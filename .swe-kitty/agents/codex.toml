@@ -4,7 +4,7 @@
 name             = "codex"
 image            = "swekitty/codex:latest"
 command          = ["codex"]
-args             = ["--full-auto"]
+args             = ["--dangerously-bypass-approvals-and-sandbox"]
 env_passthrough  = ["OPENAI_API_KEY"]
 workdir          = "/workspace"
 chat_event_port_env = "AGENT_CHAT_PORT"

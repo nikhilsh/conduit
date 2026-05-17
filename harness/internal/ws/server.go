@@ -9,8 +9,6 @@ import (
 	"compress/gzip"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -72,7 +70,11 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, created, err := s.Sessions.GetOrCreate(id, assistant)
 	if err != nil {
-		http.Error(w, "session: "+err.Error(), http.StatusInternalServerError)
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "unknown assistant") {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, "session: "+err.Error(), status)
 		return
 	}
 
@@ -93,10 +95,12 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub := sess.Subscribe()
+	textSub := sess.SubscribeText()
 	defer sess.Unsubscribe(sub)
+	defer sess.UnsubscribeText(textSub)
 
 	go c.readLoop()
-	c.writeLoop(sub, sess.Done())
+	c.writeLoop(sub, textSub, sess.Done())
 }
 
 // client wraps a websocket connection with a write mutex. gorilla
@@ -244,16 +248,58 @@ func (c *client) handleText(payload []byte) {
 		_ = c.writeJSON(map[string]any{"type": "pong", "ts": time.Now().UTC().Format(time.RFC3339Nano)})
 	case "exit":
 		c.sess.Close()
-	case "switch_agent", "rename_session", "toggle_yolo", "chat":
-		// Acknowledged in v1 protocol but unimplemented in task 001.
-		// Future tasks fill these in; never close the socket for unknown types.
+	case "switch_agent":
+		if env.Assistant == "" {
+			_ = c.writeJSON(map[string]any{
+				"type": "chat",
+				"msg":  "switch_agent requires assistant",
+				"from": "system",
+				"ts":   time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			return
+		}
+		_ = c.writeJSON(map[string]any{
+			"type":      "status",
+			"session":   c.sess.ID,
+			"viewers":   1,
+			"rows":      40,
+			"cols":      120,
+			"assistant": c.sess.Assistant,
+			"yolo":      false,
+			"health":    "healthy",
+			"phase":     "swapping",
+			"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		if err := c.sess.SwitchAdapter(env.Assistant); err != nil {
+			_ = c.writeJSON(map[string]any{
+				"type": "chat",
+				"msg":  err.Error(),
+				"from": "system",
+				"ts":   time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			return
+		}
+		_ = c.writeJSON(map[string]any{
+			"type":      "status",
+			"session":   c.sess.ID,
+			"viewers":   1,
+			"rows":      40,
+			"cols":      120,
+			"assistant": c.sess.Assistant,
+			"yolo":      false,
+			"health":    "healthy",
+			"phase":     "running",
+			"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+		})
+	case "rename_session", "toggle_yolo", "chat":
+		// Acknowledged in v1 protocol but still no-op here.
 	default:
 		// Per protocol §3.3: unknown types are logged and ignored.
 	}
 }
 
 // writeLoop forwards PTY output to the WebSocket and emits periodic pings.
-func (c *client) writeLoop(sub chan []byte, done <-chan struct{}) {
+func (c *client) writeLoop(sub chan []byte, textSub chan []byte, done <-chan struct{}) {
 	defer c.close()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -267,6 +313,13 @@ func (c *client) writeLoop(sub chan []byte, done <-chan struct{}) {
 				chunk = append([]byte{tagEscape}, chunk...)
 			}
 			if err := c.writeBinary(chunk); err != nil {
+				return
+			}
+		case payload, ok := <-textSub:
+			if !ok {
+				return
+			}
+			if err := c.writeText(payload); err != nil {
 				return
 			}
 		case <-ticker.C:
@@ -283,12 +336,3 @@ func (c *client) writeLoop(sub chan []byte, done <-chan struct{}) {
 func isReservedTag(b byte) bool {
 	return b == tagResize || b == tagUpload || b == tagSnapshot || b == tagEscape
 }
-
-// Logf is the package-level logger used by serveWS and friends.
-func Logf(format string, args ...any) {
-	log.Printf("ws: "+format, args...)
-}
-
-var errClosed = errors.New("connection closed")
-
-var _ = errClosed

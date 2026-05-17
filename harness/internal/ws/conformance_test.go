@@ -6,12 +6,15 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 
+	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
 	"github.com/nikhilsh/swe-kitty/harness/internal/auth"
 	"github.com/nikhilsh/swe-kitty/harness/internal/session"
 )
@@ -20,7 +23,8 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	a := auth.NewStore()
 	tok := a.Mint()
-	m := session.NewManager()
+	reg := newTestRegistry(t)
+	m := session.NewManager(reg)
 	srv := httptest.NewServer(New(a, m).Handler())
 	t.Cleanup(func() { srv.Close(); m.Close() })
 	return srv, tok
@@ -46,6 +50,18 @@ func TestUnauthorizedRejected(t *testing.T) {
 	}
 	if resp == nil || resp.StatusCode != 401 {
 		t.Fatalf("expected 401, got %v", resp)
+	}
+}
+
+func TestUnknownAssistantRejected(t *testing.T) {
+	srv, tok := newTestServer(t)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/abc?assistant=gemini&token=" + tok
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("expected dial to fail for unknown assistant")
+	}
+	if resp == nil || resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %v", resp)
 	}
 }
 
@@ -232,5 +248,88 @@ func TestEscapeByteOnPTYOutput(t *testing.T) {
 	}
 	if isReservedTag('a') {
 		t.Fatal("'a' should not be flagged as reserved")
+	}
+}
+
+func TestSwitchAgentKeepsSessionUsable(t *testing.T) {
+	srv, tok := newTestServer(t)
+	c := dial(t, srv, "00000000-0000-0000-0000-000000000006", tok)
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, _ = c.ReadMessage()
+
+	if err := c.WriteMessage(websocket.TextMessage, []byte(`{"type":"switch_agent","assistant":"codex"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		mt, payload, err := c.ReadMessage()
+		if err != nil {
+			t.Fatalf("read switched status: %v", err)
+		}
+		if mt != websocket.TextMessage {
+			continue
+		}
+		var env map[string]any
+		if err := json.Unmarshal(payload, &env); err != nil {
+			t.Fatalf("json: %v", err)
+		}
+		if env["type"] == "status" && env["assistant"] == "codex" && env["phase"] == "running" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("did not observe running codex status; last=%v", env)
+		}
+	}
+
+	if err := c.WriteMessage(websocket.BinaryMessage, []byte("echo switched\n")); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	var out bytes.Buffer
+	for time.Now().Before(deadline) {
+		_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		mt, payload, err := c.ReadMessage()
+		if err != nil {
+			break
+		}
+		if mt == websocket.BinaryMessage {
+			out.Write(payload)
+			if strings.Contains(out.String(), "switched") {
+				return
+			}
+		}
+	}
+	t.Fatalf("did not observe switched echo within deadline; got: %q", out.String())
+}
+
+func newTestRegistry(t *testing.T) *agents.Registry {
+	t.Helper()
+	dir := t.TempDir()
+	writeAdapter(t, dir, "claude.toml", `
+name = "claude"
+image = "swekitty/claude:latest"
+command = ["cat"]
+workdir = "."
+`)
+	writeAdapter(t, dir, "codex.toml", `
+name = "codex"
+image = "swekitty/codex:latest"
+command = ["cat"]
+workdir = "."
+`)
+	reg, err := agents.LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	return reg
+}
+
+func writeAdapter(t *testing.T, dir, name, body string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(body)+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
 	}
 }

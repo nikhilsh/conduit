@@ -4,6 +4,9 @@
 .swe-kitty/memory/sessions/
 *.local.toml
 
+# ---- swe-swe local runtime (used by the dev harness, never committed) ----
+.swe-swe/
+
 # ---- Go (harness) ----
 harness/bin/
 harness/dist/

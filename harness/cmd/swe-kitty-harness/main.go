@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
 	"github.com/nikhilsh/swe-kitty/harness/internal/auth"
 	"github.com/nikhilsh/swe-kitty/harness/internal/session"
 	"github.com/nikhilsh/swe-kitty/harness/internal/ws"
@@ -36,9 +37,7 @@ func main() {
 	case "up":
 		os.Exit(runUp(os.Args[2:]))
 	case "memory":
-		// Stub — `swe-kitty memory` subcommand surface lands in task 005.
-		fmt.Fprintln(os.Stderr, "swe-kitty memory: unimplemented in task 001; see task 005")
-		os.Exit(1)
+		os.Exit(runMemory(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -71,7 +70,15 @@ func runUp(args []string) int {
 
 	store := auth.NewStore()
 	token := store.Mint()
-	mgr := session.NewManager()
+	registry, err := agents.LoadDir("agents")
+	if err != nil {
+		log.Printf("load adapters: %v", err)
+		return 1
+	}
+	mgr := session.NewManager(registry)
+	if recovered, err := mgr.Recover(); err == nil && len(recovered) > 0 {
+		log.Printf("recovered sessions: %v", recovered)
+	}
 	srv := ws.New(store, mgr)
 
 	hostURL := *publicURL

@@ -1,0 +1,94 @@
+namespace swe_kitty_core {};
+
+dictionary ViewEventFile {
+    string path;
+    string rev;
+};
+
+dictionary PreviewInfo {
+    u16 port;
+    string url;
+};
+
+dictionary SessionStatus {
+    string session;
+    string assistant;
+    string phase;
+    string health;
+    u16 rows;
+    u16 cols;
+    boolean yolo;
+    PreviewInfo? preview;
+    string? session_name;
+    u32? viewers;
+};
+
+dictionary ProjectSession {
+    string id;
+    string name;
+    string assistant;
+    string? branch;
+    PreviewInfo? preview;
+};
+
+dictionary ChatEvent {
+    string role;
+    string content;
+    string ts;
+    sequence<ViewEventFile> files;
+};
+
+[Error]
+enum SweKittyError {
+    "Connection",
+    "Auth",
+    "Protocol",
+    "Json",
+    "NotConnected",
+    "UnknownSession",
+};
+
+callback interface SweKittyDelegate {
+    void on_pty_data(string session_id, bytes data);
+    void on_chat_event(string session_id, ChatEvent event);
+    void on_preview_ready(string session_id, PreviewInfo preview);
+    void on_status(SessionStatus status);
+    void on_snapshot(string session_id, bytes gunzipped);
+    void on_exit(string session_id, i32 code);
+    void on_disconnected(string reason);
+};
+
+interface SweKittyClient {
+    constructor(string endpoint, string bearer_token);
+
+    [Async, Throws=SweKittyError]
+    void connect(SweKittyDelegate delegate);
+
+    void disconnect();
+
+    [Async, Throws=SweKittyError]
+    string create_session(string assistant, string? branch);
+
+    [Async, Throws=SweKittyError]
+    void join_session(string session_id, string? assistant);
+
+    [Async, Throws=SweKittyError]
+    void send_input(string session_id, bytes data);
+
+    [Async, Throws=SweKittyError]
+    void send_chat(string session_id, string msg);
+
+    [Async, Throws=SweKittyError]
+    void resize(string session_id, u16 rows, u16 cols);
+
+    [Async, Throws=SweKittyError]
+    void switch_agent(string session_id, string assistant);
+
+    [Async, Throws=SweKittyError]
+    void exit_session(string session_id);
+
+    [Throws=SweKittyError]
+    ProjectSession get_session(string session_id);
+
+    sequence<ProjectSession> list_sessions();
+};
