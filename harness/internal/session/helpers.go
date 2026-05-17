@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -79,25 +78,3 @@ func (s *Session) defaultBranchName() string {
 	return "agent/" + name + "-" + shortID
 }
 
-func (s *Session) emitStatus(phase, health string) {
-	if phase == "" || health == "" {
-		status := s.Status()
-		if phase == "" {
-			phase = status.Phase
-		}
-		if health == "" {
-			health = status.Health
-		}
-	}
-	payload, err := json.Marshal(map[string]any{
-		"type":      "status",
-		"session":   s.ID,
-		"assistant": s.Assistant,
-		"phase":     phase,
-		"health":    health,
-	})
-	if err != nil {
-		return
-	}
-	s.fanoutText(payload)
-}
