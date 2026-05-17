@@ -1,0 +1,98 @@
+/* swe-kitty memory stylesheet.
+ * Loaded by both .swe-kitty/memory/index.html (project) and per-session HTML.
+ * Also renders inside the mobile app's WebView/WKWebView when the user taps
+ * the Memory affordance in the chat tab header. Keep it self-contained and
+ * dark-mode-aware — phone displays vary. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fafafa;
+  --fg: #1c1c1e;
+  --muted: #6b7280;
+  --accent: #d97706;
+  --code-bg: #f3f4f6;
+  --border: #e5e7eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0b0d;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --accent: #f59e0b;
+    --code-bg: #1f2937;
+    --border: #1f2937;
+  }
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+body { padding: 1.25rem; max-width: 56rem; margin: 0 auto; }
+
+header[data-section="meta"] {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+}
+
+header[data-section="meta"] dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+header[data-section="meta"] dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+header[data-section="meta"] dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}
+
+section {
+  margin-block: 1.75rem;
+}
+
+section > h2 {
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+  margin: 0 0 0.75rem 0;
+}
+
+section[hidden] { display: none; }
+
+code, pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code-bg);
+  border-radius: 6px;
+}
+
+code { padding: 0.1rem 0.35rem; font-size: 0.88em; }
+pre { padding: 0.85rem; overflow-x: auto; font-size: 0.85em; line-height: 1.45; }
+pre code { padding: 0; background: transparent; }
+
+ul, ol { padding-left: 1.4rem; }
+li { margin-block: 0.3rem; }
+
+time { color: var(--muted); }
+
+[data-section="attempts"] li::marker { color: #ef4444; }
+[data-section="decisions"] li::marker { color: var(--accent); }
+[data-section="open-questions"] li::marker { color: #3b82f6; }

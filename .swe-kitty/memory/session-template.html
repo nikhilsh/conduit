@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-swe-kitty-memory="v1" data-scope="session">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>swe-kitty session memory</title>
+  <link rel="stylesheet" href="../memory.css">
+</head>
+<body>
+  <header data-section="meta">
+    <dl>
+      <dt>session</dt><dd><code data-fill="session-uuid">{{SESSION_UUID}}</code></dd>
+      <dt>worktree</dt><dd><code data-fill="worktree">{{WORKTREE_PATH}}</code></dd>
+      <dt>branch</dt><dd><code data-fill="branch">{{BRANCH}}</code></dd>
+      <dt>task</dt><dd data-fill="task-id">{{TASK_ID}}</dd>
+      <dt>current-agent</dt><dd data-fill="agent">{{AGENT_NAME}}</dd>
+      <dt>created</dt><dd><time data-fill="created" datetime="{{CREATED_ISO}}">{{CREATED_ISO}}</time></dd>
+      <dt>last-checkpoint</dt><dd><time data-fill="last-checkpoint" datetime="{{CHECKPOINT_ISO}}">{{CHECKPOINT_ISO}}</time></dd>
+    </dl>
+  </header>
+
+  <section data-section="task">
+    <h2>Current task</h2>
+    <p>See <code data-fill="task-brief-path">{{TASK_BRIEF_PATH}}</code> for the full brief.</p>
+    <p data-fill="task-summary">{{TASK_SUMMARY}}</p>
+  </section>
+
+  <section data-section="state">
+    <h2>Where I am</h2>
+    <p><strong>Last completed:</strong> <span data-fill="last-completed">—</span></p>
+    <p><strong>Currently working on:</strong> <span data-fill="now">—</span></p>
+    <p><strong>Next step:</strong> <span data-fill="next">—</span></p>
+  </section>
+
+  <section data-section="decisions">
+    <h2>Decisions made this session</h2>
+    <ol></ol>
+  </section>
+
+  <section data-section="attempts">
+    <h2>Things I tried that did not work</h2>
+    <ul></ul>
+  </section>
+
+  <section data-section="open-questions">
+    <h2>Open questions for the next agent</h2>
+    <ul></ul>
+  </section>
+
+  <section data-section="env-snapshot">
+    <h2>Environment snapshot</h2>
+    <pre><code data-fill="scrollback-tail">(harness fills the last N lines of PTY scrollback here on checkpoint)</code></pre>
+  </section>
+
+  <section data-section="handoff" hidden>
+    <!-- Populated only when an agent is leaving. Next agent reads this first. -->
+    <h2>Handoff brief</h2>
+    <p data-fill="handoff-from">From: —</p>
+    <p data-fill="handoff-to">To: —</p>
+    <p data-fill="handoff-reason">Reason: —</p>
+    <div data-fill="handoff-body"></div>
+  </section>
+</body>
+</html>

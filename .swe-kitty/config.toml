@@ -1,0 +1,65 @@
+# swe-kitty: dev harness configuration
+# Loaded by swe-swe (upstream: https://github.com/choonkeat/swe-swe) when this
+# repo's root is the working dir for `swe-swe up`. Also loaded by
+# swe-kitty-harness once it exists.
+
+[harness]
+agents = ["claude", "codex"]
+preview_port_range = [3000, 3019]
+default_branch = "main"
+
+[worktree]
+# Each session creates: .swe-kitty/sessions/<uuid>/work on branch agent/<assistant>-<task>
+naming = "agent/{assistant}-{task}"
+root   = ".swe-kitty/sessions"
+
+[memory]
+project_path = ".swe-kitty/memory/index.html"
+session_path = ".swe-kitty/memory/sessions/{uuid}.html"
+template     = ".swe-kitty/memory/session-template.html"
+
+[watchdog]
+liveness_probe_interval_sec = 30
+stall_alert_after_sec       = 300
+auto_restart_on_crash       = false
+
+[checkpoint]
+interval_sec       = 60
+auto_wip_commit    = true
+auto_wip_interval_sec = 300
+
+# Task briefs — agents discover work by listing these
+[[task]]
+id              = "001-harness-server"
+brief           = ".swe-kitty/tasks/001-harness-server.md"
+suggested_agent = "codex"
+
+[[task]]
+id              = "002-rust-core"
+brief           = ".swe-kitty/tasks/002-rust-core.md"
+suggested_agent = "claude"
+
+[[task]]
+id              = "003-ios-shell"
+brief           = ".swe-kitty/tasks/003-ios-shell.md"
+suggested_agent = "claude"
+
+[[task]]
+id              = "004-android-shell"
+brief           = ".swe-kitty/tasks/004-android-shell.md"
+suggested_agent = "codex"
+
+[[task]]
+id              = "005-memory-checkpoint"
+brief           = ".swe-kitty/tasks/005-memory-checkpoint.md"
+suggested_agent = "claude"
+
+[[task]]
+id              = "006-agent-adapters"
+brief           = ".swe-kitty/tasks/006-agent-adapters.md"
+suggested_agent = "codex"
+
+[[task]]
+id              = "007-multiview-tabs"
+brief           = ".swe-kitty/tasks/007-multiview-tabs.md"
+suggested_agent = "claude"

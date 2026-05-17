@@ -1,0 +1,141 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+
+  harness:
+    name: harness (go)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: harness/go.sum
+      - name: Skip if no Go code yet
+        id: detect
+        run: |
+          if [ ! -f harness/go.mod ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: go vet
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: harness
+        run: go vet ./...
+      - name: go test
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: harness
+        run: go test ./...
+      - name: golangci-lint
+        if: steps.detect.outputs.skip != 'true'
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: harness
+          version: latest
+
+  core:
+    name: core (rust)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Skip if no Rust code yet
+        id: detect
+        run: |
+          if [ ! -f core/Cargo.toml ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: cargo fmt
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: core
+        run: cargo fmt --check
+      - name: cargo clippy
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: core
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: core
+        run: cargo test
+
+  ios-build:
+    name: ios sim build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip if no iOS project yet
+        id: detect
+        run: |
+          if [ ! -f apps/ios/project.yml ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.detect.outputs.skip != 'true'
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - name: Install xcodegen
+        if: steps.detect.outputs.skip != 'true'
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: apps/ios
+        run: xcodegen generate
+      - name: Build Rust xcframework
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: apps/ios
+        run: ./build-rust.sh
+      - name: xcodebuild (simulator, no signing)
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: apps/ios
+        run: |
+          xcodebuild -scheme SweKitty \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            build
+
+  android-build:
+    name: android debug build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip if no Android project yet
+        id: detect
+        run: |
+          if [ ! -f apps/android/build.gradle.kts ] && [ ! -f apps/android/build.gradle ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-java@v4
+        if: steps.detect.outputs.skip != 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        if: steps.detect.outputs.skip != 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.detect.outputs.skip != 'true'
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - name: Build Rust jniLibs
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: apps/android
+        run: ./build-rust.sh
+      - name: gradle assembleDebug
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: apps/android
+        run: ./gradlew assembleDebug --no-daemon

@@ -1,0 +1,59 @@
+name: release-harness
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-binaries:
+    name: cross-compile harness
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build
+        if: hashFiles('harness/go.mod') != ''
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        working-directory: harness
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
+            -o dist/swe-kitty-harness-${GOOS}-${GOARCH} ./cmd/swe-kitty-harness
+
+      - name: Upload to GitHub Release
+        if: hashFiles('harness/go.mod') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            harness/dist/swe-kitty-harness-${{ matrix.goos }}-${{ matrix.goarch }} \
+            --clobber
+
+  upload-installer:
+    name: upload install.sh
+    runs-on: ubuntu-24.04
+    needs: build-binaries
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload install.sh if present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f scripts/install.sh ]; then
+            gh release upload "${{ github.ref_name }}" scripts/install.sh --clobber
+          else
+            echo "no scripts/install.sh yet — skipping"
+          fi
