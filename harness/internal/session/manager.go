@@ -10,7 +10,6 @@ package session
 
 import (
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -148,9 +147,7 @@ func (s *Session) drain() {
 			s.fanout(chunk)
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				// Other errors are typically PTY-closed; just exit.
-			}
+			// io.EOF or PTY-closed are both terminal — tear down the session.
 			s.Close()
 			return
 		}

@@ -110,7 +110,7 @@ type client struct {
 
 func newClient(c *websocket.Conn, s *session.Session) *client {
 	cl := &client{conn: c, sess: s}
-	c.SetReadDeadline(time.Now().Add(pongWait))
+	_ = c.SetReadDeadline(time.Now().Add(pongWait))
 	c.SetPongHandler(func(string) error {
 		return c.SetReadDeadline(time.Now().Add(pongWait))
 	})
