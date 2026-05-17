@@ -1,0 +1,4 @@
+module swe_kitty_coreFFI {
+    header "swe_kitty_coreFFI.h"
+    export *
+}
