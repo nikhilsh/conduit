@@ -222,7 +222,8 @@ impl SweKittyClient {
                 sessions: Arc::clone(&self.sessions),
                 delegate,
             }),
-        ).await?;
+        )
+        .await?;
         self.handles.lock().insert(session_id, handle);
         Ok(())
     }
