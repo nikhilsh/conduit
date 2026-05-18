@@ -88,4 +88,7 @@ dependencies {
 
     // UniFFI Kotlin runtime.
     implementation("net.java.dev.jna:jna:5.13.0@aar")
+
+    // ZXing-embedded QR scanner. Ships its own activity + permission flow.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

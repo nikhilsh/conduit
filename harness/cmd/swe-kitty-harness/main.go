@@ -18,11 +18,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/mdp/qrterminal/v3"
+
 	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
 	"github.com/nikhilsh/swe-kitty/harness/internal/auth"
+	"github.com/nikhilsh/swe-kitty/harness/internal/discovery"
 	"github.com/nikhilsh/swe-kitty/harness/internal/session"
 	"github.com/nikhilsh/swe-kitty/harness/internal/ws"
 )
@@ -64,10 +69,6 @@ func runUp(args []string) int {
 	publicURL := fs.String("public-url", "", "public-facing URL (for QR/UX hints)")
 	_ = fs.Parse(args)
 
-	if *local {
-		log.Println("--local: mDNS advertisement is stubbed in task 001")
-	}
-
 	store := auth.NewStore()
 	token := store.Mint()
 	registry, err := agents.LoadDir("agents")
@@ -85,8 +86,32 @@ func runUp(args []string) int {
 	if hostURL == "" {
 		hostURL = "http://localhost" + *addr
 	}
-	fmt.Printf("swe-kitty-harness up\n  addr:  %s\n  url:   %s\n  token: %s\n\nConnect:\n  wscat -c \"%s/ws/$(uuidgen)?assistant=claude&token=%s\"\n",
-		*addr, hostURL, token, replaceScheme(hostURL), token)
+
+	// Pairing URL consumed by the mobile QR scanner (apps/{ios,android}).
+	// Format: swekitty://<host>[:port]?token=<bearer>
+	pairing := pairingURL(replaceScheme(hostURL), token)
+
+	fmt.Printf("swe-kitty-harness up\n  addr:    %s\n  url:     %s\n  token:   %s\n  pairing: %s\n\n",
+		*addr, hostURL, token, pairing)
+	qrterminal.GenerateHalfBlock(pairing, qrterminal.L, os.Stdout)
+	fmt.Printf("\nScan the QR above with the SweKitty app, or:\n  wscat -c \"%s/ws/$(uuidgen)?assistant=claude&token=%s\"\n",
+		replaceScheme(hostURL), token)
+
+	var mdnsShutdown func()
+	if *local {
+		port, err := parsePort(*addr)
+		if err != nil {
+			log.Printf("--local: cannot parse port from %q: %v (skipping mDNS)", *addr, err)
+		} else {
+			shutdown, err := discovery.Advertise(port, token)
+			if err != nil {
+				log.Printf("--local: mDNS advertise failed: %v", err)
+			} else {
+				log.Printf("--local: advertising %s on %s.local:%d", discovery.ServiceType, hostname(), port)
+				mdnsShutdown = shutdown
+			}
+		}
+	}
 
 	httpSrv := &http.Server{
 		Addr:              *addr,
@@ -111,11 +136,40 @@ func runUp(args []string) int {
 	case err := <-errCh:
 		log.Printf("shutdown: server error: %v", err)
 	}
+	if mdnsShutdown != nil {
+		mdnsShutdown()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
 	mgr.Close()
 	return 0
+}
+
+// pairingURL builds the swekitty:// deep link encoded into the QR.
+// `wsURL` is expected to be of the form ws[s]://host[:port].
+func pairingURL(wsURL, token string) string {
+	host := wsURL
+	host = strings.TrimPrefix(host, "ws://")
+	host = strings.TrimPrefix(host, "wss://")
+	return "swekitty://" + host + "?token=" + token
+}
+
+func parsePort(addr string) (int, error) {
+	// addr is a Go listen string like ":1977" or "0.0.0.0:1977".
+	idx := strings.LastIndex(addr, ":")
+	if idx < 0 || idx == len(addr)-1 {
+		return 0, fmt.Errorf("no port in %q", addr)
+	}
+	return strconv.Atoi(addr[idx+1:])
+}
+
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "swe-kitty"
+	}
+	return h
 }
 
 // replaceScheme returns hostURL with http(s) swapped for ws(s) for the

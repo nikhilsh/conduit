@@ -203,17 +203,15 @@ final class SessionStore {
     private static let tokenKey = "swekitty.endpoint.token"
 
     private static func loadPersisted() -> StoredEndpoint {
-        let d = UserDefaults.standard
-        return StoredEndpoint(
-            url: d.string(forKey: endpointKey) ?? "",
-            token: d.string(forKey: tokenKey) ?? ""
+        StoredEndpoint(
+            url: UserDefaults.standard.string(forKey: endpointKey) ?? "",
+            token: Keychain.get(tokenKey) ?? "",
         )
     }
 
     private static func persist(_ e: StoredEndpoint) {
-        let d = UserDefaults.standard
-        d.set(e.url, forKey: endpointKey)
-        d.set(e.token, forKey: tokenKey)
+        UserDefaults.standard.set(e.url, forKey: endpointKey)
+        Keychain.set(e.token.isEmpty ? nil : e.token, for: tokenKey)
     }
 }
 
