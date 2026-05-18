@@ -133,13 +133,17 @@ extension StoredEndpoint: Codable {}
 final class SessionStore {
     /// Persisted endpoint in the keychain so pairings survive app reinstalls.
     var endpoint: StoredEndpoint {
-        didSet { Self.persist(endpoint) }
+        didSet {
+            Self.persist(endpoint)
+            refreshRecentDirectories()
+        }
     }
 
     var harness: HarnessState = .disconnected
     var sessions: [ProjectSession] = []
     var selectedSessionID: String?
     var savedServers: [SavedServer] = []
+    var recentDirectories: [String] = []
 
     /// Banner-style error for the most recent session-creation failure.
     /// Cleared automatically the next time the user tries again.
@@ -179,9 +183,11 @@ final class SessionStore {
     init() {
         self.endpoint = Self.loadPersisted()
         self.savedServers = Self.loadSavedServers()
+        self.recentDirectories = []
         if endpoint.isComplete && !savedServers.contains(where: { $0.endpoint == endpoint }) {
             upsertSavedServer(name: endpoint.displayHost, endpoint: endpoint, makeDefault: true)
         }
+        refreshRecentDirectories()
         installNetworkAndLifecycleHooks()
     }
 
@@ -395,6 +401,7 @@ final class SessionStore {
                     if !trimmed.isEmpty {
                         let cmd = "cd \(Self.shellQuoted(trimmed)) && pwd\n"
                         try? await client.sendInput(sessionId: id, data: Data(cmd.utf8))
+                        self.rememberRecentDirectory(trimmed)
                     }
                 }
                 self.sessionLifecycle[pendingID] = nil
@@ -629,6 +636,38 @@ final class SessionStore {
         Keychain.set(raw, for: savedServersKey)
     }
 
+    private func refreshRecentDirectories() {
+        let all = Self.loadRecentDirectoriesByServer()
+        recentDirectories = all[endpoint.displayHost] ?? []
+    }
+
+    private func rememberRecentDirectory(_ path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var all = Self.loadRecentDirectoriesByServer()
+        let key = endpoint.displayHost
+        var current = all[key] ?? []
+        current.removeAll { $0 == trimmed }
+        current.insert(trimmed, at: 0)
+        if current.count > 12 { current = Array(current.prefix(12)) }
+        all[key] = current
+        Self.persistRecentDirectoriesByServer(all)
+        recentDirectories = current
+    }
+
+    private static func loadRecentDirectoriesByServer() -> [String: [String]] {
+        guard let data = UserDefaults.standard.data(forKey: recentDirectoriesByServerKey),
+              let decoded = try? JSONDecoder().decode([String: [String]].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    private static func persistRecentDirectoriesByServer(_ value: [String: [String]]) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        UserDefaults.standard.set(data, forKey: recentDirectoriesByServerKey)
+    }
+
     private func waitUntilCommandReady(timeoutMs: UInt64 = 6000) async throws {
         let pollNs: UInt64 = 100_000_000
         var elapsedNs: UInt64 = 0
@@ -650,6 +689,8 @@ final class SessionStore {
 }
 
 private extension SessionStore {
+    static let recentDirectoriesByServerKey = "swekitty.recentDirectoriesByServer"
+
     static func shellQuoted(_ raw: String) -> String {
         let escaped = raw.replacingOccurrences(of: "'", with: "'\"'\"'")
         return "'\(escaped)'"

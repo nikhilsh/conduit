@@ -18,6 +18,7 @@ struct SettingsSheet: View {
     @State private var directoryParent: String = "~"
     @State private var directoryLoading: Bool = false
     @State private var directoryError: String?
+    @State private var pendingAssistantAfterConnect: String?
     @State private var scanError: String?
 
     var body: some View {
@@ -50,7 +51,14 @@ struct SettingsSheet: View {
             .onAppear {
                 url = store.endpoint.url
                 token = store.endpoint.token
-                startCwd = "~"
+                startCwd = store.recentDirectories.first ?? "~"
+            }
+            .onChange(of: store.harness) { _, next in
+                guard let _ = pendingAssistantAfterConnect else { return }
+                if next.canIssueCommands {
+                    showDirectoryPicker = true
+                    Task { await loadDirectories(path: startCwd) }
+                }
             }
             .sheet(isPresented: $showScanner) {
                 QRScannerSheet { code in
@@ -161,6 +169,20 @@ struct SettingsSheet: View {
                 .autocorrectionDisabled()
                 .textFieldStyle(.plain)
                 .padding(.vertical, 4)
+
+            if !store.recentDirectories.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(store.recentDirectories, id: \.self) { path in
+                            Button(path) { startCwd = path }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .glassCapsule(interactive: true, tint: SweKittyTheme.surface.opacity(0.65))
+                        }
+                    }
+                }
+            }
 
             Divider().background(SweKittyTheme.separator)
 
@@ -306,8 +328,11 @@ struct SettingsSheet: View {
             url: url.trimmingCharacters(in: .whitespaces),
             token: token.trimmingCharacters(in: .whitespaces)
         )
-        store.connectAndStart(endpoint: next, assistant: assistant, cwd: startCwd)
-        dismiss()
+        pendingAssistantAfterConnect = assistant
+        store.endpoint = next
+        store.upsertSavedServer(name: next.displayHost, endpoint: next, makeDefault: true)
+        store.disconnect()
+        store.connect()
     }
 
     @ViewBuilder
@@ -356,6 +381,12 @@ struct SettingsSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Use This") {
                         startCwd = browsingPath
+                        if let assistant = pendingAssistantAfterConnect {
+                            store.createSession(assistant: assistant, startupCwd: browsingPath)
+                            pendingAssistantAfterConnect = nil
+                            dismiss()
+                            return
+                        }
                         showDirectoryPicker = false
                     }
                 }

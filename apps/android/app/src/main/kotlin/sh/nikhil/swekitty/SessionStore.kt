@@ -161,6 +161,8 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     val selectedId: StateFlow<String?> = _selectedId.asStateFlow()
     private val _savedServers = MutableStateFlow<List<SavedServer>>(emptyList())
     val savedServers: StateFlow<List<SavedServer>> = _savedServers.asStateFlow()
+    private val _recentDirectories = MutableStateFlow<List<String>>(emptyList())
+    val recentDirectories: StateFlow<List<String>> = _recentDirectories.asStateFlow()
 
     private val _statusBySession = MutableStateFlow<Map<String, SessionStatus>>(emptyMap())
     val statusBySession: StateFlow<Map<String, SessionStatus>> = _statusBySession.asStateFlow()
@@ -217,6 +219,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 token = p.getString(KEY_TOKEN, "") ?: "",
             )
             _savedServers.value = decodeSavedServers(p.getString(KEY_SAVED_SERVERS, null))
+            refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
             }
@@ -265,6 +268,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             ?.putString(KEY_URL, e.url)
             ?.putString(KEY_TOKEN, e.token)
             ?.apply()
+        refreshRecentDirectories()
     }
 
     fun upsertSavedServer(name: String, endpoint: Endpoint, makeDefault: Boolean) {
@@ -397,6 +401,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 startupCwd?.trim()?.takeIf { it.isNotEmpty() }?.let { cwd ->
                     val cmd = "cd ${shellQuoted(cwd)} && pwd\n"
                     runCatching { withContext(Dispatchers.IO) { c.sendInput(id, cmd.toByteArray()) } }
+                    rememberRecentDirectory(cwd)
                 }
                 updateLifecycle { (it - pendingId) + (id to SessionLifecycle.Live) }
                 _harness.value = HarnessState.Live
@@ -652,6 +657,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         private const val KEY_URL = "swekitty.endpoint.url"
         private const val KEY_TOKEN = "swekitty.endpoint.token"
         private const val KEY_SAVED_SERVERS = "swekitty.saved_servers"
+        private const val KEY_RECENT_DIRS = "swekitty.recent_dirs_by_server"
     }
 
     private fun persistSavedServers(servers: List<SavedServer>) {
@@ -690,6 +696,52 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 }
             }
         }.getOrElse { emptyList() }
+    }
+
+    private fun refreshRecentDirectories() {
+        val all = decodeRecentDirectories(prefs?.getString(KEY_RECENT_DIRS, null))
+        _recentDirectories.value = all[_endpoint.value.displayHost] ?: emptyList()
+    }
+
+    private fun rememberRecentDirectory(path: String) {
+        val trimmed = path.trim()
+        if (trimmed.isEmpty()) return
+        val all = decodeRecentDirectories(prefs?.getString(KEY_RECENT_DIRS, null)).toMutableMap()
+        val key = _endpoint.value.displayHost
+        val current = (all[key] ?: emptyList()).toMutableList().apply {
+            removeAll { it == trimmed }
+            add(0, trimmed)
+            if (size > 12) subList(12, size).clear()
+        }
+        all[key] = current
+        persistRecentDirectories(all)
+        _recentDirectories.value = current
+    }
+
+    private fun persistRecentDirectories(value: Map<String, List<String>>) {
+        val obj = JSONObject()
+        value.forEach { (server, dirs) ->
+            val arr = JSONArray()
+            dirs.forEach { arr.put(it) }
+            obj.put(server, arr)
+        }
+        prefs?.edit()?.putString(KEY_RECENT_DIRS, obj.toString())?.apply()
+    }
+
+    private fun decodeRecentDirectories(raw: String?): Map<String, List<String>> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(raw)
+            buildMap {
+                obj.keys().forEach { key ->
+                    val arr = obj.optJSONArray(key) ?: JSONArray()
+                    val dirs = buildList {
+                        for (i in 0 until arr.length()) add(arr.optString(i, ""))
+                    }.filter { it.isNotBlank() }
+                    put(key, dirs)
+                }
+            }
+        }.getOrElse { emptyMap() }
     }
 
     private suspend fun waitUntilCommandReady(timeoutMs: Long = 6_000L): Boolean {

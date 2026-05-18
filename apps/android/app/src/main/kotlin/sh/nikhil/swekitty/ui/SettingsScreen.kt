@@ -2,6 +2,7 @@ package sh.nikhil.swekitty.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -31,6 +32,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
+    val recentDirectories by store.recentDirectories.collectAsState()
 
     var url by remember(endpoint.url) { mutableStateOf(endpoint.url) }
     var token by remember(endpoint.token) { mutableStateOf(endpoint.token) }
@@ -41,8 +43,25 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     var directoryEntries by remember { mutableStateOf<List<RemoteDirectoryEntry>>(emptyList()) }
     var directoryError by remember { mutableStateOf<String?>(null) }
     var directoryLoading by remember { mutableStateOf(false) }
+    var pendingAssistantAfterConnect by remember { mutableStateOf<String?>(null) }
     var scanError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(harness, pendingAssistantAfterConnect) {
+        if (pendingAssistantAfterConnect != null && harness.canIssueCommands) {
+            showDirectoryPicker = true
+            directoryLoading = true
+            directoryError = null
+            runCatching { store.listDirectories(startCwd) }
+                .onSuccess { listing ->
+                    browsingPath = listing.path
+                    browsingParent = listing.parent
+                    directoryEntries = listing.entries.filter { it.isDir }
+                }
+                .onFailure { directoryError = it.message ?: it.toString() }
+            directoryLoading = false
+        }
+    }
 
     val scanner = rememberLauncherForActivityResult(SweKittyScanContract()) { result ->
         if (result == null) return@rememberLauncherForActivityResult
@@ -125,6 +144,16 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (recentDirectories.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    recentDirectories.forEach { path ->
+                        AssistChip(onClick = { startCwd = path }, label = { Text(path) })
+                    }
+                }
+            }
 
             OutlinedButton(
                 onClick = {
@@ -176,12 +205,15 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
                     onClick = {
-                        store.connectAndStart(
+                        pendingAssistantAfterConnect = "claude"
+                        store.setEndpoint(url, token)
+                        store.upsertSavedServer(
+                            name = Endpoint(url, token).displayHost,
                             endpoint = Endpoint(url, token),
-                            assistant = "claude",
-                            cwd = startCwd,
+                            makeDefault = true,
                         )
-                        onDismiss()
+                        store.disconnect()
+                        store.connect()
                     },
                     enabled = url.isNotBlank() && token.isNotBlank(),
                     modifier = Modifier.weight(1f),
@@ -189,12 +221,15 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
 
                 Button(
                     onClick = {
-                        store.connectAndStart(
+                        pendingAssistantAfterConnect = "codex"
+                        store.setEndpoint(url, token)
+                        store.upsertSavedServer(
+                            name = Endpoint(url, token).displayHost,
                             endpoint = Endpoint(url, token),
-                            assistant = "codex",
-                            cwd = startCwd,
+                            makeDefault = true,
                         )
-                        onDismiss()
+                        store.disconnect()
+                        store.connect()
                     },
                     enabled = url.isNotBlank() && token.isNotBlank(),
                     modifier = Modifier.weight(1f),
@@ -275,6 +310,13 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     startCwd = browsingPath
+                    pendingAssistantAfterConnect?.let { assistant ->
+                        store.createSession(assistant = assistant, startupCwd = browsingPath)
+                        pendingAssistantAfterConnect = null
+                        showDirectoryPicker = false
+                        onDismiss()
+                        return@TextButton
+                    }
                     showDirectoryPicker = false
                 }) { Text("Use This") }
             },
