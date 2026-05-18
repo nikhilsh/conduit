@@ -748,11 +748,14 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         return runCatching {
             withTimeout(timeoutMs) {
                 while (true) {
-                    when (val h = _harness.value) {
-                        is HarnessState.Linked, is HarnessState.Live, is HarnessState.Reconnecting -> return@withTimeout true
-                        is HarnessState.Failed -> return@withTimeout false
-                        else -> delay(100)
+                    val h = _harness.value
+                    if (h is HarnessState.Linked || h is HarnessState.Live || h is HarnessState.Reconnecting) {
+                        return@withTimeout true
                     }
+                    if (h is HarnessState.Failed) {
+                        return@withTimeout false
+                    }
+                    delay(100)
                 }
             }
         }.getOrDefault(false)

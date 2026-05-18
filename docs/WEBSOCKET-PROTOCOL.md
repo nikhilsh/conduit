@@ -7,7 +7,7 @@ Changes to this document REQUIRE a deliberate PR that rebases all in-flight feat
 ## 1. Endpoint
 
 ```
-GET /ws/{session-uuid}?assistant={claude|codex|…}
+GET /ws/{session-uuid}?assistant={claude|codex|…}&cwd={absolute-path}
 Authorization: Bearer <token>
 Upgrade: websocket
 ```
@@ -104,7 +104,7 @@ Unknown `type` values are logged and ignored — never close the socket for them
 ## 4. Lifecycle
 
 ### 4.1 New session
-1. Client opens `GET /ws/<new-uuid>?assistant=claude`.
+1. Client opens `GET /ws/<new-uuid>?assistant=claude&cwd=/abs/path` (optional `cwd` only on create).
 2. Server creates worktree + Docker container + PTY (per `docs/SESSION-LIFECYCLE.md`).
 3. Server sends a `status` frame.
 4. Server starts forwarding PTY bytes as raw binary frames.

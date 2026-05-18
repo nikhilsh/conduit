@@ -69,10 +69,13 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	if assistant == "" {
 		assistant = "claude"
 	}
-	sess, created, err := s.Sessions.GetOrCreate(id, assistant)
+	cwd := strings.TrimSpace(r.URL.Query().Get("cwd"))
+	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{
+		CWD: cwd,
+	})
 	if err != nil {
 		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "unknown assistant") {
+		if strings.Contains(err.Error(), "unknown assistant") || strings.Contains(err.Error(), "invalid cwd") {
 			status = http.StatusBadRequest
 		}
 		http.Error(w, "session: "+err.Error(), status)

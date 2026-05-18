@@ -46,6 +46,9 @@ func (s *Session) prepareFilesystem() error {
 }
 
 func (s *Session) commandDir(adapter agents.Adapter) string {
+	if s.requestedCWD != "" && dirExists(s.requestedCWD) {
+		return s.requestedCWD
+	}
 	if adapter.Workdir != "" {
 		if filepath.IsAbs(adapter.Workdir) {
 			if dirExists(adapter.Workdir) {
@@ -234,7 +237,7 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 		return err
 	}
 	cmd := exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
-	cmd.Dir = s.commandDir(adapter)
+	cmd.Dir = s.workspaceDir
 	cmd.Env = s.commandEnv(map[string]string{
 		"FROM_AGENT": fromAgent,
 		"TO_AGENT":   adapter.Name,

@@ -62,6 +62,7 @@ type Session struct {
 	stallAfter        time.Duration
 	handoffTimeout    time.Duration
 	workspaceDir      string
+	requestedCWD      string
 	hooks             agents.Hooks
 	phase             string
 	health            string
@@ -88,17 +89,18 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	cmd := exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
 	s := &Session{
-		ID:        id,
-		Assistant: adapter.Name,
-		adapter:   adapter,
-		rows:      40,
-		cols:      120,
-		closed:    make(chan struct{}),
-		ring:      make([]byte, ringSize),
-		subs:      make(map[chan []byte]struct{}),
-		textSubs:  make(map[chan []byte]struct{}),
-		repoRoot:  opts.repoRoot,
-		kittyRoot: opts.kittyRoot,
+		ID:           id,
+		Assistant:    adapter.Name,
+		adapter:      adapter,
+		rows:         40,
+		cols:         120,
+		closed:       make(chan struct{}),
+		ring:         make([]byte, ringSize),
+		subs:         make(map[chan []byte]struct{}),
+		textSubs:     make(map[chan []byte]struct{}),
+		repoRoot:     opts.repoRoot,
+		kittyRoot:    opts.kittyRoot,
+		requestedCWD: strings.TrimSpace(opts.requestedCWD),
 		checkpointEvery: durationFromEnv(
 			"KITTY_SESSION_CHECKPOINT_INTERVAL_MS",
 			60*time.Second,
@@ -339,6 +341,10 @@ type Manager struct {
 	kittyRoot string
 }
 
+type CreateOptions struct {
+	CWD string
+}
+
 func NewManager(registry *agents.Registry) *Manager {
 	repoRoot, kittyRoot, _ := resolveKittyRoots()
 	return &Manager{
@@ -359,6 +365,12 @@ func (m *Manager) Get(id string) (*Session, bool) {
 // GetOrCreate returns the existing session for id, or starts a new one
 // with the given assistant. assistant is honored only on creation.
 func (m *Manager) GetOrCreate(id, assistant string) (*Session, bool, error) {
+	return m.GetOrCreateWithOptions(id, assistant, CreateOptions{})
+}
+
+// GetOrCreateWithOptions is like GetOrCreate but accepts creation options.
+// Options are honored only when a new session is created.
+func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOptions) (*Session, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[id]; ok {
@@ -374,9 +386,19 @@ func (m *Manager) GetOrCreate(id, assistant string) (*Session, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+	requestedCWD := strings.TrimSpace(opts.CWD)
+	if requestedCWD != "" {
+		if !filepath.IsAbs(requestedCWD) {
+			return nil, false, fmt.Errorf("invalid cwd %q: must be an absolute path", requestedCWD)
+		}
+		if !dirExists(requestedCWD) {
+			return nil, false, fmt.Errorf("invalid cwd %q: directory does not exist", requestedCWD)
+		}
+	}
 	s, err := newSession(id, adapter, sessionOptions{
-		repoRoot:  m.repoRoot,
-		kittyRoot: m.kittyRoot,
+		repoRoot:     m.repoRoot,
+		kittyRoot:    m.kittyRoot,
+		requestedCWD: requestedCWD,
 	})
 	if err != nil {
 		return nil, false, err
@@ -446,6 +468,7 @@ type sessionOptions struct {
 	snapshot       []byte
 	lastCheckpoint time.Time
 	handoffHTML    string
+	requestedCWD   string
 }
 
 type sessionMetadata struct {
