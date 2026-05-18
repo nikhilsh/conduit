@@ -55,3 +55,5 @@ core/generated/kotlin/
 # ---- Misc ----
 node_modules/
 *.log
+website/.next/
+website/out/

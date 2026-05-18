@@ -1,0 +1,13 @@
+{
+  "repo": "nikhilsh/swe-kitty",
+  "siteOrigin": "https://swekitty.kaopeh.com",
+  "releaseName": "swe-kitty v0.0.4",
+  "tagName": "v0.0.4",
+  "releaseUrl": "https://github.com/nikhilsh/swe-kitty/releases/tag/v0.0.4",
+  "publishedAt": "2026-05-18T04:19:33Z",
+  "ipa": {
+    "name": "SweKitty.ipa",
+    "url": "https://github.com/nikhilsh/swe-kitty/releases/download/v0.0.4/SweKitty.ipa"
+  },
+  "apk": null
+}

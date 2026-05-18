@@ -30,6 +30,11 @@ jobs:
     name: signed APK
     needs: ensure-release
     runs-on: ubuntu-24.04
+    env:
+      ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/apps/android/app/release.keystore
+      ANDROID_KEYSTORE_PASSWORD: android
+      ANDROID_KEY_ALIAS: androiddebugkey
+      ANDROID_KEY_PASSWORD: android
     steps:
       - uses: actions/checkout@v4
 
@@ -47,22 +52,48 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
-      - name: Decode keystore
+      - name: Prepare test signing keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > apps/android/app/release.keystore
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+            echo "using repository-provided Android keystore"
+          else
+            keytool -genkeypair \
+              -v \
+              -keystore "$ANDROID_KEYSTORE_PATH" \
+              -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+              -alias "$ANDROID_KEY_ALIAS" \
+              -keypass "$ANDROID_KEY_PASSWORD" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=SweKitty Debug,O=SweKitty,C=US"
+            echo "generated ephemeral Android test keystore"
+          fi
+
+      - name: Override signing env from secrets when present
+        env:
+          SECRET_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SECRET_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SECRET_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$SECRET_ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "ANDROID_KEYSTORE_PASSWORD=$SECRET_ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          fi
+          if [ -n "$SECRET_ANDROID_KEY_ALIAS" ]; then
+            echo "ANDROID_KEY_ALIAS=$SECRET_ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          fi
+          if [ -n "$SECRET_ANDROID_KEY_PASSWORD" ]; then
+            echo "ANDROID_KEY_PASSWORD=$SECRET_ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+          fi
 
       - name: Build Rust jniLibs
         working-directory: apps/android
         run: ./build-rust.sh
 
       - name: gradle assembleRelease
-        env:
-          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/apps/android/app/release.keystore
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         working-directory: apps/android
         run: ./gradlew assembleRelease --no-daemon
 

@@ -35,6 +35,11 @@ A phone-first AI coding harness. Drive Claude Code, Codex, and other agents from
 - iOS: sideload the signed IPA from the latest [Release](https://github.com/nikhilsh/swe-kitty/releases) via AltStore / Sideloadly. See [`docs/INSTALL-IOS.md`](docs/INSTALL-IOS.md).
 - Android: install the signed APK from the latest Release. See [`docs/INSTALL-ANDROID.md`](docs/INSTALL-ANDROID.md).
 
+## Website
+
+- Static landing site scaffold: [`website/`](website)
+- Fyrra deploy notes: [`website/DEPLOY.md`](website/DEPLOY.md)
+
 ## Status
 
 Bootstrap. See [`docs/PLAN.md`](docs/PLAN.md) Part F — Roadmap.
