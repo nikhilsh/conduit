@@ -65,17 +65,19 @@ Run "swe-kitty-harness up --help" for options.`)
 func runUp(args []string) int {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	addr := fs.String("addr", ":1977", "HTTP listen address")
-	local := fs.Bool("local", false, "advertise on LAN via mDNS (stub in task 001)")
+	local := fs.Bool("local", false, "advertise on LAN via mDNS")
 	publicURL := fs.String("public-url", "", "public-facing URL (for QR/UX hints)")
+	agentsDir := fs.String("agents-dir", "", "directory of agent adapter TOMLs (defaults: $XDG_CONFIG_HOME/swe-kitty/agents → ~/.swe-kitty/agents → ./agents → embedded)")
 	_ = fs.Parse(args)
 
 	store := auth.NewStore()
 	token := store.Mint()
-	registry, err := agents.LoadDir("agents")
+	registry, regSource, err := loadAgentRegistry(*agentsDir)
 	if err != nil {
 		log.Printf("load adapters: %v", err)
 		return 1
 	}
+	log.Printf("adapters: source=%s names=%v", regSource, registry.Names())
 	mgr := session.NewManager(registry)
 	if recovered, err := mgr.Recover(); err == nil && len(recovered) > 0 {
 		log.Printf("recovered sessions: %v", recovered)
@@ -170,6 +172,97 @@ func hostname() string {
 		return "swe-kitty"
 	}
 	return h
+}
+
+// loadAgentRegistry walks a small priority list so a freshly-installed
+// binary works out of the box but is still trivially extensible. The
+// first source that succeeds wins.
+func loadAgentRegistry(explicit string) (*agents.Registry, string, error) {
+	type candidate struct {
+		label string
+		load  func() (*agents.Registry, error)
+	}
+	var cands []candidate
+	if explicit != "" {
+		cands = append(cands, candidate{
+			label: "--agents-dir " + explicit,
+			load:  func() (*agents.Registry, error) { return agents.LoadDir(explicit) },
+		})
+	} else {
+		if dir := userAgentsDir(); dir != "" {
+			cands = append(cands, candidate{
+				label: dir,
+				load:  func() (*agents.Registry, error) { return agents.LoadDir(dir) },
+			})
+		}
+		cands = append(cands, candidate{
+			label: "./agents",
+			load:  func() (*agents.Registry, error) { return agents.LoadDir("agents") },
+		})
+		cands = append(cands, candidate{
+			label: "embedded",
+			load: func() (*agents.Registry, error) {
+				return agents.LoadFS(embeddedAgents, "embedded-agents", "embedded")
+			},
+		})
+	}
+	var firstErr error
+	for _, c := range cands {
+		reg, err := c.load()
+		if err == nil {
+			return reg, c.label, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, "", firstErr
+}
+
+// userAgentsDir returns the user-scoped override directory if it
+// exists, else empty. Honours XDG_CONFIG_HOME but falls back to the
+// `~/.swe-kitty/agents` location documented in SELF-HOST.md.
+func userAgentsDir() string {
+	for _, dir := range []string{
+		envDir("XDG_CONFIG_HOME", "swe-kitty", "agents"),
+		homeDir(".swe-kitty", "agents"),
+	} {
+		if dir == "" {
+			continue
+		}
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			return dir
+		}
+	}
+	return ""
+}
+
+func envDir(envKey string, parts ...string) string {
+	root := os.Getenv(envKey)
+	if root == "" {
+		return ""
+	}
+	return joinPath(append([]string{root}, parts...)...)
+}
+
+func homeDir(parts ...string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return joinPath(append([]string{home}, parts...)...)
+}
+
+func joinPath(parts ...string) string {
+	out := ""
+	for _, p := range parts {
+		if out == "" {
+			out = p
+		} else {
+			out += string(os.PathSeparator) + p
+		}
+	}
+	return out
 }
 
 // replaceScheme returns hostURL with http(s) swapped for ws(s) for the

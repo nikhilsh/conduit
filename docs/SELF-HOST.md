@@ -1,5 +1,19 @@
 # Self-hosting `swe-kitty-harness`
 
+## One-line install + pair
+
+```bash
+curl -fsSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sh -s -- --up --local
+```
+
+Detects your OS + arch, drops the harness binary in `/usr/local/bin`
+(or `~/.local/bin` if you don't have root), then immediately runs
+`swe-kitty-harness up --local` so the pairing QR prints on the same
+terminal. Scan with the SweKitty iOS / Android app and you're done.
+
+The default agent adapters (`claude`, `codex`) are baked into the
+binary, so a fresh install needs no config files.
+
 Two supported topologies:
 
 1. **LAN** — `swe-kitty-harness up --local` on a laptop / homelab. mDNS
@@ -11,7 +25,7 @@ Two supported topologies:
 This doc covers both, plus the pairing-QR flow that's the same in either
 case.
 
-## LAN
+## Manual install (if you don't want to pipe curl to sh)
 
 ```bash
 # Install the harness binary (from the GitHub Release):
@@ -53,11 +67,12 @@ You need:
 ```bash
 ssh root@vps
 mkdir -p /opt/swe-kitty && cd /opt/swe-kitty
-curl -sLo swe-kitty-harness \
-  https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-harness-linux-amd64
-chmod +x swe-kitty-harness
-mkdir -p agents .swe-kitty
-# (drop your agents/{claude,codex}.toml + .swe-kitty/env)
+curl -fsSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh \
+  | sh -s -- --bin-dir /opt/swe-kitty
+mkdir -p .swe-kitty
+# Drop .swe-kitty/env if you want to pass through ANTHROPIC_API_KEY /
+# OPENAI_API_KEY. The default agent TOMLs are embedded in the binary;
+# override by placing TOMLs in ~/.swe-kitty/agents/ or pass --agents-dir.
 ```
 
 ### systemd unit (`/etc/systemd/system/swe-kitty.service`)

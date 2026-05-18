@@ -306,8 +306,7 @@ async fn reconnect(
 
         match open_ws(endpoint, session_id, assistant, token).await {
             Ok(ws) => {
-                delegate
-                    .on_connection_health(session_id.to_string(), ConnectionHealth::Connected);
+                delegate.on_connection_health(session_id.to_string(), ConnectionHealth::Connected);
                 return ReconnectOutcome::Reconnected(Box::new(ws));
             }
             Err(SweKittyError::Auth) => {

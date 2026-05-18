@@ -123,13 +123,7 @@ impl SweKittyClient {
     /// sit on a half-open TCP waiting for the kernel to surface the
     /// failure.
     pub fn notify_network_change(&self) {
-        let handles: Vec<_> = self
-            .inner
-            .handles
-            .lock()
-            .values()
-            .cloned()
-            .collect();
+        let handles: Vec<_> = self.inner.handles.lock().values().cloned().collect();
         for handle in handles {
             handle.nudge();
         }

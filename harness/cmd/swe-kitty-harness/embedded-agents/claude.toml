@@ -1,0 +1,12 @@
+name                = "claude"
+image               = "swekitty/claude:latest"
+command             = ["claude"]
+args                = ["--dangerously-skip-permissions"]
+env_passthrough     = ["ANTHROPIC_API_KEY"]
+workdir             = "/workspace"
+chat_event_port_env = "AGENT_CHAT_PORT"
+
+[hooks]
+on_start = "swe-kitty memory render --session $SESSION_UUID > /workspace/.swe-kitty/HANDOFF.html"
+on_exit  = "swe-kitty memory checkpoint --session $SESSION_UUID --reason 'exit'"
+on_swap  = "swe-kitty memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"

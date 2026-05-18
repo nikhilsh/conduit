@@ -156,12 +156,11 @@ final class SessionStore {
         installNetworkAndLifecycleHooks()
     }
 
-    deinit {
-        if let token = foregroundObserver {
-            NotificationCenter.default.removeObserver(token)
-        }
-        pathMonitor?.cancel()
-    }
+    // No deinit cleanup: SessionStore lives for the app's lifetime
+    // (owned by SweKittyApp's @State), so the NWPathMonitor and the
+    // NotificationCenter observer are released only at process exit —
+    // and Swift 6 actor isolation forbids touching MainActor state from
+    // a nonisolated deinit anyway.
 
     /// Tell every per-session worker in the Rust core that the network
     /// path probably changed. The worker drops its current socket and

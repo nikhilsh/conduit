@@ -3,6 +3,7 @@ package agents
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,7 +48,14 @@ type Registry struct {
 }
 
 func LoadDir(dir string) (*Registry, error) {
-	entries, err := os.ReadDir(dir)
+	return LoadFS(os.DirFS(dir), ".", dir)
+}
+
+// LoadFS reads adapter TOMLs from any [fs.FS] rooted at `root`. The
+// `displayDir` is used purely for error messages so callers can surface
+// the underlying source (e.g. "embedded" vs an on-disk path).
+func LoadFS(fsys fs.FS, root, displayDir string) (*Registry, error) {
+	entries, err := fs.ReadDir(fsys, root)
 	if err != nil {
 		return nil, err
 	}
@@ -56,21 +64,25 @@ func LoadDir(dir string) (*Registry, error) {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
+		path := filepath.ToSlash(filepath.Join(root, entry.Name()))
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s/%s: %w", displayDir, entry.Name(), err)
+		}
 		var adapter Adapter
-		if _, err := toml.DecodeFile(path, &adapter); err != nil {
-			return nil, fmt.Errorf("decode %s: %w", path, err)
+		if err := toml.Unmarshal(data, &adapter); err != nil {
+			return nil, fmt.Errorf("decode %s/%s: %w", displayDir, entry.Name(), err)
 		}
 		if err := adapter.Validate(); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%s/%s: %w", displayDir, entry.Name(), err)
 		}
 		if _, exists := reg.adapters[adapter.Name]; exists {
-			return nil, fmt.Errorf("%s: duplicate adapter name %q", path, adapter.Name)
+			return nil, fmt.Errorf("%s/%s: duplicate adapter name %q", displayDir, entry.Name(), adapter.Name)
 		}
 		reg.adapters[adapter.Name] = adapter
 	}
 	if len(reg.adapters) == 0 {
-		return nil, fmt.Errorf("no adapters found in %s", dir)
+		return nil, fmt.Errorf("no adapters found in %s", displayDir)
 	}
 	return reg, nil
 }
