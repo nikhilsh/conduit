@@ -22,6 +22,8 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 import uniffi.swe_kitty_core.ChatEvent
 import uniffi.swe_kitty_core.ConnectionHealth
@@ -126,6 +128,18 @@ data class SavedServer(
     val name: String,
     val endpoint: Endpoint,
     val isDefault: Boolean,
+)
+
+data class RemoteDirectoryEntry(
+    val name: String,
+    val path: String,
+    val isDir: Boolean,
+)
+
+data class RemoteDirectoryListing(
+    val path: String,
+    val parent: String,
+    val entries: List<RemoteDirectoryEntry>,
 )
 
 /**
@@ -449,6 +463,43 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     fun sendChat(sessionId: String, msg: String) {
         val c = client ?: return
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } } }
+    }
+
+    suspend fun listDirectories(path: String?): RemoteDirectoryListing {
+        val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
+        val url = if (path.isNullOrBlank()) {
+            URL("$base/api/fs/list")
+        } else {
+            URL("$base/api/fs/list?path=${java.net.URLEncoder.encode(path, "UTF-8")}")
+        }
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Authorization", "Bearer ${_endpoint.value.token}")
+            connectTimeout = 7_000
+            readTimeout = 7_000
+        }
+        conn.inputStream.bufferedReader().use { reader ->
+            val raw = reader.readText()
+            val obj = JSONObject(raw)
+            val arr = obj.optJSONArray("entries") ?: JSONArray()
+            val entries = buildList {
+                for (i in 0 until arr.length()) {
+                    val e = arr.getJSONObject(i)
+                    add(
+                        RemoteDirectoryEntry(
+                            name = e.optString("name", ""),
+                            path = e.optString("path", ""),
+                            isDir = e.optBoolean("is_dir", true),
+                        )
+                    )
+                }
+            }
+            return RemoteDirectoryListing(
+                path = obj.optString("path", path ?: "~"),
+                parent = obj.optString("parent", path ?: "~"),
+                entries = entries,
+            )
+        }
     }
 
     fun resize(sessionId: String, rows: UShort, cols: UShort) {

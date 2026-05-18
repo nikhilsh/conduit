@@ -12,6 +12,12 @@ struct SettingsSheet: View {
     @State private var token: String = ""
     @State private var startCwd: String = "~"
     @State private var showScanner: Bool = false
+    @State private var showDirectoryPicker: Bool = false
+    @State private var browsingPath: String = "~"
+    @State private var directoryEntries: [RemoteDirectoryEntry] = []
+    @State private var directoryParent: String = "~"
+    @State private var directoryLoading: Bool = false
+    @State private var directoryError: String?
     @State private var scanError: String?
 
     var body: some View {
@@ -50,6 +56,9 @@ struct SettingsSheet: View {
                 QRScannerSheet { code in
                     handleScan(code)
                 }
+            }
+            .sheet(isPresented: $showDirectoryPicker) {
+                directoryPickerSheet
             }
         }
     }
@@ -187,6 +196,20 @@ struct SettingsSheet: View {
 
             HStack(spacing: 8) {
                 Button {
+                    showDirectoryPicker = true
+                    Task { await loadDirectories(path: startCwd) }
+                } label: {
+                    Label("Browse", systemImage: "folder")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .glassCapsule(interactive: true, tint: SweKittyTheme.warning.opacity(0.40))
+                }
+                .buttonStyle(.plain)
+                .disabled(url.isEmpty || token.isEmpty)
+
+                Button {
                     connectAndStart(assistant: "claude")
                 } label: {
                     Label("Connect + Start Claude", systemImage: "sparkles")
@@ -285,6 +308,82 @@ struct SettingsSheet: View {
         )
         store.connectAndStart(endpoint: next, assistant: assistant, cwd: startCwd)
         dismiss()
+    }
+
+    @ViewBuilder
+    private var directoryPickerSheet: some View {
+        NavigationStack {
+            VStack(spacing: 10) {
+                HStack {
+                    Text(browsingPath)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(SweKittyTheme.textSecondary)
+                        .lineLimit(2)
+                    Spacer()
+                    if directoryLoading {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .padding(.horizontal, 16)
+                if let directoryError {
+                    Text(directoryError)
+                        .font(.footnote)
+                        .foregroundStyle(SweKittyTheme.danger)
+                        .padding(.horizontal, 16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                List {
+                    Button {
+                        Task { await loadDirectories(path: directoryParent) }
+                    } label: {
+                        Label("..", systemImage: "arrow.up.left")
+                    }
+                    ForEach(directoryEntries) { entry in
+                        Button {
+                            Task { await loadDirectories(path: entry.path) }
+                        } label: {
+                            Label(entry.name, systemImage: "folder")
+                        }
+                    }
+                }
+                .listStyle(.plain)
+            }
+            .navigationTitle("Select Directory")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { showDirectoryPicker = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Use This") {
+                        startCwd = browsingPath
+                        showDirectoryPicker = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadDirectories(path: String?) async {
+        let next = StoredEndpoint(
+            url: url.trimmingCharacters(in: .whitespaces),
+            token: token.trimmingCharacters(in: .whitespaces)
+        )
+        guard !next.url.isEmpty, !next.token.isEmpty else {
+            directoryError = "Set endpoint and token first."
+            return
+        }
+        directoryLoading = true
+        directoryError = nil
+        store.endpoint = next
+        do {
+            let listing = try await store.listDirectories(path: path)
+            browsingPath = listing.path
+            directoryParent = listing.parent
+            directoryEntries = listing.entries.filter(\.is_dir)
+        } catch {
+            directoryError = String(describing: error)
+        }
+        directoryLoading = false
     }
 
     private func handleScan(_ code: String) {

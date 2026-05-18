@@ -2,6 +2,8 @@ package sh.nikhil.swekitty.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -10,6 +12,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -18,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.Endpoint
 import sh.nikhil.swekitty.PairingURL
+import sh.nikhil.swekitty.RemoteDirectoryEntry
 import sh.nikhil.swekitty.SavedServer
 import sh.nikhil.swekitty.SessionStore
 
@@ -31,7 +35,14 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     var url by remember(endpoint.url) { mutableStateOf(endpoint.url) }
     var token by remember(endpoint.token) { mutableStateOf(endpoint.token) }
     var startCwd by remember { mutableStateOf("~") }
+    var showDirectoryPicker by remember { mutableStateOf(false) }
+    var browsingPath by remember { mutableStateOf("~") }
+    var browsingParent by remember { mutableStateOf("~") }
+    var directoryEntries by remember { mutableStateOf<List<RemoteDirectoryEntry>>(emptyList()) }
+    var directoryError by remember { mutableStateOf<String?>(null) }
+    var directoryLoading by remember { mutableStateOf(false) }
     var scanError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     val scanner = rememberLauncherForActivityResult(SweKittyScanContract()) { result ->
         if (result == null) return@rememberLauncherForActivityResult
@@ -115,6 +126,27 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            OutlinedButton(
+                onClick = {
+                    showDirectoryPicker = true
+                    scope.launch {
+                        directoryLoading = true
+                        directoryError = null
+                        store.setEndpoint(url, token)
+                        runCatching { store.listDirectories(startCwd) }
+                            .onSuccess { listing ->
+                                browsingPath = listing.path
+                                browsingParent = listing.parent
+                                directoryEntries = listing.entries.filter { it.isDir }
+                            }
+                            .onFailure { directoryError = it.message ?: it.toString() }
+                        directoryLoading = false
+                    }
+                },
+                enabled = url.isNotBlank() && token.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Browse directory") }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
                     onClick = { scanner.launch(Unit) },
@@ -190,6 +222,66 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (showDirectoryPicker) {
+        AlertDialog(
+            onDismissRequest = { showDirectoryPicker = false },
+            title = { Text("Select Directory") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(browsingPath, style = MaterialTheme.typography.labelSmall)
+                    if (directoryLoading) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    directoryError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = {
+                        scope.launch {
+                            directoryLoading = true
+                            directoryError = null
+                            runCatching { store.listDirectories(browsingParent) }
+                                .onSuccess { listing ->
+                                    browsingPath = listing.path
+                                    browsingParent = listing.parent
+                                    directoryEntries = listing.entries.filter { it.isDir }
+                                }
+                                .onFailure { directoryError = it.message ?: it.toString() }
+                            directoryLoading = false
+                        }
+                    }) { Text(".. (up)") }
+                    directoryEntries.forEach { entry ->
+                        TextButton(onClick = {
+                            scope.launch {
+                                directoryLoading = true
+                                directoryError = null
+                                runCatching { store.listDirectories(entry.path) }
+                                    .onSuccess { listing ->
+                                        browsingPath = listing.path
+                                        browsingParent = listing.parent
+                                        directoryEntries = listing.entries.filter { it.isDir }
+                                    }
+                                    .onFailure { directoryError = it.message ?: it.toString() }
+                                directoryLoading = false
+                            }
+                        }) { Text(entry.name) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    startCwd = browsingPath
+                    showDirectoryPicker = false
+                }) { Text("Use This") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDirectoryPicker = false }) { Text("Close") }
+            },
+        )
     }
 }
 

@@ -113,6 +113,19 @@ struct SavedServer: Codable, Equatable, Identifiable {
     var isDefault: Bool
 }
 
+struct RemoteDirectoryEntry: Codable, Equatable, Identifiable {
+    var name: String
+    var path: String
+    var is_dir: Bool
+    var id: String { path }
+}
+
+struct RemoteDirectoryListing: Codable, Equatable {
+    var path: String
+    var parent: String
+    var entries: [RemoteDirectoryEntry]
+}
+
 extension StoredEndpoint: Codable {}
 
 @Observable
@@ -272,6 +285,27 @@ final class SessionStore {
     func reconnect() {
         disconnect()
         connect()
+    }
+
+    func listDirectories(path: String?) async throws -> RemoteDirectoryListing {
+        guard let base = endpoint.httpBaseURL else {
+            throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
+        }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/fs/list"
+        if let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            components?.queryItems = [URLQueryItem(name: "path", value: path)]
+        }
+        guard let url = components?.url else {
+            throw NSError(domain: "SessionStore", code: 101, userInfo: [NSLocalizedDescriptionKey: "Failed to build directory URL"])
+        }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw NSError(domain: "SessionStore", code: 102, userInfo: [NSLocalizedDescriptionKey: "Directory listing failed"])
+        }
+        return try JSONDecoder().decode(RemoteDirectoryListing.self, from: data)
     }
 
     /// Convenience flow: optionally switch endpoint, connect, then create a
