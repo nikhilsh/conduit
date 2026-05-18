@@ -1,0 +1,154 @@
+name: release-orchestrator
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag to orchestrate (for manual reruns)
+        required: true
+        type: string
+  push:
+    tags: ['v*']
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-orchestrator-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  wait-and-deploy:
+    name: wait for release jobs and deploy website
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for tagged release workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          wait_for_workflow() {
+            local workflow_name="$1"
+
+            echo "waiting for ${workflow_name} on tag ${RELEASE_TAG}"
+            while true; do
+              run_json="$(gh run list \
+                -R "$GITHUB_REPOSITORY" \
+                --workflow "${workflow_name}" \
+                --limit 20 \
+                --json databaseId,workflowName,headBranch,status,conclusion,url,event)"
+
+              matched="$(
+                python3 - "${RELEASE_TAG}" <<'PY' <<<"${run_json}"
+import json, sys
+
+tag = sys.argv[1]
+runs = json.load(sys.stdin)
+
+for run in runs:
+    if run.get("headBranch") == tag and run.get("event") == "push":
+        print(json.dumps(run))
+        break
+PY
+              )"
+
+              if [ -z "${matched}" ]; then
+                echo "no run found yet for ${workflow_name}; sleeping"
+                sleep 15
+                continue
+              fi
+
+              status="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["status"])' <<<"${matched}")"
+              conclusion="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("conclusion") or "")' <<<"${matched}")"
+              url="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["url"])' <<<"${matched}")"
+
+              echo "${workflow_name}: status=${status} conclusion=${conclusion:-pending} ${url}"
+
+              if [ "${status}" != "completed" ]; then
+                sleep 15
+                continue
+              fi
+
+              if [ "${conclusion}" != "success" ]; then
+                echo "::error title=${workflow_name} failed::${workflow_name} ended with conclusion=${conclusion}. See ${url}"
+                exit 1
+              fi
+
+              return 0
+            done
+          }
+
+          wait_for_workflow "release-ios"
+          wait_for_workflow "release-android"
+          wait_for_workflow "release-harness"
+
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "${RELEASE_TAG}" -R "$GITHUB_REPOSITORY" --json assets,tagName,url)"
+          echo "${release_json}"
+
+          python3 - "${RELEASE_TAG}" <<'PY' <<<"${release_json}"
+import json, sys
+
+tag = sys.argv[1]
+release = json.load(sys.stdin)
+assets = {asset["name"] for asset in release.get("assets", [])}
+required = {
+    "SweKitty.ipa",
+    "app-release.apk",
+    "swe-kitty-harness-linux-amd64",
+    "swe-kitty-harness-linux-arm64",
+    "swe-kitty-harness-darwin-amd64",
+    "swe-kitty-harness-darwin-arm64",
+}
+missing = sorted(required - assets)
+if missing:
+    raise SystemExit(f"release {tag} missing assets: {', '.join(missing)}")
+PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install Fyra CLI
+        run: curl -fsSL https://fyra.sh/install.sh | sh
+
+      - name: Configure Fyra auth
+        run: |
+          mkdir -p "$HOME/.fyra"
+          cat > "$HOME/.fyra/config.yaml" <<EOF
+          server_address: ${FYRA_SERVER:-server.fyra.sh:50051}
+          token: ${FYRA_TOKEN}
+          EOF
+        env:
+          FYRA_TOKEN: ${{ secrets.FYRA_TOKEN }}
+          FYRA_SERVER: ${{ secrets.FYRA_SERVER }}
+
+      - name: Build website against latest release
+        working-directory: website
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy website to Fyra
+        working-directory: website/out
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cp ../.deploy.yaml .deploy.yaml
+          fyra push --appname swekitty

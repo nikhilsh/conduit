@@ -36,6 +36,18 @@ Optional secrets for a persistent Android signing key:
 
 Use those only if you want builds to stay signed with the same key across releases, which allows upgrade-in-place instead of uninstall/reinstall.
 
+### Website deploy secrets
+
+Required for automated website deploy after a successful tagged release:
+
+- `FYRA_TOKEN`
+
+Optional:
+
+- `FYRA_SERVER`
+
+If omitted, the deploy workflow uses the default `server.fyra.sh:50051`.
+
 ## Release flow
 
 1. Make sure `main` contains the code you want to ship.
@@ -49,13 +61,23 @@ git push origin main
 git push origin v0.0.X
 ```
 
-3. Watch the three release workflows:
+3. The tag now triggers four workflows:
+
+- `release-ios`
+- `release-android`
+- `release-harness`
+- `release-orchestrator`
+
+The orchestrator waits for the first three to finish, verifies the release assets, rebuilds the website, and pushes it to Fyra automatically.
+
+Manual watch example:
 
 ```sh
 gh run list --limit 10
 gh run watch <release-ios-run-id> --exit-status
 gh run watch <release-android-run-id> --exit-status
 gh run watch <release-harness-run-id> --exit-status
+gh run watch <release-orchestrator-run-id> --exit-status
 ```
 
 4. Verify the GitHub Release has the expected assets:
@@ -70,7 +92,9 @@ Example:
 gh release view v0.0.X -R nikhilsh/swe-kitty --json assets,tagName,url,name
 ```
 
-5. Rebuild and deploy the website after the release assets are present:
+5. The website deploy is automatic after successful tagged releases.
+
+Manual fallback if the orchestrator fails after release assets are already present:
 
 ```sh
 cd website
@@ -137,7 +161,18 @@ gh secret list -R nikhilsh/swe-kitty
 
 ### Website shows no APK button
 
-The latest GitHub Release does not contain an APK asset. Fix the Android release first, then rebuild and push the website again.
+The latest GitHub Release used by the site does not yet contain an APK asset. Fix the Android release first, then rerun the orchestrator or rebuild/push the website manually.
+
+### Orchestrator fails before website deploy
+
+Check:
+
+- `FYRA_TOKEN` exists in repo secrets
+- `release-ios`, `release-android`, and `release-harness` all succeeded for the same tag
+- the GitHub Release has:
+  - `SweKitty.ipa`
+  - `app-release.apk`
+  - the four harness binaries
 
 ### Fyra push fails from `website/out`
 

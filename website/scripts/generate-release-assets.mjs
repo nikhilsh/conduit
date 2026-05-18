@@ -26,12 +26,18 @@ if (!Array.isArray(releases) || releases.length === 0) {
   throw new Error("no releases returned from GitHub");
 }
 
+const isPublished = (item) => !item.draft && !item.prerelease;
+const assetsOf = (item) => (Array.isArray(item.assets) ? item.assets : []);
+const hasIpa = (item) => assetsOf(item).some((asset) => asset.name === "SweKitty.ipa");
+
 const release =
-  releases.find((item) => !item.draft && !item.prerelease) ??
+  releases.find((item) => isPublished(item) && hasIpa(item)) ??
+  releases.find((item) => !item.draft && hasIpa(item)) ??
+  releases.find((item) => isPublished(item)) ??
   releases.find((item) => !item.draft) ??
   releases[0];
 
-const assets = Array.isArray(release.assets) ? release.assets : [];
+const assets = assetsOf(release);
 
 const ipa = assets.find((asset) => asset.name === "SweKitty.ipa");
 const apk = assets.find((asset) => asset.name.endsWith(".apk"));
