@@ -136,6 +136,9 @@ fn normalized_role(role: &str) -> String {
 }
 
 fn classify_kind(role: &str, content: &str) -> String {
+    if looks_like_pending_input(content) {
+        return "pending_input".to_string();
+    }
     if role == "tool" {
         if looks_like_diff(content) {
             return "diff".to_string();
@@ -164,6 +167,13 @@ fn classify_status(content: &str) -> String {
 fn looks_like_diff(text: &str) -> bool {
     text.lines()
         .any(|line| line.starts_with('+') || line.starts_with('-') || line.starts_with("@@"))
+}
+
+fn looks_like_pending_input(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("request_user_input")
+        || (lower.contains("pending") && lower.contains("input"))
+        || (lower.contains("select") && lower.contains("option"))
 }
 
 #[cfg(test)]
@@ -204,5 +214,17 @@ mod tests {
         };
         let item = ConversationItem::from_chat_event(&event, 0);
         assert_eq!(item.kind, "diff");
+    }
+
+    #[test]
+    fn pending_input_is_classified() {
+        let event = ChatEvent {
+            role: "assistant".to_string(),
+            content: "request_user_input: please select one option".to_string(),
+            ts: "2026-05-18T00:00:00Z".to_string(),
+            files: vec![],
+        };
+        let item = ConversationItem::from_chat_event(&event, 0);
+        assert_eq!(item.kind, "pending_input");
     }
 }

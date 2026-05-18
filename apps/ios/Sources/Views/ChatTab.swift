@@ -15,7 +15,13 @@ struct ChatTab: View {
                         if events.isEmpty {
                             emptyState
                         } else {
-                            ConversationTimelineView(events: events)
+                            ConversationTimelineView(events: events) { reply in
+                                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    draft = reply
+                                } else {
+                                    draft += "\n" + reply
+                                }
+                            }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }

@@ -168,6 +168,23 @@ private struct ConversationRenderer {
         }
         return nil
     }
+
+    static func extractPendingOptions(from text: String) -> [String] {
+        var opts: [String] = []
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                let value = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if !value.isEmpty && !opts.contains(value) { opts.append(value) }
+                continue
+            }
+            if line.lowercased().hasPrefix("option:") {
+                let value = String(line.dropFirst("option:".count)).trimmingCharacters(in: .whitespaces)
+                if !value.isEmpty && !opts.contains(value) { opts.append(value) }
+            }
+        }
+        return Array(opts.prefix(4))
+    }
 }
 
 private enum ToolSection: Equatable {
@@ -180,11 +197,12 @@ private enum ToolSection: Equatable {
 
 struct ConversationTimelineView: View {
     let events: [ConversationItem]
+    let onQuickReply: (String) -> Void
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 14) {
             ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
-                ConversationEventRow(event: event)
+                ConversationEventRow(event: event, onQuickReply: onQuickReply)
                     .id(idx)
             }
         }
@@ -193,10 +211,15 @@ struct ConversationTimelineView: View {
 
 private struct ConversationEventRow: View {
     let event: ConversationItem
+    let onQuickReply: (String) -> Void
 
     private var role: ConversationRole { ConversationRole(rawValue: event.role) }
 
     var body: some View {
+        if event.kind == "pending_input" {
+            ConversationPendingInputCard(event: event, onQuickReply: onQuickReply)
+            return
+        }
         switch role {
         case .user:
             HStack {
@@ -227,6 +250,47 @@ private struct ConversationEventRow: View {
                 Spacer(minLength: 70)
             }
         }
+    }
+}
+
+private struct ConversationPendingInputCard: View {
+    let event: ConversationItem
+    let onQuickReply: (String) -> Void
+
+    private var options: [String] { ConversationRenderer.extractPendingOptions(from: event.content) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "questionmark.bubble.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SweKittyTheme.accentStrong)
+                Text("INPUT NEEDED")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(SweKittyTheme.textSecondary)
+                Spacer()
+                ConversationStatusChip(status: event.status)
+            }
+            ConversationMarkdownBlock(text: event.content, role: .assistant)
+            if !options.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(options, id: \.self) { option in
+                            Button(option) { onQuickReply(option) }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .glassCapsule(interactive: true, tint: SweKittyTheme.accentStrong.opacity(0.24))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassRect(cornerRadius: 18, tint: SweKittyTheme.accentStrong.opacity(0.20))
     }
 }
 

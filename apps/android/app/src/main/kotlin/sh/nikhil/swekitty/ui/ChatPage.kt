@@ -167,6 +167,24 @@ private object ConversationRenderer {
         }
         return null
     }
+
+    fun extractPendingOptions(text: String): List<String> {
+        val options = linkedSetOf<String>()
+        text.lineSequence().forEach { raw ->
+            val line = raw.trim()
+            when {
+                line.startsWith("- ") || line.startsWith("* ") -> {
+                    val value = line.drop(2).trim()
+                    if (value.isNotEmpty()) options += value
+                }
+                line.lowercase().startsWith("option:") -> {
+                    val value = line.substringAfter("option:").trim()
+                    if (value.isNotEmpty()) options += value
+                }
+            }
+        }
+        return options.take(4)
+    }
 }
 
 @Composable
@@ -212,7 +230,9 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
                     item { EmptyConversationCard() }
                 } else {
                     items(events.size) { index ->
-                        ConversationEventRow(events[index])
+                        ConversationEventRow(events[index]) { reply ->
+                            draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
+                        }
                     }
                 }
                 item { Spacer(Modifier.height(1.dp)) }
@@ -273,7 +293,11 @@ private fun EmptyConversationCard() {
 }
 
 @Composable
-private fun ConversationEventRow(ev: ConversationItem) {
+private fun ConversationEventRow(ev: ConversationItem, onQuickReply: (String) -> Unit) {
+    if (ev.kind == "pending_input") {
+        PendingInputCard(ev, onQuickReply)
+        return
+    }
     when (ConversationRole.from(ev.role)) {
         ConversationRole.User -> Row(modifier = Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(0.18f))
@@ -287,6 +311,40 @@ private fun ConversationEventRow(ev: ConversationItem) {
         ConversationRole.System -> Row(modifier = Modifier.fillMaxWidth()) {
             ConversationBubble(ev, ConversationRole.System, Modifier.weight(0.88f), alignEnd = false)
             Spacer(Modifier.weight(0.12f))
+        }
+    }
+}
+
+@Composable
+private fun PendingInputCard(ev: ConversationItem, onQuickReply: (String) -> Unit) {
+    val options = remember(ev.content) { ConversationRenderer.extractPendingOptions(ev.content) }
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.28f)),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Info, null, tint = ConversationRole.Assistant.accent, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("INPUT NEEDED", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(6.dp))
+                StatusChip(ev.status)
+            }
+            MarkdownBlock(ev.content, ConversationRole.Assistant)
+            if (options.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    options.forEach { option ->
+                        AssistChip(onClick = { onQuickReply(option) }, label = { Text(option) })
+                        Spacer(Modifier.width(2.dp))
+                    }
+                }
+            }
         }
     }
 }

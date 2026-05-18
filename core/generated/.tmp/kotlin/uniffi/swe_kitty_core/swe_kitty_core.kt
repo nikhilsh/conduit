@@ -817,6 +817,8 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -855,6 +857,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_join_session(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`assistant`: RustBuffer.ByValue,
     ): Long
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_list_conversation_items(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_list_sessions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_notify_network_change(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -993,6 +997,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_join_session(
     ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittyclient_list_conversation_items(
+    ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_list_sessions(
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_notify_network_change(
@@ -1056,6 +1062,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_join_session() != 56798.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_list_conversation_items() != 3434.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_list_sessions() != 61787.toShort()) {
@@ -1534,6 +1543,8 @@ public interface SweKittyClientInterface {
     
     suspend fun `joinSession`(`sessionId`: kotlin.String, `assistant`: kotlin.String?)
     
+    fun `listConversationItems`(`sessionId`: kotlin.String): List<ConversationItem>
+    
     fun `listSessions`(): List<ProjectSession>
     
     fun `notifyNetworkChange`()
@@ -1748,6 +1759,19 @@ open class SweKittyClient: Disposable, AutoCloseable, SweKittyClientInterface {
     )
     }
 
+    
+    @Throws(SweKittyException::class)override fun `listConversationItems`(`sessionId`: kotlin.String): List<ConversationItem> {
+            return FfiConverterSequenceTypeConversationItem.lift(
+    callWithPointer {
+    uniffiRustCallWithError(SweKittyException) { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_list_conversation_items(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    )
+    }
+    
+
     override fun `listSessions`(): List<ProjectSession> {
             return FfiConverterSequenceTypeProjectSession.lift(
     callWithPointer {
@@ -1929,6 +1953,58 @@ public object FfiConverterTypeChatEvent: FfiConverterRustBuffer<ChatEvent> {
 
     override fun write(value: ChatEvent, buf: ByteBuffer) {
             FfiConverterString.write(value.`role`, buf)
+            FfiConverterString.write(value.`content`, buf)
+            FfiConverterString.write(value.`ts`, buf)
+            FfiConverterSequenceTypeViewEventFile.write(value.`files`, buf)
+    }
+}
+
+
+
+data class ConversationItem (
+    var `id`: kotlin.String, 
+    var `role`: kotlin.String, 
+    var `kind`: kotlin.String, 
+    var `status`: kotlin.String, 
+    var `content`: kotlin.String, 
+    var `ts`: kotlin.String, 
+    var `files`: List<ViewEventFile>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConversationItem: FfiConverterRustBuffer<ConversationItem> {
+    override fun read(buf: ByteBuffer): ConversationItem {
+        return ConversationItem(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeViewEventFile.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ConversationItem) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`role`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterString.allocationSize(value.`content`) +
+            FfiConverterString.allocationSize(value.`ts`) +
+            FfiConverterSequenceTypeViewEventFile.allocationSize(value.`files`)
+    )
+
+    override fun write(value: ConversationItem, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`role`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterString.write(value.`status`, buf)
             FfiConverterString.write(value.`content`, buf)
             FfiConverterString.write(value.`ts`, buf)
             FfiConverterSequenceTypeViewEventFile.write(value.`files`, buf)
@@ -2563,6 +2639,34 @@ public object FfiConverterOptionalTypePreviewInfo: FfiConverterRustBuffer<Previe
         } else {
             buf.put(1)
             FfiConverterTypePreviewInfo.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeConversationItem: FfiConverterRustBuffer<List<ConversationItem>> {
+    override fun read(buf: ByteBuffer): List<ConversationItem> {
+        val len = buf.getInt()
+        return List<ConversationItem>(len) {
+            FfiConverterTypeConversationItem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ConversationItem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeConversationItem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ConversationItem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeConversationItem.write(it, buf)
         }
     }
 }
