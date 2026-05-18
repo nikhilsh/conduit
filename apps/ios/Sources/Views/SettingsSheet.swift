@@ -15,46 +15,10 @@ struct SettingsSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Endpoint") {
-                    TextField("ws://192.168.1.10:1977", text: $url)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    SecureField("Bearer token", text: $token)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                Section {
-                    Button {
-                        showScanner = true
-                    } label: {
-                        Label("Scan pairing QR", systemImage: "qrcode.viewfinder")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button("Save & Connect") {
-                        store.endpoint = StoredEndpoint(url: url.trimmingCharacters(in: .whitespaces),
-                                                        token: token.trimmingCharacters(in: .whitespaces))
-                        store.disconnect()
-                        store.connect()
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(url.isEmpty || token.isEmpty)
-                }
-                if let scanError {
-                    Section { Text(scanError).foregroundStyle(.red) }
-                }
-                if store.endpoint.isComplete {
-                    Section("Paired Server") {
-                        LabeledContent("Endpoint", value: store.endpoint.url)
-                        LabeledContent("Token", value: "Saved in Keychain")
-                    }
-                }
-                Section("Status") {
-                    LabeledContent("Connection") {
-                        Text(connectionLabel).foregroundStyle(.secondary)
-                    }
-                }
+                pairedSection
+                pairingSection
+                statusSection
+                aboutSection
             }
             .scrollContentBackground(.hidden)
             .background(SettingsBackground())
@@ -77,6 +41,96 @@ struct SettingsSheet: View {
         }
     }
 
+    @ViewBuilder
+    private var pairedSection: some View {
+        if store.endpoint.isComplete {
+            Section("Paired Harness") {
+                LabeledContent("Host", value: store.endpoint.displayHost)
+                LabeledContent("Token", value: "Stored in Keychain")
+                Button(role: .destructive) {
+                    store.endpoint = .empty
+                    store.disconnect()
+                    url = ""
+                    token = ""
+                } label: {
+                    Label("Forget harness", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    private var pairingSection: some View {
+        Section(store.endpoint.isComplete ? "Re-pair" : "Pair a harness") {
+            TextField("ws://192.168.1.10:1977", text: $url)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+            SecureField("Bearer token", text: $token)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            Button {
+                showScanner = true
+            } label: {
+                Label("Scan pairing QR", systemImage: "qrcode.viewfinder")
+            }
+
+            Button {
+                save()
+            } label: {
+                Label("Save & Connect", systemImage: "link")
+            }
+            .disabled(url.isEmpty || token.isEmpty)
+
+            if let scanError {
+                Text(scanError)
+                    .font(.footnote)
+                    .foregroundStyle(SweKittyTheme.danger)
+            }
+        }
+    }
+
+    private var statusSection: some View {
+        Section("Harness Status") {
+            HStack {
+                Text("Link")
+                Spacer()
+                HarnessBadge(state: store.harness)
+            }
+            if let reason = store.harness.failureReason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(SweKittyTheme.danger)
+            }
+            if store.endpoint.isComplete {
+                Button {
+                    store.reconnect()
+                } label: {
+                    Label("Reconnect", systemImage: "arrow.clockwise")
+                }
+            }
+        }
+    }
+
+    private var aboutSection: some View {
+        Section("About") {
+            LabeledContent("App", value: "SweKitty")
+            if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                LabeledContent("Version", value: version)
+            }
+        }
+    }
+
+    private func save() {
+        store.endpoint = StoredEndpoint(
+            url: url.trimmingCharacters(in: .whitespaces),
+            token: token.trimmingCharacters(in: .whitespaces)
+        )
+        store.disconnect()
+        store.connect()
+        dismiss()
+    }
+
     private func handleScan(_ code: String) {
         guard let parsed = PairingURL.parse(code) else {
             scanError = "Not a SweKitty pairing URL: \(code.prefix(40))…"
@@ -85,15 +139,6 @@ struct SettingsSheet: View {
         scanError = nil
         url = parsed.endpoint
         token = parsed.token
-    }
-
-    private var connectionLabel: String {
-        switch store.connection {
-        case .disconnected:  return "Disconnected"
-        case .connecting:    return "Connecting…"
-        case .connected:     return "Connected"
-        case .failed(let e): return "Failed: \(e)"
-        }
     }
 }
 

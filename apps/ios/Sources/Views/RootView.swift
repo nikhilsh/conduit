@@ -17,12 +17,12 @@ struct RootView: View {
                    let session = store.sessions.first(where: { $0.id == id }) {
                     ProjectView(session: session)
                 } else {
-                    ContentUnavailableView(
-                        "No session selected",
-                        systemImage: "terminal",
-                        description: Text(detailHint)
+                    DetailEmptyState(
+                        harness: store.harness,
+                        endpoint: store.endpoint,
+                        onConfigure: { showSettings = true },
+                        onReconnect: { store.reconnect() }
                     )
-                    .glassPane(horizontalPadding: 32, verticalPadding: 28)
                 }
             }
         }
@@ -33,68 +33,111 @@ struct RootView: View {
             // First launch: open settings if endpoint is unconfigured.
             if !store.endpoint.isComplete {
                 showSettings = true
-            } else if store.connection == .disconnected {
+            } else if store.harness == .disconnected {
                 store.connect()
             }
         }
     }
-
-    private var detailHint: String {
-        switch store.connection {
-        case .disconnected: return "Open Settings to enter an endpoint and bearer token."
-        case .connecting:   return "Connecting…"
-        case .connected:    return "Tap + in the sidebar to start a session."
-        case .failed(let e): return "Connection failed: \(e)"
-        }
-    }
 }
 
-struct GlassAppBackground: View {
+/// Empty detail pane. Replaces the bare `ContentUnavailableView` so the
+/// user has a single place that explains harness state + actionable next
+/// step at any given moment.
+private struct DetailEmptyState: View {
+    let harness: HarnessState
+    let endpoint: StoredEndpoint
+    let onConfigure: () -> Void
+    let onReconnect: () -> Void
+
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.05, green: 0.07, blue: 0.13),
-                    Color(red: 0.10, green: 0.13, blue: 0.24),
-                    Color(red: 0.04, green: 0.05, blue: 0.10),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            RadialGradient(
-                colors: [
-                    Color.white.opacity(0.14),
-                    Color.white.opacity(0.03),
-                    .clear,
-                ],
-                center: .topLeading,
-                startRadius: 30,
-                endRadius: 420
-            )
-            RadialGradient(
-                colors: [
-                    Color.cyan.opacity(0.14),
-                    .clear,
-                ],
-                center: .bottomTrailing,
-                startRadius: 20,
-                endRadius: 360
-            )
+        VStack(spacing: 18) {
+            Image(systemName: icon)
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(.white.opacity(0.7))
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+            Text(body)
+                .font(.callout)
+                .foregroundStyle(SweKittyTheme.mutedFG)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+            actionButtons
         }
-        .ignoresSafeArea()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
     }
-}
 
-extension View {
-    func glassPane(horizontalPadding: CGFloat = 20, verticalPadding: CGFloat = 16) -> some View {
-        self
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+    private var icon: String {
+        switch harness {
+        case .disconnected: return endpoint.isComplete ? "antenna.radiowaves.left.and.right.slash" : "wifi.slash"
+        case .connecting:   return "antenna.radiowaves.left.and.right"
+        case .linked:       return "terminal"
+        case .live:         return "terminal"
+        case .failed:       return "exclamationmark.triangle"
+        }
+    }
+
+    private var title: String {
+        switch harness {
+        case .disconnected: return endpoint.isComplete ? "Disconnected" : "Welcome to SweKitty"
+        case .connecting:   return "Connecting to harness"
+        case .linked:       return "No session selected"
+        case .live:         return "No session selected"
+        case .failed:       return "Harness unreachable"
+        }
+    }
+
+    private var body: String {
+        switch harness {
+        case .disconnected:
+            return endpoint.isComplete
+                ? "We're not currently linked to the harness."
+                : "Pair this device with a running swe-kitty harness in Settings to begin."
+        case .connecting:
+            return "Establishing a websocket link to \(endpoint.displayHost)."
+        case .linked, .live:
+            return "Tap + in the sidebar to start a session against \(endpoint.displayHost)."
+        case .failed(let reason):
+            return reason
+        }
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            if !endpoint.isComplete {
+                Button {
+                    onConfigure()
+                } label: {
+                    Label("Pair server", systemImage: "qrcode.viewfinder")
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                switch harness {
+                case .disconnected, .failed:
+                    Button {
+                        onReconnect()
+                    } label: {
+                        Label("Reconnect", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button {
+                        onConfigure()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .buttonStyle(.bordered)
+                default:
+                    Button {
+                        onConfigure()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
-            .shadow(color: .black.opacity(0.16), radius: 18, y: 12)
+        }
+        .padding(.top, 6)
     }
 }

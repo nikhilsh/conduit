@@ -21,45 +21,75 @@ struct ProjectView: View {
     @State private var browserMode: BrowserMode = .preview
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             header
-            Divider().overlay(Color.white.opacity(0.12))
             tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: SweKittyTheme.cardCornerRadius, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: SweKittyTheme.cardCornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: SweKittyTheme.cardCornerRadius, style: .continuous))
         }
         .padding(12)
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    private var status: SessionStatus? { store.statusBySession[session.id] }
+    private var lifecycle: SessionLifecycle? { store.sessionLifecycle[session.id] }
+
     private var header: some View {
-        HStack {
-            HealthDot(health: store.statusBySession[session.id]?.health ?? "unknown")
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.name).font(.headline)
-                Text(store.statusBySession[session.id]?.phase ?? "ready")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            MemoryButton(tab: $tab, mode: $browserMode)
-            agentBadge
-        }
-        .padding(.horizontal)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
-        .overlay(alignment: .bottom) {
-            Picker("View", selection: $tab) {
-                ForEach(ProjectTab.allCases) { t in
-                    Label(t.label, systemImage: t.systemImage).tag(t)
+        VStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                HealthDot(health: status?.health ?? "unknown", size: 10)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.name)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(SweKittyTheme.mutedFG)
+                        .lineLimit(1)
                 }
+                Spacer()
+                MemoryButton(tab: $tab, mode: $browserMode)
+                agentBadge
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.bottom, 4)
-            .offset(y: 40)
+            tabPicker
         }
-        .padding(.bottom, 44)
-        .glassPane(horizontalPadding: 18, verticalPadding: 16)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: SweKittyTheme.cardCornerRadius, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: SweKittyTheme.cardCornerRadius, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+        )
+    }
+
+    private var subtitle: String {
+        let parts: [String] = [
+            session.branch.flatMap { $0.isEmpty ? nil : $0 } ?? "no branch",
+            status?.phase ?? "ready",
+            lifecycleLabel,
+        ].compactMap { $0 }
+        return parts.joined(separator: " · ")
+    }
+
+    private var lifecycleLabel: String? {
+        switch lifecycle {
+        case .exited(let c): return "exited(\(c))"
+        case .failed(let m): return m
+        case .creating, .live, .none: return nil
+        }
     }
 
     private var agentBadge: some View {
@@ -79,11 +109,22 @@ struct ProjectView: View {
                 Image(systemName: "chevron.down")
             }
             .font(.caption.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.accentColor.opacity(0.15))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(SweKittyTheme.accent.opacity(0.25))
             .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(SweKittyTheme.accent.opacity(0.45), lineWidth: 1))
         }
+    }
+
+    private var tabPicker: some View {
+        Picker("View", selection: $tab) {
+            ForEach(ProjectTab.allCases) { t in
+                Label(t.label, systemImage: t.systemImage).tag(t)
+            }
+        }
+        .pickerStyle(.segmented)
     }
 
     @ViewBuilder
