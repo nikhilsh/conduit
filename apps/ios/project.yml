@@ -49,6 +49,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        NSCameraUsageDescription: "Scan SweKitty pairing QR codes."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: sh.nikhil.swekitty

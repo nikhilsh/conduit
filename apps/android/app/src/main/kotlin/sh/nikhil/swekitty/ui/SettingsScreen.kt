@@ -1,7 +1,10 @@
 package sh.nikhil.swekitty.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
@@ -10,6 +13,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.ConnectionState
+import sh.nikhil.swekitty.PairingURL
 import sh.nikhil.swekitty.SessionStore
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -20,6 +24,19 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
 
     var url by remember(endpoint.url) { mutableStateOf(endpoint.url) }
     var token by remember(endpoint.token) { mutableStateOf(endpoint.token) }
+    var scanError by remember { mutableStateOf<String?>(null) }
+
+    val scanner = rememberLauncherForActivityResult(SweKittyScanContract()) { result ->
+        if (result == null) return@rememberLauncherForActivityResult
+        val parsed = PairingURL.parse(result)
+        if (parsed == null) {
+            scanError = "Not a SweKitty pairing URL: ${result.take(40)}…"
+        } else {
+            scanError = null
+            url = parsed.endpoint
+            token = parsed.token
+        }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -46,16 +63,28 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Button(
-                onClick = {
-                    store.setEndpoint(url, token)
-                    store.disconnect()
-                    store.connect()
-                    onDismiss()
-                },
-                enabled = url.isNotBlank() && token.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save & Connect") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { scanner.launch(Unit) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Scan QR")
+                }
+                Button(
+                    onClick = {
+                        store.setEndpoint(url, token)
+                        store.disconnect()
+                        store.connect()
+                        onDismiss()
+                    },
+                    enabled = url.isNotBlank() && token.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("Save & Connect") }
+            }
+
+            scanError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 
             Text(
                 text = when (val c = connection) {
