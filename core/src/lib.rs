@@ -5,12 +5,14 @@ pub mod transport;
 pub mod views;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::runtime::Runtime;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 pub use views::{
@@ -19,6 +21,13 @@ pub use views::{
 
 uniffi::include_scaffolding!("swe_kitty_core");
 
+/// Our own multi-thread tokio runtime with full I/O + timer support.
+///
+/// UniFFI's async bridge polls our futures on a runtime it controls,
+/// which historically did not have the I/O reactor enabled — touching
+/// `tokio::net` or `tokio::time` from there panicked with
+/// "no reactor running". We sidestep that by bouncing every async
+/// method body onto this runtime via [`run_on_core`].
 static CORE_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -60,6 +69,10 @@ pub trait SweKittyDelegate: Send + Sync {
 }
 
 pub struct SweKittyClient {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
     endpoint: String,
     token: String,
     handles: Mutex<HashMap<String, transport::SessionHandle>>,
@@ -70,21 +83,26 @@ pub struct SweKittyClient {
 impl SweKittyClient {
     pub fn new(endpoint: String, bearer_token: String) -> Self {
         Self {
-            endpoint,
-            token: bearer_token,
-            handles: Mutex::new(HashMap::new()),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
-            delegate: Mutex::new(None),
+            inner: Arc::new(Inner {
+                endpoint,
+                token: bearer_token,
+                handles: Mutex::new(HashMap::new()),
+                sessions: Arc::new(Mutex::new(HashMap::new())),
+                delegate: Mutex::new(None),
+            }),
         }
     }
 
     pub async fn connect(&self, delegate: Box<dyn SweKittyDelegate>) -> Result<(), SweKittyError> {
-        *self.delegate.lock() = Some(Arc::from(delegate));
+        // Pure store of the delegate — no network work yet. Real socket
+        // setup happens on the first session.
+        *self.inner.delegate.lock() = Some(Arc::from(delegate));
         Ok(())
     }
 
     pub fn disconnect(&self) {
         let handles: Vec<_> = self
+            .inner
             .handles
             .lock()
             .drain()
@@ -93,7 +111,7 @@ impl SweKittyClient {
         for handle in handles {
             handle.close();
         }
-        *self.delegate.lock() = None;
+        *self.inner.delegate.lock() = None;
     }
 
     pub async fn create_session(
@@ -101,10 +119,15 @@ impl SweKittyClient {
         assistant: String,
         branch: Option<String>,
     ) -> Result<String, SweKittyError> {
-        let session_id = Uuid::new_v4().to_string();
-        self.open_session(session_id.clone(), assistant, branch)
-            .await?;
-        Ok(session_id)
+        let inner = Arc::clone(&self.inner);
+        run_on_core(async move {
+            let session_id = Uuid::new_v4().to_string();
+            inner
+                .open_session(session_id.clone(), assistant, branch)
+                .await?;
+            Ok(session_id)
+        })
+        .await
     }
 
     pub async fn join_session(
@@ -112,26 +135,36 @@ impl SweKittyClient {
         session_id: String,
         assistant: Option<String>,
     ) -> Result<(), SweKittyError> {
-        self.open_session(
-            session_id,
-            assistant.unwrap_or_else(|| "claude".to_string()),
-            None,
-        )
+        let inner = Arc::clone(&self.inner);
+        run_on_core(async move {
+            inner
+                .open_session(
+                    session_id,
+                    assistant.unwrap_or_else(|| "claude".to_string()),
+                    None,
+                )
+                .await
+        })
         .await
     }
 
     pub async fn send_input(&self, session_id: String, data: Vec<u8>) -> Result<(), SweKittyError> {
-        self.lookup_handle(&session_id)?.send_input(data).await
+        let handle = self.inner.lookup_handle(&session_id)?;
+        run_on_core(async move { handle.send_input(data).await }).await
     }
 
     pub async fn send_chat(&self, session_id: String, msg: String) -> Result<(), SweKittyError> {
-        self.lookup_handle(&session_id)?
-            .send_json(&serde_json::json!({
-                "type": "chat",
-                "from": "mobile",
-                "msg": msg,
-            }))
-            .await
+        let handle = self.inner.lookup_handle(&session_id)?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "chat",
+                    "from": "mobile",
+                    "msg": msg,
+                }))
+                .await
+        })
+        .await
     }
 
     pub async fn resize(
@@ -140,7 +173,8 @@ impl SweKittyClient {
         rows: u16,
         cols: u16,
     ) -> Result<(), SweKittyError> {
-        self.lookup_handle(&session_id)?.resize(rows, cols).await
+        let handle = self.inner.lookup_handle(&session_id)?;
+        run_on_core(async move { handle.resize(rows, cols).await }).await
     }
 
     pub async fn switch_agent(
@@ -148,30 +182,39 @@ impl SweKittyClient {
         session_id: String,
         assistant: String,
     ) -> Result<(), SweKittyError> {
-        self.lookup_handle(&session_id)?
-            .send_json(&serde_json::json!({
-                "type": "switch_agent",
-                "assistant": assistant,
-            }))
-            .await
+        let handle = self.inner.lookup_handle(&session_id)?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "switch_agent",
+                    "assistant": assistant,
+                }))
+                .await
+        })
+        .await
     }
 
     pub async fn exit_session(&self, session_id: String) -> Result<(), SweKittyError> {
-        let handle = self
-            .handles
-            .lock()
-            .remove(&session_id)
-            .ok_or_else(|| SweKittyError::UnknownSession(session_id.clone()))?;
-        let _ = handle
-            .send_json(&serde_json::json!({ "type": "exit" }))
-            .await;
-        handle.close();
-        self.sessions.lock().remove(&session_id);
-        Ok(())
+        let inner = Arc::clone(&self.inner);
+        run_on_core(async move {
+            let handle = inner
+                .handles
+                .lock()
+                .remove(&session_id)
+                .ok_or_else(|| SweKittyError::UnknownSession(session_id.clone()))?;
+            let _ = handle
+                .send_json(&serde_json::json!({ "type": "exit" }))
+                .await;
+            handle.close();
+            inner.sessions.lock().remove(&session_id);
+            Ok(())
+        })
+        .await
     }
 
     pub fn get_session(&self, session_id: String) -> Result<ProjectSession, SweKittyError> {
-        self.sessions
+        self.inner
+            .sessions
             .lock()
             .get(&session_id)
             .map(|state| state.session.clone())
@@ -179,15 +222,18 @@ impl SweKittyClient {
     }
 
     pub fn list_sessions(&self) -> Vec<ProjectSession> {
-        self.sessions
+        self.inner
+            .sessions
             .lock()
             .values()
             .map(|state| state.session.clone())
             .collect()
     }
+}
 
+impl Inner {
     async fn open_session(
-        &self,
+        self: Arc<Self>,
         session_id: String,
         assistant: String,
         branch: Option<String>,
@@ -213,7 +259,6 @@ impl SweKittyClient {
         );
 
         let handle = transport::connect(
-            CORE_RUNTIME.handle(),
             self.endpoint.clone(),
             session_id.clone(),
             assistant.clone(),
@@ -235,6 +280,23 @@ impl SweKittyClient {
             .cloned()
             .ok_or_else(|| SweKittyError::UnknownSession(session_id.to_string()))
     }
+}
+
+/// Run `fut` on the swe-kitty-core tokio runtime and await its result
+/// from any caller, including ones that don't have a tokio context.
+///
+/// The returned future itself only touches a oneshot channel and the
+/// runtime handle, both of which are runtime-agnostic.
+async fn run_on_core<F, T>(fut: F) -> T
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = oneshot::channel();
+    CORE_RUNTIME.spawn(async move {
+        let _ = tx.send(fut.await);
+    });
+    rx.await.expect("swe-kitty-core runtime task cancelled")
 }
 
 struct ClientDelegate {
