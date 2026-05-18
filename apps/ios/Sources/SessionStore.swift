@@ -274,6 +274,25 @@ final class SessionStore {
         connect()
     }
 
+    /// Convenience flow: optionally switch endpoint, connect, then create a
+    /// new session and move it into `cwd`.
+    func connectAndStart(endpoint nextEndpoint: StoredEndpoint? = nil, assistant: String, cwd: String) {
+        if let nextEndpoint {
+            endpoint = nextEndpoint
+            upsertSavedServer(name: nextEndpoint.displayHost, endpoint: nextEndpoint, makeDefault: true)
+        }
+        disconnect()
+        connect()
+        Task { @MainActor in
+            do {
+                try await waitUntilCommandReady()
+                createSession(assistant: assistant, startupCwd: cwd)
+            } catch {
+                harness = .failed("Connect/start failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func upsertSavedServer(name: String, endpoint: StoredEndpoint, makeDefault: Bool) {
         var next = savedServers
         if let idx = next.firstIndex(where: { $0.endpoint == endpoint }) {
@@ -329,7 +348,7 @@ final class SessionStore {
 
     // MARK: - Session lifecycle
 
-    func createSession(assistant: String, branch: String? = nil) {
+    func createSession(assistant: String, branch: String? = nil, startupCwd: String? = nil) {
         guard let client else { return }
         sessionCreationError = nil
         let pendingID = "pending-\(UUID().uuidString)"
@@ -337,6 +356,13 @@ final class SessionStore {
         Task {
             do {
                 let id = try await client.createSession(assistant: assistant, branch: branch)
+                if let startupCwd {
+                    let trimmed = startupCwd.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        let cmd = "cd \(Self.shellQuoted(trimmed)) && pwd\n"
+                        try? await client.sendInput(sessionId: id, data: Data(cmd.utf8))
+                    }
+                }
                 self.sessionLifecycle[pendingID] = nil
                 self.sessionLifecycle[id] = .live
                 self.harness = .live
@@ -568,9 +594,33 @@ final class SessionStore {
         }
         Keychain.set(raw, for: savedServersKey)
     }
+
+    private func waitUntilCommandReady(timeoutMs: UInt64 = 6000) async throws {
+        let pollNs: UInt64 = 100_000_000
+        var elapsedNs: UInt64 = 0
+        let timeoutNs = timeoutMs * 1_000_000
+        while elapsedNs < timeoutNs {
+            switch harness {
+            case .linked, .live, .reconnecting:
+                return
+            case .failed(let reason):
+                throw NSError(domain: "SessionStore", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+            default:
+                break
+            }
+            try await Task.sleep(nanoseconds: pollNs)
+            elapsedNs += pollNs
+        }
+        throw NSError(domain: "SessionStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for harness link"])
+    }
 }
 
 private extension SessionStore {
+    static func shellQuoted(_ raw: String) -> String {
+        let escaped = raw.replacingOccurrences(of: "'", with: "'\"'\"'")
+        return "'\(escaped)'"
+    }
+
     static func describe(_ error: Error) -> String {
         if isAuth(error) {
             return "Authentication failed. This pairing token has expired; scan a fresh QR code from the harness."

@@ -10,6 +10,7 @@ struct SettingsSheet: View {
 
     @State private var url: String = ""
     @State private var token: String = ""
+    @State private var startCwd: String = "~"
     @State private var showScanner: Bool = false
     @State private var scanError: String?
 
@@ -43,6 +44,7 @@ struct SettingsSheet: View {
             .onAppear {
                 url = store.endpoint.url
                 token = store.endpoint.token
+                startCwd = "~"
             }
             .sheet(isPresented: $showScanner) {
                 QRScannerSheet { code in
@@ -145,6 +147,14 @@ struct SettingsSheet: View {
 
             Divider().background(SweKittyTheme.separator)
 
+            TextField("Start directory (e.g. ~/projects/kitty)", text: $startCwd)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.plain)
+                .padding(.vertical, 4)
+
+            Divider().background(SweKittyTheme.separator)
+
             Button {
                 showScanner = true
             } label: {
@@ -174,6 +184,34 @@ struct SettingsSheet: View {
             .buttonStyle(.plain)
             .disabled(url.isEmpty || token.isEmpty)
             .padding(.top, 4)
+
+            HStack(spacing: 8) {
+                Button {
+                    connectAndStart(assistant: "claude")
+                } label: {
+                    Label("Connect + Start Claude", systemImage: "sparkles")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .glassCapsule(interactive: true, tint: SweKittyTheme.success.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+                .disabled(url.isEmpty || token.isEmpty)
+
+                Button {
+                    connectAndStart(assistant: "codex")
+                } label: {
+                    Label("Connect + Start Codex", systemImage: "chevron.left.forwardslash.chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .glassCapsule(interactive: true, tint: SweKittyTheme.accentStrong.opacity(0.50))
+                }
+                .buttonStyle(.plain)
+                .disabled(url.isEmpty || token.isEmpty)
+            }
 
             if let scanError {
                 Text(scanError)
@@ -240,6 +278,15 @@ struct SettingsSheet: View {
         dismiss()
     }
 
+    private func connectAndStart(assistant: String) {
+        let next = StoredEndpoint(
+            url: url.trimmingCharacters(in: .whitespaces),
+            token: token.trimmingCharacters(in: .whitespaces)
+        )
+        store.connectAndStart(endpoint: next, assistant: assistant, cwd: startCwd)
+        dismiss()
+    }
+
     private func handleScan(_ code: String) {
         guard let parsed = PairingURL.parse(code) else {
             scanError = "Not a SweKitty pairing URL: \(code.prefix(40))…"
@@ -257,12 +304,21 @@ enum PairingURL {
 
     static func parse(_ raw: String) -> Parsed? {
         guard let components = URLComponents(string: raw),
-              components.scheme?.lowercased() == "swekitty",
-              let host = components.host else { return nil }
-        let token = components.queryItems?.first(where: { $0.name == "token" })?.value ?? ""
+              let scheme = components.scheme?.lowercased() else { return nil }
+        let token = components.queryItems?.first(where: { $0.name.lowercased() == "token" })?.value ?? ""
         guard !token.isEmpty else { return nil }
-        let port = components.port.map { ":\($0)" } ?? ""
-        return Parsed(endpoint: "ws://\(host)\(port)", token: token)
+
+        if scheme == "swekitty", let host = components.host {
+            let port = components.port.map { ":\($0)" } ?? ""
+            return Parsed(endpoint: "ws://\(host)\(port)", token: token)
+        }
+
+        if (scheme == "ws" || scheme == "wss"),
+           let host = components.host {
+            let port = components.port.map { ":\($0)" } ?? ""
+            return Parsed(endpoint: "\(scheme)://\(host)\(port)", token: token)
+        }
+        return nil
     }
 }
 

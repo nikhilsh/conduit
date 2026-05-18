@@ -30,6 +30,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
 
     var url by remember(endpoint.url) { mutableStateOf(endpoint.url) }
     var token by remember(endpoint.token) { mutableStateOf(endpoint.token) }
+    var startCwd by remember { mutableStateOf("~") }
     var scanError by remember { mutableStateOf<String?>(null) }
 
     val scanner = rememberLauncherForActivityResult(SweKittyScanContract()) { result ->
@@ -106,6 +107,14 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            OutlinedTextField(
+                value = startCwd,
+                onValueChange = { startCwd = it },
+                label = { Text("Start directory (~/projects/kitty)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
                     onClick = { scanner.launch(Unit) },
@@ -130,6 +139,34 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                     enabled = url.isNotBlank() && token.isNotBlank(),
                     modifier = Modifier.weight(1f),
                 ) { Text("Save & Connect") }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = {
+                        store.connectAndStart(
+                            endpoint = Endpoint(url, token),
+                            assistant = "claude",
+                            cwd = startCwd,
+                        )
+                        onDismiss()
+                    },
+                    enabled = url.isNotBlank() && token.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("Connect + Claude") }
+
+                Button(
+                    onClick = {
+                        store.connectAndStart(
+                            endpoint = Endpoint(url, token),
+                            assistant = "codex",
+                            cwd = startCwd,
+                        )
+                        onDismiss()
+                    },
+                    enabled = url.isNotBlank() && token.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("Connect + Codex") }
             }
 
             scanError?.let {

@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -348,13 +349,30 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         connect()
     }
 
+    fun connectAndStart(endpoint: Endpoint? = null, assistant: String, cwd: String) {
+        endpoint?.let {
+            setEndpoint(it.url, it.token)
+            upsertSavedServer(name = it.displayHost, endpoint = it, makeDefault = true)
+        }
+        disconnect()
+        connect()
+        viewModelScope.launch {
+            val ready = waitUntilCommandReady()
+            if (!ready) {
+                _harness.value = HarnessState.Failed("Connect/start failed: harness did not become ready in time.")
+                return@launch
+            }
+            createSession(assistant = assistant, startupCwd = cwd)
+        }
+    }
+
     fun clearSessionCreationError() {
         _sessionCreationError.value = null
     }
 
     fun select(sessionId: String?) { _selectedId.value = sessionId }
 
-    fun createSession(assistant: String, branch: String? = null) {
+    fun createSession(assistant: String, branch: String? = null, startupCwd: String? = null) {
         val c = client ?: return
         _sessionCreationError.value = null
         val pendingId = "pending-${UUID.randomUUID()}"
@@ -362,6 +380,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         viewModelScope.launch {
             try {
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch) }
+                startupCwd?.trim()?.takeIf { it.isNotEmpty() }?.let { cwd ->
+                    val cmd = "cd ${shellQuoted(cwd)} && pwd\n"
+                    runCatching { withContext(Dispatchers.IO) { c.sendInput(id, cmd.toByteArray()) } }
+                }
                 updateLifecycle { (it - pendingId) + (id to SessionLifecycle.Live) }
                 _harness.value = HarnessState.Live
                 refreshSessions()
@@ -617,5 +639,24 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 }
             }
         }.getOrElse { emptyList() }
+    }
+
+    private suspend fun waitUntilCommandReady(timeoutMs: Long = 6_000L): Boolean {
+        return runCatching {
+            withTimeout(timeoutMs) {
+                while (true) {
+                    when (val h = _harness.value) {
+                        is HarnessState.Linked, is HarnessState.Live, is HarnessState.Reconnecting -> return@withTimeout true
+                        is HarnessState.Failed -> return@withTimeout false
+                        else -> delay(100)
+                    }
+                }
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun shellQuoted(raw: String): String {
+        val escaped = raw.replace("'", "'\"'\"'")
+        return "'$escaped'"
     }
 }
