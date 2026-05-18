@@ -3,20 +3,25 @@ package sh.nikhil.swekitty.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import sh.nikhil.swekitty.ConnectionState
+import sh.nikhil.swekitty.Endpoint
+import sh.nikhil.swekitty.HarnessState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EmptyDetail(
-    connection: ConnectionState,
+    harness: HarnessState,
+    endpoint: Endpoint,
     onOpenDrawer: () -> Unit,
     onOpenSettings: () -> Unit,
+    onReconnect: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -36,17 +41,46 @@ fun EmptyDetail(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text("No session selected", style = MaterialTheme.typography.headlineSmall)
+            val (title, body) = labels(harness, endpoint)
+            Text(title, style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(8.dp))
             Text(
-                text = when (connection) {
-                    is ConnectionState.Disconnected -> "Open Settings to enter an endpoint and bearer token."
-                    is ConnectionState.Connecting   -> "Connecting…"
-                    is ConnectionState.Connected    -> "Tap the menu to start a session."
-                    is ConnectionState.Failed       -> "Connection failed: ${connection.reason}"
-                },
+                body,
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
+            Spacer(Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!endpoint.isComplete) {
+                    Button(onClick = onOpenSettings) { Text("Pair server") }
+                } else {
+                    when (harness) {
+                        is HarnessState.Failed, is HarnessState.Disconnected -> {
+                            Button(onClick = onReconnect) {
+                                Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(6.dp)); Text("Reconnect")
+                            }
+                            OutlinedButton(onClick = onOpenDrawer) { Text("Sessions") }
+                        }
+                        else -> {
+                            Button(onClick = onOpenDrawer) {
+                                Icon(Icons.Default.Menu, null); Spacer(Modifier.width(6.dp)); Text("Open sessions")
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+private fun labels(harness: HarnessState, endpoint: Endpoint): Pair<String, String> = when (harness) {
+    is HarnessState.Disconnected -> if (endpoint.isComplete)
+        "Disconnected" to "We're not currently linked to the harness."
+    else
+        "Welcome to SweKitty" to "Pair this device with a running swe-kitty harness in Settings to begin."
+    is HarnessState.Connecting   -> "Connecting" to "Establishing a websocket link to ${endpoint.displayHost}."
+    is HarnessState.Linked,
+    is HarnessState.Live         -> "No session selected" to "Tap the menu to start a session against ${endpoint.displayHost}."
+    is HarnessState.Failed       -> "Harness unreachable" to harness.reason
 }

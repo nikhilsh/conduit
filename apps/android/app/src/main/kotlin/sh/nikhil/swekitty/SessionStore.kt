@@ -6,11 +6,13 @@ import androidx.lifecycle.viewModelScope
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 import uniffi.swe_kitty_core.ChatEvent
 import uniffi.swe_kitty_core.PreviewInfo
 import uniffi.swe_kitty_core.ProjectSession
@@ -18,15 +20,67 @@ import uniffi.swe_kitty_core.SessionStatus
 import uniffi.swe_kitty_core.SweKittyClient
 import uniffi.swe_kitty_core.SweKittyDelegate
 
-sealed class ConnectionState {
-    data object Disconnected : ConnectionState()
-    data object Connecting : ConnectionState()
-    data object Connected : ConnectionState()
-    data class Failed(val reason: String) : ConnectionState()
+/**
+ * Harness reachability state. The Rust `connect()` only stores a delegate
+ * — it doesn't prove the server is reachable — so we distinguish:
+ *  - [Linked]: handshake done, no traffic yet
+ *  - [Live]:   at least one round-trip succeeded
+ * A network error during operations turns us into [Failed].
+ */
+sealed class HarnessState {
+    data object Disconnected : HarnessState()
+    data object Connecting : HarnessState()
+    data object Linked : HarnessState()
+    data object Live : HarnessState()
+    data class Failed(val reason: String) : HarnessState()
+
+    val isReachable: Boolean get() = this is Linked || this is Live
+    val canIssueCommands: Boolean get() = isReachable
+    val badgeLabel: String get() = when (this) {
+        is Disconnected -> "Disconnected"
+        is Connecting   -> "Connecting…"
+        is Linked       -> "Ready"
+        is Live         -> "Live"
+        is Failed       -> "Offline"
+    }
+    val failureReason: String? get() = (this as? Failed)?.reason
+}
+
+/** Per-session lifecycle state, kept separately from the overall harness state. */
+sealed class SessionLifecycle {
+    data object Creating : SessionLifecycle()
+    data object Live : SessionLifecycle()
+    data class Exited(val code: Int) : SessionLifecycle()
+    data class FailedToStart(val reason: String) : SessionLifecycle()
+}
+
+/** Either a confirmed session or an in-flight placeholder for the sidebar. */
+sealed class VisibleSession {
+    abstract val id: String
+    data class Real(val session: ProjectSession) : VisibleSession() {
+        override val id: String get() = session.id
+    }
+    data class Creating(val pendingId: String, val reason: String? = null) : VisibleSession() {
+        override val id: String get() = pendingId
+    }
 }
 
 data class Endpoint(val url: String = "", val token: String = "") {
     val isComplete get() = url.isNotBlank() && token.isNotBlank()
+
+    /** Sanitized host display (strips ws[s]:// scheme and trailing slash). */
+    val displayHost: String
+        get() {
+            var s = url.trim()
+            listOf("wss://", "ws://", "https://", "http://").forEach { p ->
+                if (s.lowercase().startsWith(p)) {
+                    s = s.substring(p.length)
+                    return@forEach
+                }
+            }
+            s = s.trimEnd('/')
+            return s.ifEmpty { "(no endpoint)" }
+        }
 
     /**
      * http(s) base for resolving relative server paths (`/preview/<uuid>/`,
@@ -60,8 +114,8 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     private val _endpoint = MutableStateFlow(Endpoint())
     val endpoint: StateFlow<Endpoint> = _endpoint.asStateFlow()
 
-    private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-    val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    private val _harness = MutableStateFlow<HarnessState>(HarnessState.Disconnected)
+    val harness: StateFlow<HarnessState> = _harness.asStateFlow()
 
     private val _sessions = MutableStateFlow<List<ProjectSession>>(emptyList())
     val sessions: StateFlow<List<ProjectSession>> = _sessions.asStateFlow()
@@ -71,6 +125,13 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     private val _statusBySession = MutableStateFlow<Map<String, SessionStatus>>(emptyMap())
     val statusBySession: StateFlow<Map<String, SessionStatus>> = _statusBySession.asStateFlow()
+
+    private val _sessionLifecycle = MutableStateFlow<Map<String, SessionLifecycle>>(emptyMap())
+    val sessionLifecycle: StateFlow<Map<String, SessionLifecycle>> = _sessionLifecycle.asStateFlow()
+
+    /** Banner-style error for the most recent session-creation failure. */
+    private val _sessionCreationError = MutableStateFlow<String?>(null)
+    val sessionCreationError: StateFlow<String?> = _sessionCreationError.asStateFlow()
 
     private val _terminalBuffer = MutableStateFlow<Map<String, ByteArray>>(emptyMap())
     val terminalBuffer: StateFlow<Map<String, ByteArray>> = _terminalBuffer.asStateFlow()
@@ -113,19 +174,31 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             ?.apply()
     }
 
+    fun forgetEndpoint() {
+        disconnect()
+        _endpoint.value = Endpoint()
+        prefs?.edit()
+            ?.remove(KEY_URL)
+            ?.remove(KEY_TOKEN)
+            ?.apply()
+    }
+
     fun connect() {
         val e = _endpoint.value
-        if (!e.isComplete) { _connection.value = ConnectionState.Failed("missing endpoint"); return }
-        _connection.value = ConnectionState.Connecting
+        if (!e.isComplete) {
+            _harness.value = HarnessState.Failed("Set an endpoint and token in Settings.")
+            return
+        }
+        _harness.value = HarnessState.Connecting
         val c = SweKittyClient(e.url, e.token)
         client = c
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { c.connect(this@SessionStore) }
-                _connection.value = ConnectionState.Connected
+                _harness.value = HarnessState.Linked
                 refreshSessions()
             } catch (t: Throwable) {
-                _connection.value = ConnectionState.Failed(t.message ?: t.toString())
+                _harness.value = HarnessState.Failed(t.message ?: t.toString())
             }
         }
     }
@@ -133,20 +206,42 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     fun disconnect() {
         client?.disconnect()
         client = null
-        _connection.value = ConnectionState.Disconnected
+        _harness.value = HarnessState.Disconnected
+    }
+
+    fun reconnect() {
+        disconnect()
+        connect()
+    }
+
+    fun clearSessionCreationError() {
+        _sessionCreationError.value = null
     }
 
     fun select(sessionId: String?) { _selectedId.value = sessionId }
 
     fun createSession(assistant: String, branch: String? = null) {
         val c = client ?: return
+        _sessionCreationError.value = null
+        val pendingId = "pending-${UUID.randomUUID()}"
+        updateLifecycle { it + (pendingId to SessionLifecycle.Creating) }
         viewModelScope.launch {
             try {
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch) }
+                updateLifecycle { (it - pendingId) + (id to SessionLifecycle.Live) }
+                _harness.value = HarnessState.Live
                 refreshSessions()
                 _selectedId.value = id
             } catch (t: Throwable) {
-                _connection.value = ConnectionState.Failed("create_session: ${t.message}")
+                val reason = t.message ?: t.toString()
+                updateLifecycle { it + (pendingId to SessionLifecycle.FailedToStart(reason)) }
+                _sessionCreationError.value = reason
+                // Sweep the placeholder after a short delay so the user can
+                // see *why* without having a stuck row forever.
+                launch {
+                    delay(4_000)
+                    updateLifecycle { it - pendingId }
+                }
             }
         }
     }
@@ -155,7 +250,9 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         val c = client ?: return
         viewModelScope.launch {
             try { withContext(Dispatchers.IO) { c.switchAgent(sessionId, assistant) } }
-            catch (t: Throwable) { _connection.value = ConnectionState.Failed("switch_agent: ${t.message}") }
+            catch (t: Throwable) {
+                _sessionCreationError.value = "switch_agent: ${t.message}"
+            }
         }
     }
 
@@ -163,6 +260,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         val c = client ?: return
         viewModelScope.launch {
             runCatching { withContext(Dispatchers.IO) { c.exitSession(sessionId) } }
+            updateLifecycle { it - sessionId }
             refreshSessions()
             if (_selectedId.value == sessionId) _selectedId.value = null
         }
@@ -183,9 +281,35 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.resize(sessionId, rows, cols) } } }
     }
 
+    /** Sessions + creating placeholders, placeholders first so users see progress immediately. */
+    fun visibleSessions(): List<VisibleSession> {
+        val real = _sessions.value.map { VisibleSession.Real(it) }
+        val placeholders = _sessionLifecycle.value
+            .filter { (id, lc) ->
+                lc is SessionLifecycle.Creating && _sessions.value.none { it.id == id }
+            }
+            .keys
+            .sorted()
+            .map { id ->
+                val reason = (_sessionLifecycle.value[id] as? SessionLifecycle.FailedToStart)?.reason
+                VisibleSession.Creating(id, reason)
+            }
+        return placeholders + real
+    }
+
     private fun refreshSessions() {
         val c = client ?: return
-        _sessions.value = c.listSessions()
+        val list = c.listSessions()
+        _sessions.value = list
+        for (s in list) {
+            if (_sessionLifecycle.value[s.id] == null) {
+                updateLifecycle { it + (s.id to SessionLifecycle.Live) }
+            }
+        }
+    }
+
+    private fun updateLifecycle(transform: (Map<String, SessionLifecycle>) -> Map<String, SessionLifecycle>) {
+        _sessionLifecycle.value = transform(_sessionLifecycle.value)
     }
 
     // SweKittyDelegate — callbacks arrive on UniFFI worker threads; mutate
@@ -211,6 +335,11 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     override fun onStatus(status: SessionStatus) {
         _statusBySession.value = _statusBySession.value + (status.session to status)
         status.preview?.let { _previews.value = _previews.value + (status.session to it) }
+        if (_sessionLifecycle.value[status.session] == null ||
+            _sessionLifecycle.value[status.session] is SessionLifecycle.Creating) {
+            updateLifecycle { it + (status.session to SessionLifecycle.Live) }
+        }
+        _harness.value = HarnessState.Live
         refreshSessions()
     }
 
@@ -219,7 +348,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     override fun onExit(sessionId: String, code: Int) {
-        // health → red via a synthetic status update; surfaced by ProjectScreen.
+        updateLifecycle { it + (sessionId to SessionLifecycle.Exited(code)) }
         _statusBySession.value[sessionId]?.let { prev ->
             _statusBySession.value = _statusBySession.value + (sessionId to prev.copy(
                 phase = "exited($code)",
@@ -229,7 +358,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     override fun onDisconnected(reason: String) {
-        _connection.value = ConnectionState.Failed("disconnected: $reason")
+        _harness.value = HarnessState.Failed("Disconnected: $reason")
     }
 
     companion object {

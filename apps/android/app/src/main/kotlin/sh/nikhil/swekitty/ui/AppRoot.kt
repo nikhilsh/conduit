@@ -1,16 +1,17 @@
 package sh.nikhil.swekitty.ui
 
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
+import sh.nikhil.swekitty.HarnessState
 import sh.nikhil.swekitty.SessionStore
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -23,12 +24,12 @@ fun AppRoot(store: SessionStore) {
     val selectedId by store.selectedId.collectAsState()
     val sessions by store.sessions.collectAsState()
     val endpoint by store.endpoint.collectAsState()
-    val connection by store.connection.collectAsState()
+    val harness by store.harness.collectAsState()
 
     // First-launch settings prompt.
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (!endpoint.isComplete) showSettings = true
-        else if (connection is sh.nikhil.swekitty.ConnectionState.Disconnected) store.connect()
+        else if (harness is HarnessState.Disconnected) store.connect()
     }
 
     ModalNavigationDrawer(
@@ -50,9 +51,11 @@ fun AppRoot(store: SessionStore) {
             )
         } else {
             EmptyDetail(
-                connection = connection,
+                harness = harness,
+                endpoint = endpoint,
                 onOpenDrawer = { scope.launch { drawerState.open() } },
                 onOpenSettings = { showSettings = true },
+                onReconnect = { store.reconnect() },
             )
         }
     }
