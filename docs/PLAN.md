@@ -638,14 +638,15 @@ Versions are deliberate, not aspirational. Each one ends in a tagged GitHub Rele
 - Public README + screencast
 
 ### v1.x roadmap (post-v1, prioritized)
-1. **More agents** — Gemini, Aider, Goose, OpenCode adapters (one TOML + Dockerfile each)
-2. **MCP bridge** — agents can call mobile-specific tools (camera, share-sheet) via MCP, surfaced as `view_event`s
-3. **Voice input** — Whisper on-device (iOS Speech.framework / Android SpeechRecognizer) → `send_chat`
-4. **Pairing / multi-user sessions** — multiple phones drive one project simultaneously (the swe-swe "pair live" feature)
-5. **Memory diff UI** — visual diff between memory checkpoints in the mobile browser view; one-tap revert to a prior known-good state
-6. **TestFlight + Play Internal** — graduate from sideload to real distribution (deferred from v1 per user choice)
-7. **Auto-restart policies** — opt-in supervised loops with credit limits
-8. **Cross-session memory linking** — `<a href="../sessions/<uuid>.html">` for context spanning sessions
+1. **Quick replies** (port from swe-swe) — a horizontally-scrolling chip rail above the terminal/chat input with one-tap canned inputs: control keys (Enter / Esc / Ctrl-C / Tab / arrows), agent acknowledgements (`y`, `n`, `1`, `2`, "continue", "approve"), and a user-editable list per agent (stored alongside the agent adapter TOML so Claude vs Codex can ship different defaults). Solves the "phone keyboard is hostile to TUI prompts" problem; ships on both iOS and Android. No protocol change required — chips inject into the existing `send_input` / `send_chat` channels.
+2. **More agents** — Gemini, Aider, Goose, OpenCode adapters (one TOML + Dockerfile each)
+3. **MCP bridge** — agents can call mobile-specific tools (camera, share-sheet) via MCP, surfaced as `view_event`s
+4. **Voice input** — Whisper on-device (iOS Speech.framework / Android SpeechRecognizer) → `send_chat`
+5. **Pairing / multi-user sessions** — multiple phones drive one project simultaneously (the swe-swe "pair live" feature)
+6. **Memory diff UI** — visual diff between memory checkpoints in the mobile browser view; one-tap revert to a prior known-good state
+7. **TestFlight + Play Internal** — graduate from sideload to real distribution (deferred from v1 per user choice)
+8. **Auto-restart policies** — opt-in supervised loops with credit limits
+9. **Cross-session memory linking** — `<a href="../sessions/<uuid>.html">` for context spanning sessions
 
 ### Non-goals (explicit, to prevent scope creep)
 - Web client (the swe-swe browser UI already works against our server during dev; no need to ship our own)
