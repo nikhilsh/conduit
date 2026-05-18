@@ -1,13 +1,16 @@
 {
   "repo": "nikhilsh/swe-kitty",
   "siteOrigin": "https://swekitty.kaopeh.com",
-  "releaseName": "swe-kitty v0.0.4",
-  "tagName": "v0.0.4",
-  "releaseUrl": "https://github.com/nikhilsh/swe-kitty/releases/tag/v0.0.4",
-  "publishedAt": "2026-05-18T04:19:33Z",
+  "releaseName": "swe-kitty v0.0.7",
+  "tagName": "v0.0.7",
+  "releaseUrl": "https://github.com/nikhilsh/swe-kitty/releases/tag/v0.0.7",
+  "publishedAt": "2026-05-18T05:28:19Z",
   "ipa": {
     "name": "SweKitty.ipa",
-    "url": "https://github.com/nikhilsh/swe-kitty/releases/download/v0.0.4/SweKitty.ipa"
+    "url": "https://github.com/nikhilsh/swe-kitty/releases/download/v0.0.7/SweKitty.ipa"
   },
-  "apk": null
+  "apk": {
+    "name": "app-release.apk",
+    "url": "https://github.com/nikhilsh/swe-kitty/releases/download/v0.0.7/app-release.apk"
+  }
 }
