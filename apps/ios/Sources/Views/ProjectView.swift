@@ -35,7 +35,7 @@ struct ProjectView: View {
             HealthDot(health: store.statusBySession[session.id]?.health ?? "unknown")
             Text(session.name).font(.headline)
             Spacer()
-            memoryButton
+            MemoryButton(tab: $tab, mode: $browserMode)
             agentBadge
         }
         .padding(.horizontal)
@@ -52,16 +52,6 @@ struct ProjectView: View {
             .offset(y: 40)
         }
         .padding(.bottom, 44)
-    }
-
-    private var memoryButton: some View {
-        Button {
-            tab = .browser
-            browserMode = (browserMode == .memory) ? .preview : .memory
-        } label: {
-            Image(systemName: browserMode == .memory ? "doc.text.fill" : "doc.text")
-        }
-        .accessibilityLabel("Open session memory")
     }
 
     private var agentBadge: some View {
