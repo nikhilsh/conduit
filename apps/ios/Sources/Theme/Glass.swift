@@ -1,34 +1,61 @@
 import SwiftUI
 
-// MARK: - Glass effect availability wrappers
+// MARK: - Glass effect wrappers
 //
-// Thin shims over Apple's iOS 26 Liquid Glass API (`glassEffect`,
-// `GlassEffectContainer`, `glassEffectID`). On iOS 26+ each modifier
-// calls the real effect; on older OSes it falls back to a tinted
-// material so the layout stays recognisable. Inspired by the visual
-// language of the `litter` reference app (see docs/MOBILE-PORT-MATRIX.md
-// Package B sub-plan) but written against the public SwiftUI API.
+// The previous pass tried to use unreleased Liquid Glass-specific SwiftUI
+// symbols that are not present in the runner SDK yet. Keep the same visual
+// direction, but implement it with compile-safe material layering so CI and
+// release builds stay shippable.
+
+private struct GlassSurfaceModifier<S: InsettableShape>: ViewModifier {
+    let shape: S
+    var tint: Color?
+    var highlightOpacity: Double = 0.24
+    var shadowOpacity: Double = 0.16
+
+    func body(content: Content) -> some View {
+        let stroke = (tint ?? SweKittyTheme.border).opacity(0.42)
+        let glow = (tint ?? SweKittyTheme.accentStrong).opacity(highlightOpacity)
+
+        content
+            .background {
+                shape
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        shape
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        glow,
+                                        SweKittyTheme.surfaceLight.opacity(0.08),
+                                        .clear,
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
+            }
+            .overlay {
+                shape
+                    .stroke(stroke, lineWidth: 1)
+            }
+            .clipShape(shape)
+            .shadow(color: SweKittyTheme.textPrimary.opacity(shadowOpacity), radius: 18, x: 0, y: 10)
+    }
+}
 
 struct GlassRectModifier: ViewModifier {
     let cornerRadius: CGFloat
     var tint: Color?
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            if let tint {
-                content.glassEffect(.regular.tint(tint), in: .rect(cornerRadius: cornerRadius))
-            } else {
-                content.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-            }
-        } else {
-            content
-                .background(SweKittyTheme.surfaceLight.opacity(0.9))
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .stroke((tint ?? SweKittyTheme.border).opacity(0.4), lineWidth: 1)
-                )
-        }
+        content.modifier(
+            GlassSurfaceModifier(
+                shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
+                tint: tint
+            )
+        )
     }
 }
 
@@ -36,13 +63,11 @@ struct GlassRoundedRectModifier: ViewModifier {
     var cornerRadius: CGFloat = SweKittyTheme.cardCornerRadius
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-        } else {
-            content
-                .background(SweKittyTheme.surfaceLight)
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        }
+        content.modifier(
+            GlassSurfaceModifier(
+                shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+        )
     }
 }
 
@@ -51,19 +76,16 @@ struct GlassCapsuleModifier: ViewModifier {
     var tint: Color?
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            switch (tint, interactive) {
-            case (let t?, true):  content.glassEffect(.regular.tint(t).interactive(), in: .capsule)
-            case (let t?, false): content.glassEffect(.regular.tint(t), in: .capsule)
-            case (nil, true):     content.glassEffect(.regular.interactive(), in: .capsule)
-            case (nil, false):    content.glassEffect(.regular, in: .capsule)
-            }
-        } else {
-            content
-                .background(SweKittyTheme.surfaceLight)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke((tint ?? SweKittyTheme.border).opacity(0.4), lineWidth: 1))
-        }
+        content
+            .modifier(
+                GlassSurfaceModifier(
+                    shape: Capsule(),
+                    tint: tint,
+                    highlightOpacity: interactive ? 0.34 : 0.22,
+                    shadowOpacity: interactive ? 0.22 : 0.14
+                )
+            )
+            .scaleEffect(interactive ? 1.0 : 0.995)
     }
 }
 
@@ -71,33 +93,24 @@ struct GlassCircleModifier: ViewModifier {
     var tint: Color?
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            if let tint {
-                content.glassEffect(.regular.tint(tint), in: .circle)
-            } else {
-                content.glassEffect(.regular, in: .circle)
-            }
-        } else {
-            content
-                .background(SweKittyTheme.surfaceLight)
-                .clipShape(Circle())
-        }
+        content.modifier(
+            GlassSurfaceModifier(
+                shape: Circle(),
+                tint: tint,
+                highlightOpacity: 0.28
+            )
+        )
     }
 }
 
-/// Wraps children in iOS 26's `GlassEffectContainer` so siblings marked
-/// with the same `glassMorphID` morph between each other with a real
-/// liquid-glass transition. Pass-through on older iOS.
+/// Future shell rewrites can replace this with platform-native morphing
+/// once the SDK is available in CI. For now it is a pass-through wrapper.
 struct GlassMorphContainer<Content: View>: View {
     var spacing: CGFloat = 10
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) { content() }
-        } else {
-            content()
-        }
+        content()
     }
 }
 
@@ -118,15 +131,7 @@ extension View {
         modifier(GlassCircleModifier(tint: tint))
     }
 
-    /// Applies iOS 26's `glassEffectID` — which morphs glass between
-    /// matched views inside a `GlassEffectContainer` — or falls back to
-    /// `matchedGeometryEffect` so the frame still tweens on older iOS.
-    @ViewBuilder
     func glassMorphID(_ id: String, in namespace: Namespace.ID) -> some View {
-        if #available(iOS 26.0, *) {
-            self.glassEffectID(id, in: namespace)
-        } else {
-            self.matchedGeometryEffect(id: id, in: namespace)
-        }
+        matchedGeometryEffect(id: id, in: namespace)
     }
 }

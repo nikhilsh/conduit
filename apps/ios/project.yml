@@ -3,7 +3,7 @@ name: SweKitty
 options:
   bundleIdPrefix: sh.nikhil
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "18.0"
   createIntermediateGroups: true
   generateEmptyDirectories: true
 
