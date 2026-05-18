@@ -271,36 +271,36 @@ private struct ConversationEventRow: View {
     var body: some View {
         if event.kind == "pending_input" {
             ConversationPendingInputCard(event: event, onQuickReply: onQuickReply)
-            return
-        }
-        switch role {
-        case .user:
-            HStack {
-                Spacer(minLength: 40)
-                ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: true) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
-                        if !event.files.isEmpty {
-                            ConversationFileStrip(files: event.files)
+        } else {
+            switch role {
+            case .user:
+                HStack {
+                    Spacer(minLength: 40)
+                    ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: true) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
+                            if !event.files.isEmpty {
+                                ConversationFileStrip(files: event.files)
+                            }
                         }
                     }
                 }
-            }
-        case .assistant:
-            HStack {
-                ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
-                    ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
+            case .assistant:
+                HStack {
+                    ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
+                        ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
+                    }
+                    Spacer(minLength: 40)
                 }
-                Spacer(minLength: 40)
-            }
-        case .tool:
-            ConversationToolCard(event: event)
-        case .system:
-            HStack {
-                ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
-                    ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
+            case .tool:
+                ConversationToolCard(event: event)
+            case .system:
+                HStack {
+                    ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
+                        ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
+                    }
+                    Spacer(minLength: 70)
                 }
-                Spacer(minLength: 70)
             }
         }
     }
