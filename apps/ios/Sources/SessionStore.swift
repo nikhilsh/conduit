@@ -106,6 +106,15 @@ struct StoredEndpoint: Equatable {
     }
 }
 
+struct SavedServer: Codable, Equatable, Identifiable {
+    var id: String
+    var name: String
+    var endpoint: StoredEndpoint
+    var isDefault: Bool
+}
+
+extension StoredEndpoint: Codable {}
+
 @Observable
 @MainActor
 final class SessionStore {
@@ -117,6 +126,7 @@ final class SessionStore {
     var harness: HarnessState = .disconnected
     var sessions: [ProjectSession] = []
     var selectedSessionID: String?
+    var savedServers: [SavedServer] = []
 
     /// Banner-style error for the most recent session-creation failure.
     /// Cleared automatically the next time the user tries again.
@@ -135,6 +145,8 @@ final class SessionStore {
 
     /// Chat log per session, oldest first.
     var chatLog: [String: [ChatEvent]] = [:]
+    /// Typed conversation timeline per session, oldest first.
+    var conversationLog: [String: [ConversationItem]] = [:]
 
     /// Last-known preview info per session (nil until the agent reports one).
     var preview: [String: PreviewInfo] = [:]
@@ -153,6 +165,10 @@ final class SessionStore {
 
     init() {
         self.endpoint = Self.loadPersisted()
+        self.savedServers = Self.loadSavedServers()
+        if endpoint.isComplete && !savedServers.contains(where: { $0.endpoint == endpoint }) {
+            upsertSavedServer(name: endpoint.displayHost, endpoint: endpoint, makeDefault: true)
+        }
         installNetworkAndLifecycleHooks()
     }
 
@@ -258,6 +274,59 @@ final class SessionStore {
         connect()
     }
 
+    func upsertSavedServer(name: String, endpoint: StoredEndpoint, makeDefault: Bool) {
+        var next = savedServers
+        if let idx = next.firstIndex(where: { $0.endpoint == endpoint }) {
+            next[idx].name = name
+            if makeDefault {
+                for i in next.indices { next[i].isDefault = false }
+                next[idx].isDefault = true
+            }
+        } else {
+            if makeDefault {
+                for i in next.indices { next[i].isDefault = false }
+            }
+            next.append(
+                SavedServer(
+                    id: UUID().uuidString,
+                    name: name.isEmpty ? endpoint.displayHost : name,
+                    endpoint: endpoint,
+                    isDefault: makeDefault || next.isEmpty
+                )
+            )
+        }
+        savedServers = next
+        Self.persistSavedServers(next)
+    }
+
+    func selectSavedServer(_ serverID: String, autoConnect: Bool) {
+        guard let server = savedServers.first(where: { $0.id == serverID }) else { return }
+        for i in savedServers.indices {
+            savedServers[i].isDefault = savedServers[i].id == serverID
+        }
+        Self.persistSavedServers(savedServers)
+        endpoint = server.endpoint
+        if autoConnect {
+            disconnect()
+            connect()
+        }
+    }
+
+    func removeSavedServer(_ serverID: String) {
+        let removedWasCurrent = savedServers.first(where: { $0.id == serverID })?.endpoint == endpoint
+        savedServers.removeAll { $0.id == serverID }
+        if savedServers.isEmpty {
+            endpoint = .empty
+            disconnect()
+        } else if !savedServers.contains(where: { $0.isDefault }) {
+            savedServers[0].isDefault = true
+            if removedWasCurrent {
+                endpoint = savedServers[0].endpoint
+            }
+        }
+        Self.persistSavedServers(savedServers)
+    }
+
     // MARK: - Session lifecycle
 
     func createSession(assistant: String, branch: String? = nil) {
@@ -351,6 +420,9 @@ final class SessionStore {
         for s in self.sessions where sessionLifecycle[s.id] == nil {
             sessionLifecycle[s.id] = .live
         }
+        for s in self.sessions {
+            refreshConversation(sessionID: s.id)
+        }
     }
 
     fileprivate func ingestPtyData(_ sessionID: String, _ bytes: Data) {
@@ -359,6 +431,14 @@ final class SessionStore {
 
     fileprivate func ingestChat(_ sessionID: String, _ event: ChatEvent) {
         chatLog[sessionID, default: []].append(event)
+        refreshConversation(sessionID: sessionID)
+    }
+
+    fileprivate func refreshConversation(sessionID: String) {
+        guard let client else { return }
+        if let items = try? client.listConversationItems(sessionId: sessionID) {
+            conversationLog[sessionID] = items
+        }
     }
 
     fileprivate func ingestStatus(_ status: SessionStatus) {
@@ -447,6 +527,7 @@ final class SessionStore {
 
     private static let endpointKey = "swekitty.endpoint.url"
     private static let tokenKey = "swekitty.endpoint.token"
+    private static let savedServersKey = "swekitty.saved_servers.json"
     private static let legacyEndpointDefaultsKey = "swekitty.endpoint.url"
 
     private static func loadPersisted() -> StoredEndpoint {
@@ -465,6 +546,27 @@ final class SessionStore {
         Keychain.set(e.url.isEmpty ? nil : e.url, for: endpointKey)
         Keychain.set(e.token.isEmpty ? nil : e.token, for: tokenKey)
         UserDefaults.standard.removeObject(forKey: legacyEndpointDefaultsKey)
+    }
+
+    private static func loadSavedServers() -> [SavedServer] {
+        guard let raw = Keychain.get(savedServersKey),
+              let data = raw.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([SavedServer].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+
+    private static func persistSavedServers(_ servers: [SavedServer]) {
+        if servers.isEmpty {
+            Keychain.set(nil, for: savedServersKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(servers),
+              let raw = String(data: data, encoding: .utf8) else {
+            return
+        }
+        Keychain.set(raw, for: savedServersKey)
     }
 }
 

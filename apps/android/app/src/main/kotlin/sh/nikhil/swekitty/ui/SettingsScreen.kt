@@ -16,7 +16,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import sh.nikhil.swekitty.Endpoint
 import sh.nikhil.swekitty.PairingURL
+import sh.nikhil.swekitty.SavedServer
 import sh.nikhil.swekitty.SessionStore
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -24,6 +26,7 @@ import sh.nikhil.swekitty.SessionStore
 fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
+    val savedServers by store.savedServers.collectAsState()
 
     var url by remember(endpoint.url) { mutableStateOf(endpoint.url) }
     var token by remember(endpoint.token) { mutableStateOf(endpoint.token) }
@@ -47,6 +50,22 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Settings", style = MaterialTheme.typography.titleLarge)
+
+            if (savedServers.isNotEmpty()) {
+                SectionTitle("Saved Servers")
+                savedServers.forEach { server ->
+                    SavedServerRow(
+                        server = server,
+                        onUse = {
+                            store.selectSavedServer(server.id, autoConnect = true)
+                            url = server.endpoint.url
+                            token = server.endpoint.token
+                        },
+                        onRemove = { store.removeSavedServer(server.id) },
+                    )
+                }
+                HorizontalDivider()
+            }
 
             if (endpoint.isComplete) {
                 SectionTitle("Paired Harness")
@@ -99,6 +118,11 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 Button(
                     onClick = {
                         store.setEndpoint(url, token)
+                        store.upsertSavedServer(
+                            name = Endpoint(url, token).displayHost,
+                            endpoint = Endpoint(url, token),
+                            makeDefault = true,
+                        )
                         store.disconnect()
                         store.connect()
                         onDismiss()
@@ -129,6 +153,35 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SavedServerRow(
+    server: SavedServer,
+    onUse: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(server.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                server.endpoint.displayHost,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (server.isDefault) {
+            AssistChip(onClick = {}, enabled = false, label = { Text("Default") })
+        }
+        TextButton(onClick = onUse) { Text("Use") }
+        TextButton(onClick = onRemove) { Text("Remove") }
     }
 }
 

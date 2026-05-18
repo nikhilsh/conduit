@@ -19,9 +19,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 import uniffi.swe_kitty_core.ChatEvent
 import uniffi.swe_kitty_core.ConnectionHealth
+import uniffi.swe_kitty_core.ConversationItem
 import uniffi.swe_kitty_core.PreviewInfo
 import uniffi.swe_kitty_core.ProjectSession
 import uniffi.swe_kitty_core.SessionStatus
@@ -117,6 +120,13 @@ data class Endpoint(val url: String = "", val token: String = "") {
         }
 }
 
+data class SavedServer(
+    val id: String,
+    val name: String,
+    val endpoint: Endpoint,
+    val isDefault: Boolean,
+)
+
 /**
  * v1 store: wraps SweKittyClient and bridges Rust delegate callbacks back onto
  * the main dispatcher as StateFlow updates. Replaced by Hilt-style DI in v2.
@@ -134,6 +144,8 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     private val _selectedId = MutableStateFlow<String?>(null)
     val selectedId: StateFlow<String?> = _selectedId.asStateFlow()
+    private val _savedServers = MutableStateFlow<List<SavedServer>>(emptyList())
+    val savedServers: StateFlow<List<SavedServer>> = _savedServers.asStateFlow()
 
     private val _statusBySession = MutableStateFlow<Map<String, SessionStatus>>(emptyMap())
     val statusBySession: StateFlow<Map<String, SessionStatus>> = _statusBySession.asStateFlow()
@@ -150,6 +162,8 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     private val _chatLog = MutableStateFlow<Map<String, List<ChatEvent>>>(emptyMap())
     val chatLog: StateFlow<Map<String, List<ChatEvent>>> = _chatLog.asStateFlow()
+    private val _conversationLog = MutableStateFlow<Map<String, List<ConversationItem>>>(emptyMap())
+    val conversationLog: StateFlow<Map<String, List<ConversationItem>>> = _conversationLog.asStateFlow()
 
     private val _previews = MutableStateFlow<Map<String, PreviewInfo>>(emptyMap())
     val previews: StateFlow<Map<String, PreviewInfo>> = _previews.asStateFlow()
@@ -187,6 +201,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 url = p.getString(KEY_URL, "") ?: "",
                 token = p.getString(KEY_TOKEN, "") ?: "",
             )
+            _savedServers.value = decodeSavedServers(p.getString(KEY_SAVED_SERVERS, null))
+            if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
+                upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
+            }
             installNetworkAndLifecycleHooks(ctx.applicationContext)
         }
     }
@@ -232,6 +250,55 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             ?.putString(KEY_URL, e.url)
             ?.putString(KEY_TOKEN, e.token)
             ?.apply()
+    }
+
+    fun upsertSavedServer(name: String, endpoint: Endpoint, makeDefault: Boolean) {
+        val current = _savedServers.value.toMutableList()
+        val existing = current.indexOfFirst { it.endpoint == endpoint }
+        if (existing >= 0) {
+            val defaultFlag = if (makeDefault) true else current[existing].isDefault
+            current[existing] = current[existing].copy(name = name, isDefault = defaultFlag)
+        } else {
+            current += SavedServer(
+                id = UUID.randomUUID().toString(),
+                name = if (name.isBlank()) endpoint.displayHost else name,
+                endpoint = endpoint,
+                isDefault = makeDefault || current.isEmpty(),
+            )
+        }
+        if (makeDefault) {
+            val defaultId = current.firstOrNull { it.endpoint == endpoint }?.id
+            for (i in current.indices) current[i] = current[i].copy(isDefault = current[i].id == defaultId)
+        }
+        _savedServers.value = current
+        persistSavedServers(current)
+    }
+
+    fun selectSavedServer(serverId: String, autoConnect: Boolean) {
+        val server = _savedServers.value.firstOrNull { it.id == serverId } ?: return
+        val next = _savedServers.value.map { it.copy(isDefault = it.id == serverId) }
+        _savedServers.value = next
+        persistSavedServers(next)
+        setEndpoint(server.endpoint.url, server.endpoint.token)
+        if (autoConnect) {
+            disconnect()
+            connect()
+        }
+    }
+
+    fun removeSavedServer(serverId: String) {
+        val wasCurrent = _savedServers.value.firstOrNull { it.id == serverId }?.endpoint == _endpoint.value
+        val next = _savedServers.value.filterNot { it.id == serverId }.toMutableList()
+        if (next.isNotEmpty() && next.none { it.isDefault }) {
+            next[0] = next[0].copy(isDefault = true)
+        }
+        _savedServers.value = next
+        persistSavedServers(next)
+        if (next.isEmpty()) {
+            forgetEndpoint()
+        } else if (wasCurrent) {
+            setEndpoint(next[0].endpoint.url, next[0].endpoint.token)
+        }
     }
 
     fun forgetEndpoint() {
@@ -391,7 +458,16 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             if (_sessionLifecycle.value[s.id] == null) {
                 updateLifecycle { it + (s.id to SessionLifecycle.Live) }
             }
+            refreshConversation(s.id)
         }
+    }
+
+    private fun refreshConversation(sessionId: String) {
+        val c = client ?: return
+        runCatching { c.listConversationItems(sessionId) }
+            .onSuccess { items ->
+                _conversationLog.value = _conversationLog.value + (sessionId to items)
+            }
     }
 
     private fun updateLifecycle(transform: (Map<String, SessionLifecycle>) -> Map<String, SessionLifecycle>) {
@@ -412,6 +488,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
         }
+        refreshConversation(sessionId)
     }
 
     override fun onPreviewReady(sessionId: String, preview: PreviewInfo) {
@@ -501,5 +578,44 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     companion object {
         private const val KEY_URL = "swekitty.endpoint.url"
         private const val KEY_TOKEN = "swekitty.endpoint.token"
+        private const val KEY_SAVED_SERVERS = "swekitty.saved_servers"
+    }
+
+    private fun persistSavedServers(servers: List<SavedServer>) {
+        val p = prefs ?: return
+        val arr = JSONArray()
+        servers.forEach { s ->
+            val o = JSONObject()
+            o.put("id", s.id)
+            o.put("name", s.name)
+            o.put("url", s.endpoint.url)
+            o.put("token", s.endpoint.token)
+            o.put("default", s.isDefault)
+            arr.put(o)
+        }
+        p.edit().putString(KEY_SAVED_SERVERS, arr.toString()).apply()
+    }
+
+    private fun decodeSavedServers(raw: String?): List<SavedServer> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    add(
+                        SavedServer(
+                            id = o.optString("id", UUID.randomUUID().toString()),
+                            name = o.optString("name", ""),
+                            endpoint = Endpoint(
+                                o.optString("url", ""),
+                                o.optString("token", ""),
+                            ),
+                            isDefault = o.optBoolean("default", false),
+                        )
+                    )
+                }
+            }
+        }.getOrElse { emptyList() }
     }
 }

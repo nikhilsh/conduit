@@ -112,7 +112,7 @@ private struct ConversationRenderer {
         return blocks
     }
 
-    static func toolSections(for event: ChatEvent) -> [ToolSection] {
+    static func toolSections(for event: ConversationItem) -> [ToolSection] {
         var sections: [ToolSection] = []
 
         if !event.files.isEmpty {
@@ -159,7 +159,7 @@ private enum ToolSection: Equatable {
 }
 
 struct ConversationTimelineView: View {
-    let events: [ChatEvent]
+    let events: [ConversationItem]
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 14) {
@@ -172,7 +172,7 @@ struct ConversationTimelineView: View {
 }
 
 private struct ConversationEventRow: View {
-    let event: ChatEvent
+    let event: ConversationItem
 
     private var role: ConversationRole { ConversationRole(rawValue: event.role) }
 
@@ -324,7 +324,7 @@ private struct ConversationCodeBlock: View {
 }
 
 private struct ConversationToolCard: View {
-    let event: ChatEvent
+    let event: ConversationItem
     @State private var expanded = true
 
     private var sections: [ToolSection] { ConversationRenderer.toolSections(for: event) }
@@ -343,12 +343,15 @@ private struct ConversationToolCard: View {
             HStack(spacing: 8) {
                 Image(systemName: "wrench.and.screwdriver.fill")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(SweKittyTheme.warning)
+                    .foregroundStyle(statusTint)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("TOOL")
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.7)
-                        .foregroundStyle(SweKittyTheme.textSecondary)
+                    HStack(spacing: 6) {
+                        Text(event.kind.uppercased())
+                            .font(.caption2.weight(.bold))
+                            .tracking(0.7)
+                            .foregroundStyle(SweKittyTheme.textSecondary)
+                        ConversationStatusChip(status: event.status)
+                    }
                     Text(summary)
                         .font(.subheadline)
                         .foregroundStyle(SweKittyTheme.textBody)
@@ -392,7 +395,62 @@ private struct ConversationToolCard: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassRect(cornerRadius: 18, tint: SweKittyTheme.warning.opacity(0.24))
+        .glassRect(cornerRadius: 18, tint: statusTint.opacity(0.24))
+    }
+
+    private var statusTint: Color {
+        switch event.status.lowercased() {
+        case "running":
+            return SweKittyTheme.warning
+        case "pending":
+            return SweKittyTheme.accentStrong
+        case "failed":
+            return SweKittyTheme.error
+        default:
+            return SweKittyTheme.success
+        }
+    }
+}
+
+private struct ConversationStatusChip: View {
+    let status: String
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(background)
+            .clipShape(Capsule())
+    }
+
+    private var label: String { status.isEmpty ? "DONE" : status.uppercased() }
+
+    private var background: Color {
+        switch status.lowercased() {
+        case "running":
+            return SweKittyTheme.warning.opacity(0.20)
+        case "pending":
+            return SweKittyTheme.accentStrong.opacity(0.20)
+        case "failed":
+            return SweKittyTheme.error.opacity(0.20)
+        default:
+            return SweKittyTheme.success.opacity(0.20)
+        }
+    }
+
+    private var foreground: Color {
+        switch status.lowercased() {
+        case "running":
+            return SweKittyTheme.warning
+        case "pending":
+            return SweKittyTheme.accentStrong
+        case "failed":
+            return SweKittyTheme.error
+        default:
+            return SweKittyTheme.success
+        }
     }
 }
 

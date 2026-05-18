@@ -48,7 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.SessionStore
-import uniffi.swe_kitty_core.ChatEvent
+import uniffi.swe_kitty_core.ConversationItem
 import uniffi.swe_kitty_core.ProjectSession
 import uniffi.swe_kitty_core.ViewEventFile
 
@@ -128,7 +128,7 @@ private object ConversationRenderer {
         return blocks
     }
 
-    fun toolSections(event: ChatEvent): List<ToolSection> {
+    fun toolSections(event: ConversationItem): List<ToolSection> {
         val sections = mutableListOf<ToolSection>()
         if (event.files.isNotEmpty()) sections += ToolSection.Files(event.files)
         val trimmed = event.content.trim()
@@ -157,8 +157,21 @@ private object ConversationRenderer {
 
 @Composable
 fun ChatPage(store: SessionStore, session: ProjectSession) {
-    val log by store.chatLog.collectAsState()
-    val events = log[session.id] ?: emptyList()
+    val typedLog by store.conversationLog.collectAsState()
+    val fallbackLog by store.chatLog.collectAsState()
+    val events = typedLog[session.id]
+        ?: fallbackLog[session.id]?.mapIndexed { idx, ev ->
+            ConversationItem(
+                id = "${ev.ts}-$idx",
+                role = ev.role,
+                kind = if (ev.role.lowercase() == "tool") "tool" else "message",
+                status = "done",
+                content = ev.content,
+                ts = ev.ts,
+                files = ev.files,
+            )
+        }
+        ?: emptyList()
     var draft by remember { mutableStateOf("") }
     var autoFollow by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
@@ -208,7 +221,11 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
         HorizontalDivider()
         ConversationComposer(
             draft = draft,
+            quickReplies = remember(events) { QuickReplyDetector.suggestions(events) },
             onDraftChange = { draft = it },
+            onQuickReply = { reply ->
+                draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
+            },
             onSend = {
                 val msg = draft.trim()
                 if (msg.isNotEmpty()) {
@@ -242,7 +259,7 @@ private fun EmptyConversationCard() {
 }
 
 @Composable
-private fun ConversationEventRow(ev: ChatEvent) {
+private fun ConversationEventRow(ev: ConversationItem) {
     when (ConversationRole.from(ev.role)) {
         ConversationRole.User -> Row(modifier = Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(0.18f))
@@ -262,7 +279,7 @@ private fun ConversationEventRow(ev: ChatEvent) {
 
 @Composable
 private fun ConversationBubble(
-    ev: ChatEvent,
+    ev: ConversationItem,
     role: ConversationRole,
     modifier: Modifier,
     alignEnd: Boolean,
@@ -376,7 +393,7 @@ private fun CodeBlock(language: String?, content: String) {
 }
 
 @Composable
-private fun ConversationToolCard(ev: ChatEvent) {
+private fun ConversationToolCard(ev: ConversationItem) {
     var expanded by remember { mutableStateOf(true) }
     val sections = remember(ev) { ConversationRenderer.toolSections(ev) }
     val summary = remember(ev.content) {
@@ -398,7 +415,16 @@ private fun ConversationToolCard(ev: ChatEvent) {
                 Icon(Icons.Outlined.Build, null, tint = ConversationRole.Tool.accent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("TOOL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            ev.kind.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        StatusChip(ev.status)
+                    }
                     Text(summary, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                 }
                 if (ev.ts.isNotEmpty()) {
@@ -428,6 +454,32 @@ private fun ConversationToolCard(ev: ChatEvent) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatusChip(status: String) {
+    val normalized = status.lowercase().ifEmpty { "done" }
+    val bg = when (normalized) {
+        "running" -> Color(0x22F39C3D)
+        "pending" -> Color(0x2238BDF8)
+        "failed" -> Color(0x22EF4444)
+        else -> Color(0x2222C55E)
+    }
+    val fg = when (normalized) {
+        "running" -> Color(0xFFF39C3D)
+        "pending" -> Color(0xFF38BDF8)
+        "failed" -> Color(0xFFEF4444)
+        else -> Color(0xFF22C55E)
+    }
+    Surface(shape = CircleShape, color = bg) {
+        Text(
+            normalized.uppercase(),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = fg,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
@@ -502,7 +554,9 @@ private fun DiffBlock(content: String) {
 @Composable
 private fun ConversationComposer(
     draft: String,
+    quickReplies: List<String>,
     onDraftChange: (String) -> Unit,
+    onQuickReply: (String) -> Unit,
     onSend: () -> Unit,
 ) {
     Surface(
@@ -519,6 +573,20 @@ private fun ConversationComposer(
                 Icon(Icons.Outlined.SmartToy, null, tint = ConversationRole.Assistant.accent, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Reply", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+            }
+            if (quickReplies.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    quickReplies.forEach { reply ->
+                        AssistChip(
+                            onClick = { onQuickReply(reply) },
+                            label = { Text(reply) },
+                        )
+                        Spacer(Modifier.width(2.dp))
+                    }
+                }
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(
@@ -538,5 +606,42 @@ private fun ConversationComposer(
                 }
             }
         }
+    }
+}
+
+private object QuickReplyDetector {
+    fun suggestions(events: List<ConversationItem>): List<String> {
+        val source = events
+            .asReversed()
+            .firstOrNull { ev ->
+                val role = ev.role.lowercase()
+                role == "assistant" || role == "tool"
+            }
+            ?.content
+            ?.lowercase()
+            ?: return listOf("Continue", "Summarize next steps")
+
+        val chips = linkedSetOf<String>()
+        if ("confirm" in source || "proceed" in source || "continue" in source) {
+            chips += "Proceed"
+            chips += "Hold for review"
+        }
+        if ("error" in source || "failed" in source || "exception" in source) {
+            chips += "Show full error log"
+            chips += "Retry with diagnostics"
+        }
+        if ("test" in source || "ci" in source) {
+            chips += "Run targeted tests first"
+            chips += "Run full suite"
+        }
+        if ("choose" in source || "option" in source || "which" in source) {
+            chips += "Pick the recommended option"
+            chips += "Explain trade-offs"
+        }
+        if (chips.isEmpty()) {
+            chips += "Continue"
+            chips += "Summarize next steps"
+        }
+        return chips.take(4)
     }
 }

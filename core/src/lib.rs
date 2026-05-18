@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 pub use transport::ConnectionHealth;
 pub use views::{
-    ChatEvent, PreviewInfo, ProjectSession, ProjectSessionState, SessionStatus, ViewEventFile,
+    ChatEvent, ConversationItem, PreviewInfo, ProjectSession, ProjectSessionState, SessionStatus,
+    ViewEventFile,
 };
 
 uniffi::include_scaffolding!("swe_kitty_core");
@@ -243,6 +244,18 @@ impl SweKittyClient {
             .values()
             .map(|state| state.session.clone())
             .collect()
+    }
+
+    pub fn list_conversation_items(
+        &self,
+        session_id: String,
+    ) -> Result<Vec<ConversationItem>, SweKittyError> {
+        self.inner
+            .sessions
+            .lock()
+            .get(&session_id)
+            .map(|state| state.chat.conversation.clone())
+            .ok_or(SweKittyError::UnknownSession(session_id))
     }
 }
 

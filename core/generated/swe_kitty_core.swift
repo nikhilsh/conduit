@@ -544,6 +544,8 @@ public protocol SweKittyClientProtocol : AnyObject {
     
     func joinSession(sessionId: String, assistant: String?) async throws 
     
+    func listConversationItems(sessionId: String) throws  -> [ConversationItem]
+    
     func listSessions()  -> [ProjectSession]
     
     func notifyNetworkChange() 
@@ -697,6 +699,14 @@ open func joinSession(sessionId: String, assistant: String?)async throws  {
             liftFunc: { $0 },
             errorHandler: FfiConverterTypeSweKittyError.lift
         )
+}
+    
+open func listConversationItems(sessionId: String)throws  -> [ConversationItem] {
+    return try  FfiConverterSequenceTypeConversationItem.lift(try rustCallWithError(FfiConverterTypeSweKittyError.lift) {
+    uniffi_swe_kitty_core_fn_method_swekittyclient_list_conversation_items(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+})
 }
     
 open func listSessions() -> [ProjectSession] {
@@ -914,6 +924,112 @@ public func FfiConverterTypeChatEvent_lift(_ buf: RustBuffer) throws -> ChatEven
 #endif
 public func FfiConverterTypeChatEvent_lower(_ value: ChatEvent) -> RustBuffer {
     return FfiConverterTypeChatEvent.lower(value)
+}
+
+
+public struct ConversationItem {
+    public var id: String
+    public var role: String
+    public var kind: String
+    public var status: String
+    public var content: String
+    public var ts: String
+    public var files: [ViewEventFile]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, role: String, kind: String, status: String, content: String, ts: String, files: [ViewEventFile]) {
+        self.id = id
+        self.role = role
+        self.kind = kind
+        self.status = status
+        self.content = content
+        self.ts = ts
+        self.files = files
+    }
+}
+
+
+
+extension ConversationItem: Equatable, Hashable {
+    public static func ==(lhs: ConversationItem, rhs: ConversationItem) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.role != rhs.role {
+            return false
+        }
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.content != rhs.content {
+            return false
+        }
+        if lhs.ts != rhs.ts {
+            return false
+        }
+        if lhs.files != rhs.files {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(role)
+        hasher.combine(kind)
+        hasher.combine(status)
+        hasher.combine(content)
+        hasher.combine(ts)
+        hasher.combine(files)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeConversationItem: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConversationItem {
+        return
+            try ConversationItem(
+                id: FfiConverterString.read(from: &buf), 
+                role: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterString.read(from: &buf), 
+                status: FfiConverterString.read(from: &buf), 
+                content: FfiConverterString.read(from: &buf), 
+                ts: FfiConverterString.read(from: &buf), 
+                files: FfiConverterSequenceTypeViewEventFile.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ConversationItem, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.role, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterString.write(value.content, into: &buf)
+        FfiConverterString.write(value.ts, into: &buf)
+        FfiConverterSequenceTypeViewEventFile.write(value.files, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConversationItem_lift(_ buf: RustBuffer) throws -> ConversationItem {
+    return try FfiConverterTypeConversationItem.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConversationItem_lower(_ value: ConversationItem) -> RustBuffer {
+    return FfiConverterTypeConversationItem.lower(value)
 }
 
 
@@ -1816,6 +1932,31 @@ fileprivate struct FfiConverterOptionTypePreviewInfo: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeConversationItem: FfiConverterRustBuffer {
+    typealias SwiftType = [ConversationItem]
+
+    public static func write(_ value: [ConversationItem], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeConversationItem.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ConversationItem] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ConversationItem]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeConversationItem.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeProjectSession: FfiConverterRustBuffer {
     typealias SwiftType = [ProjectSession]
 
@@ -1940,6 +2081,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_join_session() != 56798) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_list_conversation_items() != 3434) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_list_sessions() != 61787) {

@@ -21,6 +21,7 @@ struct SettingsSheet: View {
 
                 ScrollView {
                     VStack(spacing: 14) {
+                        savedServersCard
                         pairedCard
                         pairingCard
                         statusCard
@@ -52,6 +53,49 @@ struct SettingsSheet: View {
     }
 
     // MARK: - Section cards
+
+    @ViewBuilder
+    private var savedServersCard: some View {
+        if !store.savedServers.isEmpty {
+            SettingsCard(title: "Saved Servers") {
+                ForEach(store.savedServers) { server in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(server.name)
+                                .foregroundStyle(SweKittyTheme.textBody)
+                            Text(server.endpoint.displayHost)
+                                .font(.caption)
+                                .foregroundStyle(SweKittyTheme.textSecondary)
+                        }
+                        Spacer()
+                        if server.isDefault {
+                            Text("Default")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .glassCapsule(interactive: false, tint: SweKittyTheme.accentStrong.opacity(0.22))
+                        }
+                        Button("Use") {
+                            store.selectSavedServer(server.id, autoConnect: true)
+                            url = server.endpoint.url
+                            token = server.endpoint.token
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(SweKittyTheme.accentStrong)
+                        Button(role: .destructive) {
+                            store.removeSavedServer(server.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if server.id != store.savedServers.last?.id {
+                        Divider().background(SweKittyTheme.separator)
+                    }
+                }
+            }
+        }
+    }
 
     @ViewBuilder
     private var pairedCard: some View {
@@ -185,10 +229,12 @@ struct SettingsSheet: View {
     }
 
     private func save() {
-        store.endpoint = StoredEndpoint(
+        let next = StoredEndpoint(
             url: url.trimmingCharacters(in: .whitespaces),
             token: token.trimmingCharacters(in: .whitespaces)
         )
+        store.endpoint = next
+        store.upsertSavedServer(name: next.displayHost, endpoint: next, makeDefault: true)
         store.disconnect()
         store.connect()
         dismiss()

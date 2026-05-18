@@ -38,6 +38,16 @@ dictionary ChatEvent {
     sequence<ViewEventFile> files;
 };
 
+dictionary ConversationItem {
+    string id;
+    string role;
+    string kind;
+    string status;
+    string content;
+    string ts;
+    sequence<ViewEventFile> files;
+};
+
 [Error]
 enum SweKittyError {
     "Connection",
@@ -101,4 +111,7 @@ interface SweKittyClient {
     ProjectSession get_session(string session_id);
 
     sequence<ProjectSession> list_sessions();
+
+    [Throws=SweKittyError]
+    sequence<ConversationItem> list_conversation_items(string session_id);
 };

@@ -95,19 +95,25 @@ func TestPingPong(t *testing.T) {
 	if err := c.WriteMessage(websocket.TextMessage, []byte(`{"type":"ping"}`)); err != nil {
 		t.Fatal(err)
 	}
-	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	mt, payload, err := c.ReadMessage()
-	if err != nil {
-		t.Fatalf("read: %v", err)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+		mt, payload, err := c.ReadMessage()
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if mt != websocket.TextMessage {
+			continue
+		}
+		var env map[string]any
+		if err := json.Unmarshal(payload, &env); err != nil {
+			continue
+		}
+		if env["type"] == "pong" {
+			return
+		}
 	}
-	if mt != websocket.TextMessage {
-		t.Fatalf("expected pong text, got mt=%d", mt)
-	}
-	var env map[string]any
-	_ = json.Unmarshal(payload, &env)
-	if env["type"] != "pong" {
-		t.Fatalf("expected pong, got %v", env["type"])
-	}
+	t.Fatal("did not observe text pong before deadline")
 }
 
 func TestPTYEcho(t *testing.T) {

@@ -58,7 +58,22 @@ struct ChatTab: View {
         }
     }
 
-    private var events: [ChatEvent] { store.chatLog[session.id] ?? [] }
+    private var events: [ConversationItem] {
+        let typed = store.conversationLog[session.id] ?? []
+        if !typed.isEmpty { return typed }
+        // Fallback while migrating older in-memory sessions.
+        return (store.chatLog[session.id] ?? []).enumerated().map { idx, ev in
+            ConversationItem(
+                id: "\(ev.ts)-\(idx)",
+                role: ev.role,
+                kind: ev.role.lowercased() == "tool" ? "tool" : "message",
+                status: "done",
+                content: ev.content,
+                ts: ev.ts,
+                files: ev.files
+            )
+        }
+    }
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -84,6 +99,26 @@ struct ChatTab: View {
                 Text("Reply")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(SweKittyTheme.textSecondary)
+            }
+            if !quickReplies.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(quickReplies, id: \.self) { reply in
+                            Button(reply) {
+                                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    draft = reply
+                                } else {
+                                    draft += "\n" + reply
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .glassCapsule(interactive: true, tint: SweKittyTheme.accentStrong.opacity(0.24))
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
             }
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -118,5 +153,47 @@ struct ChatTab: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
         .glassRoundedRect(cornerRadius: 20)
+    }
+
+    private var quickReplies: [String] {
+        guard let source = events.reversed().first(where: { ev in
+            let role = ev.role.lowercased()
+            return role == "assistant" || role == "tool"
+        })?.content else {
+            return []
+        }
+        return QuickReplyDetector.suggestions(from: source)
+    }
+}
+
+private enum QuickReplyDetector {
+    static func suggestions(from content: String) -> [String] {
+        let lower = content.lowercased()
+        var chips: [String] = []
+        func add(_ text: String) {
+            if !chips.contains(text) { chips.append(text) }
+        }
+
+        if lower.contains("confirm") || lower.contains("proceed") || lower.contains("continue") {
+            add("Proceed")
+            add("Hold for review")
+        }
+        if lower.contains("error") || lower.contains("failed") || lower.contains("exception") {
+            add("Show full error log")
+            add("Retry with diagnostics")
+        }
+        if lower.contains("test") || lower.contains("ci") {
+            add("Run targeted tests first")
+            add("Run full suite")
+        }
+        if lower.contains("choose") || lower.contains("option") || lower.contains("which") {
+            add("Pick the recommended option")
+            add("Explain trade-offs")
+        }
+        if chips.isEmpty {
+            add("Continue")
+            add("Summarize next steps")
+        }
+        return Array(chips.prefix(4))
     }
 }
