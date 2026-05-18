@@ -71,11 +71,12 @@ private struct DetailEmptyState: View {
 
     private var icon: String {
         switch harness {
-        case .disconnected: return endpoint.isComplete ? "antenna.radiowaves.left.and.right.slash" : "wifi.slash"
-        case .connecting:   return "antenna.radiowaves.left.and.right"
-        case .linked:       return "terminal"
-        case .live:         return "terminal"
-        case .failed:       return "exclamationmark.triangle"
+        case .disconnected:   return endpoint.isComplete ? "antenna.radiowaves.left.and.right.slash" : "wifi.slash"
+        case .connecting:     return "antenna.radiowaves.left.and.right"
+        case .reconnecting:   return "antenna.radiowaves.left.and.right"
+        case .linked:         return "terminal"
+        case .live:           return "terminal"
+        case .failed:         return "exclamationmark.triangle"
         }
     }
 
@@ -83,6 +84,7 @@ private struct DetailEmptyState: View {
         switch harness {
         case .disconnected: return endpoint.isComplete ? "Disconnected" : "Welcome to SweKitty"
         case .connecting:   return "Connecting to harness"
+        case .reconnecting: return "Reconnecting…"
         case .linked:       return "No session selected"
         case .live:         return "No session selected"
         case .failed:       return "Harness unreachable"
@@ -97,6 +99,8 @@ private struct DetailEmptyState: View {
                 : "Pair this device with a running swe-kitty harness in Settings to begin."
         case .connecting:
             return "Establishing a websocket link to \(endpoint.displayHost)."
+        case let .reconnecting(attempt, maxAttempts):
+            return "Lost link to \(endpoint.displayHost). Reconnecting (attempt \(attempt) of \(maxAttempts))."
         case .linked, .live:
             return "Tap + in the sidebar to start a session against \(endpoint.displayHost)."
         case .failed(let reason):

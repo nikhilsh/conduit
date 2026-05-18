@@ -5,8 +5,23 @@
 //! raw PTY) and the JSON control envelopes from §3, then surfaces each
 //! event to the supplied delegate.
 //!
-//! Snapshot frames are reassembled in-order and gunzipped before the
-//! delegate sees them — apps never see the chunking.
+//! ## Reconnection
+//!
+//! A drop on a transient network blip should not require user action.
+//! `connect()` opens the first socket synchronously (so auth failures
+//! surface to the create-session call) and then hands control to a
+//! per-session worker task. The worker owns the outbound `mpsc::Receiver`
+//! and the WebSocket; when the socket dies it retries
+//! `RECONNECT_MAX_ATTEMPTS` times with `RECONNECT_DELAY` between attempts.
+//! During reconnect the outbound channel is kept alive so messages
+//! issued from the UI land on the new socket. A 401 during reconnect
+//! is treated as terminal — the harness rotated its in-memory bearer
+//! and the user has to re-pair.
+//!
+//! The pong deadline guards half-open sockets: if no pong (or any
+//! other message) arrives within `PONG_DEADLINE`, the worker closes
+//! the current socket so the reconnect loop can take over instead of
+//! waiting for TCP to surface the error.
 
 use std::io::Read;
 use std::sync::Arc;
@@ -14,9 +29,11 @@ use std::time::Duration;
 
 use flate2::read::GzDecoder;
 use futures_util::{SinkExt, StreamExt};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
@@ -30,16 +47,35 @@ const TAG_UPLOAD: u8 = 0x01;
 const TAG_SNAPSHOT: u8 = 0x02;
 const TAG_ESCAPE: u8 = 0xFF;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const PONG_DEADLINE: Duration = Duration::from_secs(60);
+const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const RECONNECT_MAX_ATTEMPTS: u32 = 5;
+
+/// Observable per-session connection state surfaced via
+/// [`SweKittyDelegate::on_connection_health`]. Apps render this in their
+/// status banner so a transient blip looks like "Reconnecting (2/5)…"
+/// rather than "Offline".
+#[derive(Clone, Debug)]
+pub enum ConnectionHealth {
+    Connected,
+    Connecting { attempt: u32, max_attempts: u32 },
+    Disconnected { reason: String, auth: bool },
+}
 
 /// A live websocket attached to one session. Cheap to clone; cloning
-/// shares the underlying writer.
+/// shares the underlying writer and shutdown signal.
 #[derive(Clone)]
 pub struct SessionHandle {
     tx: mpsc::Sender<Message>,
+    shutdown: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 impl SessionHandle {
+    /// Signal the worker to stop. Idempotent across clones.
     pub fn close(&self) {
+        if let Some(sender) = self.shutdown.lock().take() {
+            let _ = sender.send(());
+        }
         let _ = self.tx.try_send(Message::Close(None));
     }
 
@@ -83,7 +119,8 @@ impl SessionHandle {
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-/// Open a WebSocket session against the harness.
+/// Open a WebSocket session against the harness and spawn a worker that
+/// keeps it alive across transient drops.
 ///
 /// Callers must arrange for this future to be polled on a tokio runtime
 /// with the I/O and time reactors enabled (in practice: the
@@ -95,12 +132,276 @@ pub async fn connect(
     token: String,
     delegate: Arc<dyn SweKittyDelegate>,
 ) -> Result<SessionHandle, SweKittyError> {
+    // First connect is synchronous from the caller's POV so auth
+    // failures surface to the create-session UX. Subsequent reconnects
+    // happen in the background.
+    let ws = open_ws(&endpoint, &session_id, &assistant, &token).await?;
+
+    let (tx, rx) = mpsc::channel::<Message>(64);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown = Arc::new(Mutex::new(Some(shutdown_tx)));
+
+    delegate.on_connection_health(session_id.clone(), ConnectionHealth::Connected);
+
+    tokio::spawn(session_worker(WorkerArgs {
+        endpoint,
+        session_id,
+        assistant,
+        token,
+        initial_ws: Some(ws),
+        rx,
+        shutdown_rx,
+        delegate,
+    }));
+
+    Ok(SessionHandle { tx, shutdown })
+}
+
+struct WorkerArgs {
+    endpoint: String,
+    session_id: String,
+    assistant: String,
+    token: String,
+    initial_ws: Option<WsStream>,
+    rx: mpsc::Receiver<Message>,
+    shutdown_rx: oneshot::Receiver<()>,
+    delegate: Arc<dyn SweKittyDelegate>,
+}
+
+/// Long-lived worker for one session. Owns the outbound channel,
+/// the shutdown signal, and the WebSocket lifecycle.
+async fn session_worker(mut args: WorkerArgs) {
+    let mut current_ws = args.initial_ws.take();
+    let mut shutdown_rx = args.shutdown_rx;
+
+    loop {
+        // Acquire (or re-acquire) a live WebSocket.
+        let ws = match current_ws.take() {
+            Some(ws) => ws,
+            None => {
+                match reconnect(
+                    &args.endpoint,
+                    &args.session_id,
+                    &args.assistant,
+                    &args.token,
+                    &args.delegate,
+                    &mut shutdown_rx,
+                )
+                .await
+                {
+                    ReconnectOutcome::Reconnected(ws) => *ws,
+                    ReconnectOutcome::AuthExpired => {
+                        let reason = "authentication failed".to_string();
+                        args.delegate.on_connection_health(
+                            args.session_id.clone(),
+                            ConnectionHealth::Disconnected {
+                                reason: reason.clone(),
+                                auth: true,
+                            },
+                        );
+                        args.delegate.on_disconnected(reason);
+                        return;
+                    }
+                    ReconnectOutcome::Exhausted => {
+                        let reason =
+                            format!("reconnect failed after {RECONNECT_MAX_ATTEMPTS} attempts");
+                        args.delegate.on_connection_health(
+                            args.session_id.clone(),
+                            ConnectionHealth::Disconnected {
+                                reason: reason.clone(),
+                                auth: false,
+                            },
+                        );
+                        args.delegate.on_disconnected(reason);
+                        return;
+                    }
+                    ReconnectOutcome::ShutdownRequested => {
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Drive the socket until it dies, the user closes us out, or we
+        // detect a half-open via the pong deadline.
+        let outcome = drive_socket(
+            ws,
+            &mut args.rx,
+            &mut shutdown_rx,
+            &args.delegate,
+            &args.session_id,
+        )
+        .await;
+
+        match outcome {
+            DriveOutcome::ClientClose => {
+                return;
+            }
+            DriveOutcome::Disconnected(reason) => {
+                args.delegate.on_connection_health(
+                    args.session_id.clone(),
+                    ConnectionHealth::Disconnected {
+                        reason: reason.clone(),
+                        auth: false,
+                    },
+                );
+                // Loop back to reconnect.
+            }
+        }
+    }
+}
+
+enum ReconnectOutcome {
+    Reconnected(Box<WsStream>),
+    AuthExpired,
+    Exhausted,
+    ShutdownRequested,
+}
+
+async fn reconnect(
+    endpoint: &str,
+    session_id: &str,
+    assistant: &str,
+    token: &str,
+    delegate: &Arc<dyn SweKittyDelegate>,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+) -> ReconnectOutcome {
+    for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
+        delegate.on_connection_health(
+            session_id.to_string(),
+            ConnectionHealth::Connecting {
+                attempt,
+                max_attempts: RECONNECT_MAX_ATTEMPTS,
+            },
+        );
+
+        // Wait before retrying so we don't hammer the server. Skipping
+        // the wait on attempt 1 would just slam right after a drop and
+        // is unlikely to succeed anyway.
+        let sleep = tokio::time::sleep(RECONNECT_DELAY);
+        tokio::pin!(sleep);
+        tokio::select! {
+            _ = &mut sleep => {}
+            _ = &mut *shutdown_rx => { return ReconnectOutcome::ShutdownRequested; }
+        }
+
+        match open_ws(endpoint, session_id, assistant, token).await {
+            Ok(ws) => {
+                delegate
+                    .on_connection_health(session_id.to_string(), ConnectionHealth::Connected);
+                return ReconnectOutcome::Reconnected(Box::new(ws));
+            }
+            Err(SweKittyError::Auth) => {
+                return ReconnectOutcome::AuthExpired;
+            }
+            Err(_) => {
+                // Try again until we hit MAX_ATTEMPTS.
+            }
+        }
+    }
+    ReconnectOutcome::Exhausted
+}
+
+enum DriveOutcome {
+    ClientClose,
+    Disconnected(String),
+}
+
+async fn drive_socket(
+    ws: WsStream,
+    rx: &mut mpsc::Receiver<Message>,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+    delegate: &Arc<dyn SweKittyDelegate>,
+    session_id: &str,
+) -> DriveOutcome {
+    let (mut writer, mut reader) = ws.split();
+    let mut snap = SnapshotReassembler::new();
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.tick().await; // consume the immediate tick
+    let mut last_inbound = Instant::now();
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut *shutdown_rx => {
+                let _ = writer.send(Message::Close(None)).await;
+                let _ = writer.close().await;
+                return DriveOutcome::ClientClose;
+            }
+            outbound = rx.recv() => {
+                let Some(msg) = outbound else {
+                    // SessionHandle dropped — also a clean shutdown.
+                    let _ = writer.send(Message::Close(None)).await;
+                    let _ = writer.close().await;
+                    return DriveOutcome::ClientClose;
+                };
+                let is_close = matches!(msg, Message::Close(_));
+                if let Err(e) = writer.send(msg).await {
+                    return DriveOutcome::Disconnected(format!("send: {e}"));
+                }
+                if is_close {
+                    let _ = writer.close().await;
+                    return DriveOutcome::ClientClose;
+                }
+            }
+            inbound = reader.next() => {
+                let Some(item) = inbound else {
+                    return DriveOutcome::Disconnected("eof".to_string());
+                };
+                last_inbound = Instant::now();
+                match item {
+                    Ok(Message::Binary(payload)) => {
+                        if let Err(e) = handle_binary(session_id, delegate, &mut snap, payload) {
+                            return DriveOutcome::Disconnected(e.to_string());
+                        }
+                    }
+                    Ok(Message::Text(text)) => {
+                        if let Err(e) = handle_text(session_id, delegate, &mut writer, &text).await {
+                            return DriveOutcome::Disconnected(e.to_string());
+                        }
+                    }
+                    Ok(Message::Ping(p)) => {
+                        if let Err(e) = writer.send(Message::Pong(p)).await {
+                            return DriveOutcome::Disconnected(format!("pong: {e}"));
+                        }
+                    }
+                    Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
+                    Ok(Message::Close(_)) => {
+                        return DriveOutcome::Disconnected("closed by server".to_string());
+                    }
+                    Err(e) => {
+                        return DriveOutcome::Disconnected(e.to_string());
+                    }
+                }
+            }
+            _ = heartbeat.tick() => {
+                if last_inbound.elapsed() > PONG_DEADLINE {
+                    // Server hasn't said anything in too long; assume
+                    // the socket is half-open and force a reconnect.
+                    let _ = writer.close().await;
+                    return DriveOutcome::Disconnected("pong deadline".to_string());
+                }
+                let ping = serde_json::json!({ "type": "ping" }).to_string();
+                if let Err(e) = writer.send(Message::Text(ping)).await {
+                    return DriveOutcome::Disconnected(format!("ping: {e}"));
+                }
+            }
+        }
+    }
+}
+
+async fn open_ws(
+    endpoint: &str,
+    session_id: &str,
+    assistant: &str,
+    token: &str,
+) -> Result<WsStream, SweKittyError> {
     let url = format!(
         "{}/ws/{}?assistant={}&token={}",
         endpoint.trim_end_matches('/'),
         session_id,
-        urlencode(&assistant),
-        urlencode(&token),
+        urlencode(assistant),
+        urlencode(token),
     );
     let mut request = url
         .into_client_request()
@@ -118,89 +419,7 @@ pub async fn connect(
         }
         Err(e) => return Err(SweKittyError::Connection(e.to_string())),
     };
-    let (writer, reader) = ws.split();
-    let (tx, rx) = mpsc::channel::<Message>(64);
-    let writer = Arc::new(Mutex::new(writer));
-
-    tokio::spawn(writer_loop(writer, rx));
-    tokio::spawn(heartbeat_loop(tx.clone()));
-    tokio::spawn(reader_loop(
-        reader,
-        session_id,
-        delegate,
-        tx.clone(),
-        SnapshotReassembler::new(),
-    ));
-
-    Ok(SessionHandle { tx })
-}
-
-async fn writer_loop(
-    writer: Arc<Mutex<futures_util::stream::SplitSink<WsStream, Message>>>,
-    mut rx: mpsc::Receiver<Message>,
-) {
-    while let Some(msg) = rx.recv().await {
-        let mut w = writer.lock().await;
-        if w.send(msg).await.is_err() {
-            break;
-        }
-    }
-}
-
-async fn heartbeat_loop(tx: mpsc::Sender<Message>) {
-    let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
-    loop {
-        ticker.tick().await;
-        if tx
-            .send(Message::Text(
-                serde_json::json!({ "type": "ping" }).to_string(),
-            ))
-            .await
-            .is_err()
-        {
-            return;
-        }
-    }
-}
-
-async fn reader_loop(
-    mut reader: futures_util::stream::SplitStream<WsStream>,
-    session_id: String,
-    delegate: Arc<dyn SweKittyDelegate>,
-    tx: mpsc::Sender<Message>,
-    mut snap: SnapshotReassembler,
-) {
-    while let Some(item) = reader.next().await {
-        match item {
-            Ok(Message::Binary(payload)) => {
-                if let Err(e) = handle_binary(&session_id, &delegate, &mut snap, payload) {
-                    delegate.on_disconnected(e.to_string());
-                    return;
-                }
-            }
-            Ok(Message::Text(text)) => {
-                if let Err(e) = handle_text(&session_id, &delegate, &tx, &text).await {
-                    delegate.on_disconnected(e.to_string());
-                    return;
-                }
-            }
-            Ok(Message::Ping(p)) => {
-                if tx.send(Message::Pong(p)).await.is_err() {
-                    return;
-                }
-            }
-            Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
-            Ok(Message::Close(_)) => {
-                delegate.on_disconnected("closed".to_string());
-                return;
-            }
-            Err(e) => {
-                delegate.on_disconnected(e.to_string());
-                return;
-            }
-        }
-    }
-    delegate.on_disconnected("eof".to_string());
+    Ok(ws)
 }
 
 fn handle_binary(
@@ -234,7 +453,7 @@ fn handle_binary(
 async fn handle_text(
     session_id: &str,
     delegate: &Arc<dyn SweKittyDelegate>,
-    tx: &mpsc::Sender<Message>,
+    writer: &mut futures_util::stream::SplitSink<WsStream, Message>,
     text: &str,
 ) -> Result<(), SweKittyError> {
     #[derive(Deserialize)]
@@ -321,11 +540,12 @@ async fn handle_text(
             }
         }
         "ping" => {
-            tx.send(Message::Text(
-                serde_json::json!({ "type": "pong" }).to_string(),
-            ))
-            .await
-            .map_err(|e| SweKittyError::Connection(e.to_string()))?;
+            writer
+                .send(Message::Text(
+                    serde_json::json!({ "type": "pong" }).to_string(),
+                ))
+                .await
+                .map_err(|e| SweKittyError::Connection(e.to_string()))?;
         }
         "pong" => {}
         _ => {}

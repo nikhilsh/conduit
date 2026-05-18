@@ -15,6 +15,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+pub use transport::ConnectionHealth;
 pub use views::{
     ChatEvent, PreviewInfo, ProjectSession, ProjectSessionState, SessionStatus, ViewEventFile,
 };
@@ -66,6 +67,7 @@ pub trait SweKittyDelegate: Send + Sync {
     fn on_snapshot(&self, session_id: String, gunzipped: Vec<u8>);
     fn on_exit(&self, session_id: String, code: i32);
     fn on_disconnected(&self, reason: String);
+    fn on_connection_health(&self, session_id: String, health: ConnectionHealth);
 }
 
 pub struct SweKittyClient {
@@ -349,5 +351,9 @@ impl SweKittyDelegate for ClientDelegate {
 
     fn on_disconnected(&self, reason: String) {
         self.delegate.on_disconnected(reason);
+    }
+
+    fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
+        self.delegate.on_connection_health(session_id, health);
     }
 }

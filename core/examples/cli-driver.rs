@@ -10,7 +10,9 @@
 
 use std::io::{self, Read, Write};
 
-use swe_kitty_core::{ChatEvent, PreviewInfo, SessionStatus, SweKittyClient, SweKittyDelegate};
+use swe_kitty_core::{
+    ChatEvent, ConnectionHealth, PreviewInfo, SessionStatus, SweKittyClient, SweKittyDelegate,
+};
 use tokio::sync::mpsc;
 
 struct StdoutDelegate;
@@ -41,6 +43,9 @@ impl SweKittyDelegate for StdoutDelegate {
     }
     fn on_disconnected(&self, reason: String) {
         eprintln!("[disconnected] {reason}");
+    }
+    fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
+        eprintln!("[health:{session_id}] {health:?}");
     }
 }
 

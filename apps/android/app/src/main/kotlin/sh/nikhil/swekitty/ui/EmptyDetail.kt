@@ -80,6 +80,7 @@ private fun labels(harness: HarnessState, endpoint: Endpoint): Pair<String, Stri
     else
         "Welcome to SweKitty" to "Pair this device with a running swe-kitty harness in Settings to begin."
     is HarnessState.Connecting   -> "Connecting" to "Establishing a websocket link to ${endpoint.displayHost}."
+    is HarnessState.Reconnecting -> "Reconnecting…" to "Lost link to ${endpoint.displayHost}. Reconnecting (attempt ${harness.attempt} of ${harness.maxAttempts})."
     is HarnessState.Linked,
     is HarnessState.Live         -> "No session selected" to "Tap the menu to start a session against ${endpoint.displayHost}."
     is HarnessState.Failed       -> "Harness unreachable" to harness.reason

@@ -193,7 +193,8 @@ fun HarnessStatusStrip(
 @Composable
 fun HarnessBadge(state: HarnessState) {
     when (state) {
-        is HarnessState.Connecting -> CircularProgressIndicator(
+        is HarnessState.Connecting,
+        is HarnessState.Reconnecting -> CircularProgressIndicator(
             modifier = Modifier.size(14.dp),
             strokeWidth = 2.dp,
         )

@@ -1260,6 +1260,85 @@ public func FfiConverterTypeViewEventFile_lower(_ value: ViewEventFile) -> RustB
     return FfiConverterTypeViewEventFile.lower(value)
 }
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ConnectionHealth {
+    
+    case connected
+    case connecting(attempt: UInt32, maxAttempts: UInt32
+    )
+    case disconnected(reason: String, auth: Bool
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeConnectionHealth: FfiConverterRustBuffer {
+    typealias SwiftType = ConnectionHealth
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConnectionHealth {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .connected
+        
+        case 2: return .connecting(attempt: try FfiConverterUInt32.read(from: &buf), maxAttempts: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        case 3: return .disconnected(reason: try FfiConverterString.read(from: &buf), auth: try FfiConverterBool.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ConnectionHealth, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .connected:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .connecting(attempt,maxAttempts):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt32.write(attempt, into: &buf)
+            FfiConverterUInt32.write(maxAttempts, into: &buf)
+            
+        
+        case let .disconnected(reason,auth):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(reason, into: &buf)
+            FfiConverterBool.write(auth, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConnectionHealth_lift(_ buf: RustBuffer) throws -> ConnectionHealth {
+    return try FfiConverterTypeConnectionHealth.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConnectionHealth_lower(_ value: ConnectionHealth) -> RustBuffer {
+    return FfiConverterTypeConnectionHealth.lower(value)
+}
+
+
+
+extension ConnectionHealth: Equatable, Hashable {}
+
+
+
 
 public enum SweKittyError {
 
@@ -1373,6 +1452,8 @@ public protocol SweKittyDelegate : AnyObject {
     func onExit(sessionId: String, code: Int32) 
     
     func onDisconnected(reason: String) 
+    
+    func onConnectionHealth(sessionId: String, health: ConnectionHealth) 
     
 }
 
@@ -1557,6 +1638,32 @@ fileprivate struct UniffiCallbackInterfaceSweKittyDelegate {
                 }
                 return uniffiObj.onDisconnected(
                      reason: try FfiConverterString.lift(reason)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onConnectionHealth: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            health: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceSweKittyDelegate.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onConnectionHealth(
+                     sessionId: try FfiConverterString.lift(sessionId),
+                     health: try FfiConverterTypeConnectionHealth.lift(health)
                 )
             }
 
@@ -1864,6 +1971,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_disconnected() != 59151) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_connection_health() != 43974) {
         return InitializationResult.apiChecksumMismatch
     }
 

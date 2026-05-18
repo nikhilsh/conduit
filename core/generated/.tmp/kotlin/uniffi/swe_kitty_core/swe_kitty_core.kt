@@ -682,7 +682,10 @@ internal interface UniffiCallbackInterfaceSweKittyDelegateMethod5 : com.sun.jna.
 internal interface UniffiCallbackInterfaceSweKittyDelegateMethod6 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`reason`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
-@Structure.FieldOrder("onPtyData", "onChatEvent", "onPreviewReady", "onStatus", "onSnapshot", "onExit", "onDisconnected", "uniffiFree")
+internal interface UniffiCallbackInterfaceSweKittyDelegateMethod7 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`health`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("onPtyData", "onChatEvent", "onPreviewReady", "onStatus", "onSnapshot", "onExit", "onDisconnected", "onConnectionHealth", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
     @JvmField internal var `onPtyData`: UniffiCallbackInterfaceSweKittyDelegateMethod0? = null,
     @JvmField internal var `onChatEvent`: UniffiCallbackInterfaceSweKittyDelegateMethod1? = null,
@@ -691,6 +694,7 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
     @JvmField internal var `onSnapshot`: UniffiCallbackInterfaceSweKittyDelegateMethod4? = null,
     @JvmField internal var `onExit`: UniffiCallbackInterfaceSweKittyDelegateMethod5? = null,
     @JvmField internal var `onDisconnected`: UniffiCallbackInterfaceSweKittyDelegateMethod6? = null,
+    @JvmField internal var `onConnectionHealth`: UniffiCallbackInterfaceSweKittyDelegateMethod7? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
@@ -701,8 +705,9 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
         `onSnapshot`: UniffiCallbackInterfaceSweKittyDelegateMethod4? = null,
         `onExit`: UniffiCallbackInterfaceSweKittyDelegateMethod5? = null,
         `onDisconnected`: UniffiCallbackInterfaceSweKittyDelegateMethod6? = null,
+        `onConnectionHealth`: UniffiCallbackInterfaceSweKittyDelegateMethod7? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceSweKittyDelegate(`onPtyData`,`onChatEvent`,`onPreviewReady`,`onStatus`,`onSnapshot`,`onExit`,`onDisconnected`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceSweKittyDelegate(`onPtyData`,`onChatEvent`,`onPreviewReady`,`onStatus`,`onSnapshot`,`onExit`,`onDisconnected`,`onConnectionHealth`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceSweKittyDelegate) {
         `onPtyData` = other.`onPtyData`
@@ -712,10 +717,12 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
         `onSnapshot` = other.`onSnapshot`
         `onExit` = other.`onExit`
         `onDisconnected` = other.`onDisconnected`
+        `onConnectionHealth` = other.`onConnectionHealth`
         `uniffiFree` = other.`uniffiFree`
     }
 
 }
+
 
 
 
@@ -1008,6 +1015,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_disconnected(
     ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_connection_health(
+    ): Short
     fun ffi_swe_kitty_core_uniffi_contract_version(
     ): Int
     
@@ -1080,6 +1089,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_disconnected() != 59151.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_connection_health() != 43974.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -2075,6 +2087,98 @@ public object FfiConverterTypeViewEventFile: FfiConverterRustBuffer<ViewEventFil
 
 
 
+sealed class ConnectionHealth {
+    
+    object Connected : ConnectionHealth()
+    
+    
+    data class Connecting(
+        val `attempt`: kotlin.UInt, 
+        val `maxAttempts`: kotlin.UInt) : ConnectionHealth() {
+        companion object
+    }
+    
+    data class Disconnected(
+        val `reason`: kotlin.String, 
+        val `auth`: kotlin.Boolean) : ConnectionHealth() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConnectionHealth : FfiConverterRustBuffer<ConnectionHealth>{
+    override fun read(buf: ByteBuffer): ConnectionHealth {
+        return when(buf.getInt()) {
+            1 -> ConnectionHealth.Connected
+            2 -> ConnectionHealth.Connecting(
+                FfiConverterUInt.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            3 -> ConnectionHealth.Disconnected(
+                FfiConverterString.read(buf),
+                FfiConverterBoolean.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: ConnectionHealth) = when(value) {
+        is ConnectionHealth.Connected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ConnectionHealth.Connecting -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`attempt`)
+                + FfiConverterUInt.allocationSize(value.`maxAttempts`)
+            )
+        }
+        is ConnectionHealth.Disconnected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+                + FfiConverterBoolean.allocationSize(value.`auth`)
+            )
+        }
+    }
+
+    override fun write(value: ConnectionHealth, buf: ByteBuffer) {
+        when(value) {
+            is ConnectionHealth.Connected -> {
+                buf.putInt(1)
+                Unit
+            }
+            is ConnectionHealth.Connecting -> {
+                buf.putInt(2)
+                FfiConverterUInt.write(value.`attempt`, buf)
+                FfiConverterUInt.write(value.`maxAttempts`, buf)
+                Unit
+            }
+            is ConnectionHealth.Disconnected -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`reason`, buf)
+                FfiConverterBoolean.write(value.`auth`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 
 
 sealed class SweKittyException(message: String): kotlin.Exception(message) {
@@ -2169,6 +2273,8 @@ public interface SweKittyDelegate {
     fun `onExit`(`sessionId`: kotlin.String, `code`: kotlin.Int)
     
     fun `onDisconnected`(`reason`: kotlin.String)
+    
+    fun `onConnectionHealth`(`sessionId`: kotlin.String, `health`: ConnectionHealth)
     
     companion object
 }
@@ -2297,6 +2403,19 @@ internal object uniffiCallbackInterfaceSweKittyDelegate {
             uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
         }
     }
+    internal object `onConnectionHealth`: UniffiCallbackInterfaceSweKittyDelegateMethod7 {
+        override fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`health`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSweKittyDelegate.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onConnectionHealth`(
+                    FfiConverterString.lift(`sessionId`),
+                    FfiConverterTypeConnectionHealth.lift(`health`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
 
     internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
@@ -2312,6 +2431,7 @@ internal object uniffiCallbackInterfaceSweKittyDelegate {
         `onSnapshot`,
         `onExit`,
         `onDisconnected`,
+        `onConnectionHealth`,
         uniffiFree,
     )
 

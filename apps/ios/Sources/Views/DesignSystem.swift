@@ -76,7 +76,7 @@ struct HarnessBadge: View {
     @ViewBuilder
     private var indicator: some View {
         switch state {
-        case .connecting:
+        case .connecting, .reconnecting:
             ProgressView().controlSize(.mini)
         case .live:
             HealthDot(health: "green", size: 8)
@@ -93,6 +93,7 @@ struct HarnessBadge: View {
         switch state {
         case .live:         return SweKittyTheme.success.opacity(0.35)
         case .linked:       return SweKittyTheme.warning.opacity(0.30)
+        case .reconnecting: return SweKittyTheme.warning.opacity(0.35)
         case .failed:       return SweKittyTheme.danger.opacity(0.35)
         case .connecting:   return SweKittyTheme.accent.opacity(0.30)
         case .disconnected: return nil

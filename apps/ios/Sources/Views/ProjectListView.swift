@@ -57,6 +57,7 @@ struct ProjectListView: View {
 
     @ViewBuilder
     private var sessionList: some View {
+        @Bindable var store = store
         let visible = store.visibleSessions
         if visible.isEmpty {
             EmptySessionsHint(
@@ -67,25 +68,29 @@ struct ProjectListView: View {
             .padding(.top, 18)
             .frame(maxHeight: .infinity, alignment: .top)
         } else {
-            ScrollView {
-                GlassMorphContainer(spacing: 12) {
-                    LazyVStack(spacing: 10) {
-                        ForEach(visible) { entry in
-                            SessionRow(
-                                entry: entry,
-                                status: status(for: entry),
-                                lifecycle: lifecycle(for: entry),
-                                isSelected: isSelected(entry),
-                                onTap: { selectRow(entry) }
-                            )
-                            .glassMorphID("session-\(entry.id)", in: glassNS)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+            List(selection: $store.selectedSessionID) {
+                ForEach(visible) { entry in
+                    SessionRow(
+                        entry: entry,
+                        status: status(for: entry),
+                        lifecycle: lifecycle(for: entry),
+                        isSelected: isSelected(entry)
+                    )
+                    .glassMorphID("session-\(entry.id)", in: glassNS)
+                    .tag(selectableTag(for: entry) as String?)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
+    }
+
+    private func selectableTag(for entry: VisibleSession) -> String? {
+        if case .real(let s) = entry { return s.id }
+        return nil
     }
 
     private func status(for entry: VisibleSession) -> SessionStatus? {
@@ -104,10 +109,6 @@ struct ProjectListView: View {
         case .real(let s): return store.selectedSessionID == s.id
         case .creating:    return false
         }
-    }
-
-    private func selectRow(_ entry: VisibleSession) {
-        if case .real(let s) = entry { store.selectedSessionID = s.id }
     }
 }
 
@@ -215,31 +216,27 @@ private struct SessionRow: View {
     let status: SessionStatus?
     let lifecycle: SessionLifecycle?
     let isSelected: Bool
-    let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                leading
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(displayName)
-                        .font(.headline)
-                        .foregroundStyle(SweKittyTheme.textPrimary)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(SweKittyTheme.textMuted)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                trailing
+        HStack(spacing: 12) {
+            leading
+            VStack(alignment: .leading, spacing: 3) {
+                Text(displayName)
+                    .font(.headline)
+                    .foregroundStyle(SweKittyTheme.textPrimary)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(SweKittyTheme.textMuted)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .glassRect(cornerRadius: SweKittyTheme.cardCornerRadius, tint: tint)
+            Spacer(minLength: 8)
+            trailing
         }
-        .buttonStyle(.plain)
-        .disabled(!isTappable)
+        .contentShape(Rectangle())
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .glassRect(cornerRadius: SweKittyTheme.cardCornerRadius, tint: tint)
     }
 
     @ViewBuilder
@@ -281,11 +278,6 @@ private struct SessionRow: View {
             if case .failed(let msg) = lifecycle { return msg }
             return "asking harness for a session…"
         }
-    }
-
-    private var isTappable: Bool {
-        if case .real = entry { return true }
-        return false
     }
 
     private var tint: Color? {

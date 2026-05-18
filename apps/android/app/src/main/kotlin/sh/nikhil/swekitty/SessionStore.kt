@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
 import uniffi.swe_kitty_core.ChatEvent
+import uniffi.swe_kitty_core.ConnectionHealth
 import uniffi.swe_kitty_core.PreviewInfo
 import uniffi.swe_kitty_core.ProjectSession
 import uniffi.swe_kitty_core.SessionStatus
@@ -32,15 +33,19 @@ sealed class HarnessState {
     data object Connecting : HarnessState()
     data object Linked : HarnessState()
     data object Live : HarnessState()
+    /** Transient drop, Rust core is auto-retrying. */
+    data class Reconnecting(val attempt: UInt, val maxAttempts: UInt) : HarnessState()
     data class Failed(val reason: String) : HarnessState()
 
     val isReachable: Boolean get() = this is Linked || this is Live
-    val canIssueCommands: Boolean get() = isReachable
+    /** Keep allowing input through a reconnect — outbound is queued. */
+    val canIssueCommands: Boolean get() = isReachable || this is Reconnecting
     val badgeLabel: String get() = when (this) {
         is Disconnected -> "Disconnected"
         is Connecting   -> "Connecting…"
         is Linked       -> "Paired"
         is Live         -> "Live"
+        is Reconnecting -> "Reconnecting (${attempt}/${maxAttempts})…"
         is Failed       -> "Offline"
     }
     val failureReason: String? get() = (this as? Failed)?.reason
@@ -141,6 +146,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     private val _previews = MutableStateFlow<Map<String, PreviewInfo>>(emptyMap())
     val previews: StateFlow<Map<String, PreviewInfo>> = _previews.asStateFlow()
+
+    /** Per-session connection health from the Rust reconnect worker. */
+    private val _connectionHealth = MutableStateFlow<Map<String, ConnectionHealth>>(emptyMap())
+    val connectionHealth: StateFlow<Map<String, ConnectionHealth>> = _connectionHealth.asStateFlow()
 
     private var client: SweKittyClient? = null
     private var prefs: android.content.SharedPreferences? = null
@@ -384,7 +393,46 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     override fun onDisconnected(reason: String) {
-        _harness.value = HarnessState.Failed("Disconnected: $reason")
+        // Preserve an existing "Pairing expired" diagnosis — the server tearing
+        // down the socket right after an auth rejection is part of the same
+        // failure, not a new one.
+        val current = _harness.value
+        if (current is HarnessState.Failed &&
+            current.reason.lowercase().contains("pairing expired")
+        ) {
+            return
+        }
+        val lower = reason.lowercase()
+        _harness.value = if (
+            lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized")
+        ) {
+            HarnessState.Failed("Pairing expired. Scan a new QR code from the harness.")
+        } else {
+            HarnessState.Failed("Disconnected: $reason")
+        }
+    }
+
+    override fun onConnectionHealth(sessionId: String, health: ConnectionHealth) {
+        _connectionHealth.value = _connectionHealth.value + (sessionId to health)
+        when (health) {
+            is ConnectionHealth.Connected -> {
+                _harness.value = if (_sessionLifecycle.value.isNotEmpty()) {
+                    HarnessState.Live
+                } else {
+                    HarnessState.Linked
+                }
+            }
+            is ConnectionHealth.Connecting -> {
+                _harness.value = HarnessState.Reconnecting(health.attempt, health.maxAttempts)
+            }
+            is ConnectionHealth.Disconnected -> {
+                if (health.auth) {
+                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the harness.")
+                } else {
+                    onDisconnected(health.reason)
+                }
+            }
+        }
     }
 
     private fun describe(t: Throwable): String {

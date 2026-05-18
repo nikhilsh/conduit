@@ -6,21 +6,27 @@ import Observation
 /// separate `.linked` (handshake done, not yet verified) and `.live`
 /// (at least one round-trip succeeded). Session creation flips us into
 /// `.live` on the first success.
+///
+/// `.reconnecting` is driven by the Rust core's per-session reconnect
+/// worker: a transient drop becomes "Reconnecting (2/5)…" rather than
+/// "Offline" and recovers automatically.
 enum HarnessState: Equatable {
     case disconnected
     case connecting
     case linked
     case live
+    case reconnecting(attempt: UInt32, maxAttempts: UInt32)
     case failed(String)
 
     /// Short label suitable for a status badge.
     var badgeLabel: String {
         switch self {
-        case .disconnected: return "Disconnected"
-        case .connecting:   return "Connecting…"
-        case .linked:       return "Paired"
-        case .live:         return "Live"
-        case .failed:       return "Offline"
+        case .disconnected:                       return "Disconnected"
+        case .connecting:                         return "Connecting…"
+        case .linked:                             return "Paired"
+        case .live:                               return "Live"
+        case .reconnecting(let a, let m):         return "Reconnecting (\(a)/\(m))…"
+        case .failed:                             return "Offline"
         }
     }
 
@@ -39,7 +45,15 @@ enum HarnessState: Equatable {
     }
 
     /// True once the user can issue commands (create sessions, etc).
-    var canIssueCommands: Bool { isReachable }
+    /// Keep allowing commands while reconnecting — the outbound channel
+    /// queues messages until the new socket is in place, so the user
+    /// can keep typing through a blip.
+    var canIssueCommands: Bool {
+        switch self {
+        case .linked, .live, .reconnecting: return true
+        default: return false
+        }
+    }
 }
 
 /// Per-session lifecycle, distinct from the overall harness state.
@@ -122,6 +136,11 @@ final class SessionStore {
 
     /// Last-known preview info per session (nil until the agent reports one).
     var preview: [String: PreviewInfo] = [:]
+
+    /// Per-session connection health from the Rust reconnect worker.
+    /// Exposed for UI affordances that want session-scoped state instead
+    /// of the aggregated harness state.
+    var connectionHealthBySession: [String: ConnectionHealth] = [:]
 
     private var client: SweKittyClient?
     private var delegate: StoreDelegate?
@@ -329,7 +348,46 @@ final class SessionStore {
     }
 
     fileprivate func ingestDisconnected(_ reason: String) {
-        harness = .failed("Disconnected: \(reason)")
+        // If we already knew this pairing was expired (e.g. createSession just
+        // failed with Auth), don't clobber that diagnosis with the raw
+        // URLSession close reason — the server tearing down the socket right
+        // after an auth rejection is part of the same failure, not a new one.
+        if case .failed(let existing) = harness,
+           existing.lowercased().contains("pairing expired") {
+            return
+        }
+        let lower = reason.lowercased()
+        if lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized") {
+            harness = .failed("Pairing expired. Scan a new QR code from the harness.")
+        } else {
+            harness = .failed("Disconnected: \(reason)")
+        }
+    }
+
+    /// Per-session connection health, driven by the Rust core's reconnect
+    /// worker. We aggregate across sessions into the single visible
+    /// `HarnessState`: any in-progress reconnect dominates; an auth-flavoured
+    /// terminal disconnect promotes to the friendly "Pairing expired" state.
+    fileprivate func ingestConnectionHealth(_ sessionID: String, _ health: ConnectionHealth) {
+        switch health {
+        case .connected:
+            connectionHealthBySession[sessionID] = health
+            if !sessionLifecycle.isEmpty {
+                harness = .live
+            } else if harness == .disconnected {
+                harness = .linked
+            }
+        case let .connecting(attempt, maxAttempts):
+            connectionHealthBySession[sessionID] = health
+            harness = .reconnecting(attempt: attempt, maxAttempts: maxAttempts)
+        case let .disconnected(reason, auth):
+            connectionHealthBySession[sessionID] = health
+            if auth {
+                harness = .failed("Pairing expired. Scan a new QR code from the harness.")
+            } else {
+                ingestDisconnected(reason)
+            }
+        }
     }
 
     // MARK: - Persistence
@@ -410,5 +468,8 @@ private final class StoreDelegate: SweKittyDelegate {
     }
     func onDisconnected(reason: String) {
         Task { @MainActor in self.store?.ingestDisconnected(reason) }
+    }
+    func onConnectionHealth(sessionId: String, health: ConnectionHealth) {
+        Task { @MainActor in self.store?.ingestConnectionHealth(sessionId, health) }
     }
 }

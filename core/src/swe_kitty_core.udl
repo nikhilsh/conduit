@@ -48,6 +48,13 @@ enum SweKittyError {
     "UnknownSession",
 };
 
+[Enum]
+interface ConnectionHealth {
+    Connected();
+    Connecting(u32 attempt, u32 max_attempts);
+    Disconnected(string reason, boolean auth);
+};
+
 callback interface SweKittyDelegate {
     void on_pty_data(string session_id, bytes data);
     void on_chat_event(string session_id, ChatEvent event);
@@ -56,6 +63,7 @@ callback interface SweKittyDelegate {
     void on_snapshot(string session_id, bytes gunzipped);
     void on_exit(string session_id, i32 code);
     void on_disconnected(string reason);
+    void on_connection_health(string session_id, ConnectionHealth health);
 };
 
 interface SweKittyClient {
