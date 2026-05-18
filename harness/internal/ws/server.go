@@ -53,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/api/capabilities", s.serveCapabilities)
 	mux.HandleFunc("/api/session/start", s.serveSessionStart)
+	mux.HandleFunc("/api/recent-projects", s.serveRecentProjects)
 	mux.HandleFunc("/api/fs/list", s.serveFSList)
 	return mux
 }
@@ -153,21 +154,23 @@ func (c *client) writeJSON(v any) error {
 }
 
 func (c *client) sendStatus(assistant string, created bool) error {
-	phase := "running"
-	if !created {
-		phase = "running"
+	st := c.sess.Status()
+	reason := st.ReasonCode
+	if reason == "" {
+		reason = "ok"
 	}
 	return c.writeJSON(map[string]any{
-		"type":      "status",
-		"session":   c.sess.ID,
-		"viewers":   1,
-		"rows":      40,
-		"cols":      120,
-		"assistant": assistant,
-		"yolo":      false,
-		"health":    "healthy",
-		"phase":     phase,
-		"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+		"type":        "status",
+		"session":     c.sess.ID,
+		"viewers":     1,
+		"rows":        40,
+		"cols":        120,
+		"assistant":   assistant,
+		"yolo":        false,
+		"health":      st.Health,
+		"phase":       st.Phase,
+		"reason_code": reason,
+		"ts":          time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -268,16 +271,17 @@ func (c *client) handleText(payload []byte) {
 			return
 		}
 		_ = c.writeJSON(map[string]any{
-			"type":      "status",
-			"session":   c.sess.ID,
-			"viewers":   1,
-			"rows":      40,
-			"cols":      120,
-			"assistant": c.sess.Assistant,
-			"yolo":      false,
-			"health":    "healthy",
-			"phase":     "swapping",
-			"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+			"type":        "status",
+			"session":     c.sess.ID,
+			"viewers":     1,
+			"rows":        40,
+			"cols":        120,
+			"assistant":   c.sess.Assistant,
+			"yolo":        false,
+			"health":      "healthy",
+			"phase":       "swapping",
+			"reason_code": "agent_switch_in_progress",
+			"ts":          time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		if err := c.sess.SwitchAdapter(env.Assistant); err != nil {
 			_ = c.writeJSON(map[string]any{
@@ -289,16 +293,17 @@ func (c *client) handleText(payload []byte) {
 			return
 		}
 		_ = c.writeJSON(map[string]any{
-			"type":      "status",
-			"session":   c.sess.ID,
-			"viewers":   1,
-			"rows":      40,
-			"cols":      120,
-			"assistant": c.sess.Assistant,
-			"yolo":      false,
-			"health":    "healthy",
-			"phase":     "running",
-			"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+			"type":        "status",
+			"session":     c.sess.ID,
+			"viewers":     1,
+			"rows":        40,
+			"cols":        120,
+			"assistant":   c.sess.Assistant,
+			"yolo":        false,
+			"health":      "healthy",
+			"phase":       "running",
+			"reason_code": "agent_switched",
+			"ts":          time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	case "rename_session", "toggle_yolo", "chat":
 		// Acknowledged in v1 protocol but still no-op here.
@@ -336,7 +341,13 @@ func (c *client) writeLoop(sub chan []byte, textSub chan []byte, done <-chan str
 				return
 			}
 		case <-done:
-			_ = c.writeJSON(map[string]any{"type": "exit", "session": c.sess.ID, "code": 0})
+			st := c.sess.Status()
+			_ = c.writeJSON(map[string]any{
+				"type":        "exit",
+				"session":     c.sess.ID,
+				"code":        st.ExitCode,
+				"reason_code": st.ReasonCode,
+			})
 			return
 		}
 	}

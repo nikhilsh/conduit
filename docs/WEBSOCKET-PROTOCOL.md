@@ -11,6 +11,7 @@ GET /ws/{session-uuid}?assistant={claude|codex|…}&cwd={absolute-path}
 GET /api/capabilities
 GET /api/fs/list?path=/abs/path&limit=100&offset=0&include_hidden=false
 POST /api/session/start
+GET /api/recent-projects?limit=20
 Authorization: Bearer <token>
 Upgrade: websocket
 ```
@@ -137,4 +138,7 @@ Closing the socket does NOT stop the session. Sessions live until an explicit `{
 - `GET /api/capabilities` returns machine-readable server feature flags and assistant list.
 - `GET /api/fs/list` returns directory-only children with metadata and pagination.
 - `POST /api/session/start` accepts `{session_id?, assistant?, cwd?}` and returns `{session_id, assistant, ws_path, created}`.
+- `GET /api/recent-projects` returns most-recent workspace paths for cross-device continuity.
 - Error responses are JSON: `{"error":{"code":"...","message":"..."}}`.
+
+Status/exit payloads include machine-readable `reason_code` (examples: `ok`, `agent_switched`, `agent_switch_in_progress`, `process_exited`, `session_closed`).

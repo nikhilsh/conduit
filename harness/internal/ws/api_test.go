@@ -98,3 +98,43 @@ func TestFSListMetadataAndPagination(t *testing.T) {
 		t.Fatalf("unexpected entry %+v", out.Entries)
 	}
 }
+
+func TestRecentProjectsEndpoint(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "proj")
+	if err := os.Mkdir(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+	srv, tok := newTestServer(t)
+	startBody := `{"assistant":"claude","cwd":"` + strings.ReplaceAll(projectDir, `\`, `\\`) + `"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/session/start?token="+url.QueryEscape(tok), strings.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("session start: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("session start status=%d", resp.StatusCode)
+	}
+
+	rpResp, err := http.Get(srv.URL + "/api/recent-projects?token=" + url.QueryEscape(tok) + "&limit=5")
+	if err != nil {
+		t.Fatalf("recent projects: %v", err)
+	}
+	defer rpResp.Body.Close()
+	if rpResp.StatusCode != http.StatusOK {
+		t.Fatalf("recent status=%d", rpResp.StatusCode)
+	}
+	var out struct {
+		Projects []struct {
+			Path string `json:"path"`
+		} `json:"projects"`
+	}
+	if err := json.NewDecoder(rpResp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Projects) == 0 || out.Projects[0].Path != projectDir {
+		t.Fatalf("unexpected recent projects: %+v", out.Projects)
+	}
+}

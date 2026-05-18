@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/nikhilsh/swe-kitty/harness/internal/session"
@@ -49,9 +50,10 @@ type capabilitiesResponse struct {
 	Protocol   string   `json:"protocol"`
 	Assistants []string `json:"assistants"`
 	Endpoints  struct {
-		Capabilities bool `json:"capabilities"`
-		FSList       bool `json:"fs_list"`
-		SessionStart bool `json:"session_start"`
+		Capabilities   bool `json:"capabilities"`
+		FSList         bool `json:"fs_list"`
+		SessionStart   bool `json:"session_start"`
+		RecentProjects bool `json:"recent_projects"`
 	} `json:"endpoints"`
 	Features struct {
 		WSCreateWithCWD   bool `json:"ws_create_with_cwd"`
@@ -75,6 +77,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Endpoints.Capabilities = true
 	resp.Endpoints.FSList = true
 	resp.Endpoints.SessionStart = true
+	resp.Endpoints.RecentProjects = true
 	resp.Features.WSCreateWithCWD = true
 	resp.Features.FSMetadata = true
 	resp.Features.FSPagination = true
@@ -146,7 +149,30 @@ func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
 		Created:   created,
 		WSPath:    fmt.Sprintf("/ws/%s?assistant=%s", sess.ID, sess.Assistant),
 	}
+	s.Sessions.RecordRecentProject(sess.WorkspaceDir(), sess.Assistant, sess.ID)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type recentProjectsResponse struct {
+	Projects []session.RecentProject `json:"projects"`
+}
+
+func (s *Server) serveRecentProjects(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > 100 {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid limit (must be 1..100)")
+			return
+		}
+		limit = n
+	}
+	writeJSON(w, http.StatusOK, recentProjectsResponse{
+		Projects: s.Sessions.RecentProjects(limit),
+	})
 }
 
 func newSessionID() string {

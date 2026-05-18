@@ -63,6 +63,8 @@ type Session struct {
 	handoffTimeout    time.Duration
 	workspaceDir      string
 	requestedCWD      string
+	reasonCode        string
+	exitCode          int
 	hooks             agents.Hooks
 	phase             string
 	health            string
@@ -120,6 +122,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		hooks:      adapter.Hooks,
 		phase:      "running",
 		health:     "healthy",
+		reasonCode: "ok",
 		lastOutput: time.Now().UTC(),
 	}
 	s.applyPaths()
@@ -228,6 +231,12 @@ func (s *Session) Snapshot() []byte {
 	return out
 }
 
+func (s *Session) WorkspaceDir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workspaceDir
+}
+
 // Close terminates the session. Idempotent.
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
@@ -243,6 +252,12 @@ func (s *Session) Close() {
 				exitCode = state.ExitCode()
 			}
 		}
+		s.mu.Lock()
+		s.exitCode = exitCode
+		s.phase = "exited"
+		s.reasonCode = "session_closed"
+		s.mu.Unlock()
+		_ = s.persistMetadata()
 		_ = s.runHook(s.hooks.OnExit, map[string]string{
 			"AGENT_NAME": s.Assistant,
 			"EXIT_CODE":  fmt.Sprintf("%d", exitCode),
@@ -334,11 +349,12 @@ func (s *Session) fanout(p []byte) {
 
 // Manager owns the lookup table of sessions.
 type Manager struct {
-	mu        sync.RWMutex
-	sessions  map[string]*Session
-	registry  *agents.Registry
-	repoRoot  string
-	kittyRoot string
+	mu             sync.RWMutex
+	sessions       map[string]*Session
+	recentProjects []RecentProject
+	registry       *agents.Registry
+	repoRoot       string
+	kittyRoot      string
 }
 
 type CreateOptions struct {
@@ -347,12 +363,14 @@ type CreateOptions struct {
 
 func NewManager(registry *agents.Registry) *Manager {
 	repoRoot, kittyRoot, _ := resolveKittyRoots()
-	return &Manager{
+	m := &Manager{
 		sessions:  make(map[string]*Session),
 		registry:  registry,
 		repoRoot:  repoRoot,
 		kittyRoot: kittyRoot,
 	}
+	m.loadRecentProjects()
+	return m
 }
 
 func (m *Manager) Get(id string) (*Session, bool) {
@@ -415,6 +433,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		return s.Switch(nextAdapter)
 	}
 	m.sessions[id] = s
+	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)
 	go func() {
 		<-s.Done()
 		m.mu.Lock()
@@ -482,6 +501,8 @@ type sessionMetadata struct {
 	Cols           uint16 `json:"cols"`
 	Phase          string `json:"phase"`
 	Health         string `json:"health"`
+	ReasonCode     string `json:"reason_code,omitempty"`
+	ExitCode       int    `json:"exit_code,omitempty"`
 	LastCheckpoint string `json:"last_checkpoint,omitempty"`
 }
 
@@ -498,12 +519,14 @@ func (s *Session) applyPaths() {
 func (s *Session) persistMetadata() error {
 	s.mu.Lock()
 	meta := sessionMetadata{
-		ID:        s.ID,
-		Assistant: s.Assistant,
-		Rows:      s.rows,
-		Cols:      s.cols,
-		Phase:     s.phase,
-		Health:    s.health,
+		ID:         s.ID,
+		Assistant:  s.Assistant,
+		Rows:       s.rows,
+		Cols:       s.cols,
+		Phase:      s.phase,
+		Health:     s.health,
+		ReasonCode: s.reasonCode,
+		ExitCode:   s.exitCode,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

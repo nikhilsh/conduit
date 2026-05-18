@@ -254,6 +254,7 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 	s.cmd = cmd
 	s.phase = "running"
 	s.health = "healthy"
+	s.reasonCode = "agent_switched"
 	s.mu.Unlock()
 	if oldPTY != nil {
 		_ = oldPTY.Close()

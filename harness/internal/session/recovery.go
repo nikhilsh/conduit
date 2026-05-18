@@ -61,6 +61,10 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	if meta.Health != "" {
 		s.health = meta.Health
 	}
+	if meta.ReasonCode != "" {
+		s.reasonCode = meta.ReasonCode
+	}
+	s.exitCode = meta.ExitCode
 	s.mu.Unlock()
 	s.switchFn = func(next string) error {
 		nextAdapter, err := m.registry.Get(next)
@@ -70,6 +74,7 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		return s.Switch(nextAdapter)
 	}
 	m.sessions[id] = s
+	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)
 	go func() {
 		<-s.Done()
 		m.mu.Lock()
