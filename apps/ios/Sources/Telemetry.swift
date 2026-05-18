@@ -22,7 +22,7 @@ enum Telemetry {
         SentrySDK.configureScope { scope in
             tags.forEach { scope.setTag(value: $0.value, key: $0.key) }
             extras.forEach { scope.setExtra(value: $0.value, key: $0.key) }
-            scope.setLevel(value: .error)
+            scope.level = .error
         }
         SentrySDK.capture(message: message)
         SentrySDK.capture(error: error)
