@@ -41,8 +41,8 @@ apps/android/app/build/
 apps/android/local.properties
 apps/android/app/release.keystore
 apps/android/app/src/main/jniLibs/
-# UniFFI generated Kotlin glue
-apps/android/app/src/main/kotlin/sh/nikhil/swekitty/generated/
+# UniFFI-generated Kotlin glue (sourced via kotlin.srcDir in app/build.gradle.kts)
+core/generated/kotlin/
 
 # ---- IDE / OS ----
 .DS_Store

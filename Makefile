@@ -1,4 +1,4 @@
-.PHONY: core bindings ios ios-project
+.PHONY: core bindings ios ios-project android android-debug
 
 core:
 	cargo test --manifest-path core/Cargo.toml
@@ -17,3 +17,9 @@ ios: ios-project
 
 ios-project:
 	cd apps/ios && ./build-rust.sh && xcodegen generate
+
+# Build the Android jniLibs (+ UniFFI Kotlin bindings). Run before opening
+# apps/android/ in Android Studio.
+android: android-debug
+android-debug:
+	cd apps/android && ./build-rust.sh && ./gradlew assembleDebug --no-daemon
