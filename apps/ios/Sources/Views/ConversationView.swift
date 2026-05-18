@@ -704,27 +704,63 @@ private struct ConversationFileStrip: View {
 
 private struct ConversationDiffBlock: View {
     let content: String
+    @State private var expandedFileIDs: Set<String> = []
 
     var body: some View {
-        let lines = Array(content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).enumerated())
+        let files = ConversationDiffParser.files(from: content)
         VStack(alignment: .leading, spacing: 8) {
             ConversationSectionLabel(title: "DIFF")
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(lines, id: \.offset) { _, line in
-                    Text(line)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(color(for: line))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+            ForEach(files) { file in
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            if expandedFileIDs.contains(file.id) {
+                                expandedFileIDs.remove(file.id)
+                            } else {
+                                expandedFileIDs.insert(file.id)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: expandedFileIDs.contains(file.id) ? "chevron.down" : "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(SweKittyTheme.textSecondary)
+                            Text(file.path)
+                                .font(.caption.monospaced().weight(.semibold))
+                                .foregroundStyle(SweKittyTheme.textBody)
+                            Spacer()
+                            Text("\(file.lines.count) lines")
+                                .font(.caption2)
+                                .foregroundStyle(SweKittyTheme.textMuted)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    if expandedFileIDs.contains(file.id) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(file.lines.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(color(for: line))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
                 }
+                .padding(12)
+                .background(SweKittyTheme.surface.opacity(0.72))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(SweKittyTheme.border.opacity(0.55), lineWidth: 0.8)
+                )
             }
-            .padding(12)
-            .background(SweKittyTheme.surface.opacity(0.72))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(SweKittyTheme.border.opacity(0.55), lineWidth: 0.8)
-            )
+        }
+        .onAppear {
+            if expandedFileIDs.isEmpty {
+                expandedFileIDs = Set(files.map(\.id))
+            }
         }
     }
 
@@ -739,5 +775,49 @@ private struct ConversationDiffBlock: View {
             return SweKittyTheme.warning
         }
         return SweKittyTheme.textBody
+    }
+}
+
+private struct ConversationDiffFile: Identifiable {
+    let id: String
+    let path: String
+    let lines: [String]
+}
+
+private enum ConversationDiffParser {
+    static func files(from content: String) -> [ConversationDiffFile] {
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var files: [ConversationDiffFile] = []
+        var currentPath = "patch.diff"
+        var bucket: [String] = []
+
+        func flush() {
+            if !bucket.isEmpty {
+                files.append(ConversationDiffFile(id: "\(currentPath)-\(files.count)", path: currentPath, lines: bucket))
+                bucket.removeAll(keepingCapacity: true)
+            }
+        }
+
+        for line in lines {
+            if line.hasPrefix("diff --git ") {
+                flush()
+                currentPath = parsePath(from: line)
+                bucket.append(line)
+                continue
+            }
+            bucket.append(line)
+        }
+        flush()
+        return files.isEmpty ? [ConversationDiffFile(id: "patch", path: "patch.diff", lines: lines)] : files
+    }
+
+    private static func parsePath(from diffLine: String) -> String {
+        let parts = diffLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 4 else { return "patch.diff" }
+        let raw = String(parts[3])
+        if raw.hasPrefix("b/") {
+            return String(raw.dropFirst(2))
+        }
+        return raw
     }
 }

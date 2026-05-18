@@ -704,7 +704,7 @@ private fun FileStrip(files: List<ViewEventFile>) {
 
 @Composable
 private fun DiffBlock(content: String) {
-    val lines = remember(content) { content.split('\n') }
+    val files = remember(content) { parseDiffFiles(content) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             "DIFF",
@@ -712,30 +712,106 @@ private fun DiffBlock(content: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Bold,
         )
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        files.forEach { file ->
+            DiffFileGroup(file)
+        }
+    }
+}
+
+private data class DiffFileSection(
+    val id: String,
+    val path: String,
+    val lines: List<String>,
+)
+
+@Composable
+private fun DiffFileGroup(file: DiffFileSection) {
+    var expanded by remember(file.id) { mutableStateOf(true) }
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                lines.forEach { line ->
-                    Text(
-                        line,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = when {
-                            line.startsWith("+") -> Color(0xFF2E7D32)
-                            line.startsWith("-") -> MaterialTheme.colorScheme.error
-                            line.startsWith("@@") -> Color(0xFFE65100)
-                            else -> MaterialTheme.colorScheme.onSurface
-                        },
-                    )
+                AssistChip(
+                    onClick = { expanded = !expanded },
+                    label = { Text(if (expanded) "Hide" else "Show") },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    file.path,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "${file.lines.size} lines",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    file.lines.forEach { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = when {
+                                line.startsWith("+") -> Color(0xFF2E7D32)
+                                line.startsWith("-") -> MaterialTheme.colorScheme.error
+                                line.startsWith("@@") -> Color(0xFFE65100)
+                                else -> MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+private fun parseDiffFiles(content: String): List<DiffFileSection> {
+    val lines = content.split('\n')
+    val sections = mutableListOf<DiffFileSection>()
+    var currentPath = "patch.diff"
+    val bucket = mutableListOf<String>()
+
+    fun flush() {
+        if (bucket.isNotEmpty()) {
+            sections += DiffFileSection(
+                id = "$currentPath-${sections.size}",
+                path = currentPath,
+                lines = bucket.toList(),
+            )
+            bucket.clear()
+        }
+    }
+
+    lines.forEach { line ->
+        if (line.startsWith("diff --git ")) {
+            flush()
+            val parts = line.split(' ')
+            currentPath = parts.getOrNull(3)?.removePrefix("b/") ?: "patch.diff"
+            bucket += line
+        } else {
+            bucket += line
+        }
+    }
+    flush()
+    if (sections.isEmpty()) {
+        return listOf(DiffFileSection(id = "patch", path = "patch.diff", lines = lines))
+    }
+    return sections
 }
 
 @Composable
