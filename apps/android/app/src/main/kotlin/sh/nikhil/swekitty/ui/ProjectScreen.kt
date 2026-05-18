@@ -6,7 +6,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.AccountTree
-import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Public
@@ -49,12 +48,11 @@ fun ProjectScreen(
                     IconButton(onClick = onOpenDrawer) { Icon(Icons.Default.Menu, contentDescription = "Sessions") }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        browserMode = if (browserMode == BrowserMode.Memory) BrowserMode.Preview else BrowserMode.Memory
-                        scope.launch { pagerState.animateScrollToPage(ProjectTab.Browser.ordinal) }
-                    }) {
-                        Icon(Icons.Outlined.Article, contentDescription = "Memory")
-                    }
+                    MemoryButton(
+                        currentMode = browserMode,
+                        onToggle = { browserMode = it },
+                        onJumpToBrowser = { scope.launch { pagerState.animateScrollToPage(ProjectTab.Browser.ordinal) } },
+                    )
                     Box {
                         AssistChip(
                             onClick = { menuExpanded = true },
