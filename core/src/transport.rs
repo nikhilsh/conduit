@@ -467,7 +467,10 @@ async fn open_ws(
                 continue;
             }
             Err(WsError::Http(response)) => {
-                return Err(SweKittyError::Connection(format!("HTTP error: {}", response.status())));
+                return Err(SweKittyError::Connection(format!(
+                    "HTTP error: {}",
+                    response.status()
+                )));
             }
             Err(e) => return Err(SweKittyError::Connection(e.to_string())),
         }

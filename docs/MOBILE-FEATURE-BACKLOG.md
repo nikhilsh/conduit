@@ -406,5 +406,5 @@ Quarter C — polish + voice:
   11. Voice in/out  (A.11)
 ```
 
-Stop-the-line items (regressions, not features): the harness `internal/ws` package has a pre-existing `TestPingPong` failure on `main` (`expected pong text, got mt=2`) that needs a separate fix; the wire contract in `WEBSOCKET-PROTOCOL.md §3.3` says ping/pong are JSON text frames, so the server is currently sending the wrong frame type. Worth fixing before A.1 so the new typed conversation can rely on the heartbeat path.
+Stop-the-line items (regressions, not features): none open as of 2026-05-19. The `TestPingPong` regression flagged earlier — server sending a binary frame in violation of `WEBSOCKET-PROTOCOL.md §3.3` — is fixed on `main` (server now sends JSON text per the contract). The new typed conversation work can rely on the heartbeat path.
 

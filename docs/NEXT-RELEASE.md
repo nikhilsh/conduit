@@ -1,6 +1,18 @@
 # Next Release Plan
 
-Date: 2026-05-18
+Date: 2026-05-18 (updated 2026-05-19)
+
+## Status (2026-05-19)
+
+Priorities 1 and 2 below have shipped on `main`:
+
+- `core/src/lib.rs` now owns a `Lazy<Runtime>` via `tokio::runtime::Builder::new_multi_thread()`; transport work runs on it. The `there is no reactor running` panic on first `create_session` is gone, and `cargo test` / `cargo clippy -D warnings` are green.
+- `harness/internal/ws/conformance_test.go::TestPingPong` is green; ping/pong are now JSON text frames per `docs/WEBSOCKET-PROTOCOL.md §3.3`.
+- Session creation failures surface as typed errors instead of a Rust panic. The apps now distinguish "Paired" (token stored) from a verified harness round-trip; auth failures map to a re-pair instruction (see `docs/SENTRY.md`).
+
+Priority 3 (iOS UI convergence toward the KittyLitter surface) is the open work — tracked in `docs/MOBILE-PORT-MATRIX.md` (Package B sub-plan) and `docs/MOBILE-FEATURE-BACKLOG.md`.
+
+The original findings below are kept for historical context.
 
 ## Findings
 

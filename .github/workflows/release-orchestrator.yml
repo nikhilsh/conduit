@@ -65,16 +65,12 @@ jobs:
                 --json databaseId,workflowName,displayTitle,headBranch,status,conclusion,url,event)"
 
               matched="$(
-                python3 -c 'import json, sys; tag = sys.argv[1]; runs = json.load(sys.stdin); \
-match = next((run for run in runs if run.get("headBranch") == tag and run.get("event") == "push"), None); \
-print(json.dumps(match) if match else "")' "${RELEASE_TAG}" <<<"${run_json}"
+                python3 -c 'import json, sys; tag = sys.argv[1]; runs = json.load(sys.stdin); match = next((run for run in runs if run.get("headBranch") == tag and run.get("event") == "push"), None); print(json.dumps(match) if match else "")' "${RELEASE_TAG}" <<<"${run_json}"
               )"
 
               if [ -z "${matched}" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
                 matched="$(
-                  python3 -c 'import json,sys; tag=sys.argv[1]; ref=sys.argv[2]; runs=json.load(sys.stdin); \
-match=next((run for run in runs if run.get("event")=="workflow_dispatch" and run.get("headBranch")==ref and tag in (run.get("displayTitle") or "")), None); \
-print(json.dumps(match) if match else "")' "${RELEASE_TAG}" "${TARGET_REF}" <<<"${run_json}"
+                  python3 -c 'import json, sys; tag = sys.argv[1]; ref = sys.argv[2]; runs = json.load(sys.stdin); match = next((run for run in runs if run.get("event") == "workflow_dispatch" and run.get("headBranch") == ref and tag in (run.get("displayTitle") or "")), None); print(json.dumps(match) if match else "")' "${RELEASE_TAG}" "${TARGET_REF}" <<<"${run_json}"
                 )"
               fi
 
