@@ -1271,6 +1271,29 @@ public object FfiConverterInt: FfiConverter<Int, Int> {
 /**
  * @suppress
  */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
     override fun lift(value: Byte): Boolean {
         return value.toInt() != 0
@@ -1968,7 +1991,12 @@ data class ConversationItem (
     var `status`: kotlin.String, 
     var `content`: kotlin.String, 
     var `ts`: kotlin.String, 
-    var `files`: List<ViewEventFile>
+    var `files`: List<ViewEventFile>, 
+    var `toolName`: kotlin.String?, 
+    var `command`: kotlin.String?, 
+    var `exitCode`: kotlin.Int?, 
+    var `durationMs`: kotlin.ULong?, 
+    var `diffSummary`: kotlin.String?
 ) {
     
     companion object
@@ -1987,6 +2015,11 @@ public object FfiConverterTypeConversationItem: FfiConverterRustBuffer<Conversat
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterSequenceTypeViewEventFile.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalInt.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -1997,7 +2030,12 @@ public object FfiConverterTypeConversationItem: FfiConverterRustBuffer<Conversat
             FfiConverterString.allocationSize(value.`status`) +
             FfiConverterString.allocationSize(value.`content`) +
             FfiConverterString.allocationSize(value.`ts`) +
-            FfiConverterSequenceTypeViewEventFile.allocationSize(value.`files`)
+            FfiConverterSequenceTypeViewEventFile.allocationSize(value.`files`) +
+            FfiConverterOptionalString.allocationSize(value.`toolName`) +
+            FfiConverterOptionalString.allocationSize(value.`command`) +
+            FfiConverterOptionalInt.allocationSize(value.`exitCode`) +
+            FfiConverterOptionalULong.allocationSize(value.`durationMs`) +
+            FfiConverterOptionalString.allocationSize(value.`diffSummary`)
     )
 
     override fun write(value: ConversationItem, buf: ByteBuffer) {
@@ -2008,6 +2046,11 @@ public object FfiConverterTypeConversationItem: FfiConverterRustBuffer<Conversat
             FfiConverterString.write(value.`content`, buf)
             FfiConverterString.write(value.`ts`, buf)
             FfiConverterSequenceTypeViewEventFile.write(value.`files`, buf)
+            FfiConverterOptionalString.write(value.`toolName`, buf)
+            FfiConverterOptionalString.write(value.`command`, buf)
+            FfiConverterOptionalInt.write(value.`exitCode`, buf)
+            FfiConverterOptionalULong.write(value.`durationMs`, buf)
+            FfiConverterOptionalString.write(value.`diffSummary`, buf)
     }
 }
 
@@ -2575,6 +2618,70 @@ public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
         } else {
             buf.put(1)
             FfiConverterUInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalInt: FfiConverterRustBuffer<kotlin.Int?> {
+    override fun read(buf: ByteBuffer): kotlin.Int? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Int?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Int?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
         }
     }
 }

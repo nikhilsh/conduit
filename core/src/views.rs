@@ -49,8 +49,10 @@ pub struct ChatEvent {
 
 /// Shared typed chat timeline record used by both mobile shells.
 ///
-/// This is intentionally flat (stringly-typed role/kind/status) to keep
-/// UniFFI evolution simple while we migrate away from raw event rendering.
+/// Stringly-typed `role`/`kind`/`status` for cheap UniFFI evolution; the
+/// optional structured fields are populated by `crate::conversation` and
+/// let the platform tool-call / diff / pending-input cards render without
+/// re-parsing the content blob.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConversationItem {
     pub id: String,
@@ -61,4 +63,14 @@ pub struct ConversationItem {
     pub ts: String,
     #[serde(default)]
     pub files: Vec<ViewEventFile>,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub diff_summary: Option<String>,
 }

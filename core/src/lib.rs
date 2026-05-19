@@ -1,6 +1,7 @@
 //! swe-kitty-core: the shared Rust client for the swe-kitty mobile apps.
 #![allow(clippy::empty_line_after_doc_comments)]
 
+pub mod conversation;
 pub mod transport;
 pub mod views;
 

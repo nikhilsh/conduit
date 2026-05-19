@@ -46,6 +46,11 @@ dictionary ConversationItem {
     string content;
     string ts;
     sequence<ViewEventFile> files;
+    string? tool_name;
+    string? command;
+    i32? exit_code;
+    u64? duration_ms;
+    string? diff_summary;
 };
 
 [Error]

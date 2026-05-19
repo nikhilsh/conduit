@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{ChatEvent, ConversationItem, PreviewInfo, SessionStatus};
+use crate::conversation::item_from_chat_event;
 
 /// Stable session summary exposed through UniFFI.
 ///
@@ -87,7 +88,7 @@ impl ProjectSessionState {
         let next_idx = self.chat.conversation.len();
         self.chat
             .conversation
-            .push(ConversationItem::from_chat_event(&event, next_idx));
+            .push(item_from_chat_event(&event, next_idx));
         self.chat.events.push(event);
     }
 
@@ -107,97 +108,6 @@ impl ProjectSessionState {
             }
         }
     }
-}
-
-impl ConversationItem {
-    fn from_chat_event(event: &ChatEvent, idx: usize) -> Self {
-        let role = normalized_role(&event.role);
-        let kind = classify_kind(&role, &event.content);
-        let status = classify_status(&event.content);
-        Self {
-            id: format!("{}-{}", event.ts, idx),
-            role,
-            kind,
-            status,
-            content: event.content.clone(),
-            ts: event.ts.clone(),
-            files: event.files.clone(),
-        }
-    }
-}
-
-fn normalized_role(role: &str) -> String {
-    match role.to_ascii_lowercase().as_str() {
-        "user" => "user".to_string(),
-        "assistant" => "assistant".to_string(),
-        "tool" => "tool".to_string(),
-        _ => "system".to_string(),
-    }
-}
-
-fn classify_kind(role: &str, content: &str) -> String {
-    if looks_like_pending_input(content) {
-        return "pending_input".to_string();
-    }
-    if role == "tool" {
-        if looks_like_diff(content) {
-            return "diff".to_string();
-        }
-        return "tool".to_string();
-    }
-    if role == "assistant" || role == "user" {
-        return "message".to_string();
-    }
-    "system".to_string()
-}
-
-fn classify_status(content: &str) -> String {
-    if let Some(code) = extract_exit_code(content) {
-        return if code == 0 {
-            "done".to_string()
-        } else {
-            "failed".to_string()
-        };
-    }
-    let lower = content.to_ascii_lowercase();
-    if lower.contains("running") {
-        "running".to_string()
-    } else if lower.contains("failed") || lower.contains("error") || lower.contains("exception") {
-        "failed".to_string()
-    } else if lower.contains("pending") || lower.contains("waiting") {
-        "pending".to_string()
-    } else {
-        "done".to_string()
-    }
-}
-
-fn extract_exit_code(content: &str) -> Option<i32> {
-    for raw in content.lines() {
-        let line = raw.trim().to_ascii_lowercase();
-        if let Some(rest) = line.strip_prefix("exit code:") {
-            if let Ok(code) = rest.trim().parse::<i32>() {
-                return Some(code);
-            }
-        }
-        if let Some(rest) = line.strip_prefix("exit=") {
-            if let Ok(code) = rest.trim().parse::<i32>() {
-                return Some(code);
-            }
-        }
-    }
-    None
-}
-
-fn looks_like_diff(text: &str) -> bool {
-    text.lines()
-        .any(|line| line.starts_with('+') || line.starts_with('-') || line.starts_with("@@"))
-}
-
-fn looks_like_pending_input(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("request_user_input")
-        || (lower.contains("pending") && lower.contains("input"))
-        || (lower.contains("select") && lower.contains("option"))
 }
 
 #[cfg(test)]
@@ -226,53 +136,5 @@ mod tests {
         assert_eq!(item.role, "tool");
         assert_eq!(item.kind, "tool");
         assert_eq!(item.status, "running");
-    }
-
-    #[test]
-    fn tool_diff_becomes_diff_item() {
-        let event = ChatEvent {
-            role: "tool".to_string(),
-            content: "@@ -1 +1 @@\n-old\n+new".to_string(),
-            ts: "2026-05-18T00:00:00Z".to_string(),
-            files: vec![],
-        };
-        let item = ConversationItem::from_chat_event(&event, 0);
-        assert_eq!(item.kind, "diff");
-    }
-
-    #[test]
-    fn pending_input_is_classified() {
-        let event = ChatEvent {
-            role: "assistant".to_string(),
-            content: "request_user_input: please select one option".to_string(),
-            ts: "2026-05-18T00:00:00Z".to_string(),
-            files: vec![],
-        };
-        let item = ConversationItem::from_chat_event(&event, 0);
-        assert_eq!(item.kind, "pending_input");
-    }
-
-    #[test]
-    fn exit_code_non_zero_is_failed() {
-        let event = ChatEvent {
-            role: "tool".to_string(),
-            content: "command: make test\nexit code: 1".to_string(),
-            ts: "2026-05-18T00:00:00Z".to_string(),
-            files: vec![],
-        };
-        let item = ConversationItem::from_chat_event(&event, 0);
-        assert_eq!(item.status, "failed");
-    }
-
-    #[test]
-    fn exit_code_zero_is_done() {
-        let event = ChatEvent {
-            role: "tool".to_string(),
-            content: "command: make test\nexit=0".to_string(),
-            ts: "2026-05-18T00:00:00Z".to_string(),
-            files: vec![],
-        };
-        let item = ConversationItem::from_chat_event(&event, 0);
-        assert_eq!(item.status, "done");
     }
 }

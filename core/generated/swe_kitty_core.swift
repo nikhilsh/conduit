@@ -447,6 +447,22 @@ fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -935,10 +951,15 @@ public struct ConversationItem {
     public var content: String
     public var ts: String
     public var files: [ViewEventFile]
+    public var toolName: String?
+    public var command: String?
+    public var exitCode: Int32?
+    public var durationMs: UInt64?
+    public var diffSummary: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, role: String, kind: String, status: String, content: String, ts: String, files: [ViewEventFile]) {
+    public init(id: String, role: String, kind: String, status: String, content: String, ts: String, files: [ViewEventFile], toolName: String?, command: String?, exitCode: Int32?, durationMs: UInt64?, diffSummary: String?) {
         self.id = id
         self.role = role
         self.kind = kind
@@ -946,6 +967,11 @@ public struct ConversationItem {
         self.content = content
         self.ts = ts
         self.files = files
+        self.toolName = toolName
+        self.command = command
+        self.exitCode = exitCode
+        self.durationMs = durationMs
+        self.diffSummary = diffSummary
     }
 }
 
@@ -974,6 +1000,21 @@ extension ConversationItem: Equatable, Hashable {
         if lhs.files != rhs.files {
             return false
         }
+        if lhs.toolName != rhs.toolName {
+            return false
+        }
+        if lhs.command != rhs.command {
+            return false
+        }
+        if lhs.exitCode != rhs.exitCode {
+            return false
+        }
+        if lhs.durationMs != rhs.durationMs {
+            return false
+        }
+        if lhs.diffSummary != rhs.diffSummary {
+            return false
+        }
         return true
     }
 
@@ -985,6 +1026,11 @@ extension ConversationItem: Equatable, Hashable {
         hasher.combine(content)
         hasher.combine(ts)
         hasher.combine(files)
+        hasher.combine(toolName)
+        hasher.combine(command)
+        hasher.combine(exitCode)
+        hasher.combine(durationMs)
+        hasher.combine(diffSummary)
     }
 }
 
@@ -1002,7 +1048,12 @@ public struct FfiConverterTypeConversationItem: FfiConverterRustBuffer {
                 status: FfiConverterString.read(from: &buf), 
                 content: FfiConverterString.read(from: &buf), 
                 ts: FfiConverterString.read(from: &buf), 
-                files: FfiConverterSequenceTypeViewEventFile.read(from: &buf)
+                files: FfiConverterSequenceTypeViewEventFile.read(from: &buf), 
+                toolName: FfiConverterOptionString.read(from: &buf), 
+                command: FfiConverterOptionString.read(from: &buf), 
+                exitCode: FfiConverterOptionInt32.read(from: &buf), 
+                durationMs: FfiConverterOptionUInt64.read(from: &buf), 
+                diffSummary: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1014,6 +1065,11 @@ public struct FfiConverterTypeConversationItem: FfiConverterRustBuffer {
         FfiConverterString.write(value.content, into: &buf)
         FfiConverterString.write(value.ts, into: &buf)
         FfiConverterSequenceTypeViewEventFile.write(value.files, into: &buf)
+        FfiConverterOptionString.write(value.toolName, into: &buf)
+        FfiConverterOptionString.write(value.command, into: &buf)
+        FfiConverterOptionInt32.write(value.exitCode, into: &buf)
+        FfiConverterOptionUInt64.write(value.durationMs, into: &buf)
+        FfiConverterOptionString.write(value.diffSummary, into: &buf)
     }
 }
 
@@ -1876,6 +1932,54 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionInt32: FfiConverterRustBuffer {
+    typealias SwiftType = Int32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
