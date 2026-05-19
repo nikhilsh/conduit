@@ -905,6 +905,14 @@ private fun ConversationComposer(
                     maxLines = 6,
                 )
                 Spacer(Modifier.width(10.dp))
+                InlineVoiceButton { transcript ->
+                    val trimmed = transcript.trim()
+                    if (trimmed.isNotEmpty()) {
+                        val next = if (draft.isBlank()) trimmed else "$draft $trimmed"
+                        onDraftChange(next)
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
                 FilledIconButton(
                     onClick = onSend,
                     enabled = draft.trim().isNotEmpty(),

@@ -142,6 +142,16 @@ struct ChatTab: View {
                     .background(SweKittyTheme.surface.opacity(0.65))
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
+                InlineVoiceButton { transcript in
+                    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        draft = trimmed
+                    } else {
+                        draft += " " + trimmed
+                    }
+                }
+
                 Button {
                     let msg = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !msg.isEmpty else { return }
