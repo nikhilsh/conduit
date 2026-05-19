@@ -94,7 +94,9 @@ jobs:
   upload-installer:
     name: upload install.sh
     runs-on: ubuntu-24.04
-    needs: build-binaries
+    needs:
+      - ensure-release
+      - build-binaries
     steps:
       - uses: actions/checkout@v4
       - name: Upload install.sh if present
