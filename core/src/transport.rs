@@ -38,6 +38,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use url::Url;
 
 use crate::views::{ChatEvent, PreviewInfo, SessionStatus, ViewEventFile};
 use crate::{SweKittyDelegate, SweKittyError};
@@ -50,6 +51,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const PONG_DEADLINE: Duration = Duration::from_secs(60);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_MAX_ATTEMPTS: u32 = 5;
+const WS_REDIRECT_MAX_HOPS: usize = 3;
 
 /// Observable per-session connection state surfaced via
 /// [`SweKittyDelegate::on_connection_health`]. Apps render this in their
@@ -422,30 +424,108 @@ async fn open_ws(
     assistant: &str,
     token: &str,
 ) -> Result<WsStream, SweKittyError> {
-    let url = format!(
-        "{}/ws/{}?assistant={}&token={}",
-        endpoint.trim_end_matches('/'),
-        session_id,
-        urlencode(assistant),
-        urlencode(token),
-    );
-    let mut request = url
-        .into_client_request()
-        .map_err(|e| SweKittyError::Connection(e.to_string()))?;
-    request.headers_mut().insert(
-        "Authorization",
-        HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|e| SweKittyError::Connection(e.to_string()))?,
-    );
+    let mut endpoint_url = normalize_ws_endpoint(endpoint)?;
+    let mut hops = 0usize;
 
-    let (ws, _resp) = match connect_async(request).await {
-        Ok(parts) => parts,
-        Err(WsError::Http(response)) if response.status() == StatusCode::UNAUTHORIZED => {
-            return Err(SweKittyError::Auth);
+    loop {
+        let ws_url = format!(
+            "{}/ws/{}?assistant={}&token={}",
+            endpoint_url.as_str().trim_end_matches('/'),
+            session_id,
+            urlencode(assistant),
+            urlencode(token),
+        );
+        let mut request = ws_url
+            .into_client_request()
+            .map_err(|e| SweKittyError::Connection(e.to_string()))?;
+        request.headers_mut().insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|e| SweKittyError::Connection(e.to_string()))?,
+        );
+
+        match connect_async(request).await {
+            Ok((ws, _resp)) => return Ok(ws),
+            Err(WsError::Http(response)) if response.status() == StatusCode::UNAUTHORIZED => {
+                return Err(SweKittyError::Auth);
+            }
+            Err(WsError::Http(response))
+                if is_redirect_status(response.status()) && hops < WS_REDIRECT_MAX_HOPS =>
+            {
+                let location = response
+                    .headers()
+                    .get("Location")
+                    .and_then(|h| h.to_str().ok())
+                    .ok_or_else(|| {
+                        SweKittyError::Connection(format!(
+                            "HTTP error: {} (missing redirect location)",
+                            response.status()
+                        ))
+                    })?;
+                endpoint_url = redirect_base_url(&endpoint_url, location)?;
+                hops += 1;
+                continue;
+            }
+            Err(WsError::Http(response)) => {
+                return Err(SweKittyError::Connection(format!("HTTP error: {}", response.status())));
+            }
+            Err(e) => return Err(SweKittyError::Connection(e.to_string())),
         }
-        Err(e) => return Err(SweKittyError::Connection(e.to_string())),
-    };
-    Ok(ws)
+    }
+}
+
+fn normalize_ws_endpoint(endpoint: &str) -> Result<Url, SweKittyError> {
+    let mut parsed = Url::parse(endpoint).map_err(|e| SweKittyError::Connection(e.to_string()))?;
+    match parsed.scheme() {
+        "http" => parsed
+            .set_scheme("ws")
+            .map_err(|_| SweKittyError::Connection("invalid ws endpoint scheme".to_string()))?,
+        "https" => parsed
+            .set_scheme("wss")
+            .map_err(|_| SweKittyError::Connection("invalid wss endpoint scheme".to_string()))?,
+        "ws" | "wss" => {}
+        other => {
+            return Err(SweKittyError::Connection(format!(
+                "unsupported endpoint scheme: {other}"
+            )))
+        }
+    }
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    Ok(parsed)
+}
+
+fn is_redirect_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::MOVED_PERMANENTLY
+            | StatusCode::FOUND
+            | StatusCode::TEMPORARY_REDIRECT
+            | StatusCode::PERMANENT_REDIRECT
+    )
+}
+
+fn redirect_base_url(current: &Url, location: &str) -> Result<Url, SweKittyError> {
+    let mut next = current
+        .join(location)
+        .map_err(|e| SweKittyError::Connection(e.to_string()))?;
+    match next.scheme() {
+        "http" => next
+            .set_scheme("ws")
+            .map_err(|_| SweKittyError::Connection("invalid ws redirect scheme".to_string()))?,
+        "https" => next
+            .set_scheme("wss")
+            .map_err(|_| SweKittyError::Connection("invalid wss redirect scheme".to_string()))?,
+        "ws" | "wss" => {}
+        other => {
+            return Err(SweKittyError::Connection(format!(
+                "unsupported redirect scheme: {other}"
+            )))
+        }
+    }
+    next.set_query(None);
+    next.set_fragment(None);
+    Ok(next)
 }
 
 fn handle_binary(
