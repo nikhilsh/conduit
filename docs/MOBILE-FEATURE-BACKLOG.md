@@ -2,6 +2,13 @@
 
 Date: 2026-05-18
 
+> **2026-05-19 update:** sequencing in this doc is now superseded by
+> [`PLAN-2026-05-19.md`](PLAN-2026-05-19.md), which adds Rust-first
+> refactor (Package 1), subagent / handoff surfaces, BLE pairing,
+> Live Activities / lock-screen card, and Whisper-style voice (rail A) on
+> top of the items below. Inventory in this file remains accurate; treat
+> the dated plan as the execution layer.
+
 ## Purpose
 
 This document turns the KittyLitter reference into a concrete product backlog for `swe-kitty`.
