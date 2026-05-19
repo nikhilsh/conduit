@@ -57,3 +57,10 @@ So the right shared split is:
 - Native apps: DSN injection, SDK initialization, crash/log upload, and platform breadcrumbs
 
 The current implementation already uses that boundary pragmatically: the apps capture Rust-surfaced failures with platform Sentry SDKs.
+
+## Ops
+
+For day-to-day issue triage from this server, use:
+
+- [docs/SENTRY-OPS.md](/root/developer/projects/kitty-swe/docs/SENTRY-OPS.md:1)
+- `scripts/sentry-check.sh`
