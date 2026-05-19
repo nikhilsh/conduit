@@ -368,6 +368,14 @@ private fun ConversationEventRow(ev: ConversationItem, onQuickReply: (String) ->
         PendingInputCard(ev, onQuickReply)
         return
     }
+    if (ev.kind == "handoff") {
+        HandoffCard(ev)
+        return
+    }
+    if (ev.kind == "subagent") {
+        SubagentCard(ev)
+        return
+    }
     when (ConversationRole.from(ev.role)) {
         ConversationRole.User -> Row(modifier = Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(0.18f))
@@ -417,6 +425,106 @@ private fun PendingInputCard(ev: ConversationItem, onQuickReply: (String) -> Uni
                         Spacer(Modifier.width(2.dp))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HandoffCard(ev: ConversationItem) {
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Info,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "AGENT HANDOFF",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.weight(1f))
+                if (ev.ts.isNotEmpty()) {
+                    Text(ev.ts, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                }
+            }
+            Text(
+                ev.content,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubagentCard(ev: ConversationItem) {
+    var expanded by remember { mutableStateOf(false) }
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.28f)),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Outlined.SmartToy,
+                    null,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "SUBAGENT",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.width(6.dp))
+                StatusChip(ev.status)
+                Spacer(Modifier.weight(1f))
+                if (ev.ts.isNotEmpty()) {
+                    Text(
+                        ev.ts,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                AssistChip(
+                    onClick = { expanded = !expanded },
+                    label = { Text(if (expanded) "Hide" else "Show") },
+                )
+            }
+            if (expanded) {
+                Text(
+                    ev.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            } else {
+                Text(
+                    ev.content.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "Subagent activity",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
             }
         }
     }
