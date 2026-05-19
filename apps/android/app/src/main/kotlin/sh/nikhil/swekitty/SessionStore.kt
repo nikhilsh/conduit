@@ -783,19 +783,19 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     private suspend fun waitUntilCommandReady(timeoutMs: Long = 6_000L): Boolean {
-        return runCatching<Boolean> {
-            withTimeout<Boolean>(timeoutMs) {
+        return runCatching {
+            withTimeoutOrNull(timeoutMs) {
                 while (true) {
                     val h = _harness.value
                     if (h is HarnessState.Linked || h is HarnessState.Live || h is HarnessState.Reconnecting) {
-                        return@withTimeout true
+                        return@withTimeoutOrNull true
                     }
                     if (h is HarnessState.Failed) {
-                        return@withTimeout false
+                        return@withTimeoutOrNull false
                     }
                     delay(100)
                 }
-            }
+            } ?: false
         }.getOrDefault(false)
     }
 
