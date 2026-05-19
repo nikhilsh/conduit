@@ -303,6 +303,10 @@ private struct ConversationEventRow: View {
     var body: some View {
         if event.kind == "pending_input" {
             ConversationPendingInputCard(event: event, onQuickReply: onQuickReply)
+        } else if event.kind == "handoff" {
+            ConversationHandoffCard(event: event)
+        } else if event.kind == "subagent" {
+            ConversationSubagentCard(event: event)
         } else {
             switch role {
             case .user:
@@ -335,6 +339,83 @@ private struct ConversationEventRow: View {
                 }
             }
         }
+    }
+}
+
+private struct ConversationHandoffCard: View {
+    let event: ConversationItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.swap")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SweKittyTheme.accentStrong)
+                Text("AGENT HANDOFF")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(SweKittyTheme.textSecondary)
+                Spacer()
+                if !event.ts.isEmpty {
+                    Text(event.ts)
+                        .font(.caption2)
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                }
+            }
+            ConversationMarkdownBlock(text: event.content, role: .system)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassRect(cornerRadius: 18, tint: SweKittyTheme.accentStrong.opacity(0.22))
+    }
+}
+
+private struct ConversationSubagentCard: View {
+    let event: ConversationItem
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "person.2.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SweKittyTheme.warning)
+                Text("SUBAGENT")
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(SweKittyTheme.textSecondary)
+                ConversationStatusChip(status: event.status)
+                Spacer()
+                if !event.ts.isEmpty {
+                    Text(event.ts)
+                        .font(.caption2)
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                }
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SweKittyTheme.textSecondary)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    expanded.toggle()
+                }
+            }
+            if expanded {
+                ConversationMarkdownBlock(text: event.content, role: .system)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else {
+                Text(event.content.split(separator: "\n").first.map(String.init) ?? "Subagent activity")
+                    .font(.subheadline)
+                    .foregroundStyle(SweKittyTheme.textBody)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassRect(cornerRadius: 18, tint: SweKittyTheme.warning.opacity(0.22))
     }
 }
 
