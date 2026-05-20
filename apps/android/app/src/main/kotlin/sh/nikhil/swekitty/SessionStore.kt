@@ -30,8 +30,13 @@ import uniffi.swe_kitty_core.ConversationItem
 import uniffi.swe_kitty_core.PreviewInfo
 import uniffi.swe_kitty_core.ProjectSession
 import uniffi.swe_kitty_core.SessionStatus
+import uniffi.swe_kitty_core.SshCredentials
+import uniffi.swe_kitty_core.SshException
+import uniffi.swe_kitty_core.SshHostKeyDelegate
 import uniffi.swe_kitty_core.SweKittyClient
 import uniffi.swe_kitty_core.SweKittyDelegate
+import uniffi.swe_kitty_core.sshBootstrap as ffiSshBootstrap
+import java.util.concurrent.CountDownLatch
 
 /**
  * Harness reachability state. The Rust `connect()` only stores a delegate
@@ -62,6 +67,24 @@ sealed class HarnessState {
     }
     val failureReason: String? get() = (this as? Failed)?.reason
 }
+
+/**
+ * UI-level status for the SSH-bootstrap flow. Independent of [HarnessState]:
+ * bootstrap runs *before* we have an endpoint, so the progress line lives in
+ * the SSH login sheet, not the main pairing status.
+ */
+sealed class SshBootstrapState {
+    data object Idle : SshBootstrapState()
+    data class Running(val message: String) : SshBootstrapState()
+    data class Failed(val reason: String) : SshBootstrapState()
+}
+
+/** Outstanding TOFU prompt. The bridge blocks until the user resolves it. */
+data class HostKeyPrompt(
+    val host: String,
+    val port: UShort,
+    val fingerprint: String,
+)
 
 /** Per-session lifecycle state, kept separately from the overall harness state. */
 sealed class SessionLifecycle {
@@ -188,6 +211,19 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     private val _connectionHealth = MutableStateFlow<Map<String, ConnectionHealth>>(emptyMap())
     val connectionHealth: StateFlow<Map<String, ConnectionHealth>> = _connectionHealth.asStateFlow()
 
+    /** SSH-bootstrap progress, observed by the SSH login sheet. */
+    private val _sshBootstrap = MutableStateFlow<SshBootstrapState>(SshBootstrapState.Idle)
+    val sshBootstrap: StateFlow<SshBootstrapState> = _sshBootstrap.asStateFlow()
+
+    /** Outstanding TOFU prompt; MainActivity observes this and shows a dialog. */
+    private val _pendingHostKey = MutableStateFlow<HostKeyPrompt?>(null)
+    val pendingHostKey: StateFlow<HostKeyPrompt?> = _pendingHostKey.asStateFlow()
+
+    /** Wired by the bridge; consumed by the dialog's Accept/Reject buttons. */
+    @Volatile private var hostKeyResolver: ((Boolean) -> Unit)? = null
+
+    private var hostKeyTrustStore: SshHostKeyTrustStore? = null
+
     private var client: SweKittyClient? = null
     private var prefs: android.content.SharedPreferences? = null
     private var connectivity: ConnectivityManager? = null
@@ -223,6 +259,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
             }
             installNetworkAndLifecycleHooks(ctx.applicationContext)
+            hostKeyTrustStore = SshHostKeyTrustStore.forContext(ctx.applicationContext)
         }
     }
 
@@ -364,6 +401,135 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     fun reconnect() {
         disconnect()
         connect()
+    }
+
+    // MARK: - SSH bootstrap
+
+    /**
+     * Drive the UniFFI `sshBootstrap` from a credential the user typed in the
+     * SSH login sheet. On success, swap in the new ws://127.0.0.1:<port>
+     * endpoint and call [connect]. Errors and progress are surfaced through
+     * [sshBootstrap].
+     */
+    fun connectViaSSH(
+        credentials: SshCredentials,
+        serverName: String? = null,
+        anthropicApiKey: String = "",
+        openaiApiKey: String = "",
+        imageRef: String? = null,
+    ) {
+        val host = credentials.host
+        val port = credentials.port
+        val user = credentials.username
+        _sshBootstrap.value = SshBootstrapState.Running("Connecting to $user@$host:$port…")
+        val bridge = SshHostKeyBridge(this, host, port)
+        viewModelScope.launch {
+            val preToken = java.util.UUID.randomUUID().toString()
+            try {
+                _sshBootstrap.value = SshBootstrapState.Running("Starting harness on $host…")
+                val result = withContext(Dispatchers.IO) {
+                    ffiSshBootstrap(
+                        credentials,
+                        preToken,
+                        anthropicApiKey,
+                        openaiApiKey,
+                        imageRef,
+                        bridge,
+                    )
+                }
+                val url = "ws://127.0.0.1:${result.localPort.toInt()}"
+                val token = result.token
+                val endpoint = Endpoint(url, token)
+                val name = serverName?.takeIf { it.isNotBlank() } ?: "$user@$host"
+                setEndpoint(url, token)
+                upsertSavedServer(name = name, endpoint = endpoint, makeDefault = true)
+                disconnect()
+                connect()
+                _sshBootstrap.value = SshBootstrapState.Idle
+            } catch (e: SshException) {
+                val detail = describeSsh(e)
+                _sshBootstrap.value = SshBootstrapState.Failed(detail)
+                Telemetry.capture(
+                    error = e,
+                    message = "Android SSH bootstrap failed",
+                    tags = mapOf("surface" to "android", "phase" to "ssh_bootstrap", "code" to sshCode(e)),
+                    extras = mapOf("host" to host, "user" to user, "detail" to detail),
+                )
+            } catch (t: Throwable) {
+                val detail = t.message ?: t.toString()
+                _sshBootstrap.value = SshBootstrapState.Failed(detail)
+                Telemetry.capture(
+                    error = t,
+                    message = "Android SSH bootstrap failed",
+                    tags = mapOf("surface" to "android", "phase" to "ssh_bootstrap", "code" to "unknown"),
+                    extras = mapOf("host" to host, "user" to user, "detail" to detail),
+                )
+            }
+        }
+    }
+
+    /** Called by [SshHostKeyBridge] on a worker thread; UI thread shows the dialog. */
+    internal fun requestHostKeyDecision(
+        host: String,
+        port: UShort,
+        fingerprint: String,
+        onResolved: (Boolean) -> Unit,
+    ) {
+        val store = hostKeyTrustStore
+        if (store != null) {
+            val known = store.known(host, port)
+            if (known != null && known == fingerprint) {
+                onResolved(true)
+                return
+            }
+        }
+        hostKeyResolver = onResolved
+        _pendingHostKey.value = HostKeyPrompt(host, port, fingerprint)
+    }
+
+    fun resolveHostKeyPrompt(accept: Boolean) {
+        val prompt = _pendingHostKey.value ?: return
+        if (accept) {
+            hostKeyTrustStore?.trust(prompt.host, prompt.port, prompt.fingerprint)
+        }
+        _pendingHostKey.value = null
+        val resolver = hostKeyResolver
+        hostKeyResolver = null
+        resolver?.invoke(accept)
+    }
+
+    fun clearSshBootstrap() {
+        _sshBootstrap.value = SshBootstrapState.Idle
+    }
+
+    private fun describeSsh(e: SshException): String = when (e) {
+        is SshException.Dial                -> "Couldn't reach the host: ${e.message}"
+        is SshException.Handshake           -> "SSH handshake failed: ${e.message}"
+        is SshException.HostKeyRejected     -> "Host key rejected: ${e.message}"
+        is SshException.AuthFailed          -> "Authentication failed: ${e.message}"
+        is SshException.DockerMissing       -> "Docker is not installed on the server: ${e.message}"
+        is SshException.DockerPermission    -> "User can't reach Docker: ${e.message}"
+        is SshException.PortConflict        -> "Server port is already in use: ${e.message}"
+        is SshException.HarnessStartTimeout -> "Harness took too long to come up: ${e.message}"
+        is SshException.BootstrapExitCode   -> "Bootstrap script failed: ${e.message}"
+        is SshException.BootstrapParse      -> "Couldn't parse bootstrap output: ${e.message}"
+        is SshException.PortForward         -> "Port forward failed: ${e.message}"
+        is SshException.Io                  -> "I/O error: ${e.message}"
+    }
+
+    private fun sshCode(e: SshException): String = when (e) {
+        is SshException.Dial                -> "dial"
+        is SshException.Handshake           -> "handshake"
+        is SshException.HostKeyRejected     -> "host_key_rejected"
+        is SshException.AuthFailed          -> "auth_failed"
+        is SshException.DockerMissing       -> "docker_missing"
+        is SshException.DockerPermission    -> "docker_permission"
+        is SshException.PortConflict        -> "port_conflict"
+        is SshException.HarnessStartTimeout -> "harness_start_timeout"
+        is SshException.BootstrapExitCode   -> "bootstrap_exit"
+        is SshException.BootstrapParse      -> "bootstrap_parse"
+        is SshException.PortForward         -> "port_forward"
+        is SshException.Io                  -> "io"
     }
 
     fun connectAndStart(endpoint: Endpoint? = null, assistant: String, cwd: String) {
@@ -799,5 +965,29 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     private fun shellQuoted(raw: String): String {
         val escaped = raw.replace("'", "'\"'\"'")
         return "'$escaped'"
+    }
+}
+
+/**
+ * Bridges the Rust SSH layer's TOFU callback into the Compose dialog. The
+ * Rust side calls `acceptHostKey` synchronously on a worker thread; we
+ * either short-circuit on a previously trusted fingerprint (handled inside
+ * `requestHostKeyDecision`) or block this worker on a [CountDownLatch]
+ * while the user taps Accept/Reject on the UI thread.
+ */
+class SshHostKeyBridge(
+    private val store: SessionStore,
+    private val host: String,
+    private val port: UShort,
+) : SshHostKeyDelegate {
+    override fun `acceptHostKey`(`fingerprint`: String): Boolean {
+        val latch = CountDownLatch(1)
+        var decision = false
+        store.requestHostKeyDecision(host, port, fingerprint) { accepted ->
+            decision = accepted
+            latch.countDown()
+        }
+        latch.await()
+        return decision
     }
 }

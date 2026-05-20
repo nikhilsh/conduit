@@ -12,6 +12,7 @@ struct SettingsSheet: View {
     @State private var token: String = ""
     @State private var startCwd: String = "~"
     @State private var showScanner: Bool = false
+    @State private var showSshLogin: Bool = false
     @State private var showDirectoryPicker: Bool = false
     @State private var browsingPath: String = "~"
     @State private var directoryEntries: [RemoteDirectoryEntry] = []
@@ -64,6 +65,10 @@ struct SettingsSheet: View {
                 QRScannerSheet { code in
                     handleScan(code)
                 }
+            }
+            .sheet(isPresented: $showSshLogin) {
+                SSHLoginSheet()
+                    .environment(store)
             }
             .sheet(isPresented: $showDirectoryPicker) {
                 directoryPickerSheet
@@ -191,6 +196,23 @@ struct SettingsSheet: View {
             } label: {
                 HStack(spacing: 10) {
                     Label("Scan pairing QR", systemImage: "qrcode.viewfinder")
+                        .foregroundStyle(SweKittyTheme.textBody)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, 4)
+
+            Divider().background(SweKittyTheme.separator)
+
+            Button {
+                showSshLogin = true
+            } label: {
+                HStack(spacing: 10) {
+                    Label("Add server via SSH", systemImage: "terminal")
                         .foregroundStyle(SweKittyTheme.textBody)
                     Spacer()
                     Image(systemName: "chevron.right")

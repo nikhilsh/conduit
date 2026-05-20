@@ -128,6 +128,25 @@ struct RemoteDirectoryListing: Codable, Equatable {
 
 extension StoredEndpoint: Codable {}
 
+/// UI-level status for the SSH-bootstrap flow. Independent of `HarnessState`
+/// because bootstrap runs *before* we have an endpoint to connect to: the
+/// progress line ("Starting harness…") lives in the SSH login sheet, not
+/// the main pairing status.
+enum SshBootstrapState: Equatable {
+    case idle
+    case running(message: String)
+    case failed(reason: String)
+}
+
+/// Outstanding TOFU prompt presented to the user mid-bootstrap. The bridge
+/// blocks on the user's tap before letting the SSH handshake continue.
+struct HostKeyPrompt: Identifiable, Equatable {
+    let id = UUID()
+    let host: String
+    let port: UInt16
+    let fingerprint: String
+}
+
 @Observable
 @MainActor
 final class SessionStore {
@@ -144,6 +163,16 @@ final class SessionStore {
     var selectedSessionID: String?
     var savedServers: [SavedServer] = []
     var recentDirectories: [String] = []
+
+    /// SSH-bootstrap progress. Observed by the SSH login sheet.
+    var sshBootstrapState: SshBootstrapState = .idle
+
+    /// Active TOFU prompt. SweKittyApp observes this and presents a sheet.
+    var pendingHostKey: HostKeyPrompt?
+
+    /// Resolver for the active TOFU prompt. Wired up by the bridge; consumed
+    /// by the SwiftUI sheet's Accept/Reject buttons.
+    private var hostKeyResolver: ((Bool) -> Void)?
 
     /// Banner-style error for the most recent session-creation failure.
     /// Cleared automatically the next time the user tries again.
@@ -331,6 +360,114 @@ final class SessionStore {
                 harness = .failed("Connect/start failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    // MARK: - SSH bootstrap
+
+    /// Drive `sshBootstrap` from the UniFFI surface, pipe the resulting
+    /// `local_port` + `token` into our existing pairing flow.
+    ///
+    /// `serverName` defaults to the human-friendly `user@host` if omitted.
+    /// `anthropicApiKey` / `openaiApiKey` are forwarded into the harness'
+    /// `docker run -e ...` so first-launch agents work without a follow-up
+    /// SSH session — both are optional. The bootstrap script also reads
+    /// any host-side env if these are empty.
+    func connectViaSSH(
+        credentials: SshCredentials,
+        serverName: String? = nil,
+        anthropicApiKey: String = "",
+        openaiApiKey: String = "",
+        imageRef: String? = nil
+    ) {
+        let host = credentials.host
+        let port = credentials.port
+        let user = credentials.username
+        sshBootstrapState = .running(message: "Connecting to \(user)@\(host):\(port)…")
+
+        Task {
+            let preToken = UUID().uuidString
+            let bridge = SshHostKeyBridge(store: self, host: host, port: port)
+            do {
+                self.sshBootstrapState = .running(message: "Starting harness on \(host)…")
+                let result = try await sshBootstrap(
+                    credentials: credentials,
+                    preAllocatedToken: preToken,
+                    anthropicApiKey: anthropicApiKey,
+                    openaiApiKey: openaiApiKey,
+                    imageRef: imageRef,
+                    hostKeyDelegate: bridge
+                )
+                let endpoint = StoredEndpoint(
+                    url: "ws://127.0.0.1:\(result.localPort)",
+                    token: result.token
+                )
+                let name = serverName?.isEmpty == false
+                    ? serverName!
+                    : "\(user)@\(host)"
+                self.endpoint = endpoint
+                self.upsertSavedServer(name: name, endpoint: endpoint, makeDefault: true)
+                self.disconnect()
+                self.connect()
+                self.sshBootstrapState = .idle
+                Telemetry.capture(
+                    error: NSError(domain: "ios.ssh_bootstrap", code: 0, userInfo: [NSLocalizedDescriptionKey: "ok"]),
+                    message: "iOS SSH bootstrap success",
+                    tags: ["surface": "ios", "phase": "ssh_bootstrap", "reused": result.reused ? "1" : "0"],
+                    extras: [
+                        "host": host,
+                        "remote_port": "\(result.remotePort)",
+                        "local_port": "\(result.localPort)",
+                    ]
+                )
+            } catch let err as SshError {
+                let detail = Self.describeSsh(err)
+                self.sshBootstrapState = .failed(reason: detail)
+                Telemetry.capture(
+                    error: err,
+                    message: "iOS SSH bootstrap failed",
+                    tags: ["surface": "ios", "phase": "ssh_bootstrap", "code": Self.sshCode(err)],
+                    extras: ["host": host, "user": user, "detail": detail]
+                )
+            } catch {
+                let detail = String(describing: error)
+                self.sshBootstrapState = .failed(reason: detail)
+                Telemetry.capture(
+                    error: error,
+                    message: "iOS SSH bootstrap failed",
+                    tags: ["surface": "ios", "phase": "ssh_bootstrap", "code": "unknown"],
+                    extras: ["host": host, "user": user, "detail": detail]
+                )
+            }
+        }
+    }
+
+    /// Called from `SshHostKeyBridge` on the main actor when the SSH
+    /// handshake hits an unknown fingerprint. The completion runs when
+    /// the user taps Accept/Reject in `HostKeyPromptSheet`.
+    fileprivate func presentHostKeyPrompt(
+        host: String,
+        port: UInt16,
+        fingerprint: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        hostKeyResolver = completion
+        pendingHostKey = HostKeyPrompt(host: host, port: port, fingerprint: fingerprint)
+    }
+
+    /// Invoked by the TOFU sheet's buttons.
+    func resolveHostKeyPrompt(accept: Bool) {
+        guard let prompt = pendingHostKey else { return }
+        if accept {
+            SshHostKeyTrustStore.trust(host: prompt.host, port: prompt.port, fingerprint: prompt.fingerprint)
+        }
+        pendingHostKey = nil
+        let resolver = hostKeyResolver
+        hostKeyResolver = nil
+        resolver?(accept)
+    }
+
+    func clearSshBootstrap() {
+        sshBootstrapState = .idle
     }
 
     func upsertSavedServer(name: String, endpoint: StoredEndpoint, makeDefault: Bool) {
@@ -735,6 +872,40 @@ private extension SessionStore {
         return text.contains("auth(") || text == "auth" || text.contains("unauthorized")
     }
 
+    static func describeSsh(_ err: SshError) -> String {
+        switch err {
+        case .Dial(let m):                  return "Couldn't reach the host: \(m)"
+        case .Handshake(let m):             return "SSH handshake failed: \(m)"
+        case .HostKeyRejected(let m):       return "Host key rejected: \(m)"
+        case .AuthFailed(let m):            return "Authentication failed: \(m)"
+        case .DockerMissing(let m):         return "Docker is not installed on the server: \(m)"
+        case .DockerPermission(let m):      return "User can't reach Docker: \(m)"
+        case .PortConflict(let m):          return "Server port is already in use: \(m)"
+        case .HarnessStartTimeout(let m):   return "Harness took too long to come up: \(m)"
+        case .BootstrapExitCode(let m):     return "Bootstrap script failed: \(m)"
+        case .BootstrapParse(let m):        return "Couldn't parse bootstrap output: \(m)"
+        case .PortForward(let m):           return "Port forward failed: \(m)"
+        case .Io(let m):                    return "I/O error: \(m)"
+        }
+    }
+
+    static func sshCode(_ err: SshError) -> String {
+        switch err {
+        case .Dial:                  return "dial"
+        case .Handshake:             return "handshake"
+        case .HostKeyRejected:       return "host_key_rejected"
+        case .AuthFailed:            return "auth_failed"
+        case .DockerMissing:         return "docker_missing"
+        case .DockerPermission:      return "docker_permission"
+        case .PortConflict:          return "port_conflict"
+        case .HarnessStartTimeout:   return "harness_start_timeout"
+        case .BootstrapExitCode:     return "bootstrap_exit"
+        case .BootstrapParse:        return "bootstrap_parse"
+        case .PortForward:           return "port_forward"
+        case .Io:                    return "io"
+        }
+    }
+
     static func connectionReasonCode(from reason: String) -> String {
         let lower = reason.lowercased()
         if lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized") {
@@ -764,6 +935,45 @@ enum VisibleSession: Identifiable {
         case .real(let s):     return s.id
         case .creating(let p): return p
         }
+    }
+}
+
+/// Bridges the Rust SSH layer's TOFU callback into the SwiftUI sheet.
+/// The Rust side invokes `acceptHostKey(fingerprint:)` synchronously on a
+/// background runtime thread; we either short-circuit on a previously
+/// trusted fingerprint or block via a semaphore while the user taps
+/// Accept/Reject on the main actor.
+final class SshHostKeyBridge: SshHostKeyDelegate {
+    private weak var store: SessionStore?
+    private let host: String
+    private let port: UInt16
+
+    init(store: SessionStore, host: String, port: UInt16) {
+        self.store = store
+        self.host = host
+        self.port = port
+    }
+
+    func acceptHostKey(fingerprint: String) -> Bool {
+        if let trusted = SshHostKeyTrustStore.known(host: host, port: port), trusted == fingerprint {
+            return true
+        }
+        let sem = DispatchSemaphore(value: 0)
+        var decision = false
+        let host = self.host
+        let port = self.port
+        Task { @MainActor in
+            guard let store = self.store else {
+                sem.signal()
+                return
+            }
+            store.presentHostKeyPrompt(host: host, port: port, fingerprint: fingerprint) { accepted in
+                decision = accepted
+                sem.signal()
+            }
+        }
+        sem.wait()
+        return decision
     }
 }
 

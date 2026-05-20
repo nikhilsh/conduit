@@ -71,6 +71,15 @@ fun AppRoot(store: SessionStore) {
             onDismiss = { showSettings = false },
         )
     }
+
+    val hostKey by store.pendingHostKey.collectAsState()
+    hostKey?.let { prompt ->
+        HostKeyPromptDialog(
+            prompt = prompt,
+            onAccept = { store.resolveHostKeyPrompt(true) },
+            onReject = { store.resolveHostKeyPrompt(false) },
+        )
+    }
 }
 
 // Small shim so this file doesn't pull androidx.compose.runtime.rememberCoroutineScope

@@ -15,7 +15,26 @@ struct SweKittyApp: App {
                 .onOpenURL { url in
                     applyPairingURL(url)
                 }
+                .sheet(item: hostKeyBinding) { prompt in
+                    HostKeyPromptSheet(prompt: prompt) { accepted in
+                        store.resolveHostKeyPrompt(accept: accepted)
+                    }
+                    .presentationDetents([.medium])
+                }
         }
+    }
+
+    private var hostKeyBinding: Binding<HostKeyPrompt?> {
+        Binding(
+            get: { store.pendingHostKey },
+            set: { next in
+                // SwiftUI may set this to nil if the user swipes the sheet
+                // away — treat that as a rejection so the bridge unblocks.
+                if next == nil, store.pendingHostKey != nil {
+                    store.resolveHostKeyPrompt(accept: false)
+                }
+            }
+        )
     }
 
     /// Handle a `swekitty://host[:port]?token=…` deep link by re-pointing

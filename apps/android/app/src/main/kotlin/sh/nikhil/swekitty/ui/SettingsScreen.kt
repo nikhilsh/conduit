@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
@@ -45,6 +46,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     var directoryLoading by remember { mutableStateOf(false) }
     var pendingAssistantAfterConnect by remember { mutableStateOf<String?>(null) }
     var scanError by remember { mutableStateOf<String?>(null) }
+    var showSshSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(harness, pendingAssistantAfterConnect) {
@@ -185,6 +187,14 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                     Spacer(Modifier.width(6.dp))
                     Text("Scan QR")
                 }
+                OutlinedButton(
+                    onClick = { showSshSheet = true },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Terminal, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Via SSH")
+                }
                 Button(
                     onClick = {
                         store.setEndpoint(url, token)
@@ -257,6 +267,10 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (showSshSheet) {
+        SSHLoginSheet(store = store, onDismiss = { showSshSheet = false })
     }
 
     if (showDirectoryPicker) {
