@@ -608,6 +608,29 @@ final class SessionStore {
 
     func sendChat(sessionID: String, message: String) {
         guard let client else { return }
+        // Optimistic local echo so the user sees their message immediately.
+        // The harness doesn't loop user messages back as `on_chat_event`, so
+        // without this the chat tab stays empty until the assistant replies.
+        // The synthetic item carries a `local-` id; `refreshConversation`
+        // preserves it until the server's typed log catches up by content.
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = ConversationItem(
+            id: "local-\(UUID().uuidString)",
+            role: "user",
+            kind: "message",
+            status: "done",
+            content: message,
+            ts: now,
+            files: [],
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: []
+        )
+        conversationLog[sessionID, default: []].append(item)
+        chatLog[sessionID, default: []].append(ChatEvent(role: "user", content: message, ts: now, files: []))
         Task { try? await client.sendChat(sessionId: sessionID, msg: message) }
     }
 
@@ -641,7 +664,15 @@ final class SessionStore {
     fileprivate func refreshConversation(sessionID: String) {
         guard let client else { return }
         if let items = try? client.listConversationItems(sessionId: sessionID) {
-            conversationLog[sessionID] = items
+            // Preserve locally-echoed `local-*` items not yet reflected by
+            // the server (matched by role+content). Once the harness mirrors
+            // the same text back under a server id, the local copy drops.
+            let existing = conversationLog[sessionID] ?? []
+            let serverFingerprints = Set(items.map { "\($0.role)|\($0.content)" })
+            let stillPending = existing.filter {
+                $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
+            }
+            conversationLog[sessionID] = items + stillPending
         }
     }
 

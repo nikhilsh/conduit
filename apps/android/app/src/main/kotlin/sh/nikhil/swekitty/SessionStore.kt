@@ -632,6 +632,34 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     fun sendChat(sessionId: String, msg: String) {
         val c = client ?: return
+        // Optimistic local echo — harness doesn't loop user messages back
+        // as onChatEvent, so the chat tab would stay empty until the
+        // assistant replies. The `local-` id lets refreshConversation
+        // preserve this entry until the server's typed log catches up.
+        val ts = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        val item = ConversationItem(
+            id = "local-${java.util.UUID.randomUUID()}",
+            role = "user",
+            kind = "message",
+            status = "done",
+            content = msg,
+            ts = ts,
+            files = emptyList(),
+            toolName = null,
+            command = null,
+            exitCode = null,
+            durationMs = null,
+            diffSummary = null,
+            pendingOptions = emptyList(),
+        )
+        _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+            m[sessionId] = (m[sessionId] ?: emptyList()) + item
+        }
+        _chatLog.value = _chatLog.value.toMutableMap().also { m ->
+            m[sessionId] = (m[sessionId] ?: emptyList()) +
+                ChatEvent(role = "user", content = msg, ts = ts, files = emptyList())
+        }
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } } }
     }
 
@@ -709,7 +737,12 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         val c = client ?: return
         runCatching { c.listConversationItems(sessionId) }
             .onSuccess { items ->
-                _conversationLog.value = _conversationLog.value + (sessionId to items)
+                val existing = _conversationLog.value[sessionId] ?: emptyList()
+                val serverFingerprints = items.map { "${it.role}|${it.content}" }.toSet()
+                val stillPending = existing.filter {
+                    it.id.startsWith("local-") && "${it.role}|${it.content}" !in serverFingerprints
+                }
+                _conversationLog.value = _conversationLog.value + (sessionId to (items + stillPending))
             }
     }
 
