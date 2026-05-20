@@ -1,6 +1,6 @@
 # WebSocket protocol (frozen contract v1)
 
-Wire format between `swe-kitty-harness` (Go) and `swe-kitty-core` (Rust). **Byte-identical** to upstream [swe-swe](https://github.com/choonkeat/swe-swe)'s protocol so that swe-swe's own browser UI also works against our server. swe-kitty extends the JSON control set with `switch_agent`, `view_event`, and `health` fields — extensions are forward-compatible because the swe-swe client ignores unknown JSON types.
+Wire format between `swe-kitty-harness` (Go) and `swe-kitty-core` (Rust). The binary framing was originally adopted from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), but swe-kitty has since added `switch_agent`, typed `view_event`, structured `health` / `phase` fields, and a **bearer-only auth path** (no cookie redirect to `/swe-swe-auth/login`). Treat the upstream as historical prior art, not as a compatibility target — pointing the SweKitty client at an unmodified `swe-swe` server fails the WS upgrade because the auth redirect lands on an HTML login page.
 
 Changes to this document REQUIRE a deliberate PR that rebases all in-flight feature branches.
 

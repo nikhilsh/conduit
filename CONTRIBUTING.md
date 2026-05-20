@@ -1,6 +1,6 @@
 # Contributing to swe-kitty
 
-This repo is built **under a swe-swe harness**. Whether you are a human or an AI agent (Claude Code, Codex, Gemini, …), the workflow is the same: pick a task brief from `.swe-kitty/tasks/`, get a fresh git worktree, work in isolation, open a PR. Multiple agents can be in flight at once; the frozen contracts in `docs/` keep them from colliding.
+This repo is **built under its own harness**. Whether you are a human or an AI agent (Claude Code, Codex, Gemini, …), the workflow is the same: pick a task brief from `.swe-kitty/tasks/`, get a fresh git worktree, work in isolation, open a PR. Multiple agents can be in flight at once; the frozen contracts in `docs/` keep them from colliding.
 
 ## TL;DR
 
@@ -9,16 +9,17 @@ This repo is built **under a swe-swe harness**. Whether you are a human or an AI
 git clone git@github.com:nikhilsh/swe-kitty.git
 cd swe-kitty
 cp .swe-kitty/env.example .swe-kitty/env   # add your API keys
-npm i -g swe-swe                            # or alias swe-swe='npx -y swe-swe'
 
 # every task
-swe-swe up                                  # opens http://localhost:1977
+make harness && ./harness/bin/swe-kitty-harness up --local   # opens http://localhost:1977
 #  → spawn a session with your preferred agent
 #  → the harness creates a worktree at .swe-kitty/sessions/<uuid>/work
 #  → the agent reads .swe-kitty/HANDOFF.html (if any) first
 #  → work in that worktree, commit, push the branch
 #  → open a PR on GitHub
 ```
+
+> **Historical note:** earlier versions of this guide pointed at `npm i -g swe-swe` for the dev workflow. swe-kitty has since absorbed everything it needed from that prior art and now ships its own harness binary (`swe-kitty-harness`). Don't install or run upstream swe-swe alongside — its `/swe-swe-auth/login` redirect breaks our bearer-only client. See `docs/SELF-HOST.md`.
 
 ## Picking a task
 
@@ -73,10 +74,10 @@ Any agent can self-merge a green PR — `CODEOWNERS` is intentionally empty for 
 
 ## Releases
 
-Tags `v*` trigger three workflows (see [`docs/PLAN.md`](docs/PLAN.md) Part C). Don't tag from a feature branch.
+Tags `v*` (and `workflow_dispatch -f release_tag=…` from `release.yml`) trigger one reusable-workflow DAG that fans out to `ios`, `android`, `harness`, then deploys the website. See [`docs/RELEASE.md`](docs/RELEASE.md). Don't tag from a feature branch.
 
 ## Style
 
 - **No comments** unless something is non-obvious. Identifiers and types should explain themselves.
 - **No future-proofing.** Build for the current contract; the next contract change comes with its own PR.
-- **Match upstream where possible.** WebSocket framing is byte-identical to swe-swe. Build scripts mirror litter's shape. Don't reinvent terminals — use SwiftTerm / termux-terminal-view.
+- **Standalone product.** swe-kitty has its own wire shape, its own auth, its own apps, and its own release pipeline. Don't reach for upstream `swe-swe` semantics (cookie auth, browser UI, etc.) — they were prior art, not a contract. Don't reinvent terminals though: `SwiftTerm` on iOS, `termux-terminal-view` on Android.

@@ -1,10 +1,10 @@
-# Plan: `swe-kitty` — a litter-style mobile app with swe-swe per-project multi-view, built under a harness dev workflow
+# Plan: `swe-kitty` — phone-first AI coding harness with per-project multi-view, built under its own harness
 
 ## How To Read This Document
 
 - **Status Snapshot** below is the current reality and should drive execution.
-- **Part A onward** preserves the detailed target architecture and future plan.
-- If there is any mismatch, treat the Status Snapshot + newer focused docs (`RELEASE.md`, `MOBILE-FEATURE-BACKLOG.md`, `NEXT-RELEASE.md`) as the source of truth for immediate work.
+- **Part A onward** preserves the detailed target architecture and the original (2026-04) bootstrap plan, including framing that referenced upstream `swe-swe` as the harness for dev work. That dependency is gone — swe-kitty ships its own `swe-kitty-harness` binary now — but the historical text is preserved verbatim below so the design rationale isn't lost. The newer execution layer is [`PLAN-2026-05-19.md`](PLAN-2026-05-19.md).
+- If there is any mismatch, treat the Status Snapshot + newer focused docs (`RELEASE.md`, `MOBILE-FEATURE-BACKLOG.md`, `NEXT-RELEASE.md`, `PLAN-2026-05-19.md`) as the source of truth for immediate work.
 
 ## Status Snapshot (May 18, 2026)
 

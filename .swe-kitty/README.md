@@ -1,6 +1,12 @@
-# `.swe-kitty/` — dev harness for *this* repo
+# `.swe-kitty/` — dev harness state for *this* repo
 
-This directory is **read by upstream [swe-swe](https://github.com/choonkeat/swe-swe)** so multiple AI agents can work on swe-kitty in parallel, each on its own git worktree, each in its own PTY-backed container. Once `swe-kitty-harness` exists, it will read the same files.
+This directory is read by **`swe-kitty-harness`** so multiple AI agents can
+work on swe-kitty in parallel, each on its own git worktree, each in its
+own PTY-backed container.
+
+> Earlier iterations of this README pointed at upstream `swe-swe` for the
+> dev workflow. swe-kitty now ships its own harness binary and is no
+> longer a swe-swe consumer. Don't install upstream swe-swe alongside.
 
 ## What lives here
 
@@ -19,15 +25,25 @@ This directory is **read by upstream [swe-swe](https://github.com/choonkeat/swe-
 
 ## Two adapter directories — why?
 
-- `.swe-kitty/agents/` — what swe-swe uses *right now* to build this repo (dev-time)
-- `agents/` (repo root) — what `swe-kitty-harness` will use when it runs in production
+- `.swe-kitty/agents/` — what the harness reads when working **on this repo**
+  (dev-time). These TOMLs are tuned for the agents that work on swe-kitty
+  itself.
+- `agents/` (repo root) — what `swe-kitty-harness` ships **to users**. End
+  users get this set when they run the harness against their own project.
 
-These are intentionally separate so a change to dev-time tooling never breaks the shipped product.
+These are intentionally separate so a change to dev-time tooling never
+breaks the shipped product.
 
 ## Bootstrapping a parallel session
 
-1. `cp env.example env`, fill in keys
-2. `swe-swe up`
-3. In the swe-swe UI: New session → pick agent → pick a task brief from `tasks/`
-4. The worktree is created under `sessions/<uuid>/work`. `HANDOFF.html` lands at its root.
-5. Work, commit, push branch, open PR.
+```sh
+cp env.example env                              # fill in your API keys
+make harness                                    # build ./harness/bin/swe-kitty-harness
+./harness/bin/swe-kitty-harness up --local      # opens http://localhost:1977
+```
+
+In the local UI (or the mobile app, paired via the printed QR):
+
+1. New session → pick agent → pick a task brief from `tasks/`.
+2. Worktree is created under `sessions/<uuid>/work/`. `HANDOFF.html` lands at its root.
+3. Work, commit, push branch, open PR. Multiple agents can run in parallel — the frozen contracts in `docs/` keep them from colliding.

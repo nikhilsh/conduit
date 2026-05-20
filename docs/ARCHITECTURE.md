@@ -4,7 +4,7 @@ Entry point for new contributors. For full motivation, roadmap, and v1 scope, se
 
 ## One-paragraph summary
 
-A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) running on a swe-swe-style harness server. Each *project* is a tab in the app; *within* a project, the user switches between Terminal / Agent Chat / Browser-preview views. Agents are interchangeable mid-session via a structured HTML handoff document. The harness checkpoints session state every 60s; long-running sessions survive crashes, network blips, and agent swaps.
+A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) running on **`swe-kitty-harness`** — our own Go server that owns PTYs, git worktrees, and Docker-spawned agent containers. Each *project* is a tab in the app; *within* a project, the user switches between Terminal / Agent Chat / Browser-preview views. Agents are interchangeable mid-session via a structured HTML handoff document. The harness checkpoints session state every 60s; long-running sessions survive crashes, network blips, and agent swaps.
 
 ## Layers
 
@@ -42,7 +42,7 @@ These four `docs/*.md` are **frozen contracts** — they parallel-decouple work 
 
 ```
 swe-kitty/
-├── .swe-kitty/                  dev harness config (read by upstream swe-swe)
+├── .swe-kitty/                  dev harness state (read by swe-kitty-harness)
 │   ├── config.toml
 │   ├── agents/                  dev-time adapter TOMLs
 │   ├── tasks/                   task briefs for parallel agents
@@ -63,7 +63,7 @@ swe-kitty/
 
 ## Why two adapter directories
 
-- `.swe-kitty/agents/*.toml` — what **upstream swe-swe** uses to build this repo
+- `.swe-kitty/agents/*.toml` — what `swe-kitty-harness` reads when working **on this repo** (dev-time)
 - `agents/*.toml` — what **swe-kitty-harness** uses when running the shipped product
 
 Same schema, separate scopes. A change to dev tooling never breaks the product.

@@ -4,7 +4,7 @@ How an arbitrary CLI coding agent (Claude Code, Codex, Gemini, Aider, Goose, Ope
 
 Two physical locations on disk:
 
-- `.swe-kitty/agents/*.toml` — dev-time, read by upstream `swe-swe` when building this repo
+- `.swe-kitty/agents/*.toml` — dev-time, read by `swe-kitty-harness` when working on this repo
 - `agents/*.toml` — production, read by `swe-kitty-harness` when running the shipped product
 
 The TOML schema is the same; only the consumers differ.

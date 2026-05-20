@@ -1,6 +1,8 @@
 # swe-kitty
 
-A phone-first AI coding harness. Drive Claude Code, Codex, and other agents from iOS and Android with per-project tabs for terminal, agent chat, and live preview. Built itself under a multi-agent dev harness.
+A phone-first AI coding harness. Drive Claude Code, Codex, and other agents from iOS and Android with per-project tabs for terminal, agent chat, and live preview.
+
+swe-kitty is its own product — three layers (Rust core, Go harness, native shells) that all ship from this repo. Its WebSocket wire shape is documented in `docs/WEBSOCKET-PROTOCOL.md`; the harness, IPA, APK, and harness binaries all come from `release.yml` in this repo and only this repo.
 
 ```
 ┌───────────────────────────────┐
@@ -28,7 +30,8 @@ A phone-first AI coding harness. Drive Claude Code, Codex, and other agents from
   - [`docs/AGENT-ADAPTERS.md`](docs/AGENT-ADAPTERS.md)
   - [`docs/MEMORY-FORMAT.md`](docs/MEMORY-FORMAT.md)
   - [`docs/SESSION-LIFECYCLE.md`](docs/SESSION-LIFECYCLE.md)
-- **Working on this repo (under harness):** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **Working on this repo:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **Running your own harness:** [`docs/SELF-HOST.md`](docs/SELF-HOST.md)
 
 ## Install (post-v0.4)
 
@@ -79,8 +82,6 @@ Authoritative roadmap remains in:
 - [`docs/MOBILE-FEATURE-BACKLOG.md`](docs/MOBILE-FEATURE-BACKLOG.md)
 - [`docs/RELEASE.md`](docs/RELEASE.md)
 
-## References
+## Prior art
 
-Stands on the shoulders of:
-- [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe) — server-side harness model (Go, PTY, worktrees, WebSocket, per-project multi-view)
-- [dnakov/litter](https://github.com/dnakov/litter) — mobile client model (Rust core, UniFFI, iOS+Android shells)
+The original WebSocket framing took inspiration from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), and the layered Rust-core + native-shells split is the same shape [dnakov/litter](https://github.com/dnakov/litter) chose for Codex on mobile. swe-kitty has diverged on auth (bearer-only, no cookie login), on the harness protocol (`switch_agent`, typed `view_event`, the structured memory HTML), and on the entire mobile surface, so neither upstream is a runtime dependency or an interoperability target — they're references, not parents.
