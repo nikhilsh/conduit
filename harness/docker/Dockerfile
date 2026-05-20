@@ -57,11 +57,27 @@ RUN apt-get update \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Pre-install every agent we ship a TOML adapter for. Adding a new agent =
-# one npm install line + one agents/*.toml — no per-agent Dockerfile.
-RUN npm install -g \
-        @anthropic-ai/claude-code \
-        @openai/codex \
+# Claude Code: install via Anthropic's signed apt repo (the docs at
+# https://code.claude.com/docs/en/setup recommend the native installer
+# OR apt — we use apt inside the image so we don't depend on a network
+# bootstrap at first run). The npm path produced a corrupt-on-rerun
+# install three separate times on the host today, so it's avoided.
+# Repo signing key fingerprint (must match): 31DD DE24 DDFA B679 F42D
+# 7BD2 BAA9 29FF 1A7E CACE.
+RUN install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
+        -o /etc/apt/keyrings/claude-code.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main" \
+        > /etc/apt/sources.list.d/claude-code.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends claude-code \
+    && rm -rf /var/lib/apt/lists/*
+
+# Codex: still on npm because OpenAI doesn't publish an apt repo. The
+# codex npm package has been stable for us; revisit if it joins the
+# claude pattern of failures. Direct-binary install is a future cleanup
+# (codex publishes platform binaries on GitHub Releases).
+RUN npm install -g @openai/codex \
     && npm cache clean --force
 
 # Single, swe-swe-shaped non-root user. uid 1000 lines up with how most

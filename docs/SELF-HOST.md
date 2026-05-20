@@ -66,7 +66,32 @@ curl -sLo /usr/local/bin/swe-kitty-harness \
   https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-harness-linux-amd64
 chmod +x /usr/local/bin/swe-kitty-harness
 
-# Bring it up. --local enables mDNS advertise.
+# Install agent CLIs *natively* (NOT via npm — re-running `npm install -g`
+# on top of a previous install fails with ENOTEMPTY and leaves the
+# binary in a half-broken state; we hit this three times in a single
+# day on the dogfood box). Anthropic's signed apt repo is the
+# preferred host install per https://code.claude.com/docs/en/setup.
+
+# Claude Code via apt (Debian / Ubuntu):
+install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
+  -o /etc/apt/keyrings/claude-code.asc
+# Verify the fingerprint matches:
+#   31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE
+gpg --show-keys /etc/apt/keyrings/claude-code.asc
+echo "deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main" \
+  > /etc/apt/sources.list.d/claude-code.list
+apt update && apt install -y claude-code
+
+# Or via the official native installer (recommended by Anthropic,
+# per-user under ~/.local/bin/claude, auto-updates in background):
+#   curl -fsSL https://claude.ai/install.sh | bash
+
+# Codex still ships via npm only:
+npm install -g @openai/codex
+
+# Bring up the harness. Run as a non-root user (claude refuses
+# --dangerously-skip-permissions under root). --local enables mDNS.
 swe-kitty-harness up --local --addr :1977
 ```
 
