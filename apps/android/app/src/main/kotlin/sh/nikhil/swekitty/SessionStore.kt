@@ -236,6 +236,62 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     /**
+     * Local rename map — keyed by session id. Persisted to the same
+     * EncryptedSharedPreferences blob as the endpoint. Display names are
+     * not secrets; using the existing store avoids an extra prefs file.
+     */
+    private val _displayNames = MutableStateFlow<Map<String, String>>(emptyMap())
+    val displayNames: StateFlow<Map<String, String>> = _displayNames.asStateFlow()
+
+    fun displayName(session: ProjectSession): String =
+        _displayNames.value[session.id] ?: session.name
+
+    fun renameSession(sessionId: String, newName: String) {
+        val trimmed = newName.trim()
+        val next = _displayNames.value.toMutableMap()
+        if (trimmed.isEmpty()) {
+            next.remove(sessionId)
+        } else {
+            next[sessionId] = trimmed
+        }
+        _displayNames.value = next
+        prefs?.edit()?.putString(KEY_DISPLAY_NAMES, encodeDisplayNames(next))?.apply()
+    }
+
+    /**
+     * Fork — create a new session with the same agent + branch, seed
+     * the new conversation with a hand-off note. Fully client-side;
+     * docs/PLAN-LITTER-UI.md Stage 3 flagged a Rust `fork_session`
+     * UDL method as a future optimization, but client-side is enough.
+     */
+    fun forkSession(sessionId: String) {
+        val c = client ?: return
+        val original = _sessions.value.firstOrNull { it.id == sessionId } ?: return
+        viewModelScope.launch {
+            try {
+                val newId = withContext(Dispatchers.IO) {
+                    c.createSession(original.assistant, original.branch)
+                }
+                val seed = "Forked from ${original.name} (id $sessionId). Pick up where the previous session left off."
+                runCatching { withContext(Dispatchers.IO) { c.sendChat(newId, seed) } }
+                updateLifecycle { it + (newId to SessionLifecycle.Live) }
+                refreshSessions()
+                _selectedId.value = newId
+                renameSession(newId, "Fork: ${displayName(original)}")
+            } catch (t: Throwable) {
+                val detail = describe(t)
+                _sessionCreationError.value = "fork: $detail"
+                Telemetry.capture(
+                    error = t,
+                    message = "Android fork session failed",
+                    tags = mapOf("surface" to "android", "phase" to "fork_session"),
+                    extras = mapOf("endpoint" to _endpoint.value.displayHost, "session_id" to sessionId, "detail" to detail),
+                )
+            }
+        }
+    }
+
+    /**
      * Parse a `swekitty://...` URL, save the endpoint, connect, and
      * arm `pendingAgentPick` so the picker sheet shows automatically.
      * Called from MainActivity on intent.data arrival.
@@ -285,6 +341,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 token = p.getString(KEY_TOKEN, "") ?: "",
             )
             _savedServers.value = decodeSavedServers(p.getString(KEY_SAVED_SERVERS, null))
+            _displayNames.value = decodeDisplayNames(p.getString(KEY_DISPLAY_NAMES, null))
             refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
@@ -925,6 +982,23 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         private const val KEY_TOKEN = "swekitty.endpoint.token"
         private const val KEY_SAVED_SERVERS = "swekitty.saved_servers"
         private const val KEY_RECENT_DIRS = "swekitty.recent_dirs_by_server"
+        private const val KEY_DISPLAY_NAMES = "swekitty.session_display_names"
+    }
+
+    private fun encodeDisplayNames(names: Map<String, String>): String {
+        val obj = JSONObject()
+        names.forEach { (k, v) -> obj.put(k, v) }
+        return obj.toString()
+    }
+
+    private fun decodeDisplayNames(raw: String?): Map<String, String> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(raw)
+            buildMap {
+                obj.keys().forEach { k -> put(k, obj.optString(k, "")) }
+            }
+        }.getOrDefault(emptyMap())
     }
 
     private fun persistSavedServers(servers: List<SavedServer>) {

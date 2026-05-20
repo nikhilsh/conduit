@@ -217,6 +217,13 @@ final class SessionStore {
     /// resets this to nil when the sheet dismisses.
     var pendingAgentPick: PendingAgentPick?
 
+    /// Local rename map — keyed by session id, value is the user-supplied
+    /// display name. Persists in `UserDefaults` so a rename survives
+    /// relaunch even though the Rust core doesn't know about it.
+    var displayNames: [String: String] = SessionStore.loadDisplayNames() {
+        didSet { SessionStore.persistDisplayNames(displayNames) }
+    }
+
     private var client: SweKittyClient?
     private var delegate: StoreDelegate?
     private var pathMonitor: NWPathMonitor?
@@ -844,6 +851,72 @@ final class SessionStore {
             return
         }
         Keychain.set(raw, for: savedServersKey)
+    }
+
+    private static let displayNamesKey = "swekitty.session.displayNames"
+
+    static func loadDisplayNames() -> [String: String] {
+        guard let raw = UserDefaults.standard.data(forKey: displayNamesKey),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: raw) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    static func persistDisplayNames(_ names: [String: String]) {
+        if names.isEmpty {
+            UserDefaults.standard.removeObject(forKey: displayNamesKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(names) {
+            UserDefaults.standard.set(data, forKey: displayNamesKey)
+        }
+    }
+
+    /// User-supplied name for a session if any, otherwise the harness name.
+    func displayName(for session: ProjectSession) -> String {
+        displayNames[session.id] ?? session.name
+    }
+
+    /// Locally rename a session — persisted to `UserDefaults`, no
+    /// harness round-trip. Empty/whitespace strings clear the override.
+    func renameSession(sessionID: String, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            displayNames[sessionID] = nil
+        } else {
+            displayNames[sessionID] = trimmed
+        }
+    }
+
+    /// Fork: create a fresh session with the same assistant + branch,
+    /// and seed it with a one-line hand-off pointing at the original.
+    /// v1 stays fully client-side (no Rust core change); Stage 3 of
+    /// docs/PLAN-LITTER-UI.md flagged a `fork_session` UDL method as a
+    /// future optimization but the client-side path is enough for now.
+    func forkSession(sessionID: String) {
+        guard let original = sessions.first(where: { $0.id == sessionID }) else { return }
+        guard let client else { return }
+        Task {
+            do {
+                let newID = try await client.createSession(assistant: original.assistant, branch: original.branch)
+                let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."
+                try? await client.sendChat(sessionId: newID, msg: seed)
+                self.sessionLifecycle[newID] = .live
+                self.refreshSessions()
+                self.selectedSessionID = newID
+                self.displayNames[newID] = "Fork: \(self.displayName(for: original))"
+            } catch {
+                let detail = Self.describe(error)
+                self.sessionCreationError = "fork: \(detail)"
+                Telemetry.capture(
+                    error: error,
+                    message: "iOS fork session failed",
+                    tags: ["surface": "ios", "phase": "fork_session"],
+                    extras: ["endpoint": self.endpoint.displayHost, "session_id": sessionID, "detail": detail]
+                )
+            }
+        }
     }
 
     private func refreshRecentDirectories() {
