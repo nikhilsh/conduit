@@ -30,6 +30,11 @@ if (!Array.isArray(releases) || releases.length === 0) {
   throw new Error("no releases returned from GitHub");
 }
 
+// GitHub's default sort isn't strictly newest-first by published_at —
+// it interleaves by created_at / last-edit order. Sort explicitly so
+// `find()` below picks the most recently published release.
+releases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
+
 const isPublished = (item) => !item.draft && !item.prerelease;
 const assetsOf = (item) => (Array.isArray(item.assets) ? item.assets : []);
 const hasIpa = (item) => assetsOf(item).some((asset) => asset.name === "SweKitty.ipa");
