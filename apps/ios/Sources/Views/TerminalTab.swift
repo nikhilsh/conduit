@@ -37,6 +37,15 @@ private struct TerminalRepresentable: UIViewRepresentable {
         let view = TerminalView(frame: .zero)
         view.terminalDelegate = context.coordinator
         context.coordinator.terminal = view
+        // Disable mouse reporting so touches do NOT get forwarded to the
+        // agent as mouse events. Claude/Codex TUIs both enable mouse
+        // reporting (DEC 1000/1003/1006) which causes SwiftTerm to
+        // capture every touch — that's what was preventing the user
+        // from scrolling the scrollback. With this off, `TerminalView`
+        // (a UIScrollView subclass) handles pan-to-scroll natively.
+        // Trade-off: no mouse-click inside the agent's TUI, but the
+        // agents work fine off the keyboard.
+        view.allowMouseReporting = false
         // Initial backfill from any snapshot already buffered before the view existed.
         let initial = bufferProvider()
         if !initial.isEmpty {
