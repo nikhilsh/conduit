@@ -424,18 +424,13 @@ async fn open_ws(
     assistant: &str,
     token: &str,
 ) -> Result<WsStream, SweKittyError> {
-    let mut endpoint_url = normalize_ws_endpoint(endpoint)?;
+    let base = normalize_ws_endpoint(endpoint)?;
+    let mut target = build_initial_ws_url(&base, session_id, assistant, token)?;
     let mut hops = 0usize;
 
     loop {
-        let ws_url = format!(
-            "{}/ws/{}?assistant={}&token={}",
-            endpoint_url.as_str().trim_end_matches('/'),
-            session_id,
-            urlencode(assistant),
-            urlencode(token),
-        );
-        let mut request = ws_url
+        let mut request = target
+            .as_str()
             .into_client_request()
             .map_err(|e| SweKittyError::Connection(e.to_string()))?;
         request.headers_mut().insert(
@@ -462,7 +457,13 @@ async fn open_ws(
                             response.status()
                         ))
                     })?;
-                endpoint_url = redirect_base_url(&endpoint_url, location)?;
+                // Honour the redirect Location verbatim — do NOT re-append
+                // /ws/{session_id} to it. The previous shape lost track of
+                // whether the Location already contained the ws path and
+                // ended up requesting /ws/abc/ws/abc on the next hop, which
+                // the upstream proxy bounced again until we hit hop limit
+                // and surfaced "HTTP error: 302 Found" (Sentry APPLE-IOS-3).
+                target = redirect_to_ws_url(&target, location, token)?;
                 hops += 1;
                 continue;
             }
@@ -475,6 +476,55 @@ async fn open_ws(
             Err(e) => return Err(SweKittyError::Connection(e.to_string())),
         }
     }
+}
+
+fn build_initial_ws_url(
+    base: &Url,
+    session_id: &str,
+    assistant: &str,
+    token: &str,
+) -> Result<Url, SweKittyError> {
+    let raw = format!(
+        "{}/ws/{}?assistant={}&token={}",
+        base.as_str().trim_end_matches('/'),
+        session_id,
+        urlencode(assistant),
+        urlencode(token),
+    );
+    Url::parse(&raw).map_err(|e| SweKittyError::Connection(e.to_string()))
+}
+
+/// Resolve `location` relative to the previous target ws URL, then translate
+/// http(s) into ws(s) and make sure the bearer token still rides in the
+/// query string (some upstream proxies strip headers across a redirect).
+fn redirect_to_ws_url(current: &Url, location: &str, token: &str) -> Result<Url, SweKittyError> {
+    let mut next = current
+        .join(location)
+        .map_err(|e| SweKittyError::Connection(e.to_string()))?;
+    match next.scheme() {
+        "http" => next
+            .set_scheme("ws")
+            .map_err(|_| SweKittyError::Connection("invalid ws redirect scheme".to_string()))?,
+        "https" => next
+            .set_scheme("wss")
+            .map_err(|_| SweKittyError::Connection("invalid wss redirect scheme".to_string()))?,
+        "ws" | "wss" => {}
+        other => {
+            return Err(SweKittyError::Connection(format!(
+                "unsupported redirect scheme: {other}"
+            )))
+        }
+    }
+    // Preserve any pre-existing query the server sent us (e.g. an auth
+    // cookie hint); if the redirect dropped the `token=` query we put there,
+    // splice it back in so the next hop can still authenticate.
+    let has_token = next
+        .query_pairs()
+        .any(|(k, _)| k.eq_ignore_ascii_case("token"));
+    if !has_token {
+        next.query_pairs_mut().append_pair("token", token);
+    }
+    Ok(next)
 }
 
 fn normalize_ws_endpoint(endpoint: &str) -> Result<Url, SweKittyError> {
@@ -506,29 +556,6 @@ fn is_redirect_status(status: StatusCode) -> bool {
             | StatusCode::TEMPORARY_REDIRECT
             | StatusCode::PERMANENT_REDIRECT
     )
-}
-
-fn redirect_base_url(current: &Url, location: &str) -> Result<Url, SweKittyError> {
-    let mut next = current
-        .join(location)
-        .map_err(|e| SweKittyError::Connection(e.to_string()))?;
-    match next.scheme() {
-        "http" => next
-            .set_scheme("ws")
-            .map_err(|_| SweKittyError::Connection("invalid ws redirect scheme".to_string()))?,
-        "https" => next
-            .set_scheme("wss")
-            .map_err(|_| SweKittyError::Connection("invalid wss redirect scheme".to_string()))?,
-        "ws" | "wss" => {}
-        other => {
-            return Err(SweKittyError::Connection(format!(
-                "unsupported redirect scheme: {other}"
-            )))
-        }
-    }
-    next.set_query(None);
-    next.set_fragment(None);
-    Ok(next)
 }
 
 fn handle_binary(
@@ -774,5 +801,70 @@ mod tests {
         v.extend_from_slice(&total.to_be_bytes());
         v.extend_from_slice(gz);
         v
+    }
+
+    #[test]
+    fn redirect_http_to_https_does_not_duplicate_ws_path() {
+        // Reproduces Sentry APPLE-IOS-3: client opens
+        // ws://harness.example.com/ws/abc and the reverse proxy 302s to
+        // https://harness.example.com/ws/abc. The fix must NOT re-append
+        // /ws/abc on the next hop.
+        let base = normalize_ws_endpoint("ws://harness.example.com").unwrap();
+        let initial = build_initial_ws_url(&base, "abc", "claude", "tok").unwrap();
+        assert_eq!(
+            initial.as_str(),
+            "ws://harness.example.com/ws/abc?assistant=claude&token=tok"
+        );
+        let next = redirect_to_ws_url(
+            &initial,
+            "https://harness.example.com/ws/abc?assistant=claude&token=tok",
+            "tok",
+        )
+        .unwrap();
+        assert_eq!(next.scheme(), "wss");
+        assert_eq!(next.host_str(), Some("harness.example.com"));
+        assert_eq!(next.path(), "/ws/abc");
+        assert!(next.as_str().contains("token=tok"));
+        // Critical: no duplicated /ws/abc/ws/abc.
+        assert_eq!(next.as_str().matches("/ws/abc").count(), 1);
+    }
+
+    #[test]
+    fn redirect_relative_location_resolves_against_target() {
+        let base = normalize_ws_endpoint("https://example.com").unwrap();
+        let initial = build_initial_ws_url(&base, "s1", "claude", "t").unwrap();
+        let next = redirect_to_ws_url(&initial, "/ws/s1/", "t").unwrap();
+        assert_eq!(next.scheme(), "wss");
+        assert_eq!(next.path(), "/ws/s1/");
+        assert_eq!(next.as_str().matches("/ws/s1").count(), 1);
+    }
+
+    #[test]
+    fn redirect_preserves_token_when_proxy_strips_it() {
+        let base = normalize_ws_endpoint("wss://example.com").unwrap();
+        let initial = build_initial_ws_url(&base, "s1", "claude", "secret").unwrap();
+        // Proxy returns a Location without the original token query.
+        let next = redirect_to_ws_url(
+            &initial,
+            "https://example.com/ws/s1?assistant=claude",
+            "secret",
+        )
+        .unwrap();
+        assert!(next.as_str().contains("token=secret"));
+    }
+
+    #[test]
+    fn redirect_keeps_existing_token_in_location() {
+        let base = normalize_ws_endpoint("ws://example.com").unwrap();
+        let initial = build_initial_ws_url(&base, "s1", "claude", "old").unwrap();
+        let next = redirect_to_ws_url(
+            &initial,
+            "ws://example.com/ws/s1?assistant=claude&token=fresh",
+            "old",
+        )
+        .unwrap();
+        // The Location's token wins; we don't append a second one.
+        assert_eq!(next.as_str().matches("token=").count(), 1);
+        assert!(next.as_str().contains("token=fresh"));
     }
 }
