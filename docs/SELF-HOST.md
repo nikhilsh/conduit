@@ -1,31 +1,46 @@
 # Self-hosting `swe-kitty-harness`
 
-## One-line install + pair
+The harness ships as a single Docker image (`swekitty/harness:latest`)
+that bakes the Go server, all agent CLIs (claude, codex, …), and the
+required system tooling into one container. This is the **recommended**
+deploy path — it matches how upstream `swe-swe` distributes itself and
+sidesteps the host-permissions corner cases (claude refuses
+`--dangerously-skip-permissions` under root; bare-binary deploys hit
+this).
+
+## Recommended: docker compose
 
 ```bash
-curl -fsSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sh -s -- --up --local
+git clone git@github.com:nikhilsh/swe-kitty.git
+cd swe-kitty/harness/docker
+
+cp .env.example .env
+$EDITOR .env                                    # fill ANTHROPIC_API_KEY / OPENAI_API_KEY
+
+docker compose up -d --build                    # one container, port 1977
+docker logs swe-kitty-harness 2>&1 | grep -E 'token:|pairing:' | tail -2
 ```
 
-Detects your OS + arch, drops the harness binary in `/usr/local/bin`
-(or `~/.local/bin` if you don't have root), then immediately runs
-`swe-kitty-harness up --local` so the pairing QR prints on the same
-terminal. Scan with the SweKitty iOS / Android app and you're done.
-
-The default agent adapters (`claude`, `codex`) are baked into the
-binary, so a fresh install needs no config files.
+The pairing log line is your `swekitty://…?token=…` URL — tap it on the
+phone (the SweKitty app registers the scheme) and you're paired. The
+default agent adapters (`claude`, `codex`) are pre-installed inside the
+image, so no extra config is needed.
 
 Two supported topologies:
 
-1. **LAN** — `swe-kitty-harness up --local` on a laptop / homelab. mDNS
-   advertises `_swe-kitty._tcp.local`; mobile clients connect over
-   `ws://<host>.local:1977`.
-2. **Public VPS** — harness behind Caddy with TLS; mobile clients connect
-   over `wss://<your-domain>` from anywhere.
+1. **LAN / homelab** — `docker compose up -d` on a laptop / dev box.
+   Mobile clients connect over `ws://<host>:1977`. Enable mDNS by
+   appending `--local` to the harness command (see "Service overrides"
+   below).
+2. **Public VPS** — same compose stack, plus Caddy in front for TLS;
+   mobile clients connect over `wss://<your-domain>` from anywhere.
 
-This doc covers both, plus the pairing-QR flow that's the same in either
-case.
+## Bare binary (legacy path, not recommended)
 
-## Manual install (if you don't want to pipe curl to sh)
+If you can't run Docker, the harness still ships as a static binary —
+but you'll need to install claude/codex separately on PATH, and you'll
+need to run the harness as a non-root user (uid != 0) so claude accepts
+`--dangerously-skip-permissions`.
 
 ```bash
 # Install the harness binary (from the GitHub Release):

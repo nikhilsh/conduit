@@ -4,6 +4,10 @@
 .swe-kitty/memory/sessions/
 *.local.toml
 
+# docker compose env files for the harness — never commit real API keys
+harness/docker/.env
+harness/docker/workspace/
+
 # ---- swe-swe local runtime (used by the dev harness, never committed) ----
 .swe-swe/
 

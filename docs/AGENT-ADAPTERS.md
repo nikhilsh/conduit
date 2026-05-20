@@ -28,37 +28,63 @@ on_swap  = "swe-kitty memory handoff --session $SESSION_UUID --from $FROM_AGENT 
 
 Required fields: `name`, `image`, `command`, `workdir`. Everything else has a documented default.
 
-## 2. Container contract
+## 2. Container model
 
-When the harness spawns an agent, the container receives:
+**One container per harness, all agents pre-installed inside it.** This
+matches the pattern upstream `swe-swe` settled on after experimenting with
+per-agent containers: per-session isolation comes from per-session git
+worktrees and per-session PTY/process trees, not from per-session Docker
+containers. The harness binary runs as user `app` (uid 1000) inside the
+image — that's specifically what lets claude accept
+`--dangerously-skip-permissions`, which it refuses under root.
 
-### 2.1 Mounts
-- `<host worktree>:/workspace` (read-write)
-- `<host>/.swe-kitty/memory:/swe-kitty-memory` (read-only, for `swe-kitty memory render` calls)
+The canonical image is built from `harness/docker/Dockerfile` and tagged
+`swekitty/harness:latest`. See `docs/SELF-HOST.md` for the
+`docker compose up -d` flow.
 
-### 2.2 Environment variables (always set by harness)
+### 2.1 What the image ships
+- `swe-kitty-harness` binary (the Go server), built from this repo.
+- Every agent CLI we ship a TOML adapter for (currently `claude`,
+  `codex`) — installed globally via `npm install -g`.
+- `git`, `bash`, `jq`, `curl`, `openssl`, `procps`, `tini`.
+- The production agent TOMLs from `agents/` mounted at
+  `/etc/swe-kitty/agents` and read on startup via `--agents-dir`.
+
+### 2.2 Mounts (set by `docker-compose.yml`)
+- `${WORKSPACE_DIR:-./workspace}:/workspace:rw` — the project root that
+  every spawned agent's cwd points into.
+- `swe-kitty-worktrees:/worktrees:rw` — per-session worktrees (named
+  volume so they survive container restarts; one of the three
+  persistence rails in `docs/SESSION-LIFECYCLE.md §1`).
+- `swe-kitty-home:/home/app:rw` — agent auth caches + npm globals
+  (claude logins, codex tokens, etc).
+
+### 2.3 Environment variables the harness sets per-session
+The harness spawns each agent as a child process inside the same
+container via `pty.Start(exec.Command(adapter.Command[0], …))` from
+`harness/internal/session/lifecycle.go`. Each spawn gets:
+
 | Var | Value |
 |---|---|
 | `SESSION_UUID` | session id |
 | `PORT` | preview port (3000–3019) |
 | `AGENT_CHAT_PORT` | `PORT + 1000` — for MCP `view_event` bridge |
 | `WORKTREE_BRANCH` | git branch checked out in `/workspace` |
-| `FROM_AGENT` / `TO_AGENT` | only inside `on_swap` |
+| `FROM_AGENT` / `TO_AGENT` | only set inside `on_swap` |
 | `KITTY_HANDOFF_PATH` | `/workspace/.swe-kitty/HANDOFF.html` |
 | `KITTY_HANDOFF_OUT_PATH` | `/workspace/.swe-kitty/HANDOFF-OUT.html` |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | forwarded from `harness/docker/.env` |
 | ... | plus any KEY=VALUE from `.swe-kitty/env` with `$VAR` expansion |
 
-### 2.3 Entrypoint expectations
+### 2.4 Agent process expectations
 
-Every adapter image's entrypoint MUST:
+Every adapter's `command` + `args` from `agents/*.toml`:
 
 1. **Read `$KITTY_HANDOFF_PATH` first.** If non-empty, prepend its contents to the agent's system prompt.
    - Claude Code: `claude --system-prompt-file "$KITTY_HANDOFF_PATH"`
    - Codex: pass via Codex's prompt-prefix mechanism
 2. **Trap `SIGUSR1`.** On receipt, write a final structured summary to `$KITTY_HANDOFF_OUT_PATH` and exit cleanly. This is how the harness initiates an atomic agent swap.
 3. **Run the agent CLI in foreground** so PTY connects directly. No `tail -f` wrappers.
-
-The Dockerfile is responsible for installing the agent CLI; the entrypoint shell script lives at `/swekitty/entrypoint.sh` inside the image. A canonical `entrypoint.sh` template ships at `harness/docker/entrypoint-template.sh` (task 006).
 
 ## 3. Hooks
 
@@ -76,25 +102,34 @@ Hooks must be idempotent — recovery (`docs/SESSION-LIFECYCLE.md` §4) may invo
 
 Triggered by `{"type":"switch_agent","assistant":"<new>"}` JSON control message. The harness:
 
-1. Sends `SIGUSR1` to the agent inside the container; waits up to 30s for `$KITTY_HANDOFF_OUT_PATH` to land.
+1. Sends `SIGUSR1` to the running agent process; waits up to 30s for `$KITTY_HANDOFF_OUT_PATH` to land.
 2. If it does, parses it as memory HTML and merges its `data-section="handoff"` into the session memory file. If it doesn't, falls back to the last memory checkpoint.
-3. Stops the container (`docker stop` with 10s grace, then kill).
+3. Sends `SIGTERM` (10s grace, then `SIGKILL`) to the old agent process.
 4. Runs `on_swap` hook.
 5. Renders fresh `HANDOFF.html` into the worktree.
-6. Spawns the new container with the new adapter; PTY scrollback ring is preserved client-side via the standard reconnect snapshot.
-7. Broadcasts `status` with `phase: "swapping"` then `phase: "running"`.
+6. `pty.Start`s the new agent process inside the same container; PTY scrollback ring is preserved client-side via the standard reconnect snapshot.
+7. Broadcasts `status` with `phase: "swapping"` then `phase: "running"`. On spawn failure the harness still flips back to `running` with `reason_code: "agent_switch_failed"` so the mobile UI doesn't get stuck (regression fixed 2026-05-20).
 
 The worktree, branch, and git state are **identical** across the swap.
 
-## 5. Image build & versioning
+## 5. Image build & distribution
 
-Per-agent Dockerfiles live at `harness/docker/<agent>.Dockerfile`. They are built and tagged as `swekitty/<agent>:latest` and `swekitty/<agent>:v<release>`. The harness pins to `latest` by default; override with `image_tag` field in the TOML for reproducibility.
+The whole harness ships as one image: `swekitty/harness:latest`, built from
+`harness/docker/Dockerfile`. CI builds it on every release tag and attaches
+the tag-pinned variant (e.g. `swekitty/harness:v0.0.x`). Users pull and
+run via `harness/docker/docker-compose.yml`.
 
-CI builds these images on every release tag (see `docs/PLAN.md` Part C5). They are NOT pushed to a public registry in v1 — users build locally on first `swe-kitty-harness up` if not present.
+There are **no per-agent images** any more. Adding a new agent means
+adding an `npm install -g` line in the Dockerfile and a new
+`agents/<name>.toml`, then rebuilding — no second Dockerfile to maintain.
 
-## 6. Adding a new agent (post-v1)
+## 6. Adding a new agent
 
-1. Drop `agents/<name>.toml`.
-2. Drop `harness/docker/<name>.Dockerfile` + matching `entrypoint.sh`.
-3. The agent CLI must support a system-prompt mechanism that can be fed by file or stdin — required for handoff. If it doesn't, write a tiny shim wrapper inside the image.
+1. Add a line to the `npm install -g` block in `harness/docker/Dockerfile`
+   (or an `apt-get install` line if the CLI distributes that way).
+2. Drop `agents/<name>.toml` with the right `command` / `args` / handoff flags.
+3. Rebuild the image: `docker compose -f harness/docker/docker-compose.yml build`.
+4. The agent CLI must support a system-prompt mechanism that can be fed
+   by file or stdin — required for handoff. If it doesn't, write a tiny
+   shim wrapper inside the image.
 4. No Go or Rust code changes. Registry auto-discovers.

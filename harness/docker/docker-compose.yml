@@ -1,0 +1,57 @@
+# swe-kitty single-container harness deploy.
+#
+# Pattern (matches swe-swe's working model): one container per harness
+# instance, all agents baked inside, harness runs as `app` (uid 1000).
+#
+# From repo root:
+#   docker compose -f harness/docker/docker-compose.yml up -d --build
+#
+# Or from this directory:
+#   cd harness/docker && docker compose up -d --build
+#
+# The pairing token prints to the journal — get it with:
+#   docker logs swe-kitty-harness 2>&1 | grep -E 'token:|pairing:' | tail -2
+
+services:
+  swe-kitty:
+    container_name: swe-kitty-harness
+    image: swekitty/harness:latest
+    build:
+      # The build context is the repo root so we can COPY harness/ and
+      # agents/ in. Relative-from-this-file: ../..
+      context: ../..
+      dockerfile: harness/docker/Dockerfile
+      args:
+        RELEASE_TAG: ${RELEASE_TAG:-docker-dev}
+    restart: unless-stopped
+    ports:
+      - "1977:1977"
+      # Preview port range — agents that spawn dev servers (npm run dev,
+      # python -m http.server, etc.) get an allocated port here and the
+      # harness reverse-proxies it through /preview/<uuid>/ to mobile.
+      - "5000-5019:5000-5019"
+    env_file:
+      # Hold ANTHROPIC_API_KEY / OPENAI_API_KEY here. Sample at
+      # .env.example.
+      - .env
+    volumes:
+      # Per-project workspace. Override WORKSPACE_DIR at the host level
+      # to bind a different host path (e.g. your real project root).
+      - ${WORKSPACE_DIR:-./workspace}:/workspace:rw
+      # Per-session git worktrees live here so they survive container
+      # restarts (matches docs/SESSION-LIFECYCLE.md §1 "three
+      # persistence rails").
+      - swe-kitty-worktrees:/worktrees:rw
+      # Persistent agent home — Claude/Codex auth caches, npm globals
+      # specific to the running session, etc.
+      - swe-kitty-home:/home/app:rw
+    # Explicit, even though the image USERs to 1000:1000 already — makes
+    # bind-mount permissions obvious to operators reading the file.
+    user: "1000:1000"
+    # The harness manages PTYs; allocate a TTY for the entrypoint.
+    tty: true
+    stdin_open: true
+
+volumes:
+  swe-kitty-worktrees:
+  swe-kitty-home:
