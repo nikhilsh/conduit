@@ -4,12 +4,19 @@
 # Usage:
 #   curl -sSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sh
 #   curl -sSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sh -s -- --up [--local]
+#   curl -sSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sudo sh -s -- --service [--addr :1977] [--local]
 #
 # Flags:
 #   --version <vN.N.N>   pin a specific tag instead of `latest`
 #   --bin-dir <path>     install location (default: /usr/local/bin if writable, else ~/.local/bin)
 #   --up [args...]       after install, immediately exec `swe-kitty-harness up <args>` so
 #                        the pairing QR prints in one command.
+#   --service            install as a long-running systemd service under the `swekitty`
+#                        user, with an ExecStartPre that mirrors the deploying user's
+#                        ~/.claude + ~/.codex OAuth credentials so harness-spawned agents
+#                        can use the existing login without an ANTHROPIC_API_KEY /
+#                        OPENAI_API_KEY. Requires root. Args after --service flow through
+#                        to `swe-kitty-harness up` in the unit's ExecStart.
 
 set -eu
 
@@ -18,6 +25,8 @@ VERSION=""
 BIN_DIR=""
 RUN_UP=0
 UP_ARGS=""
+RUN_SERVICE=0
+SERVICE_UP_ARGS=""
 
 # Pre-parse our own flags. Anything after --up flows through to `swe-kitty-harness up`.
 while [ $# -gt 0 ]; do
@@ -40,8 +49,14 @@ while [ $# -gt 0 ]; do
             UP_ARGS="$*"
             break
             ;;
+        --service)
+            RUN_SERVICE=1; shift
+            # Everything else is forwarded to the harness unit's ExecStart.
+            SERVICE_UP_ARGS="$*"
+            break
+            ;;
         -h|--help)
-            sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -136,6 +151,93 @@ case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "  note: $BIN_DIR is not on PATH — add it to your shell rc" ;;
 esac
+
+# Install as a systemd service if requested.
+if [ "$RUN_SERVICE" = "1" ]; then
+    [ "$(id -u)" = "0" ] || die "--service requires root (writes to /etc/systemd/system)"
+    need systemctl
+    need install
+    need id
+    need useradd
+    SVC_USER="swekitty"
+    SVC_HOME="/opt/swe-kitty"
+    DEPLOYER_HOME="${SUDO_USER:+$(getent passwd "$SUDO_USER" | cut -d: -f6)}"
+    [ -n "$DEPLOYER_HOME" ] || DEPLOYER_HOME="/root"
+
+    if ! id "$SVC_USER" >/dev/null 2>&1; then
+        useradd --system --home-dir "$SVC_HOME" --shell /usr/sbin/nologin "$SVC_USER"
+        mkdir -p "$SVC_HOME"
+        chown "$SVC_USER:$SVC_USER" "$SVC_HOME"
+        echo "✓ created $SVC_USER user with home $SVC_HOME"
+    fi
+
+    cat > /usr/local/bin/swekitty-mirror-auth <<MIRROR
+#!/bin/bash
+# Idempotent ExecStartPre — copies the deployer's Claude + Codex OAuth
+# credentials into the harness user's home so agents skip the
+# ANTHROPIC_API_KEY / OPENAI_API_KEY path. Only copies when source is
+# newer; safe to re-run on every service start.
+set -eu
+DEPLOYER_HOME="$DEPLOYER_HOME"
+SVC_HOME="$SVC_HOME"
+SVC_USER="$SVC_USER"
+mkdir -p "\$SVC_HOME/.claude" "\$SVC_HOME/.codex"
+sync_one() {
+    src=\$1; dst=\$2; mode=\$3
+    [ -f "\$src" ] || return 0
+    if [ ! -f "\$dst" ] || [ "\$src" -nt "\$dst" ]; then
+        install -m "\$mode" -o "\$SVC_USER" -g "\$SVC_USER" "\$src" "\$dst"
+    fi
+}
+sync_one "\$DEPLOYER_HOME/.claude/.credentials.json" "\$SVC_HOME/.claude/.credentials.json" 600
+sync_one "\$DEPLOYER_HOME/.claude.json"              "\$SVC_HOME/.claude.json"              600
+sync_one "\$DEPLOYER_HOME/.codex/auth.json"          "\$SVC_HOME/.codex/auth.json"          600
+sync_one "\$DEPLOYER_HOME/.codex/config.toml"        "\$SVC_HOME/.codex/config.toml"        644
+exit 0
+MIRROR
+    chmod +x /usr/local/bin/swekitty-mirror-auth
+
+    # Make the binary discoverable from a stable system path so the unit
+    # never breaks when --bin-dir is set to something exotic.
+    install -m 755 "$BIN_DIR/swe-kitty-harness" "$SVC_HOME/swe-kitty-harness"
+    chown "$SVC_USER:$SVC_USER" "$SVC_HOME/swe-kitty-harness"
+
+    SVC_ARGS="up"
+    if [ -n "$SERVICE_UP_ARGS" ]; then
+        SVC_ARGS="up $SERVICE_UP_ARGS"
+    fi
+
+    cat > /etc/systemd/system/swe-kitty.service <<UNIT
+[Unit]
+Description=swe-kitty harness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=$SVC_USER
+Group=$SVC_USER
+Type=simple
+WorkingDirectory=$SVC_HOME
+ExecStartPre=/usr/local/bin/swekitty-mirror-auth
+ExecStart=$SVC_HOME/swe-kitty-harness $SVC_ARGS
+Restart=always
+RestartSec=2s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now swe-kitty.service
+    echo "✓ enabled swe-kitty.service (user=$SVC_USER, home=$SVC_HOME)"
+    sleep 3
+    echo
+    echo "Pairing info from journal:"
+    journalctl -u swe-kitty --since '15 seconds ago' --no-pager 2>/dev/null \
+        | grep -E '(url:|token:|pairing:)' | tail -3 || echo "  (check 'journalctl -u swe-kitty' if missing)"
+    exit 0
+fi
 
 # Show pairing QR right away if requested.
 if [ "$RUN_UP" = "1" ]; then
