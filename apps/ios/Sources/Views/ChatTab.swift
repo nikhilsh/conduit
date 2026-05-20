@@ -96,7 +96,7 @@ struct ChatTab: View {
             Text("No conversation yet")
                 .font(.headline)
                 .foregroundStyle(SweKittyTheme.textPrimary)
-            Text("Messages, tool activity, diffs, and file references will appear here once the session starts responding.")
+            Text("Type a message below. Until the structured-chat adapter lands, replies from \(session.assistant) arrive in the **Terminal** tab — the chat tab here just records what you've sent.")
                 .font(.subheadline)
                 .foregroundStyle(SweKittyTheme.textSecondary)
         }
@@ -115,6 +115,29 @@ struct ChatTab: View {
                 Text("Reply")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(SweKittyTheme.textSecondary)
+                Spacer()
+                // Inline agent switcher — same menu as the session
+                // header's agentBadge, but reachable when the keyboard
+                // pushes the header off-screen.
+                Menu {
+                    Button("Switch to Claude") { store.switchAgent(sessionID: session.id, to: "claude") }
+                        .disabled(session.assistant == "claude")
+                    Button("Switch to Codex") { store.switchAgent(sessionID: session.id, to: "codex") }
+                        .disabled(session.assistant == "codex")
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "cpu")
+                            .font(.caption2.weight(.semibold))
+                        Text(session.assistant)
+                            .font(.caption.weight(.semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(agentTint)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .glassCapsule(interactive: true, tint: agentTint.opacity(0.20))
+                }
             }
             if !quickReplies.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {

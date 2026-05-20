@@ -182,6 +182,10 @@ DEPLOYER_HOME="$DEPLOYER_HOME"
 SVC_HOME="$SVC_HOME"
 SVC_USER="$SVC_USER"
 mkdir -p "\$SVC_HOME/.claude" "\$SVC_HOME/.codex"
+# Created by root via ExecStartPre — agents need to write their own
+# runtime state (codex tracks PATH + history in here), so reassign
+# ownership before the processes start.
+chown "\$SVC_USER:\$SVC_USER" "\$SVC_HOME/.claude" "\$SVC_HOME/.codex"
 sync_one() {
     src=\$1; dst=\$2; mode=\$3
     [ -f "\$src" ] || return 0

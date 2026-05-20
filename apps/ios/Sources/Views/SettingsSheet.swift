@@ -158,7 +158,7 @@ struct SettingsSheet: View {
                     .foregroundStyle(SweKittyTheme.danger)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if store.endpoint.isComplete {
+            if shouldShowReconnect {
                 Divider().background(SweKittyTheme.separator)
                 Button {
                     store.reconnect()
@@ -175,6 +175,18 @@ struct SettingsSheet: View {
                 .buttonStyle(.plain)
                 .padding(.vertical, 4)
             }
+        }
+    }
+
+    /// Only show the manual Reconnect affordance when the link
+    /// actually needs intervention. While the harness is live or
+    /// in the middle of an auto-reconnect, surfacing a button labeled
+    /// "Reconnect" reads like the connection is broken when it isn't.
+    private var shouldShowReconnect: Bool {
+        guard store.endpoint.isComplete else { return false }
+        switch store.harness {
+        case .disconnected, .failed: return true
+        default: return false
         }
     }
 

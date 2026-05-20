@@ -170,7 +170,12 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                if (endpoint.isComplete) {
+                // Only show manual Reconnect when the link actually needs
+                // intervention — surfacing it while Live reads as broken.
+                val needsReconnect = endpoint.isComplete &&
+                    (harness is sh.nikhil.swekitty.HarnessState.Disconnected ||
+                     harness is sh.nikhil.swekitty.HarnessState.Failed)
+                if (needsReconnect) {
                     HorizontalDivider()
                     Row(
                         modifier = Modifier

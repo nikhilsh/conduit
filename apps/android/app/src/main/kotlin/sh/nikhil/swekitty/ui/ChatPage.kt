@@ -298,7 +298,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (events.isEmpty()) {
-                    item { EmptyConversationCard() }
+                    item { EmptyConversationCard(assistant = session.assistant) }
                 } else {
                     items(events.size) { index ->
                         ConversationEventRow(events[index], agentAccent) { reply ->
@@ -345,7 +345,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
 }
 
 @Composable
-private fun EmptyConversationCard() {
+private fun EmptyConversationCard(assistant: String) {
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
@@ -356,7 +356,7 @@ private fun EmptyConversationCard() {
         ) {
             Text("No conversation yet", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Messages, tool activity, diffs, and file references will appear here once the session starts responding.",
+                "Type a message below. Until the structured-chat adapter lands, replies from $assistant arrive in the Terminal tab — the chat tab here just records what you've sent.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -466,7 +466,7 @@ private fun HandoffCard(ev: ConversationItem) {
                 )
                 Spacer(Modifier.weight(1f))
                 if (ev.ts.isNotEmpty()) {
-                    Text(ev.ts, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    Text(ConversationTimestamp.relative(ev.ts), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                 }
             }
             Text(
@@ -569,7 +569,7 @@ private fun ConversationBubble(
             )
             if (ev.ts.isNotEmpty()) {
                 Spacer(Modifier.width(6.dp))
-                Text(ev.ts, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                Text(ConversationTimestamp.relative(ev.ts), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             }
             if (alignEnd) {
                 Spacer(Modifier.width(6.dp))
@@ -713,7 +713,7 @@ private fun ConversationToolCard(ev: ConversationItem) {
                     Text(summary, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                 }
                 if (ev.ts.isNotEmpty()) {
-                    Text(ev.ts, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    Text(ConversationTimestamp.relative(ev.ts), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                     Spacer(Modifier.width(8.dp))
                 }
                 AssistChip(
@@ -1007,6 +1007,12 @@ private fun ConversationComposer(
                 Icon(Icons.Outlined.SmartToy, null, tint = agentAccent, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Reply", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                // Inline agent switcher — reachable when the keyboard
+                // pushes the session header off-screen.
+                AgentSwitchChip(currentAssistant = session.assistant, tint = agentAccent) { next ->
+                    store.switchAgent(session.id, next)
+                }
             }
             if (quickReplies.isNotEmpty()) {
                 Row(
@@ -1051,6 +1057,66 @@ private fun ConversationComposer(
                 }
             }
         }
+    }
+}
+
+/**
+ * Compact agent switcher pill — mirror of iOS ChatTab's inline Menu.
+ * Reachable while the keyboard is up.
+ */
+@Composable
+private fun AgentSwitchChip(
+    currentAssistant: String,
+    tint: Color,
+    onSwitch: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text(currentAssistant, style = MaterialTheme.typography.labelMedium) },
+            leadingIcon = {
+                Icon(
+                    Icons.Outlined.SmartToy,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(14.dp),
+                )
+            },
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Switch to Claude") },
+                enabled = currentAssistant != "claude",
+                onClick = { expanded = false; onSwitch("claude") },
+            )
+            DropdownMenuItem(
+                text = { Text("Switch to Codex") },
+                enabled = currentAssistant != "codex",
+                onClick = { expanded = false; onSwitch("codex") },
+            )
+        }
+    }
+}
+
+/**
+ * Render an ISO-8601 timestamp as a relative string ("just now",
+ * "5 min ago"). Falls back to the raw text when unparseable.
+ * Mirrors iOS `ConversationTimestamp.relative`.
+ */
+internal object ConversationTimestamp {
+    fun relative(rawTimestamp: String): String {
+        val trimmed = rawTimestamp.trim()
+        if (trimmed.isEmpty()) return ""
+        val instant = runCatching { java.time.Instant.parse(trimmed) }.getOrNull() ?: return trimmed
+        val nowMs = System.currentTimeMillis()
+        val tsMs = instant.toEpochMilli()
+        return android.text.format.DateUtils.getRelativeTimeSpanString(
+            tsMs,
+            nowMs,
+            android.text.format.DateUtils.MINUTE_IN_MILLIS,
+            android.text.format.DateUtils.FORMAT_ABBREV_RELATIVE,
+        ).toString()
     }
 }
 

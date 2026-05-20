@@ -1,5 +1,37 @@
 import SwiftUI
 
+/// Renders ISO-8601 timestamps in the conversation bubbles as
+/// human-friendly relative strings ("just now", "5m ago") instead
+/// of the raw `2026-05-20T14:03:03Z` shape. Falls back to the raw
+/// text when the format isn't parseable.
+enum ConversationTimestamp {
+    private static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoNoFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    private static let relative: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.dateTimeStyle = .named
+        f.unitsStyle = .short
+        return f
+    }()
+
+    static func relative(_ rawTimestamp: String) -> String {
+        let trimmed = rawTimestamp.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return "" }
+        guard let date = iso.date(from: trimmed) ?? isoNoFrac.date(from: trimmed) else {
+            return trimmed
+        }
+        return Self.relative.localizedString(for: date, relativeTo: Date())
+    }
+}
+
 private enum ConversationRole: Equatable {
     case user
     case assistant
@@ -357,7 +389,7 @@ private struct ConversationHandoffCard: View {
                     .foregroundStyle(SweKittyTheme.textSecondary)
                 Spacer()
                 if !event.ts.isEmpty {
-                    Text(event.ts)
+                    Text(ConversationTimestamp.relative(event.ts))
                         .font(.caption2)
                         .foregroundStyle(SweKittyTheme.textMuted)
                 }
@@ -388,7 +420,7 @@ private struct ConversationSubagentCard: View {
                 ConversationStatusChip(status: event.status)
                 Spacer()
                 if !event.ts.isEmpty {
-                    Text(event.ts)
+                    Text(ConversationTimestamp.relative(event.ts))
                         .font(.caption2)
                         .foregroundStyle(SweKittyTheme.textMuted)
                 }
@@ -482,7 +514,7 @@ private struct ConversationBubbleContainer<Content: View>: View {
                     .tracking(0.7)
                     .foregroundStyle(SweKittyTheme.textSecondary)
                 if !timestamp.isEmpty {
-                    Text(timestamp)
+                    Text(ConversationTimestamp.relative(timestamp))
                         .font(.caption2)
                         .foregroundStyle(SweKittyTheme.textMuted)
                 }
@@ -630,7 +662,7 @@ private struct ConversationToolCard: View {
                 }
                 Spacer()
                 if !event.ts.isEmpty {
-                    Text(event.ts)
+                    Text(ConversationTimestamp.relative(event.ts))
                         .font(.caption2)
                         .foregroundStyle(SweKittyTheme.textMuted)
                 }
