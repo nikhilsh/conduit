@@ -54,7 +54,13 @@ private struct TerminalRepresentable: UIViewRepresentable {
             view.feed(byteArray: ArraySlice(slice))
             context.coordinator.lastFedByteCount = buf.count
         } else if buf.count < last {
-            // Snapshot replaced the buffer — reset and feed the whole thing.
+            // Snapshot replaced the buffer entirely. Reset SwiftTerm's
+            // internal state BEFORE replaying the new bytes — otherwise
+            // the snapshot's ANSI piles on top of whatever was already
+            // rendered and the screen comes out as garbled vertical
+            // stripes (this is the bug from the codex-session screenshot
+            // on 2026-05-20). ESC c (RIS) is the full terminal reset.
+            view.feed(byteArray: ArraySlice([0x1b, 0x63]))
             view.feed(byteArray: ArraySlice(buf))
             context.coordinator.lastFedByteCount = buf.count
         }

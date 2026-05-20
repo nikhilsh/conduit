@@ -21,14 +21,16 @@ struct ProjectView: View {
     @State private var browserMode: BrowserMode = .preview
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             header
             tabContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .glassRoundedRect()
                 .clipShape(RoundedRectangle(cornerRadius: SweKittyTheme.cardCornerRadius, style: .continuous))
         }
-        .padding(12)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 0)
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
         .tint(SweKittyTheme.accentStrong)
@@ -38,12 +40,12 @@ struct ProjectView: View {
     private var lifecycle: SessionLifecycle? { store.sessionLifecycle[session.id] }
 
     private var header: some View {
-        VStack(spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                HealthDot(health: status?.health ?? "unknown", size: 10)
-                VStack(alignment: .leading, spacing: 2) {
+        VStack(spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                HealthDot(health: status?.health ?? "unknown", size: 8)
+                VStack(alignment: .leading, spacing: 1) {
                     Text(session.name)
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(SweKittyTheme.textPrimary)
                         .lineLimit(1)
                     Text(subtitle)
@@ -57,8 +59,8 @@ struct ProjectView: View {
             }
             tabPicker
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .glassRoundedRect()
     }
 
