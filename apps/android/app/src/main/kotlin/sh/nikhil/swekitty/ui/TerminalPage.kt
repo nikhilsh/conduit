@@ -35,8 +35,19 @@ fun TerminalPage(store: SessionStore, session: ProjectSession) {
     val rendered = remember(raw) { renderAnsi(raw) }
     val scroll = rememberScrollState()
     var draft by remember { mutableStateOf("") }
+    // Stop yanking the view back to bottom on every PTY event when the
+    // user has deliberately scrolled up to read history — matches the
+    // iOS SwiftTerm parity work (commit 69c4d7c). The flag flips on
+    // whenever the user lands back near the bottom, off when they drag
+    // away. New content only auto-follows when they're at the tail.
+    var followBottom by remember { mutableStateOf(true) }
+    LaunchedEffect(scroll.value, scroll.maxValue) {
+        followBottom = scroll.value >= scroll.maxValue - 1
+    }
 
-    LaunchedEffect(rendered) { scroll.scrollTo(scroll.maxValue) }
+    LaunchedEffect(rendered) {
+        if (followBottom) scroll.scrollTo(scroll.maxValue)
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         SelectionContainer(modifier = Modifier.weight(1f).fillMaxWidth()) {
