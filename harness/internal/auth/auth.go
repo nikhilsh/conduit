@@ -28,10 +28,22 @@ func (s *Store) Mint() string {
 		panic(err)
 	}
 	tok := base64.RawURLEncoding.EncodeToString(b)
-	s.mu.Lock()
-	s.tokens[tok] = struct{}{}
-	s.mu.Unlock()
+	s.Adopt(tok)
 	return tok
+}
+
+// Adopt stores a caller-supplied token. Used when an upstream
+// orchestrator (e.g. the mobile app's SSH-bootstrap path) wants to
+// pre-allocate the bearer so it doesn't have to scrape it back out
+// of the harness's stdout. Empty / overly-short tokens are rejected.
+func (s *Store) Adopt(token string) bool {
+	if len(token) < 16 {
+		return false
+	}
+	s.mu.Lock()
+	s.tokens[token] = struct{}{}
+	s.mu.Unlock()
+	return true
 }
 
 // Check returns true iff the Authorization header carries a valid bearer

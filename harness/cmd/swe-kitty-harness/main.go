@@ -72,7 +72,14 @@ func runUp(args []string) int {
 	_ = fs.Parse(args)
 
 	store := auth.NewStore()
-	token := store.Mint()
+	// SWE_KITTY_TOKEN lets the mobile-app SSH bootstrap (and any other
+	// upstream orchestrator) pre-pick the bearer so the pairing flow
+	// doesn't have to scrape `docker logs` after `docker run`. If the
+	// env var is missing or too short, mint a fresh one as before.
+	token := os.Getenv("SWE_KITTY_TOKEN")
+	if !store.Adopt(token) {
+		token = store.Mint()
+	}
 	registry, regSource, err := loadAgentRegistry(*agentsDir)
 	if err != nil {
 		log.Printf("load adapters: %v", err)
