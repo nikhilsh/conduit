@@ -328,6 +328,8 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
             draft = draft,
             quickReplies = remember(events) { QuickReplyDetector.suggestions(events) },
             agentAccent = agentAccent,
+            currentAssistant = session.assistant,
+            onSwitchAgent = { next -> store.switchAgent(session.id, next) },
             onDraftChange = { draft = it },
             onQuickReply = { reply ->
                 draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
@@ -989,6 +991,8 @@ private fun ConversationComposer(
     draft: String,
     quickReplies: List<String>,
     agentAccent: Color,
+    currentAssistant: String,
+    onSwitchAgent: (String) -> Unit,
     onDraftChange: (String) -> Unit,
     onQuickReply: (String) -> Unit,
     onSend: () -> Unit,
@@ -1010,9 +1014,7 @@ private fun ConversationComposer(
                 Spacer(Modifier.weight(1f))
                 // Inline agent switcher — reachable when the keyboard
                 // pushes the session header off-screen.
-                AgentSwitchChip(currentAssistant = session.assistant, tint = agentAccent) { next ->
-                    store.switchAgent(session.id, next)
-                }
+                AgentSwitchChip(currentAssistant = currentAssistant, tint = agentAccent, onSwitch = onSwitchAgent)
             }
             if (quickReplies.isNotEmpty()) {
                 Row(
