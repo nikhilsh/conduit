@@ -8,6 +8,17 @@ enum SweKittyTheme {
 
     static var accent: Color        { SweKittyPalette.accent.color }
     static var accentStrong: Color  { SweKittyPalette.accentStrong.color }
+    static var claudeAccent: Color  { SweKittyPalette.claudeAccent.color }
+    static var codexAccent: Color   { SweKittyPalette.codexAccent.color }
+
+    /// Per-agent accent. Falls back to `accentStrong` for unknown agents.
+    static func accent(forAgent assistant: String) -> Color {
+        switch assistant.lowercased() {
+        case "claude": return claudeAccent
+        case "codex":  return codexAccent
+        default:       return accentStrong
+        }
+    }
     static var textPrimary: Color   { SweKittyPalette.textPrimary.color }
     static var textSecondary: Color { SweKittyPalette.textSecondary.color }
     static var textMuted: Color     { SweKittyPalette.textMuted.color }

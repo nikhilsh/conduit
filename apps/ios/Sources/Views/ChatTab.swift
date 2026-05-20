@@ -7,6 +7,10 @@ struct ChatTab: View {
     @State private var draft: String = ""
     @State private var autoFollow = true
 
+    private var agentTint: Color {
+        SweKittyTheme.accent(forAgent: session.assistant)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
@@ -53,7 +57,7 @@ struct ChatTab: View {
                             .padding(.vertical, 8)
                     }
                     .buttonStyle(.plain)
-                    .glassCapsule(interactive: true, tint: SweKittyTheme.accentStrong.opacity(0.28))
+                    .glassCapsule(interactive: true, tint: agentTint.opacity(0.28))
                     .padding(.trailing, 12)
                     .padding(.bottom, 10)
                 }
@@ -99,7 +103,7 @@ struct ChatTab: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 18)
-        .glassRect(cornerRadius: 18, tint: SweKittyTheme.accentStrong.opacity(0.16))
+        .glassRect(cornerRadius: 18, tint: agentTint.opacity(0.16))
     }
 
     private var composer: some View {
@@ -107,7 +111,7 @@ struct ChatTab: View {
             HStack(spacing: 8) {
                 Image(systemName: "message.badge.waveform")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(SweKittyTheme.accentStrong)
+                    .foregroundStyle(agentTint)
                 Text("Reply")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(SweKittyTheme.textSecondary)
@@ -126,7 +130,7 @@ struct ChatTab: View {
                             .buttonStyle(.plain)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
-                            .glassCapsule(interactive: true, tint: SweKittyTheme.accentStrong.opacity(0.24))
+                            .glassCapsule(interactive: true, tint: agentTint.opacity(0.24))
                         }
                     }
                     .padding(.vertical, 2)
@@ -164,7 +168,7 @@ struct ChatTab: View {
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(SweKittyTheme.textOnAccent)
                         .frame(width: 42, height: 42)
-                        .background(SweKittyTheme.accentStrong)
+                        .background(agentTint)
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)

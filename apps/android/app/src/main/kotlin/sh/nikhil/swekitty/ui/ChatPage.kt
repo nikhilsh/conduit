@@ -253,6 +253,7 @@ private object ConversationRenderer {
 
 @Composable
 fun ChatPage(store: SessionStore, session: ProjectSession) {
+    val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
     val typedLog by store.conversationLog.collectAsState()
     val fallbackLog by store.chatLog.collectAsState()
     val events = typedLog[session.id]
@@ -300,7 +301,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
                     item { EmptyConversationCard() }
                 } else {
                     items(events.size) { index ->
-                        ConversationEventRow(events[index]) { reply ->
+                        ConversationEventRow(events[index], agentAccent) { reply ->
                             draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
                         }
                     }
@@ -326,6 +327,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
         ConversationComposer(
             draft = draft,
             quickReplies = remember(events) { QuickReplyDetector.suggestions(events) },
+            agentAccent = agentAccent,
             onDraftChange = { draft = it },
             onQuickReply = { reply ->
                 draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
@@ -363,9 +365,13 @@ private fun EmptyConversationCard() {
 }
 
 @Composable
-private fun ConversationEventRow(ev: ConversationItem, onQuickReply: (String) -> Unit) {
+private fun ConversationEventRow(
+    ev: ConversationItem,
+    agentAccent: Color,
+    onQuickReply: (String) -> Unit,
+) {
     if (ev.kind == "pending_input") {
-        PendingInputCard(ev, onQuickReply)
+        PendingInputCard(ev, agentAccent, onQuickReply)
         return
     }
     if (ev.kind == "handoff") {
@@ -379,22 +385,26 @@ private fun ConversationEventRow(ev: ConversationItem, onQuickReply: (String) ->
     when (ConversationRole.from(ev.role)) {
         ConversationRole.User -> Row(modifier = Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(0.18f))
-            ConversationBubble(ev, ConversationRole.User, Modifier.weight(0.82f), alignEnd = true)
+            ConversationBubble(ev, ConversationRole.User, agentAccent, Modifier.weight(0.82f), alignEnd = true)
         }
         ConversationRole.Assistant -> Row(modifier = Modifier.fillMaxWidth()) {
-            ConversationBubble(ev, ConversationRole.Assistant, Modifier.weight(0.82f), alignEnd = false)
+            ConversationBubble(ev, ConversationRole.Assistant, agentAccent, Modifier.weight(0.82f), alignEnd = false)
             Spacer(Modifier.weight(0.18f))
         }
         ConversationRole.Tool -> ConversationToolCard(ev)
         ConversationRole.System -> Row(modifier = Modifier.fillMaxWidth()) {
-            ConversationBubble(ev, ConversationRole.System, Modifier.weight(0.88f), alignEnd = false)
+            ConversationBubble(ev, ConversationRole.System, agentAccent, Modifier.weight(0.88f), alignEnd = false)
             Spacer(Modifier.weight(0.12f))
         }
     }
 }
 
 @Composable
-private fun PendingInputCard(ev: ConversationItem, onQuickReply: (String) -> Unit) {
+private fun PendingInputCard(
+    ev: ConversationItem,
+    agentAccent: Color,
+    onQuickReply: (String) -> Unit,
+) {
     val options = remember(ev) {
         ev.pendingOptions.takeIf { it.isNotEmpty() }
             ?: ConversationRenderer.extractPendingOptions(ev.content)
@@ -408,7 +418,7 @@ private fun PendingInputCard(ev: ConversationItem, onQuickReply: (String) -> Uni
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Info, null, tint = ConversationRole.Assistant.accent, modifier = Modifier.size(16.dp))
+                Icon(Icons.Outlined.Info, null, tint = agentAccent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("INPUT NEEDED", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.width(6.dp))
@@ -534,9 +544,13 @@ private fun SubagentCard(ev: ConversationItem) {
 private fun ConversationBubble(
     ev: ConversationItem,
     role: ConversationRole,
+    agentAccent: Color,
     modifier: Modifier,
     alignEnd: Boolean,
 ) {
+    // For Assistant bubbles, swap the hardcoded role accent for the
+    // per-agent tint so Claude/Codex conversations read distinctly.
+    val bubbleAccent = if (role == ConversationRole.Assistant) agentAccent else role.accent
     Column(
         modifier = modifier,
         horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
@@ -544,7 +558,7 @@ private fun ConversationBubble(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (!alignEnd) {
-                RoleIcon(role)
+                RoleIcon(role, bubbleAccent)
                 Spacer(Modifier.width(6.dp))
             }
             Text(
@@ -559,13 +573,13 @@ private fun ConversationBubble(
             }
             if (alignEnd) {
                 Spacer(Modifier.width(6.dp))
-                RoleIcon(role)
+                RoleIcon(role, bubbleAccent)
             }
         }
 
         Surface(
             shape = RoundedCornerShape(20.dp),
-            color = role.accent.copy(alpha = if (role == ConversationRole.User) 0.18f else 0.10f),
+            color = bubbleAccent.copy(alpha = if (role == ConversationRole.User) 0.18f else 0.10f),
             tonalElevation = 1.dp,
         ) {
             Column(
@@ -587,14 +601,14 @@ private fun ConversationBubble(
 }
 
 @Composable
-private fun RoleIcon(role: ConversationRole) {
+private fun RoleIcon(role: ConversationRole, tint: Color = role.accent) {
     val icon = when (role) {
         ConversationRole.User -> Icons.Outlined.AccountCircle
         ConversationRole.Assistant -> Icons.Outlined.SmartToy
         ConversationRole.Tool -> Icons.Outlined.Build
         ConversationRole.System -> Icons.Outlined.Info
     }
-    Icon(icon, null, modifier = Modifier.size(14.dp), tint = role.accent)
+    Icon(icon, null, modifier = Modifier.size(14.dp), tint = tint)
 }
 
 @Composable
@@ -974,6 +988,7 @@ private fun parseDiffFiles(content: String): List<DiffFileSection> {
 private fun ConversationComposer(
     draft: String,
     quickReplies: List<String>,
+    agentAccent: Color,
     onDraftChange: (String) -> Unit,
     onQuickReply: (String) -> Unit,
     onSend: () -> Unit,
@@ -989,7 +1004,7 @@ private fun ConversationComposer(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.SmartToy, null, tint = ConversationRole.Assistant.accent, modifier = Modifier.size(14.dp))
+                Icon(Icons.Outlined.SmartToy, null, tint = agentAccent, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Reply", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
             }
@@ -1028,6 +1043,9 @@ private fun ConversationComposer(
                 FilledIconButton(
                     onClick = onSend,
                     enabled = draft.trim().isNotEmpty(),
+                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                        containerColor = agentAccent,
+                    ),
                 ) {
                     Icon(Icons.Default.Send, contentDescription = "Send")
                 }

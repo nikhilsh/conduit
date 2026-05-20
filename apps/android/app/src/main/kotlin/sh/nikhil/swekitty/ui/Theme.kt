@@ -20,6 +20,8 @@ internal data class AdaptiveColor(val light: Long, val dark: Long) {
 internal object SweKittyPalette {
     val accent          = AdaptiveColor(0xFF4A4A4A, 0xFFB0B0B0)
     val accentStrong    = AdaptiveColor(0xFF00A86B, 0xFF34C759)
+    val claudeAccent    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
+    val codexAccent     = AdaptiveColor(0xFF10A37F, 0xFF1FCB9C)
     val textPrimary     = AdaptiveColor(0xFF1A1A1A, 0xFFFFFFFF)
     val textSecondary   = AdaptiveColor(0xFF6B6B6B, 0xFF888888)
     val textMuted       = AdaptiveColor(0xFF9E9E9E, 0xFF555555)
@@ -38,6 +40,16 @@ internal object SweKittyPalette {
 object SweKittyTheme {
     @Composable @ReadOnlyComposable fun accent()        : Color = SweKittyPalette.accent.color()
     @Composable @ReadOnlyComposable fun accentStrong()  : Color = SweKittyPalette.accentStrong.color()
+    @Composable @ReadOnlyComposable fun claudeAccent()  : Color = SweKittyPalette.claudeAccent.color()
+    @Composable @ReadOnlyComposable fun codexAccent()   : Color = SweKittyPalette.codexAccent.color()
+
+    /** Per-agent accent. Falls back to [accentStrong] for unknown agents. */
+    @Composable @ReadOnlyComposable
+    fun accent(forAgent assistant: String): Color = when (assistant.lowercase()) {
+        "claude" -> claudeAccent()
+        "codex"  -> codexAccent()
+        else     -> accentStrong()
+    }
     @Composable @ReadOnlyComposable fun textPrimary()   : Color = SweKittyPalette.textPrimary.color()
     @Composable @ReadOnlyComposable fun textSecondary() : Color = SweKittyPalette.textSecondary.color()
     @Composable @ReadOnlyComposable fun textMuted()     : Color = SweKittyPalette.textMuted.color()
