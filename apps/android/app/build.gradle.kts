@@ -14,7 +14,7 @@ android {
         applicationId = "sh.nikhil.swekitty"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
+        versionCode = 4
         versionName = "0.0.1"
         buildConfigField("String", "SENTRY_DSN", "\"${System.getenv("SENTRY_DSN_ANDROID") ?: ""}\"")
 

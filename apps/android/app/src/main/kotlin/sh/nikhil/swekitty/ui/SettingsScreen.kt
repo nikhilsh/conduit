@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
@@ -47,6 +48,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     var pendingAssistantAfterConnect by remember { mutableStateOf<String?>(null) }
     var scanError by remember { mutableStateOf<String?>(null) }
     var showSshSheet by remember { mutableStateOf(false) }
+    var showDiscoverSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(harness, pendingAssistantAfterConnect) {
@@ -188,6 +190,14 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                     Text("Scan QR")
                 }
                 OutlinedButton(
+                    onClick = { showDiscoverSheet = true },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Wifi, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("On LAN")
+                }
+                OutlinedButton(
                     onClick = { showSshSheet = true },
                     modifier = Modifier.weight(1f),
                 ) {
@@ -267,6 +277,10 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (showDiscoverSheet) {
+        DiscoveryScreen(store = store, onDismiss = { showDiscoverSheet = false })
     }
 
     if (showSshSheet) {

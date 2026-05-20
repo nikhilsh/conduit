@@ -13,6 +13,7 @@ struct SettingsSheet: View {
     @State private var startCwd: String = "~"
     @State private var showScanner: Bool = false
     @State private var showSshLogin: Bool = false
+    @State private var showDiscover: Bool = false
     @State private var showDirectoryPicker: Bool = false
     @State private var browsingPath: String = "~"
     @State private var directoryEntries: [RemoteDirectoryEntry] = []
@@ -68,6 +69,10 @@ struct SettingsSheet: View {
             }
             .sheet(isPresented: $showSshLogin) {
                 SSHLoginSheet()
+                    .environment(store)
+            }
+            .sheet(isPresented: $showDiscover) {
+                DiscoveryView()
                     .environment(store)
             }
             .sheet(isPresented: $showDirectoryPicker) {
@@ -196,6 +201,23 @@ struct SettingsSheet: View {
             } label: {
                 HStack(spacing: 10) {
                     Label("Scan pairing QR", systemImage: "qrcode.viewfinder")
+                        .foregroundStyle(SweKittyTheme.textBody)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, 4)
+
+            Divider().background(SweKittyTheme.separator)
+
+            Button {
+                showDiscover = true
+            } label: {
+                HStack(spacing: 10) {
+                    Label("Discover on LAN", systemImage: "wifi.circle")
                         .foregroundStyle(SweKittyTheme.textBody)
                     Spacer()
                     Image(systemName: "chevron.right")
