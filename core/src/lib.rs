@@ -2,6 +2,7 @@
 #![allow(clippy::empty_line_after_doc_comments)]
 
 pub mod conversation;
+pub mod discovery;
 pub mod ssh;
 pub mod transport;
 pub mod views;
