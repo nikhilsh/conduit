@@ -342,33 +342,37 @@ private struct ConversationEventRow: View {
         } else {
             switch role {
             case .user:
-                HStack {
-                    Spacer(minLength: 40)
-                    ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: true) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
-                            if !event.files.isEmpty {
-                                ConversationFileStrip(files: event.files)
-                            }
+                ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
+                        if !event.files.isEmpty {
+                            ConversationFileStrip(files: event.files)
                         }
                     }
                 }
             case .assistant:
-                HStack {
-                    ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
-                        ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
-                    }
-                    Spacer(minLength: 40)
+                ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
+                    ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
                 }
             case .tool:
                 ConversationToolCard(event: event)
             case .system:
-                HStack {
-                    ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
-                        ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
-                    }
-                    Spacer(minLength: 70)
+                // System messages aren't conversation — they're
+                // metadata (exit codes, link drops, switches). Render
+                // as a centered subtle line instead of a bubble.
+                HStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "info.circle")
+                        .font(.caption2)
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                    Text(event.content)
+                        .font(.caption.weight(.regular))
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                    Spacer()
                 }
+                .padding(.vertical, 2)
             }
         }
     }
@@ -498,42 +502,35 @@ private struct ConversationPendingInputCard: View {
 private struct ConversationBubbleContainer<Content: View>: View {
     let role: ConversationRole
     let timestamp: String
-    let alignTrailing: Bool
+    let alignTrailing: Bool  // ignored — kept for source compat with call sites
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                if !alignTrailing {
-                    Image(systemName: role.icon)
+        // Litter-style: NO bubbles. Discord/Slack-shaped row — role
+        // icon on the left, role name + timestamp on a header line,
+        // content flowing below as plain text. Left-aligned regardless
+        // of role; the accent color does the differentiation.
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: role.icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(role.accent)
+                .frame(width: 16, height: 16)
+                .padding(.top, 3)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(role.label)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(role.accent)
+                    if !timestamp.isEmpty {
+                        Text(ConversationTimestamp.relative(timestamp))
+                            .font(.caption2)
+                            .foregroundStyle(SweKittyTheme.textMuted)
+                    }
                 }
-                Text(role.label.uppercased())
-                    .font(.caption2.weight(.semibold))
-                    .tracking(0.7)
-                    .foregroundStyle(SweKittyTheme.textSecondary)
-                if !timestamp.isEmpty {
-                    Text(ConversationTimestamp.relative(timestamp))
-                        .font(.caption2)
-                        .foregroundStyle(SweKittyTheme.textMuted)
-                }
-                if alignTrailing {
-                    Image(systemName: role.icon)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(role.accent)
-                }
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: alignTrailing ? .trailing : .leading)
-
-            content()
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .glassRect(
-                    cornerRadius: 20,
-                    tint: role == .user ? role.accent.opacity(0.28) : role.accent.opacity(0.18)
-                )
+            Spacer(minLength: 0)
         }
     }
 }

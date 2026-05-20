@@ -387,18 +387,29 @@ private fun ConversationEventRow(
         return
     }
     when (ConversationRole.from(ev.role)) {
-        ConversationRole.User -> Row(modifier = Modifier.fillMaxWidth()) {
-            Spacer(Modifier.weight(0.18f))
-            ConversationBubble(ev, ConversationRole.User, agentAccent, Modifier.weight(0.82f), alignEnd = true)
-        }
-        ConversationRole.Assistant -> Row(modifier = Modifier.fillMaxWidth()) {
-            ConversationBubble(ev, ConversationRole.Assistant, agentAccent, Modifier.weight(0.82f), alignEnd = false)
-            Spacer(Modifier.weight(0.18f))
-        }
+        ConversationRole.User ->
+            ConversationBubble(ev, ConversationRole.User, agentAccent, Modifier, alignEnd = false)
+        ConversationRole.Assistant ->
+            ConversationBubble(ev, ConversationRole.Assistant, agentAccent, Modifier, alignEnd = false)
         ConversationRole.Tool -> ConversationToolCard(ev)
-        ConversationRole.System -> Row(modifier = Modifier.fillMaxWidth()) {
-            ConversationBubble(ev, ConversationRole.System, agentAccent, Modifier.weight(0.88f), alignEnd = false)
-            Spacer(Modifier.weight(0.12f))
+        ConversationRole.System -> Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(12.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                ev.content,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                maxLines = 2,
+            )
         }
     }
 }
@@ -552,53 +563,47 @@ private fun ConversationBubble(
     modifier: Modifier,
     alignEnd: Boolean,
 ) {
-    // For Assistant bubbles, swap the hardcoded role accent for the
-    // per-agent tint so Claude/Codex conversations read distinctly.
-    val bubbleAccent = if (role == ConversationRole.Assistant) agentAccent else role.accent
-    Column(
-        modifier = modifier,
-        horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    // Litter-style: NO bubbles. Render as a Discord/Slack-style row —
+    // role icon + label + timestamp on a single header line, content
+    // flowing below as plain text. Left-aligned for everyone; the
+    // accent color does the differentiation.
+    val accent = if (role == ConversationRole.Assistant) agentAccent else role.accent
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (!alignEnd) {
-                RoleIcon(role, bubbleAccent)
-                Spacer(Modifier.width(6.dp))
-            }
-            Text(
-                role.label.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (ev.ts.isNotEmpty()) {
-                Spacer(Modifier.width(6.dp))
-                Text(ConversationTimestamp.relative(ev.ts), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-            }
-            if (alignEnd) {
-                Spacer(Modifier.width(6.dp))
-                RoleIcon(role, bubbleAccent)
-            }
+        Box(modifier = Modifier.size(20.dp).padding(top = 2.dp)) {
+            RoleIcon(role, accent)
         }
-
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = bubbleAccent.copy(alpha = if (role == ConversationRole.User) 0.18f else 0.10f),
-            tonalElevation = 1.dp,
+        Spacer(Modifier.width(10.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                ConversationRenderer.blocks(ev.content).forEach { block ->
-                    when (block) {
-                        is ConversationBlock.Markdown -> MarkdownBlock(block.text, role)
-                        is ConversationBlock.Code -> CodeBlock(block.language, block.content)
-                    }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    role.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = accent,
+                )
+                if (ev.ts.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        ConversationTimestamp.relative(ev.ts),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
                 }
-                if (role == ConversationRole.User && ev.files.isNotEmpty()) {
-                    FileStrip(ev.files)
+            }
+            ConversationRenderer.blocks(ev.content).forEach { block ->
+                when (block) {
+                    is ConversationBlock.Markdown -> MarkdownBlock(block.text, role)
+                    is ConversationBlock.Code -> CodeBlock(block.language, block.content)
                 }
+            }
+            if (role == ConversationRole.User && ev.files.isNotEmpty()) {
+                FileStrip(ev.files)
             }
         }
     }
