@@ -58,6 +58,11 @@ targets:
         NSPhotoLibraryUsageDescription: "Import a SweKitty pairing QR code from your photo library."
         NSMicrophoneUsageDescription: "Dictate replies to the coding agent."
         NSSpeechRecognitionUsageDescription: "Transcribe your voice on-device into chat messages for the coding agent."
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: sh.nikhil.swekitty.pairing
+            CFBundleURLSchemes:
+              - swekitty
         SentryDSN: $(SENTRY_DSN)
     settings:
       base:

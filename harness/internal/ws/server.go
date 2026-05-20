@@ -290,6 +290,23 @@ func (c *client) handleText(payload []byte) {
 				"from": "system",
 				"ts":   time.Now().UTC().Format(time.RFC3339Nano),
 			})
+			// Don't leave the client stuck on phase=swapping: emit a
+			// status frame that flips it back to running with the
+			// previous assistant so the UI un-sticks. Reason code
+			// surfaces in mobile telemetry for triage.
+			_ = c.writeJSON(map[string]any{
+				"type":        "status",
+				"session":     c.sess.ID,
+				"viewers":     1,
+				"rows":        40,
+				"cols":        120,
+				"assistant":   c.sess.Assistant,
+				"yolo":        false,
+				"health":      "healthy",
+				"phase":       "running",
+				"reason_code": "agent_switch_failed",
+				"ts":          time.Now().UTC().Format(time.RFC3339Nano),
+			})
 			return
 		}
 		_ = c.writeJSON(map[string]any{

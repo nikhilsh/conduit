@@ -257,6 +257,57 @@ func TestEscapeByteOnPTYOutput(t *testing.T) {
 	}
 }
 
+// Regression: when SwitchAdapter fails (e.g. the target adapter's
+// container or process refuses to start), the server used to emit a
+// "swapping" status and a chat error, then return without ever
+// flipping the phase back. Mobile clients sat on phase=swapping
+// forever. The fix emits an explicit phase=running status with
+// reason_code=agent_switch_failed so the UI can un-stick.
+func TestSwitchAgentFailureBroadcastsRunning(t *testing.T) {
+	srv, tok := newTestServer(t)
+	c := dial(t, srv, "00000000-0000-0000-0000-000000000007", tok)
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, _ = c.ReadMessage()
+
+	// Ask for an assistant that the registry doesn't know about.
+	// SwitchAdapter returns "unknown assistant" and the request fails.
+	if err := c.WriteMessage(websocket.TextMessage, []byte(`{"type":"switch_agent","assistant":"definitely-not-a-real-agent"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	sawSwapping := false
+	sawRecover := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		mt, payload, err := c.ReadMessage()
+		if err != nil {
+			break
+		}
+		if mt != websocket.TextMessage {
+			continue
+		}
+		var env map[string]any
+		if err := json.Unmarshal(payload, &env); err != nil {
+			t.Fatalf("json: %v", err)
+		}
+		if env["type"] == "status" && env["phase"] == "swapping" {
+			sawSwapping = true
+		}
+		if env["type"] == "status" && env["phase"] == "running" && env["reason_code"] == "agent_switch_failed" {
+			sawRecover = true
+			break
+		}
+	}
+
+	if !sawSwapping {
+		t.Fatal("did not observe phase=swapping before the failure")
+	}
+	if !sawRecover {
+		t.Fatal("did not observe phase=running with reason_code=agent_switch_failed after the failure — client would be stuck")
+	}
+}
+
 func TestSwitchAgentKeepsSessionUsable(t *testing.T) {
 	srv, tok := newTestServer(t)
 	c := dial(t, srv, "00000000-0000-0000-0000-000000000006", tok)
