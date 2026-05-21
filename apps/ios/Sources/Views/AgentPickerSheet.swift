@@ -16,12 +16,22 @@ struct AgentPickerSheet: View {
     /// in the sheet header. nil hides it.
     var headerNote: String?
 
+    /// Optional pre-populated prompt (typically a voice transcript
+    /// from `VoiceDictationSheet`). When set, the picker becomes
+    /// "speak to start a session": tapping an agent creates the new
+    /// session with this prompt seeded as its first chat message.
+    var initialPrompt: String? = nil
+
     var body: some View {
         NavigationStack {
             ZStack {
                 SweKittyTheme.backgroundGradient(for: colorScheme).ignoresSafeArea()
                 VStack(spacing: 16) {
                     header
+                    if let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !prompt.isEmpty {
+                        promptPreview(prompt)
+                    }
                     agentButton(
                         kind: "claude",
                         label: "Claude",
@@ -78,9 +88,30 @@ struct AgentPickerSheet: View {
         }
     }
 
+    /// Header card rendering the seeded prompt above the agent
+    /// buttons so the user can confirm the dictated transcript before
+    /// committing to an agent. Mirrors litter's "speak to start" cue.
+    private func promptPreview(_ prompt: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Initial prompt")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(SweKittyTheme.textSecondary)
+            Text(prompt)
+                .font(.subheadline)
+                .foregroundStyle(SweKittyTheme.textPrimary)
+                .lineLimit(4)
+                .multilineTextAlignment(.leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .glassRoundedRect()
+        .accessibilityIdentifier("AgentPickerSheet.initialPrompt")
+    }
+
     private func agentButton(kind: String, label: String, subtitle: String, tint: Color) -> some View {
         Button {
-            store.createSession(assistant: kind)
+            store.createSession(assistant: kind, initialPrompt: initialPrompt)
             dismiss()
         } label: {
             HStack(spacing: 14) {

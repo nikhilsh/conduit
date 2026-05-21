@@ -3,9 +3,10 @@ import SwiftUI
 /// Active-tab context for the in-session bottom bar. Drives where the
 /// voice transcript is routed when the user taps the center mic FAB —
 /// chat gets `sendChat`, terminal gets `sendInput` (line-terminated),
-/// browser falls through to a "not supported" toast for v1. Mirrors
-/// `ProjectTab` but lives separately so the bar can be unit-tested
-/// without standing up the SwiftUI view tree.
+/// browser is the only tab where v1 still surfaces a "not wired here"
+/// toast since no text-entry surface exists. Mirrors `ProjectTab` but
+/// lives separately so the bar can be unit-tested without standing up
+/// the SwiftUI view tree.
 enum InSessionContext: String, CaseIterable, Equatable {
     case terminal
     case chat
@@ -18,6 +19,20 @@ enum InSessionContext: String, CaseIterable, Equatable {
         case .browser:  self = .browser
         }
     }
+}
+
+/// Per-tab routing for the global voice transcript. Lifted out of the
+/// view body so unit tests can pin the matrix without standing up the
+/// SwiftUI host. Stage 5 of `docs/PLAN-LITTER-UI.md` opens the mic FAB
+/// on every tab; the routing decides where the resulting transcript
+/// lands.
+enum VoiceRoute: Equatable {
+    /// Send as a chat message to the active session.
+    case chat
+    /// Append to the terminal stdin as a line (CR-terminated).
+    case terminalInput
+    /// No text-input surface — show the "not wired here" toast.
+    case browserToast
 }
 
 /// Pure-data description of the in-session bottom bar. Three controls
@@ -57,23 +72,35 @@ struct InSessionBottomBarModel: Equatable {
     /// exact triple so the litter HomeBottomBar visual parity holds.
     static let controls: [Control] = [.threads, .voice, .newSession]
 
-    /// Whether the center mic FAB is wired to the existing voice path
-    /// for the supplied tab context. Per the spec: v1 supports chat
-    /// only; terminal / browser surface a toast instead. Tests assert
-    /// the routing table so a future refactor can't silently broaden
-    /// or shrink the supported set.
+    /// Whether the center mic FAB actually opens the voice dictation
+    /// sheet for the supplied tab. Stage 5 opens the sheet on every
+    /// tab — even browser, where the resulting transcript falls
+    /// through to the "not wired here" toast inside the route
+    /// handler. Kept around as a single-source-of-truth boolean in
+    /// case a future tab wants to suppress the sheet entirely.
     static func voiceSupported(for context: InSessionContext) -> Bool {
         switch context {
-        case .chat:                  return true
-        case .terminal, .browser:    return false
+        case .chat, .terminal, .browser: return true
         }
     }
 
-    /// Message used by the toast / inline note when voice isn't wired
-    /// for the current tab. Mono-cased for parity with our other UI
-    /// strings.
+    /// Per-tab routing matrix for the resulting transcript. Asserted
+    /// by `VoiceDictationModelTests` so a refactor can't silently
+    /// shrink the supported set. v1 wires chat + terminal; browser
+    /// surfaces the toast.
+    static func voiceRoute(for context: InSessionContext) -> VoiceRoute {
+        switch context {
+        case .chat:     return .chat
+        case .terminal: return .terminalInput
+        case .browser:  return .browserToast
+        }
+    }
+
+    /// Message used by the toast / inline note when voice has no
+    /// text-input surface to land in (browser tab). Mono-cased for
+    /// parity with our other UI strings.
     static func voiceUnsupportedMessage(for context: InSessionContext) -> String {
-        "Voice not supported here"
+        "Voice not wired here"
     }
 }
 
@@ -89,15 +116,16 @@ struct InSessionBottomBar: View {
     let onThreads: () -> Void
     let onVoice: () -> Void
     let onNewSession: () -> Void
-
-    /// One-shot transient message surfaced when the user taps voice
-    /// on an unsupported tab. Cleared after a short delay so the bar
-    /// goes back to its three-icon resting state.
-    @State private var unsupportedNote: String?
+    /// Transient note rendered above the bar — used by ProjectView to
+    /// surface the "Voice not wired here" toast after the browser-tab
+    /// route handler short-circuits the transcript. Nil hides the
+    /// capsule. Owned by the parent so the bar itself stays stateless
+    /// and unit-testable as a pure layout.
+    var transientNote: String? = nil
 
     var body: some View {
         VStack(spacing: 6) {
-            if let note = unsupportedNote {
+            if let note = transientNote {
                 Text(note)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(SweKittyTheme.textPrimary)
@@ -140,25 +168,14 @@ struct InSessionBottomBar: View {
     }
 
     /// Center mic FAB — bigger and copper-accented to match litter's
-    /// dominant voice affordance. Tap routes to `onVoice` when the
-    /// tab supports voice, otherwise surfaces the "not supported" note
-    /// so the user gets feedback instead of a no-op.
+    /// dominant voice affordance. Stage 5: always opens the voice
+    /// dictation sheet regardless of tab; the parent view's
+    /// transcript callback decides where to route the result. The
+    /// `unsupportedNote` survives on the bar so a future tab that
+    /// suppresses the sheet entirely can still fall back to a toast.
     private var voiceFab: some View {
         Button {
-            if InSessionBottomBarModel.voiceSupported(for: context) {
-                onVoice()
-            } else {
-                let msg = InSessionBottomBarModel.voiceUnsupportedMessage(for: context)
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    unsupportedNote = msg
-                }
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 1_800_000_000)
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        unsupportedNote = nil
-                    }
-                }
-            }
+            onVoice()
         } label: {
             Image(systemName: InSessionBottomBarModel.Control.voice.systemImage)
                 .font(.title.weight(.bold))

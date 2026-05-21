@@ -40,26 +40,24 @@ struct InSessionBottomBarTests {
 
     // MARK: - Per-tab voice routing
 
-    @Test func voiceWiredOnChatTabOnly() {
-        // v1 spec: voice routes to `sendChat` when the user is on
-        // the chat tab; terminal and browser surface a "not
-        // supported" toast instead. Centralising the routing
-        // matrix in the model means the SwiftUI button has nothing
-        // to decide — it just asks.
+    @Test func voiceSheetOpensFromEveryTab() {
+        // Stage 5 spec: the FAB opens the voice dictation sheet on
+        // every tab — chat, terminal, browser. The actual routing
+        // (chat → sendChat, terminal → sendInput, browser → toast)
+        // happens inside `VoiceRoute`; see VoiceDictationModelTests
+        // for the per-route matrix.
         #expect(InSessionBottomBarModel.voiceSupported(for: .chat))
-        #expect(!InSessionBottomBarModel.voiceSupported(for: .terminal))
-        #expect(!InSessionBottomBarModel.voiceSupported(for: .browser))
+        #expect(InSessionBottomBarModel.voiceSupported(for: .terminal))
+        #expect(InSessionBottomBarModel.voiceSupported(for: .browser))
     }
 
-    @Test func voiceUnsupportedMessageIsActionable() {
-        // The toast string itself is part of the contract — the
-        // user needs to know what to do (or that the feature isn't
-        // wired yet). Pin it so an accidental copy edit doesn't
-        // turn it into a no-op nag.
-        let terminalMsg = InSessionBottomBarModel.voiceUnsupportedMessage(for: .terminal)
+    @Test func voiceUnsupportedMessageReflectsBrowserOnlyToast() {
+        // The "not wired here" toast now only fires on browser —
+        // terminal got promoted to a first-class voice surface in
+        // Stage 5. Pin the string so a copy edit can't turn it back
+        // into a no-op nag for terminal.
         let browserMsg = InSessionBottomBarModel.voiceUnsupportedMessage(for: .browser)
-        #expect(terminalMsg == "Voice not supported here")
-        #expect(browserMsg == "Voice not supported here")
+        #expect(browserMsg == "Voice not wired here")
     }
 
     // MARK: - ProjectTab → InSessionContext bridge

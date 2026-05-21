@@ -21,6 +21,11 @@ struct HomeView: View {
     @State private var showAgentPicker = false
     @State private var showSessionsHistory = false
     @State private var selectedSessionID: String?
+    /// Transcript captured by the global voice sheet on home. When
+    /// non-nil, the AgentPickerSheet opens pre-populated with this
+    /// text as the initial prompt — matches the "speak to start"
+    /// flow called out in Stage 5 of docs/PLAN-LITTER-UI.md.
+    @State private var pendingVoicePrompt: String? = nil
     /// Long-lived LAN browser so discovered servers stream into the
     /// home pill row as a litter-style "what's around me" affordance.
     /// Lifetime is bound to the HomeView's presence on screen: started
@@ -79,8 +84,11 @@ struct HomeView: View {
             .sheet(isPresented: $showAddServer) {
                 AddServerSheet().environment(store)
             }
-            .sheet(isPresented: $showAgentPicker) {
-                AgentPickerSheet(headerNote: nil).environment(store)
+            .sheet(isPresented: $showAgentPicker, onDismiss: {
+                pendingVoicePrompt = nil
+            }) {
+                AgentPickerSheet(headerNote: nil, initialPrompt: pendingVoicePrompt)
+                    .environment(store)
             }
             .sheet(isPresented: $showSearch) {
                 SessionSearchView().environment(store)
@@ -88,14 +96,17 @@ struct HomeView: View {
             .sheet(isPresented: $showVoice) {
                 VoiceDictationSheet { transcript in
                     // If a session is already selected, push the transcript
-                    // into it as a chat message. Otherwise spin up a new
-                    // claude session with the transcript as its first
-                    // prompt — this matches the litter "speak to start"
-                    // flow rather than dumping the transcript on the floor.
+                    // into it as a chat message. Otherwise open the
+                    // AgentPickerSheet seeded with the transcript so the
+                    // user picks claude/codex first — matches the litter
+                    // "speak to start" flow rather than dumping the
+                    // transcript on the floor or silently picking an
+                    // agent for the user.
                     if let id = store.selectedSessionID {
                         store.sendChat(sessionID: id, message: transcript)
                     } else if store.harness.canIssueCommands {
-                        store.createSession(assistant: "claude", initialPrompt: transcript)
+                        pendingVoicePrompt = transcript
+                        showAgentPicker = true
                     }
                 }
             }

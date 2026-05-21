@@ -23,6 +23,11 @@ struct ProjectView: View {
     @State private var showAgentPicker: Bool = false
     @State private var showThreadSwitcher: Bool = false
     @State private var showVoice: Bool = false
+    /// Transient "Voice not wired here" capsule rendered above the
+    /// in-session dock when the user taps the FAB on a tab whose route
+    /// doesn't accept text (browser today). Cleared after a short
+    /// delay so the bar returns to its resting three-icon state.
+    @State private var voiceToast: String? = nil
 
     var body: some View {
         VStack(spacing: 10) {
@@ -45,7 +50,8 @@ struct ProjectView: View {
                 context: InSessionContext(tab),
                 onThreads: { showThreadSwitcher = true },
                 onVoice: { showVoice = true },
-                onNewSession: { showAgentPicker = true }
+                onNewSession: { showAgentPicker = true },
+                transientNote: voiceToast
             )
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -80,27 +86,39 @@ struct ProjectView: View {
         }
     }
 
-    /// Per-tab voice routing. v1: chat is wired to the existing voice
-    /// path (transcript → `sendChat`). Terminal / browser are stubbed
-    /// behind a toast in `InSessionBottomBar` and never reach this
-    /// closure, but we defend the unreachable branches anyway so a
-    /// future "wire voice into terminal" change has one place to
-    /// extend.
+    /// Per-tab voice routing. Stage 5: chat → `sendChat`, terminal →
+    /// `sendInput` (LF-terminated stdin write), browser → "not wired
+    /// here" toast. The routing matrix lives on `InSessionBottomBarModel`
+    /// so the SwiftUI body has nothing to decide and tests can pin it
+    /// without a host controller.
     private func routeVoice(transcript: String) {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        switch InSessionContext(tab) {
+        let context = InSessionContext(tab)
+        switch InSessionBottomBarModel.voiceRoute(for: context) {
         case .chat:
             store.sendChat(sessionID: session.id, message: trimmed)
-        case .terminal:
-            // Reserved — feed as a line-terminated stdin write once
-            // we ship voice-to-terminal. For v1 the unsupported toast
-            // short-circuits before we get here.
+        case .terminalInput:
+            // Feed the transcript as a line-terminated stdin write so
+            // the agent CLI in the PTY sees a complete command rather
+            // than a partial line waiting for Enter. LF matches the
+            // existing `cd … && pwd` seed in `createSession`.
             let line = trimmed.hasSuffix("\n") ? trimmed : trimmed + "\n"
             store.sendInput(sessionID: session.id, bytes: Data(line.utf8))
-        case .browser:
-            // No browser surface accepts text input today.
-            break
+        case .browserToast:
+            // No browser surface accepts text input today — surface
+            // the "not wired here" toast so the user gets feedback
+            // instead of a no-op.
+            let msg = InSessionBottomBarModel.voiceUnsupportedMessage(for: context)
+            withAnimation(.easeInOut(duration: 0.15)) {
+                voiceToast = msg
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    voiceToast = nil
+                }
+            }
         }
     }
 

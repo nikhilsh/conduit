@@ -31,7 +31,7 @@ struct VoiceDictationSheet: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 32)
                     } else {
-                        listeningOrb
+                        waveform
                         Text(displayTranscript.isEmpty ? "Listening…" : displayTranscript)
                             .font(.title3)
                             .foregroundStyle(SweKittyTheme.textPrimary)
@@ -100,21 +100,33 @@ struct VoiceDictationSheet: View {
         return transcriber.partialTranscript
     }
 
-    private var listeningOrb: some View {
-        ZStack {
-            Circle()
-                .fill(SweKittyTheme.accentStrong.opacity(0.18))
-                .frame(width: 140, height: 140)
-                .scaleEffect(transcriber.state == .listening ? 1.05 : 1.0)
-                .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: transcriber.state)
-            Circle()
-                .fill(SweKittyTheme.accentStrong.opacity(0.35))
-                .frame(width: 96, height: 96)
-            Image(systemName: "waveform")
-                .font(.system(size: 38, weight: .semibold))
-                .foregroundStyle(SweKittyTheme.textOnAccent)
-                .frame(width: 64, height: 64)
-                .background(Circle().fill(SweKittyTheme.accentStrong))
+    /// Big waveform — 24 vertical bars with sine-driven heights, each
+    /// bar phase-shifted so the row reads as a travelling wave. The
+    /// values don't reflect actual audio levels (that would need a
+    /// second tap on the audio buffer; redundant with the recognizer
+    /// pipeline). The point is to look alive while the user dictates.
+    private var waveform: some View {
+        let bars = 24
+        let isLive = transcriber.state == .listening
+        return TimelineView(.animation(minimumInterval: 1.0/30.0, paused: !isLive)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 6) {
+                ForEach(0..<bars, id: \.self) { idx in
+                    let phase = Double(idx) * 0.45
+                    let base = sin(t * 4.0 + phase) * 0.5 + 0.5
+                    let envelope = sin(Double(idx) / Double(bars - 1) * .pi)
+                    let height = isLive
+                        ? CGFloat(8 + base * envelope * 70)
+                        : CGFloat(8)
+                    Capsule()
+                        .fill(SweKittyTheme.accentStrong)
+                        .frame(width: 5, height: height)
+                        .opacity(isLive ? 0.95 : 0.45)
+                }
+            }
+            .frame(height: 90)
+            .padding(.horizontal, 32)
+            .accessibilityHidden(true)
         }
     }
 
