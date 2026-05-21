@@ -198,6 +198,14 @@ final class SessionStore {
     /// re-feeds the SwiftTerm view on appear / after reconnect.
     var terminalBuffer: [String: Data] = [:]
 
+    /// Per-session xterm.js serialized render state, captured by
+    /// `WKTerminalView.dismantleUIView` (tab switch / background) and
+    /// replayed by the next attach so the user doesn't see an empty
+    /// terminal waiting for live PTY bytes. ANSI string from
+    /// `SerializeAddon.serialize()`. In-memory only; cross-launch
+    /// persistence would need disk write-through.
+    var terminalSnapshot: [String: String] = [:]
+
     /// Chat log per session, oldest first.
     var chatLog: [String: [ChatEvent]] = [:]
     /// Typed conversation timeline per session, oldest first.
