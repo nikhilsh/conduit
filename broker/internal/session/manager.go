@@ -537,6 +537,39 @@ func NewManager(registry *agents.Registry) *Manager {
 	return m
 }
 
+// Health reports whether the broker is fully operational.
+//   - `Live` is always true if the broker process is responding (this
+//     function returns) — kept so the response shape never collapses.
+//   - `SidecarExpected` mirrors the "did node exist at startup" check
+//     in NewManager. A false here is fine; it just means scrollback
+//     replay is ring-only and we shouldn't fault the sidecar absence.
+//   - `SidecarHealthy` is true only when the headless xterm.js sidecar
+//     answers a Ping within the termgrid manager's existing timeout.
+//     Surfaces silent sidecar crashes that today only manifest as
+//     garbled snapshots in the iOS terminal tab.
+type Health struct {
+	Live            bool
+	SidecarExpected bool
+	SidecarHealthy  bool
+	SidecarError    string
+}
+
+func (m *Manager) Health() Health {
+	m.mu.RLock()
+	tg := m.termgrid
+	m.mu.RUnlock()
+	h := Health{Live: true, SidecarExpected: tg != nil}
+	if tg == nil {
+		return h
+	}
+	if _, err := tg.Ping(); err != nil {
+		h.SidecarError = err.Error()
+		return h
+	}
+	h.SidecarHealthy = true
+	return h
+}
+
 func (m *Manager) Get(id string) (*Session, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

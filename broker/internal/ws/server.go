@@ -49,14 +49,43 @@ func New(a *auth.Store, m *session.Manager) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/", s.serveWS)
+	// /health stays as a soft liveness probe — returns 200 as long as
+	// the broker is responding. Kept the trailing newline for
+	// curl-script compatibility.
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	// /healthz is the strict probe — returns 200 only when every
+	// expected subsystem (broker + sidecar, when present) is
+	// answering. Use this for systemd / k8s liveness checks; the
+	// response body is JSON with per-component detail so silent
+	// degradation surfaces in the operator's logs.
+	mux.HandleFunc("/healthz", s.serveHealthz)
 	mux.HandleFunc("/api/capabilities", s.serveCapabilities)
 	mux.HandleFunc("/api/session/start", s.serveSessionStart)
 	mux.HandleFunc("/api/recent-projects", s.serveRecentProjects)
 	mux.HandleFunc("/api/fs/list", s.serveFSList)
 	return mux
+}
+
+func (s *Server) serveHealthz(w http.ResponseWriter, r *http.Request) {
+	h := s.Sessions.Health()
+	body := map[string]any{
+		"live":             h.Live,
+		"sidecar_expected": h.SidecarExpected,
+		"sidecar_healthy":  h.SidecarHealthy,
+	}
+	if h.SidecarError != "" {
+		body["sidecar_error"] = h.SidecarError
+	}
+	w.Header().Set("Content-Type", "application/json")
+	// Degraded state — sidecar was expected but isn't answering. 503
+	// is the right code; load balancers and systemd Restart=on-failure
+	// can act on it.
+	if h.SidecarExpected && !h.SidecarHealthy {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
