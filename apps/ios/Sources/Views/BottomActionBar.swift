@@ -1,29 +1,24 @@
 import SwiftUI
 
-/// Three-control bottom bar inspired by litter's home: mic (left),
-/// large copper `+` (center), search (right). All in glass shells. The
-/// `+` is the primary new-session entry point; mic + search are surface
-/// affordances for the global features that arrive in Stage 5.
+/// Two-control bottom bar: mic (left) and large copper `+` (right).
+/// Session search/list moved to the top-right hamburger, so the
+/// bottom magnifier is gone — the `+` no longer needs to be centered
+/// for symmetry against a third control.
 struct BottomActionBar: View {
     let onVoice: () -> Void
     let onPlus: () -> Void
-    let onSearch: () -> Void
 
     var body: some View {
-        HStack(spacing: 24) {
+        HStack {
             actionCircle(
                 icon: "mic.fill",
                 accessibilityLabel: "Voice dictation",
                 action: onVoice
             )
+            Spacer()
             primaryPlus
-            actionCircle(
-                icon: "magnifyingglass",
-                accessibilityLabel: "Search sessions",
-                action: onSearch
-            )
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 24)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity)
     }

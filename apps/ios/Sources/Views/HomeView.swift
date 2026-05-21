@@ -45,8 +45,7 @@ struct HomeView: View {
                             } else {
                                 showAddServer = true
                             }
-                        },
-                        onSearch: { showSearch = true }
+                        }
                     )
                 }
                 .padding(.top, 8)
@@ -113,7 +112,7 @@ struct HomeView: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            iconButton(systemImage: "list.bullet", action: {})
+            iconButton(systemImage: "list.bullet", action: { showSearch = true })
         }
         .padding(.horizontal, 16)
     }

@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// Cross-server session search. Stage 4 ships the surface (input field,
-/// empty state, result row primitive); Stage 5 wires the actual index
-/// so results filter as the user types over `store.conversationLog` ×
-/// `store.savedServers`.
+/// Global "All sessions" overlay opened from the home top-right
+/// hamburger. Empty query → full session list (matches Litter's "every
+/// thread" surface). Typed query → substring filter over name, agent,
+/// branch, and message content. Multi-server enumeration is still
+/// single-server today (`store.sessions`); the cross-server index lands
+/// when saved-server switching is real (MOBILE-FEATURE-BACKLOG #4).
 struct SessionSearchView: View {
     @Environment(SessionStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -19,7 +21,7 @@ struct SessionSearchView: View {
 
                 VStack(spacing: 14) {
                     searchField
-                    if results.isEmpty {
+                    if results.isEmpty && !query.isEmpty {
                         emptyState
                     } else {
                         ScrollView {
@@ -35,7 +37,7 @@ struct SessionSearchView: View {
                 }
                 .padding(.vertical, 12)
             }
-            .navigationTitle("Search")
+            .navigationTitle("All Sessions")
             .navigationBarTitleDisplayMode(.inline)
             .tint(SweKittyTheme.accentStrong)
             .toolbar {
@@ -118,11 +120,21 @@ struct SessionSearchView: View {
     }
 
     /// v1 client-side index: case-insensitive substring match over
-    /// session name, agent, branch, and conversation log content. v2
-    /// (Stage 5+) can push search server-side via the harness.
+    /// session name, agent, branch, and conversation log content. Empty
+    /// query returns every session so this view doubles as the "all
+    /// threads" list. v2 (multi-server) can push search server-side via
+    /// the harness once saved-server switching is real.
     private var results: [SearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        if trimmed.isEmpty {
+            return store.sessions.map { session in
+                SearchResult(
+                    sessionID: session.id,
+                    title: store.displayName(for: session),
+                    subtitle: "\(session.assistant) · \(session.branch ?? "no branch")"
+                )
+            }
+        }
         let needle = trimmed.lowercased()
         var out: [SearchResult] = []
         for session in store.sessions {
