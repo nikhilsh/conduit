@@ -135,7 +135,7 @@ fun WebTerminal(
  * the byte-count cursor used for diffing, and queued chunks waiting on
  * the JS `ready` post.
  */
-private class WebTerminalState {
+internal class WebTerminalState {
     var webView: WebView? = null
     var lastFedByteCount: Int = 0
 
@@ -200,7 +200,10 @@ private class WebTerminalState {
  * WebView (evaluateJavascript) MUST hop back to the main thread — see
  * [WebTerminalState.evalOnMain].
  */
-private class TerminalBridge(
+// `internal` (not `private`) so apps/android/app/src/test/... can
+// drive postMessage with canned JSON. Keeps the parser exercised by
+// a unit test instead of waiting for a real WebView to deliver bytes.
+internal class TerminalBridge(
     private val state: WebTerminalState,
     @Suppress("unused") private val webView: WebView,
     private val onInput: (ByteArray) -> Unit,

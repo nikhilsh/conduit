@@ -173,3 +173,7 @@ jobs:
         env:
           SENTRY_DSN_ANDROID: ${{ secrets.SENTRY_DSN_ANDROID }}
         run: ./gradlew assembleDebug --no-daemon
+      - name: gradle unit tests
+        if: steps.detect.outputs.skip != 'true' && hashFiles('apps/android/app/src/test/**/*.kt') != ''
+        working-directory: apps/android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon

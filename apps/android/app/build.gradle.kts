@@ -73,6 +73,17 @@ android {
             "/META-INF/NOTICE*",
         )
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric needs the Android framework available on the
+            // unit-test classpath; otherwise tests that touch any
+            // android.* class throw RuntimeException("Method ... not
+            // mocked"). Cheap to enable — costs nothing for tests that
+            // don't use Android types.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 sentry {
@@ -111,4 +122,16 @@ dependencies {
 
     // ZXing-embedded QR scanner. Ships its own activity + permission flow.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
+    // Test dependencies — pinned per docs/TESTING-STRATEGY.md.
+    // JUnit 4 stays the default because Compose tooling assumes it.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("io.mockk:mockk:1.13.13")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core-ktx:1.6.1")
+    // org.json's actual implementation isn't on the JVM unit-test
+    // classpath by default — Robolectric ships an inert stub. Pull the
+    // real artifact so JSONObject parsing in TerminalBridge can be
+    // exercised under `./gradlew testDebugUnitTest`.
+    testImplementation("org.json:json:20240303")
 }
