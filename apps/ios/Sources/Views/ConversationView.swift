@@ -197,15 +197,16 @@ struct ConversationRenderer {
         }
 
         for line in lines {
-            if isToolLine(line) {
+            // Check continuation FIRST. An indented "running 12 tests"
+            // line under a `$ make test` should stay grouped as captured
+            // output, not get classified as a separate tool step by
+            // isToolLine (which doesn't care about indentation).
+            if isToolOutputContinuation(line, hasOpenTool: !tool.isEmpty) {
+                tool.append(line)
+            } else if isToolLine(line) {
                 if !prose.isEmpty { flushProse() }
                 tool.append(line)
                 toolCount += 1
-            } else if isToolOutputContinuation(line, hasOpenTool: !tool.isEmpty) {
-                // Indented output following a tool line — keep it
-                // grouped with the same summary instead of breaking
-                // out into prose.
-                tool.append(line)
             } else {
                 if !tool.isEmpty { flushTool() }
                 prose.append(line)
@@ -236,9 +237,18 @@ struct ConversationRenderer {
         for v in verbs {
             if lower.hasPrefix(v) {
                 // Avoid eating mid-sentence prose like "Reading the
-                // docs..." — require a path-ish or short follow-up.
+                // project documentation and the changelog..." — the
+                // tail must look like a *value* (path / identifier /
+                // short phrase), not a sentence. Two guards:
+                //  1. ≤3 whitespace-separated tokens after the verb
+                //     ("Reading manifest.json" → 1 token; "Running
+                //     ./build.sh" → 1 token; the failing prose case
+                //     above has 10+ tokens and is correctly rejected).
+                //  2. No mid-clause sentence break (". ") — catches
+                //     short prose like "Reading X. Done."
                 let tail = trimmed.dropFirst(v.count)
-                if tail.count < 80 && !tail.contains(". ") {
+                let words = tail.split(whereSeparator: { $0.isWhitespace }).count
+                if words <= 3 && !tail.contains(". ") {
                     return true
                 }
             }
