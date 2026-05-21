@@ -689,7 +689,12 @@ final class SessionStore {
         terminalBuffer[sessionID, default: Data()].append(bytes)
     }
 
-    fileprivate func ingestChat(_ sessionID: String, _ event: ChatEvent) {
+    // `internal` (not `fileprivate`) so SweKittyTests can drive this
+    // path directly. The fileprivate access was originally to lock
+    // down "only the transport delegate can ingest"; that constraint
+    // is fine to relax for tests because the type guards (ChatEvent)
+    // make malformed calls a compile error anyway.
+    func ingestChat(_ sessionID: String, _ event: ChatEvent) {
         chatLog[sessionID, default: []].append(event)
         refreshConversation(sessionID: sessionID)
     }
