@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("io.sentry.android.gradle") version "4.11.0"
+    // Roborazzi: Compose snapshot testing on the JVM. See docs/
+    // TESTING-STRATEGY.md for the rationale (Paparazzi alternative).
+    id("io.github.takahirom.roborazzi")
 }
 
 android {
@@ -134,4 +137,11 @@ dependencies {
     // real artifact so JSONObject parsing in TerminalBridge can be
     // exercised under `./gradlew testDebugUnitTest`.
     testImplementation("org.json:json:20240303")
+    // Roborazzi snapshot testing — JVM Compose snapshots, no emulator.
+    // Compose runtime + JUnit rule + Robolectric integration glue.
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.32.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.32.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-junit-rule:1.32.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.activity:activity-compose:1.9.2")
 }

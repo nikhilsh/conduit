@@ -19,6 +19,12 @@ packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa
     from: 8.55.0
+  SnapshotTesting:
+    # Point-Free's swift-snapshot-testing. De facto standard for
+    # iOS visual regression — image + accessibility + text snapshots.
+    # Test-target dep only; never linked into the app.
+    url: https://github.com/pointfreeco/swift-snapshot-testing
+    from: 1.17.0
 
 targets:
   SweKitty:
@@ -90,6 +96,8 @@ targets:
       - path: Tests/SweKittyTests
     dependencies:
       - target: SweKitty
+      - package: SnapshotTesting
+        product: SnapshotTesting
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: sh.nikhil.swekitty.tests

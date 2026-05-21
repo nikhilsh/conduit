@@ -50,14 +50,14 @@ The TDD loop we want, in one paragraph: write a test that captures the *contract
 - Snapshot `SessionInfoView`, `AppearanceSheet`, the agent-pill states.
 - Consider [**ViewInspector**](https://github.com/nalexn/ViewInspector) for SwiftUI hierarchy introspection without taking pixel snapshots — a middle ground when we need to assert "this view contains a HealthDot" without committing to a specific render.
 
-### Android — JUnit 4 + MockK + Robolectric + Compose UI Testing + Paparazzi
+### Android — JUnit 4 + MockK + Robolectric + Compose UI Testing + Roborazzi
 
 **Framework choice notes:**
 - **JUnit 4** as the default. JUnit 5 is modern and supports parameterized tests / parallel execution more cleanly, but Compose tooling (`ComposeTestRule`, etc.) assumes JUnit 4 and the JUnit 5 Android plugin adds setup friction. We start with JUnit 4 and revisit if/when Compose lands a JUnit 5 path.
 - **MockK** (Apache-2.0) for mocking. Kotlin-native, idiomatic for Kotlin (handles coroutines, sealed classes, top-level functions cleanly). De facto standard since ~2019 — Mockito-Kotlin is the older alternative but MockK has won.
 - **Robolectric** (Apache-2.0) lets us run "Android" tests on the JVM without an emulator. Standard for fast unit-testing of Android classes (View, Context, etc.).
 - **Compose UI Testing** (`androidx.compose.ui:ui-test-junit4`) for Compose views — the official Google framework.
-- **Paparazzi** (Cash App, Apache-2.0) for Compose snapshot testing on the JVM — the spiritual equivalent of swift-snapshot-testing for Android. Same value: visual regressions become explicit snapshot diffs in the PR.
+- **Roborazzi** (Apache-2.0) for Compose snapshot testing on the JVM — the Compose-snapshot equivalent of swift-snapshot-testing for Android. **Updated from the original Paparazzi pick** because Roborazzi tracks AGP/Kotlin versions faster (Paparazzi has historically blocked AGP 8.5 / Kotlin 2.0 upgrades), and it integrates with Robolectric which we already have in the test classpath. Same value: visual regressions become explicit snapshot diffs in PRs.
 
 **Setup (~half day):**
 - New source set `apps/android/app/src/test/java/sh/nikhil/swekitty/`.
@@ -70,8 +70,8 @@ The TDD loop we want, in one paragraph: write a test that captures the *contract
 
 **What to test next (Compose + snapshot tier):**
 - Add `androidx.compose.ui:ui-test-junit4` + `compose-ui-test-manifest`.
-- Add Paparazzi for snapshot tests of the same surfaces iOS snapshots: `ChatPage`, agent picker, project list.
-- Compose tree assertions (`hasText`, `assertIsDisplayed`) for interactive behavior; Paparazzi snapshots for visual regression.
+- Add Roborazzi for snapshot tests of the same surfaces iOS snapshots: `ChatPage`, agent picker, project list.
+- Compose tree assertions (`hasText`, `assertIsDisplayed`) for interactive behavior; Roborazzi snapshots for visual regression.
 
 ### Rust core — already covered, expand the surface
 
