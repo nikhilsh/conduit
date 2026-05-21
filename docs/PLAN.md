@@ -6,35 +6,37 @@
 - **Part A onward** preserves the detailed target architecture and the original (2026-04) bootstrap plan, including framing that referenced upstream `swe-swe` as the harness for dev work. That dependency is gone — swe-kitty ships its own `swe-kitty-broker` binary now — but the historical text is preserved verbatim below so the design rationale isn't lost. The newer execution layer is [`PLAN-2026-05-19.md`](PLAN-2026-05-19.md).
 - If there is any mismatch, treat the Status Snapshot + newer focused docs (`RELEASE.md`, `MOBILE-FEATURE-BACKLOG.md`, `NEXT-RELEASE.md`, `PLAN-2026-05-19.md`) as the source of truth for immediate work.
 
-## Status Snapshot (May 18, 2026)
+## Status Snapshot (May 21, 2026)
 
 ### Done
 - Repository, CI, and tagged release automation are active.
 - Broker one-line bootstrap is active:
   - `install.sh` download/install
   - `swe-kitty-broker up --local` prints bearer token + pairing QR + `swekitty://` deep link
+  - `harness/` → `broker/` rename complete (PR #19, #34)
+  - `/healthz` endpoint + sidecar liveness probe (PR #26)
 - iOS and Android shipping flow is tag-driven (release workflows + orchestrator + website deploy).
 - Rust core has:
   - reconnect/liveness handling
-  - typed conversation-item foundation
+  - typed conversation-item foundation with `tool_name`, `exit_code`, `duration_ms`, `diff_summary`, `pending_options`
   - UniFFI bindings used by both apps
 - Mobile apps have:
   - terminal/chat/browser tabs
-  - tool cards, diff rendering, quick-reply chips
+  - tool cards, diff rendering (per-file grouping), quick-reply chips
+  - pending-input cards with typed reply options
+  - subagent + handoff cards (the `switch_agent` differentiator)
+  - structured tool payload (args/exit/duration) consumed in both timelines
   - saved-server persistence scaffolding in settings
+- Test discipline (2026-05-21): iOS `SweKittyTests` target + 20 tests (PR #20); Android JUnit harness + TerminalBridge tests (PR #21); core E2E WS tests (PR #25); snapshot testing wired on both platforms (PR #30) with CI artifacts on failure (PR #31).
 
 ### In Progress
-- KittyLitter parity for structured tool-call UX:
-  - command metadata richness (args/exit/duration/progress)
-  - stronger diff UX (grouping/collapse)
-- Pending user-input first-class UX on both platforms.
+- Package 1 (Rust-first refactor) slice 3: lift reducer-shaped logic from `apps/ios/Sources/SessionStore.swift` and `apps/android/.../SessionStore.kt` into `core/src/store/`. Slices 1 & 2 (typed classifier + tool-card consumption) shipped; slice 3 (AppStore in Rust) open. See `docs/PLAN-2026-05-19.md` §8.
 - Discovery UI parity (mDNS browser / server switching UX polish).
+- Voice rail B (realtime WebRTC); rail A (Whisper-style push-to-talk) shipped.
 
 ### Planned / Future
-- Push notifications + background fetch/wakeup.
-- Voice I/O surfaces.
-- Subagent/handoff visualization parity.
-- Further UI convergence toward KittyLitter design language.
+- Push notifications + background fetch/wakeup (Package 5; broker has no `push/` package yet).
+- Further UI convergence toward KittyLitter design language (composer attach sheet, context bar, expanded editor).
 
 ## Original Planning Context (Preserved)
 

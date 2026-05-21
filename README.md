@@ -43,39 +43,42 @@ swe-kitty is its own product — three layers (Rust core, Go broker, native shel
 - Static landing site scaffold: [`website/`](website)
 - Fyra deploy notes: [`website/DEPLOY.md`](website/DEPLOY.md)
 
-## Delivery Status (May 18, 2026)
+## Delivery Status (May 21, 2026)
 
 ### Done
 - Broker runtime and pairing flow are live:
   - one-line installer: `install.sh`
   - `swe-kitty-broker up --local` prints token + pairing QR + `swekitty://` deep link
+  - `harness/` → `broker/` rename complete (PR #19); Dockerfile + docker-compose paths updated (PR #34)
+  - `/healthz` endpoint with sidecar liveness probe (PR #26)
 - Release pipeline is live:
   - `release-ios`, `release-android`, `release-broker`, `release-orchestrator`
   - website pulls latest release assets and deploys via Fyra
-- Mobile chat has moved past plain logs:
-  - tool-call cards
-  - diff rendering
-  - quick-reply chips
-  - typed conversation-item foundation in shared Rust core
+- Mobile chat has moved past plain logs (verified in `apps/ios/Sources/Views/ConversationView.swift` + `apps/android/.../ui/ChatPage.kt`):
+  - tool-call cards (`ConversationToolCard`)
+  - diff rendering with per-file grouping (`ConversationDiffBlock` / `DiffFileSection`)
+  - quick-reply chips (`QuickReplyDetector`)
+  - typed conversation-item foundation in shared Rust core (`core/src/conversation.rs`)
+  - structured tool payload: `tool_name`, `exit_code`, `duration_ms`, `diff_summary` populated by the Rust classifier
+  - pending-input cards with typed reply options (`PendingInputCard` / `ConversationPendingInputCard`)
+  - subagent + handoff cards (`SubagentCard` / `HandoffCard` on both platforms)
 - Multi-server persistence scaffolding exists in app settings:
   - iOS: Keychain-backed saved servers
   - Android: EncryptedSharedPreferences-backed saved servers
+- Test discipline (today, 2026-05-21):
+  - iOS `SweKittyTests` target with 20+ tests (PR #20)
+  - Android JUnit harness + TerminalBridge tests (PR #21)
+  - core E2E WebSocket round-trip tests (PR #25)
+  - swift-snapshot-testing + Roborazzi wired (PR #30); CI uploads xcresult + diff dirs on failure (PR #31)
 
 ### In Progress
-- Structured tool payload parity with KittyLitter:
-  - explicit command args / exit code / timing
-  - stdout/stderr grouping
-  - richer progress state transitions
-- Diff UX parity:
-  - per-file/per-hunk grouping and collapsible sections
-- Pending user-input UX parity:
-  - native request/choice cards instead of plain text fallback
+- Package 1 (Rust-first refactor): `core/src/store/` `AppStore` with snapshots + subscriber callbacks; iOS/Android `SessionStore` to project from the Rust store. Slices 1 & 2 (typed conversation classifier + tool-card consumption) shipped; slice 3 (reducer to Rust) open. See [`docs/PLAN-2026-05-19.md`](docs/PLAN-2026-05-19.md) §8.
 
 ### Planned (not started or partial)
 - Discovery view (mDNS browser UI)
-- Push notifications + background wake/reconnect
-- Subagent / handoff timeline polish
-- Voice I/O and deeper composer parity
+- Push notifications + background wake/reconnect (Package 5; no `broker/internal/push/` yet, no APNs/FCM client)
+- Voice rail B (realtime WebRTC) — rail A (Whisper-style push-to-talk) shipped per `docs/PLAN-2026-05-19.md` §8
+- Deeper composer parity (attach sheet, context bar, expanded editor)
 
 Authoritative roadmap remains in:
 - [`docs/PLAN.md`](docs/PLAN.md)
