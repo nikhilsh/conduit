@@ -38,11 +38,17 @@ struct SweKittyApp: App {
                     }
                 if showSplash {
                     AnimatedSplashView { showSplash = false }
+                        .environment(store)
+                        .environment(appearance)
+                        .preferredColorScheme(appearance.themeMode.colorScheme)
                         .transition(.opacity)
                         .zIndex(1)
                 }
             }
-            .animation(.easeOut(duration: 0.3), value: showSplash)
+            .animation(
+                .easeOut(duration: AnimatedSplashModel.crossFadeDuration),
+                value: showSplash
+            )
         }
     }
 
