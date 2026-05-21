@@ -363,7 +363,7 @@ private fun EmptyConversationCard(assistant: String) {
         ) {
             Text("No conversation yet", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Type a message below. Until the structured-chat adapter lands, replies from $assistant arrive in the Terminal tab — the chat tab here just records what you've sent.",
+                "Send a message to $assistant. Replies appear here as structured turns; the Terminal tab still shows the raw TUI if you want to peek at the unparsed stream.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
