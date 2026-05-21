@@ -89,6 +89,8 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        AgentAvatar(assistant = session.assistant, size = 32.dp)
+                        Spacer(Modifier.width(10.dp))
                         HealthDot(status?.health ?: "unknown")
                         Spacer(Modifier.width(10.dp))
                         Column {

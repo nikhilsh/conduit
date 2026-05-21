@@ -23,7 +23,21 @@ internal object SweKittyPalette {
     // litter's visual reference (see iOS Palette.swift comment).
     val accentStrong    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
     val claudeAccent    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
-    val codexAccent     = AdaptiveColor(0xFF10A37F, 0xFF1FCB9C)
+    val claudeAccentStrong = AdaptiveColor(0xFFA85A3F, 0xFFCC785C)
+    val codexAccent     = AdaptiveColor(0xFF10B981, 0xFF34D399)
+    val codexAccentStrong  = AdaptiveColor(0xFF047857, 0xFF10B981)
+    // Hermes purple — Tailwind purple-500. No public Hermes adapter
+    // brand to anchor to, so this is a defensible choice that contrasts
+    // cleanly with claude/codex.
+    val hermesAccent    = AdaptiveColor(0xFFA855F7, 0xFFC084FC)
+    val hermesAccentStrong = AdaptiveColor(0xFF7E22CE, 0xFFA855F7)
+    // Inflection Pi blue — Tailwind blue-500.
+    val piAccent        = AdaptiveColor(0xFF3B82F6, 0xFF60A5FA)
+    val piAccentStrong  = AdaptiveColor(0xFF1D4ED8, 0xFF3B82F6)
+    // opencode orange — Tailwind orange-500. sst.dev's opencode docs
+    // site reads orange.
+    val opencodeAccent  = AdaptiveColor(0xFFF97316, 0xFFFB923C)
+    val opencodeAccentStrong = AdaptiveColor(0xFFC2410C, 0xFFF97316)
     val textPrimary     = AdaptiveColor(0xFF1A1A1A, 0xFFFFFFFF)
     val textSecondary   = AdaptiveColor(0xFF6B6B6B, 0xFF888888)
     val textMuted       = AdaptiveColor(0xFF9E9E9E, 0xFF555555)
@@ -40,17 +54,71 @@ internal object SweKittyPalette {
 }
 
 object SweKittyTheme {
-    @Composable @ReadOnlyComposable fun accent()        : Color = SweKittyPalette.accent.color()
-    @Composable @ReadOnlyComposable fun accentStrong()  : Color = SweKittyPalette.accentStrong.color()
-    @Composable @ReadOnlyComposable fun claudeAccent()  : Color = SweKittyPalette.claudeAccent.color()
-    @Composable @ReadOnlyComposable fun codexAccent()   : Color = SweKittyPalette.codexAccent.color()
+    @Composable @ReadOnlyComposable fun accent()          : Color = SweKittyPalette.accent.color()
+    @Composable @ReadOnlyComposable fun accentStrong()    : Color = SweKittyPalette.accentStrong.color()
+    @Composable @ReadOnlyComposable fun claudeAccent()    : Color = SweKittyPalette.claudeAccent.color()
+    @Composable @ReadOnlyComposable fun codexAccent()     : Color = SweKittyPalette.codexAccent.color()
+    @Composable @ReadOnlyComposable fun hermesAccent()    : Color = SweKittyPalette.hermesAccent.color()
+    @Composable @ReadOnlyComposable fun piAccent()        : Color = SweKittyPalette.piAccent.color()
+    @Composable @ReadOnlyComposable fun opencodeAccent()  : Color = SweKittyPalette.opencodeAccent.color()
 
-    /** Per-agent accent. Falls back to [accentStrong] for unknown agents. */
+    /**
+     * Per-agent accent. Each adapter that ships with the harness gets
+     * a distinct hue — Claude copper, Codex green, Hermes purple,
+     * Pi blue, opencode orange. Falls back to the neutral gray
+     * [accent] for unknown agents (rather than the copper brand
+     * accent, so an unknown agent doesn't masquerade as Claude).
+     */
     @Composable @ReadOnlyComposable
     fun accent(forAgent: String): Color = when (forAgent.lowercase()) {
-        "claude" -> claudeAccent()
-        "codex"  -> codexAccent()
-        else     -> accentStrong()
+        "claude"   -> claudeAccent()
+        "codex"    -> codexAccent()
+        "hermes"   -> hermesAccent()
+        "pi"       -> piAccent()
+        "opencode" -> opencodeAccent()
+        else       -> accent()
+    }
+
+    /**
+     * High-emphasis sibling of [accent]. Use for filled avatars, the
+     * user-bubble background on agent-tinted surfaces, or any chrome
+     * where the regular accent reads too light against
+     * [textOnAccent]. Same fallback policy: neutral gray for unknown.
+     */
+    @Composable @ReadOnlyComposable
+    fun accentStrong(forAgent: String): Color = when (forAgent.lowercase()) {
+        "claude"   -> SweKittyPalette.claudeAccentStrong.color()
+        "codex"    -> SweKittyPalette.codexAccentStrong.color()
+        "hermes"   -> SweKittyPalette.hermesAccentStrong.color()
+        "pi"       -> SweKittyPalette.piAccentStrong.color()
+        "opencode" -> SweKittyPalette.opencodeAccentStrong.color()
+        else       -> accent()
+    }
+
+    /**
+     * Pure (non-Composable) per-agent light-mode RGB. Lives here so
+     * unit tests can pin the color map without instantiating a
+     * Compose runtime — JUnit isn't a Composable scope. The
+     * Composable [accent] above is still the call site for the
+     * actual UI; this just exposes the same source-of-truth list
+     * for parity tests.
+     */
+    fun accentForAgentLightRgb(forAgent: String): Long = when (forAgent.lowercase()) {
+        "claude"   -> SweKittyPalette.claudeAccent.light
+        "codex"    -> SweKittyPalette.codexAccent.light
+        "hermes"   -> SweKittyPalette.hermesAccent.light
+        "pi"       -> SweKittyPalette.piAccent.light
+        "opencode" -> SweKittyPalette.opencodeAccent.light
+        else       -> SweKittyPalette.accent.light
+    }
+
+    fun accentStrongForAgentLightRgb(forAgent: String): Long = when (forAgent.lowercase()) {
+        "claude"   -> SweKittyPalette.claudeAccentStrong.light
+        "codex"    -> SweKittyPalette.codexAccentStrong.light
+        "hermes"   -> SweKittyPalette.hermesAccentStrong.light
+        "pi"       -> SweKittyPalette.piAccentStrong.light
+        "opencode" -> SweKittyPalette.opencodeAccentStrong.light
+        else       -> SweKittyPalette.accent.light
     }
     @Composable @ReadOnlyComposable fun textPrimary()   : Color = SweKittyPalette.textPrimary.color()
     @Composable @ReadOnlyComposable fun textSecondary() : Color = SweKittyPalette.textSecondary.color()

@@ -19,8 +19,25 @@ enum SweKittyPalette {
     static let accentStrong    = Pair(light: "#CC785C", dark: "#E89677")
     /// Anthropic copper. Used when the active agent is Claude.
     static let claudeAccent    = Pair(light: "#CC785C", dark: "#E89677")
+    /// Anthropic copper — strong variant for high-emphasis surfaces.
+    static let claudeAccentStrong = Pair(light: "#A85A3F", dark: "#CC785C")
     /// OpenAI green. Used when the active agent is Codex.
-    static let codexAccent     = Pair(light: "#10A37F", dark: "#1FCB9C")
+    static let codexAccent     = Pair(light: "#10B981", dark: "#34D399")
+    /// OpenAI green — strong variant for high-emphasis surfaces.
+    static let codexAccentStrong  = Pair(light: "#047857", dark: "#10B981")
+    /// Hermes purple. Mythological messenger — a Tailwind purple-500.
+    /// No public Hermes adapter brand to anchor to, so this is a
+    /// defensible choice that contrasts cleanly with claude/codex.
+    static let hermesAccent    = Pair(light: "#A855F7", dark: "#C084FC")
+    static let hermesAccentStrong = Pair(light: "#7E22CE", dark: "#A855F7")
+    /// Inflection Pi blue. Tailwind blue-500 — Inflection's brand
+    /// reads as a cool blue in their marketing.
+    static let piAccent        = Pair(light: "#3B82F6", dark: "#60A5FA")
+    static let piAccentStrong  = Pair(light: "#1D4ED8", dark: "#3B82F6")
+    /// opencode orange. Tailwind orange-500 — sst.dev's opencode
+    /// reads orange on its docs site.
+    static let opencodeAccent  = Pair(light: "#F97316", dark: "#FB923C")
+    static let opencodeAccentStrong = Pair(light: "#C2410C", dark: "#F97316")
     static let textPrimary     = Pair(light: "#1A1A1A", dark: "#FFFFFF")
     static let textSecondary   = Pair(light: "#6B6B6B", dark: "#888888")
     static let textMuted       = Pair(light: "#9E9E9E", dark: "#555555")

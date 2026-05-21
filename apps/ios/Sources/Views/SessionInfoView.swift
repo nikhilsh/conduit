@@ -80,6 +80,7 @@ struct SessionInfoView: View {
     private var hero: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 10) {
+                AgentAvatar(assistant: session.assistant, size: 32)
                 HealthDot(health: status?.health ?? "unknown", size: 10)
                 Text(store.displayName(for: session))
                     .font(.title2.weight(.bold))

@@ -6,17 +6,44 @@ import SwiftUI
 enum SweKittyTheme {
     // MARK: - Adaptive colours
 
-    static var accent: Color        { SweKittyPalette.accent.color }
-    static var accentStrong: Color  { SweKittyPalette.accentStrong.color }
-    static var claudeAccent: Color  { SweKittyPalette.claudeAccent.color }
-    static var codexAccent: Color   { SweKittyPalette.codexAccent.color }
+    static var accent: Color          { SweKittyPalette.accent.color }
+    static var accentStrong: Color    { SweKittyPalette.accentStrong.color }
+    static var claudeAccent: Color    { SweKittyPalette.claudeAccent.color }
+    static var codexAccent: Color     { SweKittyPalette.codexAccent.color }
+    static var hermesAccent: Color    { SweKittyPalette.hermesAccent.color }
+    static var piAccent: Color        { SweKittyPalette.piAccent.color }
+    static var opencodeAccent: Color  { SweKittyPalette.opencodeAccent.color }
 
-    /// Per-agent accent. Falls back to `accentStrong` for unknown agents.
+    /// Per-agent accent. Each adapter that ships with the harness
+    /// gets a distinct hue so users can see *which* agent they're
+    /// talking to at a glance — Claude copper, Codex green, Hermes
+    /// purple, Pi blue, opencode orange. Falls back to the neutral
+    /// gray `accent` token for unknown agents (rather than the
+    /// copper brand accent, so an unknown agent doesn't masquerade
+    /// as Claude).
     static func accent(forAgent assistant: String) -> Color {
         switch assistant.lowercased() {
-        case "claude": return claudeAccent
-        case "codex":  return codexAccent
-        default:       return accentStrong
+        case "claude":   return claudeAccent
+        case "codex":    return codexAccent
+        case "hermes":   return hermesAccent
+        case "pi":       return piAccent
+        case "opencode": return opencodeAccent
+        default:         return accent
+        }
+    }
+
+    /// High-emphasis sibling of `accent(forAgent:)`. Use for filled
+    /// avatars, the user-bubble background on agent-tinted surfaces,
+    /// or any chrome where the regular accent reads too light against
+    /// `textOnAccent`. Same fallback policy: neutral gray for unknown.
+    static func accentStrong(forAgent assistant: String) -> Color {
+        switch assistant.lowercased() {
+        case "claude":   return SweKittyPalette.claudeAccentStrong.color
+        case "codex":    return SweKittyPalette.codexAccentStrong.color
+        case "hermes":   return SweKittyPalette.hermesAccentStrong.color
+        case "pi":       return SweKittyPalette.piAccentStrong.color
+        case "opencode": return SweKittyPalette.opencodeAccentStrong.color
+        default:         return accent
         }
     }
     static var textPrimary: Color   { SweKittyPalette.textPrimary.color }

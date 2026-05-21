@@ -1,14 +1,10 @@
 package sh.nikhil.swekitty.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -74,10 +70,10 @@ fun AgentPickerSheet(
                 }
             }
             AgentTile(
+                assistant = "claude",
                 label = "Claude",
                 subtitle = "Anthropic — copper accent, headstrong",
                 tint = SweKittyTheme.claudeAccent(),
-                icon = { Icon(Icons.Filled.AutoAwesome, null, tint = Color.White) },
                 enabled = harness.canIssueCommands,
                 onTap = {
                     store.createSession("claude")
@@ -85,10 +81,10 @@ fun AgentPickerSheet(
                 },
             )
             AgentTile(
+                assistant = "codex",
                 label = "Codex",
                 subtitle = "OpenAI — green accent, codex",
                 tint = SweKittyTheme.codexAccent(),
-                icon = { Icon(Icons.Filled.Code, null, tint = Color.White) },
                 enabled = harness.canIssueCommands,
                 onTap = {
                     store.createSession("codex")
@@ -109,10 +105,10 @@ fun AgentPickerSheet(
 
 @Composable
 private fun AgentTile(
+    assistant: String,
     label: String,
     subtitle: String,
     tint: Color,
-    icon: @Composable () -> Unit,
     enabled: Boolean,
     onTap: () -> Unit,
 ) {
@@ -128,13 +124,7 @@ private fun AgentTile(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(if (enabled) tint else tint.copy(alpha = 0.4f)),
-                contentAlignment = Alignment.Center,
-            ) { icon() }
+            AgentAvatar(assistant = assistant, size = 44.dp)
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

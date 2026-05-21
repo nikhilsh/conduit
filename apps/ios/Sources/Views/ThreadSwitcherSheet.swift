@@ -182,7 +182,15 @@ struct ThreadSwitcherSheet: View {
             switchTo(session: session)
         } label: {
             HStack(spacing: 12) {
-                HealthDot(health: status?.health ?? "unknown", size: 10)
+                ZStack(alignment: .bottomTrailing) {
+                    AgentAvatar(assistant: session.assistant, size: 28)
+                    HealthDot(health: status?.health ?? "unknown", size: 8)
+                        .overlay(
+                            Circle()
+                                .stroke(SweKittyTheme.surface, lineWidth: 1.5)
+                        )
+                        .offset(x: 2, y: 2)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(store.displayName(for: session))
                         .font(.system(.body, design: .monospaced).weight(.semibold))

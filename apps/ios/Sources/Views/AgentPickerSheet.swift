@@ -25,13 +25,13 @@ struct AgentPickerSheet: View {
                     agentButton(
                         kind: "claude",
                         label: "Claude",
-                        icon: "sparkles",
+                        subtitle: "Anthropic — copper accent, headstrong",
                         tint: SweKittyTheme.claudeAccent
                     )
                     agentButton(
                         kind: "codex",
                         label: "Codex",
-                        icon: "chevron.left.forwardslash.chevron.right",
+                        subtitle: "OpenAI — green accent, codex",
                         tint: SweKittyTheme.codexAccent
                     )
                     if !store.harness.canIssueCommands {
@@ -78,25 +78,18 @@ struct AgentPickerSheet: View {
         }
     }
 
-    private func agentButton(kind: String, label: String, icon: String, tint: Color) -> some View {
+    private func agentButton(kind: String, label: String, subtitle: String, tint: Color) -> some View {
         Button {
             store.createSession(assistant: kind)
             dismiss()
         } label: {
             HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.title2)
-                    .foregroundStyle(SweKittyTheme.textOnAccent)
-                    .frame(width: 44, height: 44)
-                    .background(tint)
-                    .clipShape(Circle())
+                AgentAvatar(assistant: kind, size: 44)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(SweKittyTheme.textPrimary)
-                    Text(kind == "claude"
-                        ? "Anthropic — copper accent, headstrong"
-                        : "OpenAI — green accent, codex")
+                    Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(SweKittyTheme.textMuted)
                 }
