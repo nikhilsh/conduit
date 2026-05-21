@@ -6,7 +6,7 @@ Written 2026-05-21. Counter to how we've been shipping so far.
 
 | Layer | Test files | Coverage |
 | --- | --- | --- |
-| Go server (`harness/`) | yes — `*_test.go` per package | reasonable; new code lands with table tests |
+| Go server (`broker/`) | yes — `*_test.go` per package | reasonable; new code lands with table tests |
 | Rust core (`core/`) | yes — `cargo test` | thin but real, especially `session.rs::tests` |
 | iOS app (`apps/ios/`) | **none** | zero |
 | Android app (`apps/android/`) | **none** | zero |
@@ -77,9 +77,9 @@ The TDD loop we want, in one paragraph: write a test that captures the *contract
 
 `cargo test --workspace` works today. Add:
 - **Integration test for `apply_status`** — assert that the new info-sheet fields from PR #16 actually thread through.
-- **End-to-end protocol test** — spin up a fake WebSocket server in-process, drive `transport::connect`, assert the `ChatEvent` / `SessionStatus` round-trip. This is the **real** test harness: it exercises the wire format end-to-end without spawning an agent.
+- **End-to-end protocol test** — spin up a fake WebSocket server in-process, drive `transport::connect`, assert the `ChatEvent` / `SessionStatus` round-trip. This is the **real** test broker: it exercises the wire format end-to-end without spawning an agent.
 
-### Server (currently `harness/`) — keep the discipline
+### Server (currently `broker/`) — keep the discipline
 
 The Go side is the only place we already do TDD. Don't regress. The session GC (`PR #14`), the PTY scraper (`PR #13`), and the ANSI stripper all landed with tests because we were in the habit there.
 
@@ -115,6 +115,6 @@ Required-to-merge: all four. No `[skip ci]` for client changes. No "I'll add the
 ## Next steps (after this doc is approved)
 
 1. Add iOS XCTest target + first 3 tests (~half day, one PR).
-2. Add Android JUnit harness + first 2 tests (~half day, one PR).
+2. Add Android JUnit broker + first 2 tests (~half day, one PR).
 3. Wire CI gates (separate small PR so it's reversible).
 4. Adopt the rule. Watch what happens.

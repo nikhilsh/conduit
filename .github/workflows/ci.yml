@@ -10,19 +10,19 @@ env:
 
 jobs:
 
-  harness:
-    name: harness (go)
+  broker:
+    name: broker (go)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-          cache-dependency-path: harness/go.sum
+          cache-dependency-path: broker/go.sum
       - name: Skip if no Go code yet
         id: detect
         run: |
-          if [ ! -f harness/go.mod ]; then
+          if [ ! -f broker/go.mod ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -33,22 +33,22 @@ jobs:
         with:
           node-version: '20'
       - name: Install sidecar deps
-        if: steps.detect.outputs.skip != 'true' && hashFiles('harness/sidecar/package.json') != ''
-        working-directory: harness/sidecar
+        if: steps.detect.outputs.skip != 'true' && hashFiles('broker/sidecar/package.json') != ''
+        working-directory: broker/sidecar
         run: npm install --omit=dev --no-audit --no-fund
       - name: go vet
         if: steps.detect.outputs.skip != 'true'
-        working-directory: harness
+        working-directory: broker
         run: go vet ./...
       - name: go test
         if: steps.detect.outputs.skip != 'true'
-        working-directory: harness
+        working-directory: broker
         run: go test ./...
       - name: golangci-lint
         if: steps.detect.outputs.skip != 'true'
         uses: golangci/golangci-lint-action@v6
         with:
-          working-directory: harness
+          working-directory: broker
           version: latest
 
   core:

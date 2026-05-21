@@ -1,7 +1,7 @@
 # swe-kitty single-container harness image.
 #
 # Distribution model — one container per `docker compose up`, all agents
-# pre-installed inside, `swe-kitty-harness` runs as user `app` (uid 1000).
+# pre-installed inside, `swe-kitty-broker` runs as user `app` (uid 1000).
 # Per-session isolation is per-process + per-worktree, not per-container.
 # This is the swe-swe-shaped pattern (see docs/AGENT-ADAPTERS.md §2):
 # claude won't refuse `--dangerously-skip-permissions` because the harness
@@ -31,8 +31,8 @@ RUN cd harness \
     && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
          -trimpath \
          -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
-         -o /out/swe-kitty-harness \
-         ./cmd/swe-kitty-harness
+         -o /out/swe-kitty-broker \
+         ./cmd/swe-kitty-broker
 
 
 # Stage 2: runtime — node base + all the agent CLIs we ship adapters for.
@@ -90,7 +90,7 @@ RUN userdel --remove node 2>/dev/null || true \
     && mkdir -p /workspace /worktrees /home/app/.swe-kitty \
     && chown -R app:app /workspace /worktrees /home/app
 
-COPY --from=builder /out/swe-kitty-harness /usr/local/bin/swe-kitty-harness
+COPY --from=builder /out/swe-kitty-broker /usr/local/bin/swe-kitty-broker
 
 # Agent adapter TOMLs are read by the harness on startup. Ship the
 # production set from repo-root `agents/`, not the dev `.swe-kitty/agents/`.
@@ -103,5 +103,5 @@ ENV HOME=/home/app \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     SWE_KITTY_AGENTS_DIR=/etc/swe-kitty/agents
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/swe-kitty-harness"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/swe-kitty-broker"]
 CMD ["up", "--addr", ":1977", "--agents-dir", "/etc/swe-kitty/agents"]

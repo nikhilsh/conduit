@@ -4,7 +4,7 @@ This is the release path for publishing:
 
 - signed iOS IPA
 - signed Android APK
-- harness binaries
+- broker binaries
 - updated static website on Fyra
 
 The website reads the latest GitHub Release at build time, so the release assets must exist before the Fyra deploy.
@@ -66,11 +66,11 @@ git push origin v0.0.X
 ```
 prepare ──┬── ios ─────┐
           ├── android ─┼── deploy-website (Fyra)
-          └── harness ─┘
+          └── broker ─┘
 ```
 
 - `prepare` resolves the tag and ensures the GitHub Release exists
-- `ios`, `android`, `harness` are reusable workflows (`./.github/workflows/release-*.yml`) called in parallel via `workflow_call`
+- `ios`, `android`, `broker` are reusable workflows (`./.github/workflows/release-*.yml`) called in parallel via `workflow_call`
 - `deploy-website` verifies all required assets are present and then pushes the static site to Fyra
 
 Manual release without a git tag (e.g. to ship `main` HEAD):
@@ -91,7 +91,7 @@ gh run watch <run-id> --exit-status
 
 - `SweKitty.ipa`
 - Android `*.apk`
-- harness binaries
+- broker binaries
 
 Example:
 
@@ -175,13 +175,13 @@ The latest GitHub Release used by the site does not yet contain an APK asset. Re
 Check:
 
 - `FYRA_TOKEN` exists in repo secrets
-- The `ios`, `android`, and `harness` jobs in the same `release` run all succeeded
+- The `ios`, `android`, and `broker` jobs in the same `release` run all succeeded
 - The GitHub Release has:
   - `SweKitty.ipa`
   - `app-release.apk`
-  - the four harness binaries (`swe-kitty-harness-{linux,darwin}-{amd64,arm64}`)
+  - the four broker binaries (`swe-kitty-broker-{linux,darwin}-{amd64,arm64}`)
 
-To re-run just the website deploy without rebuilding the apps, use "Re-run failed jobs" on the `release` workflow run — `prepare`, `ios`, `android`, `harness` are skipped if green and only `deploy-website` re-runs.
+To re-run just the website deploy without rebuilding the apps, use "Re-run failed jobs" on the `release` workflow run — `prepare`, `ios`, `android`, `broker` are skipped if green and only `deploy-website` re-runs.
 
 ### Fyra push fails from `website/out`
 

@@ -7,8 +7,8 @@ Date: 2026-05-18 (updated 2026-05-19)
 Priorities 1 and 2 below have shipped on `main`:
 
 - `core/src/lib.rs` now owns a `Lazy<Runtime>` via `tokio::runtime::Builder::new_multi_thread()`; transport work runs on it. The `there is no reactor running` panic on first `create_session` is gone, and `cargo test` / `cargo clippy -D warnings` are green.
-- `harness/internal/ws/conformance_test.go::TestPingPong` is green; ping/pong are now JSON text frames per `docs/WEBSOCKET-PROTOCOL.md §3.3`.
-- Session creation failures surface as typed errors instead of a Rust panic. The apps now distinguish "Paired" (token stored) from a verified harness round-trip; auth failures map to a re-pair instruction (see `docs/SENTRY.md`).
+- `broker/internal/ws/conformance_test.go::TestPingPong` is green; ping/pong are now JSON text frames per `docs/WEBSOCKET-PROTOCOL.md §3.3`.
+- Session creation failures surface as typed errors instead of a Rust panic. The apps now distinguish "Paired" (token stored) from a verified broker round-trip; auth failures map to a re-pair instruction (see `docs/SENTRY.md`).
 
 Priority 3 (iOS UI convergence toward the KittyLitter surface) is the open work — tracked in `docs/MOBILE-PORT-MATRIX.md` (Package B sub-plan) and `docs/MOBILE-FEATURE-BACKLOG.md`.
 
@@ -60,14 +60,14 @@ Evidence:
 Interpretation:
 
 - The app has only one coarse `connection` state, but the real product model has at least two distinct states:
-  - harness reachability / auth
+  - broker reachability / auth
   - per-session creation and lifecycle
 - A session creation failure is being shoved into the same global connection bucket, so the UI has no focused place to present it.
 
 Required fix:
 
 - Add explicit session creation state and inline error presentation in the project/session creation flow.
-- Do not report the app as fully "connected" until at least one harness operation has succeeded, or rename the state to something narrower like "configured".
+- Do not report the app as fully "connected" until at least one broker operation has succeeded, or rename the state to something narrower like "configured".
 
 ### 3. The current iOS UI is intentionally a minimal shell, not the planned KittyLitter-style product surface
 
@@ -95,7 +95,7 @@ Interpretation:
 
 Assessment:
 
-- For the harness/core integration work, the stripped-down shell was a fast way to validate transport and release plumbing.
+- For the broker/core integration work, the stripped-down shell was a fast way to validate transport and release plumbing.
 - For the product surface, it was the wrong stopping point because it leaves too much design and behavior debt:
   - weaker error surfacing
   - less familiar information architecture
@@ -104,7 +104,7 @@ Assessment:
 Recommendation:
 
 - Treat the next iOS pass as a convergence release:
-  - keep the new Rust core + harness plumbing
+  - keep the new Rust core + broker plumbing
   - pull the UI hierarchy, navigation patterns, and view composition much closer to the KittyLitter reference / planned design
   - avoid another parallel custom shell unless a specific platform limitation forces it
 
@@ -118,7 +118,7 @@ Recommendation:
 
 ### Priority 2: Fix error presentation
 
-- Separate harness/auth state from session lifecycle state.
+- Separate broker/auth state from session lifecycle state.
 - Show session creation failure inline at the point of action.
 - Keep Settings for configuration, not as the main place users discover runtime failures.
 
@@ -143,6 +143,6 @@ Recommendation:
 
 The next iOS release should:
 
-- successfully create and open a session against a live harness
+- successfully create and open a session against a live broker
 - surface session creation failures in-context if anything goes wrong
 - move the UI materially closer to the planned KittyLitter-style app instead of preserving the current scaffold feel

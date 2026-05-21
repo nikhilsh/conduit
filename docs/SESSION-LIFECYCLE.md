@@ -15,7 +15,7 @@ Every session has three independent rails on disk. Recovery is possible iff all 
 ## 2. Session creation
 
 1. Client `GET /ws/<new-uuid>?assistant=<a>` with bearer auth.
-2. Harness:
+2. Broker:
    1. Allocates a preview port from `[3000, 3019]`.
    2. Creates worktree: `git worktree add .swe-kitty/sessions/<uuid>/work -b agent/<a>-<task-or-uuidshort> origin/main`
    3. Renders session memory HTML from `.swe-kitty/memory/session-template.html` (substitutes placeholders).
@@ -31,7 +31,7 @@ A checkpoint is a coordinated flush of all three rails. Triggers:
 - 60s ticker (configurable: `[checkpoint] interval_sec`)
 - Every `switch_agent`
 - Every clean `exit`
-- `SIGTERM` to the harness
+- `SIGTERM` to the broker
 - Manual `swe-kitty memory checkpoint --session <uuid>` from inside the container or host
 
 Checkpoint sequence (atomic):
@@ -51,7 +51,7 @@ A goroutine per session, independent of the PTY drain. Runs three checks every 3
 |---|---|---|
 | Container alive | `docker exec <name> /bin/true` | Mark session `dead`; broadcast `phase: "stalled"`; emit `view_event` to chat tab; **do not** auto-restart |
 | PTY producing output | bytes-since-last-output > `[watchdog] stall_alert_after_sec` (default 300s) | Mark `warning`; broadcast `phase: "stalled"`; emit alert `view_event` |
-| Memory writable | open + fsync probe file under `.swe-kitty/memory/` | Log error; broadcast `phase: "stalled"`; do not crash harness |
+| Memory writable | open + fsync probe file under `.swe-kitty/memory/` | Log error; broadcast `phase: "stalled"`; do not crash broker |
 
 `auto_restart_on_crash` is `false` by default (avoids agents looping forever burning credits). Users tap "Resume" in the mobile app to restart.
 
@@ -78,9 +78,9 @@ Triggered by `{"type":"switch_agent","assistant":"<new>"}` from any connected cl
 
 The worktree, branch, git state, scrollback, and memory are preserved across the swap. The container instance and process state are reset (deliberately — that's the point).
 
-## 6. Harness restart recovery
+## 6. Broker restart recovery
 
-`swe-kitty-harness up` after a kill / reboot:
+`swe-kitty-broker up` after a kill / reboot:
 
 1. Scan `.swe-kitty/sessions/*/` for sessions.
 2. For each:
@@ -91,13 +91,13 @@ The worktree, branch, git state, scrollback, and memory are preserved across the
    3. Mark `phase: "running"`.
 3. Start the WebSocket server. Reconnecting clients get the standard snapshot and resume.
 
-Sessions can survive an arbitrary number of harness restarts as long as Docker and the filesystem persist.
+Sessions can survive an arbitrary number of broker restarts as long as Docker and the filesystem persist.
 
 ## 7. Session shutdown
 
 Triggered by:
 - `{"type":"exit"}` from any client (graceful, prompts confirm in app)
-- Explicit `swe-kitty-harness session rm <uuid>` from CLI
+- Explicit `swe-kitty-broker session rm <uuid>` from CLI
 
 Shutdown sequence:
 1. Final checkpoint (§3).
@@ -113,12 +113,12 @@ Shutdown sequence:
 |---|---|
 | Agent CLI crashes inside container | Watchdog detects, session `dead`, mobile shows Resume sheet; scrollback + memory intact; Resume re-runs `on_start` and respawns container with same adapter |
 | Container OOM-killed | Same as above |
-| Harness process `kill -9` | On restart (§6), all sessions recovered; clients reconnect and see snapshot — appears as a brief network blip |
+| Broker process `kill -9` | On restart (§6), all sessions recovered; clients reconnect and see snapshot — appears as a brief network blip |
 | Mid-PR agent swap | §5 round-trip; new agent sees diff-so-far via `git stash list` from the auto-WIP, plus `HANDOFF.html` |
-| Phone loses network for 1h | Sessions keep running on harness; on reconnect, gzip snapshot brings UI up to date |
-| Concurrent memory edits (human + harness) | Detected via mtime+hash; human content in non-meta sections wins; `meta` and `env-snapshot` re-rendered by harness |
-| User force-quits mobile app | No effect — harness sessions are server-side |
+| Phone loses network for 1h | Sessions keep running on broker; on reconnect, gzip snapshot brings UI up to date |
+| Concurrent memory edits (human + broker) | Detected via mtime+hash; human content in non-meta sections wins; `meta` and `env-snapshot` re-rendered by broker |
+| User force-quits mobile app | No effect — broker sessions are server-side |
 | Disk full during checkpoint | Checkpoint aborted with logged error, session continues in degraded mode (memory rail stale but PTY and worktree still live); mobile shows 🟡 warning |
-| `HANDOFF-OUT.html` malformed | Validator rejects it; harness falls back to last checkpoint's handoff; logged |
+| `HANDOFF-OUT.html` malformed | Validator rejects it; broker falls back to last checkpoint's handoff; logged |
 
-Integration tests under `harness/internal/session/integration_test.go` cover each row (task 005).
+Integration tests under `broker/internal/session/integration_test.go` cover each row (task 005).

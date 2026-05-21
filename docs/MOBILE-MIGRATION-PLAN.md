@@ -79,7 +79,7 @@ Recommended default: **Path B unless you explicitly approve relicensing / deriva
 Reason:
 
 - the licensing mismatch is real
-- the current repo already has its own harness/core/product constraints
+- the current repo already has its own broker/core/product constraints
 - we do not need voice/audio/realtime Codex-specific features from upstream to get the UI shell and product quality back
 
 If you explicitly want the fastest route and are fine treating this as a derivative of `litter`, then Path A becomes the practical choice.
@@ -117,7 +117,7 @@ Plan:
 - wait for:
   - iOS IPA
   - Android APK
-  - harness binaries
+  - broker binaries
 - if any release job fails:
   - fail the orchestrator clearly
   - surface the exact failed workflow/job in one place

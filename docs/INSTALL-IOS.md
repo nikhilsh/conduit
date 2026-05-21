@@ -54,9 +54,9 @@ handles refresh automatically while it's connected to AltServer.
   signing identity. (Ad-hoc profiles are pre-trusted on devices whose
   UDID is in the profile; this step is for Apple-ID-signed re-signs.)
 - Launch SweKitty → the **Settings sheet** opens.
-- Either type the harness endpoint + bearer token manually, or tap
+- Either type the broker endpoint + bearer token manually, or tap
   **Scan pairing QR** and point the camera at the QR printed when you
-  ran `swe-kitty-harness up`.
+  ran `swe-kitty-broker up`.
 
 ## Updating
 

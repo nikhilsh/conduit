@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/memory"
+	"github.com/nikhilsh/swe-kitty/broker/internal/memory"
 )
 
 var (
@@ -17,7 +17,7 @@ var (
 
 func runMemory(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(memoryStderr, "usage: swe-kitty-harness memory <init|render|checkpoint|handoff|promote|show>")
+		fmt.Fprintln(memoryStderr, "usage: swe-kitty-broker memory <init|render|checkpoint|handoff|promote|show>")
 		return 2
 	}
 	root := "."

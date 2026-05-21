@@ -1,8 +1,8 @@
 # swe-kitty
 
-A phone-first AI coding harness. Drive Claude Code, Codex, and other agents from iOS and Android with per-project tabs for terminal, agent chat, and live preview.
+A phone-first AI coding broker. Drive Claude Code, Codex, and other agents from iOS and Android with per-project tabs for terminal, agent chat, and live preview.
 
-swe-kitty is its own product — three layers (Rust core, Go harness, native shells) that all ship from this repo. Its WebSocket wire shape is documented in `docs/WEBSOCKET-PROTOCOL.md`; the harness, IPA, APK, and harness binaries all come from `release.yml` in this repo and only this repo.
+swe-kitty is its own product — three layers (Rust core, Go broker, native shells) that all ship from this repo. Its WebSocket wire shape is documented in `docs/WEBSOCKET-PROTOCOL.md`; the broker, IPA, APK, and broker binaries all come from `release.yml` in this repo and only this repo.
 
 ```
 ┌───────────────────────────────┐
@@ -16,7 +16,7 @@ swe-kitty is its own product — three layers (Rust core, Go harness, native she
 └───────────────┬───────────────┘
                 │ WebSocket
 ┌───────────────┴───────────────┐
-│  swe-kitty-harness (Go)       │
+│  swe-kitty-broker (Go)       │
 │  PTY · worktrees · Docker     │
 └───────────────────────────────┘
 ```
@@ -25,13 +25,13 @@ swe-kitty is its own product — three layers (Rust core, Go harness, native she
 
 - **Full plan + roadmap:** [`docs/PLAN.md`](docs/PLAN.md)
 - **Architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- **Frozen contracts** (read these before writing any harness/core/agent code):
+- **Frozen contracts** (read these before writing any broker/core/agent code):
   - [`docs/WEBSOCKET-PROTOCOL.md`](docs/WEBSOCKET-PROTOCOL.md)
   - [`docs/AGENT-ADAPTERS.md`](docs/AGENT-ADAPTERS.md)
   - [`docs/MEMORY-FORMAT.md`](docs/MEMORY-FORMAT.md)
   - [`docs/SESSION-LIFECYCLE.md`](docs/SESSION-LIFECYCLE.md)
 - **Working on this repo:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- **Running your own harness:** [`docs/SELF-HOST.md`](docs/SELF-HOST.md)
+- **Running your own broker:** [`docs/SELF-HOST.md`](docs/SELF-HOST.md)
 
 ## Install (post-v0.4)
 
@@ -46,11 +46,11 @@ swe-kitty is its own product — three layers (Rust core, Go harness, native she
 ## Delivery Status (May 18, 2026)
 
 ### Done
-- Harness runtime and pairing flow are live:
+- Broker runtime and pairing flow are live:
   - one-line installer: `install.sh`
-  - `swe-kitty-harness up --local` prints token + pairing QR + `swekitty://` deep link
+  - `swe-kitty-broker up --local` prints token + pairing QR + `swekitty://` deep link
 - Release pipeline is live:
-  - `release-ios`, `release-android`, `release-harness`, `release-orchestrator`
+  - `release-ios`, `release-android`, `release-broker`, `release-orchestrator`
   - website pulls latest release assets and deploys via Fyra
 - Mobile chat has moved past plain logs:
   - tool-call cards
@@ -84,4 +84,4 @@ Authoritative roadmap remains in:
 
 ## Prior art
 
-The original WebSocket framing took inspiration from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), and the layered Rust-core + native-shells split is the same shape [dnakov/litter](https://github.com/dnakov/litter) chose for Codex on mobile. swe-kitty has diverged on auth (bearer-only, no cookie login), on the harness protocol (`switch_agent`, typed `view_event`, the structured memory HTML), and on the entire mobile surface, so neither upstream is a runtime dependency or an interoperability target — they're references, not parents.
+The original WebSocket framing took inspiration from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), and the layered Rust-core + native-shells split is the same shape [dnakov/litter](https://github.com/dnakov/litter) chose for Codex on mobile. swe-kitty has diverged on auth (bearer-only, no cookie login), on the broker protocol (`switch_agent`, typed `view_event`, the structured memory HTML), and on the entire mobile surface, so neither upstream is a runtime dependency or an interoperability target — they're references, not parents.

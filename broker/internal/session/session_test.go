@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
+	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
 )
 
 func TestCheckpointPersistsSessionRails(t *testing.T) {

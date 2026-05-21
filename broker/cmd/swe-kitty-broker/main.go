@@ -1,8 +1,8 @@
-// Command swe-kitty-harness is the harness server entry point.
+// Command swe-kitty-broker is the harness server entry point.
 //
 // Usage:
 //
-//	swe-kitty-harness up [--local] [--public-url URL] [--addr :1977]
+//	swe-kitty-broker up [--local] [--public-url URL] [--addr :1977]
 //
 // On `up`, the harness mints a bearer token, starts the HTTP+WebSocket
 // server, and prints a connection URL to stdout. Sessions are managed
@@ -26,11 +26,11 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
-	"github.com/nikhilsh/swe-kitty/harness/internal/auth"
-	"github.com/nikhilsh/swe-kitty/harness/internal/discovery"
-	"github.com/nikhilsh/swe-kitty/harness/internal/session"
-	"github.com/nikhilsh/swe-kitty/harness/internal/ws"
+	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
+	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
+	"github.com/nikhilsh/swe-kitty/broker/internal/discovery"
+	"github.com/nikhilsh/swe-kitty/broker/internal/session"
+	"github.com/nikhilsh/swe-kitty/broker/internal/ws"
 )
 
 func main() {
@@ -54,13 +54,13 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `swe-kitty-harness — the swe-kitty server
+	fmt.Fprintln(os.Stderr, `swe-kitty-broker — the swe-kitty server
 
 Commands:
   up        start the HTTP+WebSocket harness
   memory    (task 005) per-session memory CLI
 
-Run "swe-kitty-harness up --help" for options.`)
+Run "swe-kitty-broker up --help" for options.`)
 }
 
 func runUp(args []string) int {
@@ -98,7 +98,7 @@ func runUp(args []string) int {
 	// Format: swekitty://<host>[:port]?token=<bearer>
 	pairing := pairingURL(replaceScheme(hostURL), token)
 
-	fmt.Printf("swe-kitty-harness up\n  addr:    %s\n  url:     %s\n  token:   %s\n  pairing: %s\n\n",
+	fmt.Printf("swe-kitty-broker up\n  addr:    %s\n  url:     %s\n  token:   %s\n  pairing: %s\n\n",
 		*addr, hostURL, token, pairing)
 	qrterminal.GenerateHalfBlock(pairing, qrterminal.L, os.Stdout)
 	fmt.Printf("\nScan the QR above with the SweKitty app, or:\n  wscat -c \"%s/ws/$(uuidgen)?assistant=claude&token=%s\"\n",

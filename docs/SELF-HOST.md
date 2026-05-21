@@ -1,6 +1,6 @@
-# Self-hosting `swe-kitty-harness`
+# Self-hosting `swe-kitty-broker`
 
-The harness ships as a single Docker image (`swekitty/harness:latest`)
+The broker ships as a single Docker image (`swekitty/broker:latest`)
 that bakes the Go server, all agent CLIs (claude, codex, …), and the
 required system tooling into one container. This is the **recommended**
 deploy path — it matches how upstream `swe-swe` distributes itself and
@@ -16,14 +16,14 @@ to the GitHub Container Registry. Multi-arch (linux/amd64 + linux/arm64).
 
 ```bash
 git clone git@github.com:nikhilsh/swe-kitty.git    # for the compose file
-cd swe-kitty/harness/docker
+cd swe-kitty/broker/docker
 
 cp .env.example .env
 $EDITOR .env                                       # fill ANTHROPIC_API_KEY / OPENAI_API_KEY
 
 docker compose pull                                # fetch latest image from ghcr.io
 docker compose up -d                               # one container, port 1977
-docker logs swe-kitty-harness 2>&1 | grep -E 'token:|pairing:' | tail -2
+docker logs swe-kitty-broker 2>&1 | grep -E 'token:|pairing:' | tail -2
 ```
 
 Pin to a specific version instead of `latest`:
@@ -48,23 +48,23 @@ Two supported topologies:
 
 1. **LAN / homelab** — `docker compose up -d` on a laptop / dev box.
    Mobile clients connect over `ws://<host>:1977`. Enable mDNS by
-   appending `--local` to the harness command (see "Service overrides"
+   appending `--local` to the broker command (see "Service overrides"
    below).
 2. **Public VPS** — same compose stack, plus Caddy in front for TLS;
    mobile clients connect over `wss://<your-domain>` from anywhere.
 
 ## Bare binary (legacy path, not recommended)
 
-If you can't run Docker, the harness still ships as a static binary —
+If you can't run Docker, the broker still ships as a static binary —
 but you'll need to install claude/codex separately on PATH, and you'll
-need to run the harness as a non-root user (uid != 0) so claude accepts
+need to run the broker as a non-root user (uid != 0) so claude accepts
 `--dangerously-skip-permissions`.
 
 ```bash
-# Install the harness binary (from the GitHub Release):
-curl -sLo /usr/local/bin/swe-kitty-harness \
-  https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-harness-linux-amd64
-chmod +x /usr/local/bin/swe-kitty-harness
+# Install the broker binary (from the GitHub Release):
+curl -sLo /usr/local/bin/swe-kitty-broker \
+  https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-broker-linux-amd64
+chmod +x /usr/local/bin/swe-kitty-broker
 
 # Install agent CLIs *natively* (NOT via npm — re-running `npm install -g`
 # on top of a previous install fails with ENOTEMPTY and leaves the
@@ -90,15 +90,15 @@ apt update && apt install -y claude-code
 # Codex still ships via npm only:
 npm install -g @openai/codex
 
-# Bring up the harness. Run as a non-root user (claude refuses
+# Bring up the broker. Run as a non-root user (claude refuses
 # --dangerously-skip-permissions under root). --local enables mDNS.
-swe-kitty-harness up --local --addr :1977
+swe-kitty-broker up --local --addr :1977
 ```
 
 stdout prints:
 
 ```
-swe-kitty-harness up
+swe-kitty-broker up
   addr:    :1977
   url:     http://localhost:1977
   token:   <bearer>
@@ -115,10 +115,10 @@ Scan the QR with the SweKitty app. Done.
 
 You need:
 
-- A small VPS (1 CPU / 1 GB is fine for a single-user harness).
+- A small VPS (1 CPU / 1 GB is fine for a single-user broker).
 - A domain pointing an A record at it.
 - Docker installed if you want to actually spawn agent containers
-  (otherwise the harness works in PTY-only mode for testing).
+  (otherwise the broker works in PTY-only mode for testing).
 
 ### Install
 
@@ -137,15 +137,15 @@ mkdir -p .swe-kitty
 
 ```ini
 [Unit]
-Description=swe-kitty harness
+Description=swe-kitty broker
 After=network-online.target
 
 [Service]
 WorkingDirectory=/opt/swe-kitty
 EnvironmentFile=/opt/swe-kitty/.swe-kitty/env
-ExecStart=/opt/swe-kitty/swe-kitty-harness up \
+ExecStart=/opt/swe-kitty/swe-kitty-broker up \
             --addr 127.0.0.1:1977 \
-            --public-url https://harness.example.com
+            --public-url https://broker.example.com
 Restart=always
 
 [Install]
@@ -162,13 +162,13 @@ journalctl -u swe-kitty -f
 ### Caddyfile (`/etc/caddy/Caddyfile`)
 
 ```
-harness.example.com {
+broker.example.com {
     encode zstd gzip
     reverse_proxy 127.0.0.1:1977
 }
 ```
 
-Caddy automatically provisions a Let's Encrypt cert. The harness's
+Caddy automatically provisions a Let's Encrypt cert. The broker's
 WebSocket endpoint at `/ws/...` is reverse-proxied through TLS.
 
 ### Pairing
@@ -179,15 +179,15 @@ journalctl -u swe-kitty | grep -A 30 'pairing:'
 
 Scan the QR. The app stores the bearer in Keychain
 (iOS) / EncryptedSharedPreferences (Android) and connects over
-`wss://harness.example.com`.
+`wss://broker.example.com`.
 
 ## Updating
 
 ```bash
 systemctl stop swe-kitty
-curl -sLo /opt/swe-kitty/swe-kitty-harness \
-  https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-harness-linux-amd64
-chmod +x /opt/swe-kitty/swe-kitty-harness
+curl -sLo /opt/swe-kitty/swe-kitty-broker \
+  https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-broker-linux-amd64
+chmod +x /opt/swe-kitty/swe-kitty-broker
 systemctl start swe-kitty
 ```
 
@@ -198,12 +198,12 @@ recovery model.
 ## Sanity checks
 
 ```bash
-# from a laptop on the same LAN as a --local harness
+# from a laptop on the same LAN as a --local broker
 dns-sd -B _swe-kitty._tcp local        # macOS
 avahi-browse -t _swe-kitty._tcp        # Linux
 
 # from anywhere, against a public deploy
-curl -i https://harness.example.com/ws/$(uuidgen) \
+curl -i https://broker.example.com/ws/$(uuidgen) \
      -H "Authorization: Bearer $TOKEN" \
      -H "Upgrade: websocket" -H "Connection: Upgrade" \
      -H "Sec-WebSocket-Key: $(openssl rand -base64 16)" \
@@ -214,10 +214,10 @@ curl -i https://harness.example.com/ws/$(uuidgen) \
 ## Hardening
 
 - Treat the bearer like an SSH key: anyone with it has shell on the
-  harness host through the agent containers. Rotate by restarting the
-  harness (each `up` mints a fresh token).
-- Run the harness as a non-root user with Docker group membership.
+  broker host through the agent containers. Rotate by restarting the
+  broker (each `up` mints a fresh token).
+- Run the broker as a non-root user with Docker group membership.
 - Caddy + Cloudflare in front gives DDoS protection essentially for
   free.
-- The harness binds to `127.0.0.1` in the systemd example above so it's
+- The broker binds to `127.0.0.1` in the systemd example above so it's
   only reachable via the reverse proxy.

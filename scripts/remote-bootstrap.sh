@@ -1,6 +1,6 @@
 #!/bin/sh
 # swe-kitty remote bootstrap — invoked by the mobile app over SSH to
-# stand up the swe-kitty-harness Docker container on a remote host
+# stand up the swe-kitty-broker Docker container on a remote host
 # without requiring the user to install anything by hand.
 #
 # Output contract (the mobile app parses these exact lines):
@@ -11,7 +11,7 @@
 #   0   ok
 #   11  docker not installed
 #   12  docker not runnable as current user (group / daemon missing)
-#   13  harness container started but never returned a usable state
+#   13  broker container started but never returned a usable state
 #   14  port collision with a non-swe-kitty process
 #   15  bad usage (missing args)
 #
@@ -70,7 +70,7 @@ if command -v ss >/dev/null 2>&1; then
   fi
 fi
 
-# Bind to 127.0.0.1 so the harness is only reachable through the
+# Bind to 127.0.0.1 so the broker is only reachable through the
 # SSH tunnel the mobile app sets up. Public exposure is opt-in via
 # `docs/SELF-HOST.md` (Caddy + wss).
 DOCKER_RUN_ARGS="-d --restart unless-stopped --name $CONTAINER_NAME -p 127.0.0.1:$HOST_PORT:1977"
@@ -91,7 +91,7 @@ if ! docker run $DOCKER_RUN_ARGS "$IMAGE" >/dev/null 2>&1; then
   exit 13
 fi
 
-# Wait for the harness to start serving — health endpoint returns 200
+# Wait for the broker to start serving — health endpoint returns 200
 # once routes are registered. Retry briefly because cold-start pulls the
 # image (10-30s on a fresh host).
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
@@ -103,5 +103,5 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   sleep 2
 done
 
-echo "ERR 13 harness did not become healthy within 30s; docker logs $CONTAINER_NAME"
+echo "ERR 13 broker did not become healthy within 30s; docker logs $CONTAINER_NAME"
 exit 13

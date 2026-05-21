@@ -37,9 +37,9 @@ adb install -r SweKitty-vX.Y.Z.apk
 ## First launch
 
 - Launch SweKitty → drawer opens → tap *Settings*.
-- Either type the harness endpoint + bearer manually, or tap **Scan QR**.
+- Either type the broker endpoint + bearer manually, or tap **Scan QR**.
   Android prompts for camera permission on the first scan; grant it.
-- The QR is the one printed when you ran `swe-kitty-harness up`.
+- The QR is the one printed when you ran `swe-kitty-broker up`.
 
 State (endpoint + bearer in EncryptedSharedPreferences, scrollback in
 ViewModel state) is preserved across upgrades because the application id
@@ -56,5 +56,5 @@ ViewModel state) is preserved across upgrades because the application id
   `AndroidManifest.xml` sets `android:usesCleartextTraffic="true"`
   globally for v0.x; if you've side-modified that, restore it.
 
-See also: `docs/SELF-HOST.md` to put the harness behind TLS so you can
+See also: `docs/SELF-HOST.md` to put the broker behind TLS so you can
 use `wss://`.

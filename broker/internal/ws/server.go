@@ -17,8 +17,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/auth"
-	"github.com/nikhilsh/swe-kitty/harness/internal/session"
+	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
+	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 )
 
 const (

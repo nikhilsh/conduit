@@ -22,8 +22,8 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
-	"github.com/nikhilsh/swe-kitty/harness/internal/termgrid"
+	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
+	"github.com/nikhilsh/swe-kitty/broker/internal/termgrid"
 )
 
 const ringSize = 256 * 1024 // 256 KB scrollback per session

@@ -1,6 +1,6 @@
 # WebSocket protocol (frozen contract v1)
 
-Wire format between `swe-kitty-harness` (Go) and `swe-kitty-core` (Rust). The binary framing was originally adopted from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), but swe-kitty has since added `switch_agent`, typed `view_event`, structured `health` / `phase` fields, and a **bearer-only auth path** (no cookie redirect to `/swe-swe-auth/login`). Treat the upstream as historical prior art, not as a compatibility target — pointing the SweKitty client at an unmodified `swe-swe` server fails the WS upgrade because the auth redirect lands on an HTML login page.
+Wire format between `swe-kitty-broker` (Go) and `swe-kitty-core` (Rust). The binary framing was originally adopted from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), but swe-kitty has since added `switch_agent`, typed `view_event`, structured `health` / `phase` fields, and a **bearer-only auth path** (no cookie redirect to `/swe-swe-auth/login`). Treat the upstream as historical prior art, not as a compatibility target — pointing the SweKitty client at an unmodified `swe-swe` server fails the WS upgrade because the auth redirect lands on an HTML login page.
 
 Changes to this document REQUIRE a deliberate PR that rebases all in-flight feature branches.
 
@@ -18,7 +18,7 @@ Upgrade: websocket
 
 - `{session-uuid}` is a v4 UUID. Unknown UUID → server creates a new session.
 - `assistant` query param is **only honored on session creation**. For existing sessions it is ignored (use `switch_agent` JSON message to swap mid-session).
-- Bearer token is validated against the harness's token table (printed as QR on `swe-kitty-harness up`).
+- Bearer token is validated against the broker's token table (printed as QR on `swe-kitty-broker up`).
 
 ## 2. Frame types
 
@@ -38,7 +38,7 @@ Binary frames are length-prefixed by the WebSocket layer itself; the first byte 
 Notes:
 - Snapshots are chunked because iOS Safari (and some WKWebView builds) cap individual WebSocket message size aggressively. Reassembly: concatenate by `chunk_idx`, gunzip the result.
 - Filenames are sanitized server-side (no `..`, no absolute paths) and stored under `.swe-kitty/sessions/<uuid>/uploads/`.
-- Raw PTY I/O has no tag because matching against tag bytes that happen to appear at byte 0 of a PTY chunk is acceptable: the harness reserves `0x00`, `0x01`, `0x02` as forbidden first bytes for PTY frames — if a PTY chunk would start with one, the harness prefixes a single `0xFF` escape byte; the client strips a leading `0xFF` from raw frames. (Implementations: in practice this only matters at the boundary of NUL/SOH/STX bytes which are rare in interactive shells. Test fixture covers it.)
+- Raw PTY I/O has no tag because matching against tag bytes that happen to appear at byte 0 of a PTY chunk is acceptable: the broker reserves `0x00`, `0x01`, `0x02` as forbidden first bytes for PTY frames — if a PTY chunk would start with one, the broker prefixes a single `0xFF` escape byte; the client strips a leading `0xFF` from raw frames. (Implementations: in practice this only matters at the boundary of NUL/SOH/STX bytes which are rare in interactive shells. Test fixture covers it.)
 
 ### 2.2 Text frames
 
@@ -122,7 +122,7 @@ Unknown `type` values are logged and ignored — never close the socket for them
 Either side may send `{"type":"ping"}`; the peer replies `{"type":"pong"}`. Default cadence 30s. If a client misses two consecutive pings, server marks the connection idle but keeps the session running.
 
 ### 4.4 Disconnect
-Closing the socket does NOT stop the session. Sessions live until an explicit `{"type":"exit"}` from a client or until the harness is told to drop them.
+Closing the socket does NOT stop the session. Sessions live until an explicit `{"type":"exit"}` from a client or until the broker is told to drop them.
 
 ## 5. Forbidden in v1
 
@@ -132,7 +132,7 @@ Closing the socket does NOT stop the session. Sessions live until an explicit `{
 
 ## 6. Conformance tests
 
-`harness/internal/ws/conformance_test.go` (task 001) holds the canonical wire-level fixtures. Any client implementation (including the Rust core) must pass them.
+`broker/internal/ws/conformance_test.go` (task 001) holds the canonical wire-level fixtures. Any client implementation (including the Rust core) must pass them.
 ### HTTP helper endpoints (mobile bootstrap)
 
 - `GET /api/capabilities` returns machine-readable server feature flags and assistant list.

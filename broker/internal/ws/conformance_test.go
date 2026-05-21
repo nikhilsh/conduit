@@ -14,9 +14,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
-	"github.com/nikhilsh/swe-kitty/harness/internal/auth"
-	"github.com/nikhilsh/swe-kitty/harness/internal/session"
+	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
+	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
+	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, string) {

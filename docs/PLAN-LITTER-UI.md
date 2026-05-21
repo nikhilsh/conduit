@@ -39,10 +39,10 @@ which is the main idea per chat window for us.
 ## Open product gaps to fill
 
 1. **Voice (global)** — currently we only have voice inside the chat composer (`InlineVoiceButton`). New bottom-bar voice tile triggers a global modal dictation that hands the transcript to whatever screen is active (compose new session prompt, search query, or message). Reuses the existing speech recognizer.
-2. **Search (sessions)** — new view. Searches across `store.savedServers` × `store.sessions` × `store.conversationLog` for a query. v1: client-side text-match on the conversation log; v2 (later) push the search server-side via harness.
+2. **Search (sessions)** — new view. Searches across `store.savedServers` × `store.sessions` × `store.conversationLog` for a query. v1: client-side text-match on the conversation log; v2 (later) push the search server-side via broker.
 3. **Session "Info" screen** — surfaces stats we already track + Fork/Rename ops we don't fully have yet:
    - Fork (Rust core has no `fork_session` — add it: new session with same agent + cwd + seed the conversation log with the current one as system prompt).
-   - Rename — store-local `displayName` field on `ProjectSession`, no harness round-trip needed.
+   - Rename — store-local `displayName` field on `ProjectSession`, no broker round-trip needed.
 
 ## Visual tokens to formalize
 
@@ -135,7 +135,7 @@ Acceptance: iPhone home matches litter. iPad still uses split view but with new 
 Voice:
 - Reuse the existing `SFSpeechRecognizer` pipeline from `InlineVoiceButton`.
 - New `VoiceDictationSheet` presents a fullscreen-ish modal with a big waveform + transcript-so-far + send/cancel.
-- On confirm, send transcript to harness as a chat message if a session is active; otherwise open AgentPickerSheet pre-populated with the transcript as the initial prompt.
+- On confirm, send transcript to broker as a chat message if a session is active; otherwise open AgentPickerSheet pre-populated with the transcript as the initial prompt.
 
 Search:
 - iOS: build an index from `store.conversationLog` and `store.savedServers`. Filter as user types.

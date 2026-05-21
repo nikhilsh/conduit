@@ -4,8 +4,8 @@ How an arbitrary CLI coding agent (Claude Code, Codex, Gemini, Aider, Goose, Ope
 
 Two physical locations on disk:
 
-- `.swe-kitty/agents/*.toml` — dev-time, read by `swe-kitty-harness` when working on this repo
-- `agents/*.toml` — production, read by `swe-kitty-harness` when running the shipped product
+- `.swe-kitty/agents/*.toml` — dev-time, read by `swe-kitty-broker` when working on this repo
+- `agents/*.toml` — production, read by `swe-kitty-broker` when running the shipped product
 
 The TOML schema is the same; only the consumers differ.
 
@@ -30,20 +30,20 @@ Required fields: `name`, `image`, `command`, `workdir`. Everything else has a do
 
 ## 2. Container model
 
-**One container per harness, all agents pre-installed inside it.** This
+**One container per broker, all agents pre-installed inside it.** This
 matches the pattern upstream `swe-swe` settled on after experimenting with
 per-agent containers: per-session isolation comes from per-session git
 worktrees and per-session PTY/process trees, not from per-session Docker
-containers. The harness binary runs as user `app` (uid 1000) inside the
+containers. The broker binary runs as user `app` (uid 1000) inside the
 image — that's specifically what lets claude accept
 `--dangerously-skip-permissions`, which it refuses under root.
 
-The canonical image is built from `harness/docker/Dockerfile` and tagged
-`swekitty/harness:latest`. See `docs/SELF-HOST.md` for the
+The canonical image is built from `broker/docker/Dockerfile` and tagged
+`swekitty/broker:latest`. See `docs/SELF-HOST.md` for the
 `docker compose up -d` flow.
 
 ### 2.1 What the image ships
-- `swe-kitty-harness` binary (the Go server), built from this repo.
+- `swe-kitty-broker` binary (the Go server), built from this repo.
 - Every agent CLI we ship a TOML adapter for (currently `claude`,
   `codex`) — installed globally via `npm install -g`.
 - `git`, `bash`, `jq`, `curl`, `openssl`, `procps`, `tini`.
@@ -59,10 +59,10 @@ The canonical image is built from `harness/docker/Dockerfile` and tagged
 - `swe-kitty-home:/home/app:rw` — agent auth caches + npm globals
   (claude logins, codex tokens, etc).
 
-### 2.3 Environment variables the harness sets per-session
-The harness spawns each agent as a child process inside the same
+### 2.3 Environment variables the broker sets per-session
+The broker spawns each agent as a child process inside the same
 container via `pty.Start(exec.Command(adapter.Command[0], …))` from
-`harness/internal/session/lifecycle.go`. Each spawn gets:
+`broker/internal/session/lifecycle.go`. Each spawn gets:
 
 | Var | Value |
 |---|---|
@@ -73,7 +73,7 @@ container via `pty.Start(exec.Command(adapter.Command[0], …))` from
 | `FROM_AGENT` / `TO_AGENT` | only set inside `on_swap` |
 | `KITTY_HANDOFF_PATH` | `/workspace/.swe-kitty/HANDOFF.html` |
 | `KITTY_HANDOFF_OUT_PATH` | `/workspace/.swe-kitty/HANDOFF-OUT.html` |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | forwarded from `harness/docker/.env` |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | forwarded from `broker/docker/.env` |
 | ... | plus any KEY=VALUE from `.swe-kitty/env` with `$VAR` expansion |
 
 ### 2.4 Agent process expectations
@@ -83,12 +83,12 @@ Every adapter's `command` + `args` from `agents/*.toml`:
 1. **Read `$KITTY_HANDOFF_PATH` first.** If non-empty, prepend its contents to the agent's system prompt.
    - Claude Code: `claude --system-prompt-file "$KITTY_HANDOFF_PATH"`
    - Codex: pass via Codex's prompt-prefix mechanism
-2. **Trap `SIGUSR1`.** On receipt, write a final structured summary to `$KITTY_HANDOFF_OUT_PATH` and exit cleanly. This is how the harness initiates an atomic agent swap.
+2. **Trap `SIGUSR1`.** On receipt, write a final structured summary to `$KITTY_HANDOFF_OUT_PATH` and exit cleanly. This is how the broker initiates an atomic agent swap.
 3. **Run the agent CLI in foreground** so PTY connects directly. No `tail -f` wrappers.
 
 ## 3. Hooks
 
-Hooks run on the **harness host** (not inside the container) so they have access to the persistence rails (scrollback ring, memory HTML, git worktree).
+Hooks run on the **broker host** (not inside the container) so they have access to the persistence rails (scrollback ring, memory HTML, git worktree).
 
 | Hook | When | Available env |
 |---|---|---|
@@ -100,7 +100,7 @@ Hooks must be idempotent — recovery (`docs/SESSION-LIFECYCLE.md` §4) may invo
 
 ## 4. Agent swap mechanics
 
-Triggered by `{"type":"switch_agent","assistant":"<new>"}` JSON control message. The harness:
+Triggered by `{"type":"switch_agent","assistant":"<new>"}` JSON control message. The broker:
 
 1. Sends `SIGUSR1` to the running agent process; waits up to 30s for `$KITTY_HANDOFF_OUT_PATH` to land.
 2. If it does, parses it as memory HTML and merges its `data-section="handoff"` into the session memory file. If it doesn't, falls back to the last memory checkpoint.
@@ -108,16 +108,16 @@ Triggered by `{"type":"switch_agent","assistant":"<new>"}` JSON control message.
 4. Runs `on_swap` hook.
 5. Renders fresh `HANDOFF.html` into the worktree.
 6. `pty.Start`s the new agent process inside the same container; PTY scrollback ring is preserved client-side via the standard reconnect snapshot.
-7. Broadcasts `status` with `phase: "swapping"` then `phase: "running"`. On spawn failure the harness still flips back to `running` with `reason_code: "agent_switch_failed"` so the mobile UI doesn't get stuck (regression fixed 2026-05-20).
+7. Broadcasts `status` with `phase: "swapping"` then `phase: "running"`. On spawn failure the broker still flips back to `running` with `reason_code: "agent_switch_failed"` so the mobile UI doesn't get stuck (regression fixed 2026-05-20).
 
 The worktree, branch, and git state are **identical** across the swap.
 
 ## 5. Image build & distribution
 
-The whole harness ships as one image: `swekitty/harness:latest`, built from
-`harness/docker/Dockerfile`. CI builds it on every release tag and attaches
-the tag-pinned variant (e.g. `swekitty/harness:v0.0.x`). Users pull and
-run via `harness/docker/docker-compose.yml`.
+The whole broker ships as one image: `swekitty/broker:latest`, built from
+`broker/docker/Dockerfile`. CI builds it on every release tag and attaches
+the tag-pinned variant (e.g. `swekitty/broker:v0.0.x`). Users pull and
+run via `broker/docker/docker-compose.yml`.
 
 There are **no per-agent images** any more. Adding a new agent means
 adding an `npm install -g` line in the Dockerfile and a new
@@ -125,10 +125,10 @@ adding an `npm install -g` line in the Dockerfile and a new
 
 ## 6. Adding a new agent
 
-1. Add a line to the `npm install -g` block in `harness/docker/Dockerfile`
+1. Add a line to the `npm install -g` block in `broker/docker/Dockerfile`
    (or an `apt-get install` line if the CLI distributes that way).
 2. Drop `agents/<name>.toml` with the right `command` / `args` / handoff flags.
-3. Rebuild the image: `docker compose -f harness/docker/docker-compose.yml build`.
+3. Rebuild the image: `docker compose -f broker/docker/docker-compose.yml build`.
 4. The agent CLI must support a system-prompt mechanism that can be fed
    by file or stdin — required for handoff. If it doesn't, write a tiny
    shim wrapper inside the image.

@@ -8,7 +8,7 @@ into the local xterm.js instance, which renders them correctly at the
 client's actual viewport size.
 
 The bug shows up on (re)attach. When a client connects to an existing
-session, the harness ships its `Session.Snapshot()` — a copy of the
+session, the broker ships its `Session.Snapshot()` — a copy of the
 last 256 KB of raw PTY output from `session.ring`. Those bytes were
 emitted by the agent at whatever `rows × cols` the PTY was at when they
 were written. They contain absolute cursor positioning (`CSI H`), line
@@ -31,13 +31,13 @@ to feed back into the client's xterm.js — same parser, same line-wrap
 algorithm, same DEC state machine.
 
 Tabby-Web, ttyd, Hyper-Cloud all use this pattern. We do it via a Node
-subprocess so we don't have to embed a JS engine in the Go harness.
+subprocess so we don't have to embed a JS engine in the Go broker.
 
 ## Architecture
 
 ```
               ┌────────────────────────┐
-   PTY bytes  │ harness/session.go     │
+   PTY bytes  │ broker/session.go     │
    ──────────►│   ring (256 KB)        │ ← streaming source of truth
               │   PTY drain loop       │
               └─────┬──────────────────┘
@@ -104,13 +104,13 @@ Unknown `cmd` → `{ok: false, error: "unknown_cmd"}`. Bad JSON is
 logged to stderr and dropped — the sidecar does not crash on a bad
 line.
 
-## Go side (`harness/internal/termgrid`)
+## Go side (`broker/internal/termgrid`)
 
 `Manager` owns the long-running sidecar subprocess and a pending-request
 map keyed by `id`. A background goroutine consumes the sidecar's
 stdout and dispatches responses by id. All RPCs use a 5-second
 context timeout; on timeout the caller gets `ErrTimeout` and the
-harness falls back to ring-based snapshots.
+broker falls back to ring-based snapshots.
 
 If `node` isn't on PATH at startup, `termgrid.NewManager()` returns
 `termgrid.ErrNoNode` and the session.Manager continues with
@@ -154,11 +154,11 @@ once per attach.
 
 ## What's deferred
 
-- **Auto-respawn**: if the sidecar dies mid-session, the harness keeps
-  running but loses size-correct snapshots until the harness itself
+- **Auto-respawn**: if the sidecar dies mid-session, the broker keeps
+  running but loses size-correct snapshots until the broker itself
   restarts. A future stage should auto-respawn the sidecar and rebuild
   per-session grids from the ring.
-- **Persistent grid across harness restarts**: each cold start
+- **Persistent grid across broker restarts**: each cold start
   re-creates an empty grid in the sidecar. The grid gets the
   persisted ring replayed once at recovery time (which seeds it), but
   scrollback older than the ring is gone.
@@ -170,9 +170,9 @@ once per attach.
   separate ANSI-aware paging layer.
 - **Bundle Node binary**: today we require Node 20+ on the host. A
   future cleanup could bundle a pinned Node binary alongside the
-  harness so install.sh has zero runtime deps.
+  broker so install.sh has zero runtime deps.
 
 ## Runtime requirement
 
-Node.js **20+** on the host that runs the harness. `install.sh` warns
+Node.js **20+** on the host that runs the broker. `install.sh` warns
 if Node is missing or older.

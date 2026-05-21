@@ -10,11 +10,11 @@
 #   cd harness/docker && docker compose up -d --build
 #
 # The pairing token prints to the journal — get it with:
-#   docker logs swe-kitty-harness 2>&1 | grep -E 'token:|pairing:' | tail -2
+#   docker logs swe-kitty-broker 2>&1 | grep -E 'token:|pairing:' | tail -2
 
 services:
   swe-kitty:
-    container_name: swe-kitty-harness
+    container_name: swe-kitty-broker
     # Pull from GHCR by default (release.yml builds + pushes on every
     # tagged or dispatched release). `docker compose up -d` pulls it.
     # Pass `--build` to compile locally instead (uses the build: block

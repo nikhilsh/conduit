@@ -22,7 +22,7 @@ Add these too for release-time symbol and source uploads:
 - Android reads `BuildConfig.SENTRY_DSN` at build time.
 - If the DSN is empty, telemetry is a no-op.
 - If the DSN is present, handled errors from:
-  - harness connect
+  - broker connect
   - session creation
   - agent switching
   are captured with endpoint, assistant, and session context.
@@ -31,7 +31,7 @@ Add these too for release-time symbol and source uploads:
 
 ## Why this exists
 
-The harness bearer token is minted in memory on every server startup. A saved mobile pairing can therefore become stale after a harness restart. Before this patch, the apps showed `Ready` immediately after `connect()` even though no authenticated round-trip had happened yet.
+The broker bearer token is minted in memory on every server startup. A saved mobile pairing can therefore become stale after a broker restart. Before this patch, the apps showed `Ready` immediately after `connect()` even though no authenticated round-trip had happened yet.
 
 The current UI now treats that state as `Paired`, not verified, and maps auth failures to a re-pair instruction instead of a raw `Auth(message: "auth")` banner.
 

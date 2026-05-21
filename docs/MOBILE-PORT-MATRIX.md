@@ -27,7 +27,7 @@ The right fix is:
 
 - replace the shell structure with the intended product structure
 - borrow the upstream app’s architecture and flow shape aggressively
-- keep only the `swe-kitty`-specific protocol and harness behavior where needed
+- keep only the `swe-kitty`-specific protocol and broker behavior where needed
 
 ## Upstream `litter` vs Current `swe-kitty`
 
@@ -180,7 +180,7 @@ These pieces are useful and should survive, but likely under different surroundi
 
 Reason:
 
-- this is the project’s main differentiator and ties directly to our harness/server contracts
+- this is the project’s main differentiator and ties directly to our broker/server contracts
 
 #### Terminal rendering adapters
 
@@ -204,9 +204,9 @@ Reason:
 
 These do not come directly from upstream and should remain our own product-specific work.
 
-- harness multi-agent semantics
+- broker multi-agent semantics
 - memory / handoff views
-- preview routing tied to our harness
+- preview routing tied to our broker
 - session swap / `switch_agent`
 - release website / self-host distribution model
 
@@ -280,7 +280,7 @@ Do this first because it removes release drift while the mobile rewrite is under
 
 Target:
 
-- tagged release triggers IPA/APK/harness builds
+- tagged release triggers IPA/APK/broker builds
 - orchestration waits for all three
 - if all succeed:
   - regenerate site release metadata
@@ -389,7 +389,7 @@ The audit above names the *what*. This section pins down the *how* for the iOS v
 | Morph between states | None — chips fade in/out | `GlassMorphContainer` (`GlassEffectContainer` on iOS 26) + `glassMorphID(_:in:)` (`glassEffectID` / `matchedGeometryEffect` fallback) |
 | Palette | Hardcoded dark-only gradient (`GlassAppBackground`) | `LitterPalette` light/dark pairs, resolved via App Group; `LitterTheme.backgroundGradient` is adaptive |
 | Typography | Default `Font.system` everywhere | `LitterFont` + `FontFamilyOption.mono/.system`, Berkeley Mono with SFMono fallback |
-| Status pill | `HarnessBadge` glass chip | Same idea, but uses real `glassEffect` capsule + tint that maps to status colour |
+| Status pill | `BrokerBadge` glass chip | Same idea, but uses real `glassEffect` capsule + tint that maps to status colour |
 
 ### File-Level Port Plan
 
@@ -399,7 +399,7 @@ Execute strictly in this order — each step compiles on its own and the app sta
 - New `apps/ios/Sources/Theme/SweKittyPalette.swift` — port of `LitterPalette` shape, but bake our own light/dark hex values (no App Group yet; that's a v2 concern). Keep it minimal: `accent`, `accentStrong`, `surface`, `surfaceLight`, `border`, `separator`, `danger`, `success`, `warning`, `textPrimary/secondary/muted/body/onAccent`.
 - New `apps/ios/Sources/Theme/SweKittyTheme.swift` — wraps the palette into `Color` resolvers + `backgroundGradient(for: ColorScheme)`. Replaces `SweKittyTheme` enum in `DesignSystem.swift`.
 - New `apps/ios/Sources/Theme/Glass.swift` — port of `GlassRectModifier`, `GlassRoundedRectModifier`, `GlassCapsuleModifier`, `GlassCircleModifier`, `GlassMorphContainer`, and the `glassMorphID(_:in:)` extension. Direct copy with name swap (`LitterTheme` → `SweKittyTheme`).
-- Delete the old `glassPane()` / `glassChip()` modifiers and `GlassAppBackground` from `DesignSystem.swift`. Keep `HealthDot`, `InlineErrorBanner`, `HarnessBadge` but reskin them to use the new modifiers.
+- Delete the old `glassPane()` / `glassChip()` modifiers and `GlassAppBackground` from `DesignSystem.swift`. Keep `HealthDot`, `InlineErrorBanner`, `BrokerBadge` but reskin them to use the new modifiers.
 
 **Step B.2 — Background + RootView reskin.** First visible change.
 - Replace the hardcoded dark `GlassAppBackground` with a `SweKittyTheme.backgroundGradient(for: colorScheme)` that respects light/dark. Light mode must work — the screenshot proves this is a current gap.
@@ -407,7 +407,7 @@ Execute strictly in this order — each step compiles on its own and the app sta
 
 **Step B.3 — Home screen rewrite (`ProjectListView` → `HomeDashboardView`-shape).** This is what the user is looking at in the screenshot. The current "one server card + start-a-session card" layout becomes a real dashboard:
 - Title row with adaptive header, settings + new-session glass capsules (replaces top gear / + icons).
-- Server card uses `GlassRoundedRectModifier`. Status pill uses `GlassCapsuleModifier` tinted by `HarnessState` (refused → `danger`, linked → `accent`, live → `success`).
+- Server card uses `GlassRoundedRectModifier`. Status pill uses `GlassCapsuleModifier` tinted by `BrokerState` (refused → `danger`, linked → `accent`, live → `success`).
 - "Start a session" becomes a hero glass card with `GlassMorphContainer` so the Claude/Codex chips morph into a session row when tapped — using `glassMorphID` keyed by session UUID.
 - Use `LitterPalette.accentStrong` (`#00FF9C`) as our agent-tint while we hold onto the neon-cat brand.
 
@@ -420,7 +420,7 @@ Execute strictly in this order — each step compiles on its own and the app sta
 ### Out of Scope For Package B
 
 Defer (matches the "Likely exclude or defer" list above):
-- CarPlay, Watch, Live Activities — no harness use case yet.
+- CarPlay, Watch, Live Activities — no broker use case yet.
 - App Group / theme-store — single-app for now; revisit when watch lands.
 - Berkeley Mono shipping — use system mono until licence story is settled.
 

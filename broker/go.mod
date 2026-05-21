@@ -1,4 +1,4 @@
-module github.com/nikhilsh/swe-kitty/harness
+module github.com/nikhilsh/swe-kitty/broker
 
 go 1.22
 

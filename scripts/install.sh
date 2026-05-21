@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# install.sh — one-command installer for swe-kitty-harness.
+# install.sh — one-command installer for swe-kitty-broker (server).
 #
 # Usage:
 #   curl -sSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sh
@@ -9,14 +9,14 @@
 # Flags:
 #   --version <vN.N.N>   pin a specific tag instead of `latest`
 #   --bin-dir <path>     install location (default: /usr/local/bin if writable, else ~/.local/bin)
-#   --up [args...]       after install, immediately exec `swe-kitty-harness up <args>` so
+#   --up [args...]       after install, immediately exec `swe-kitty-broker up <args>` so
 #                        the pairing QR prints in one command.
 #   --service            install as a long-running systemd service under the `swekitty`
 #                        user, with an ExecStartPre that mirrors the deploying user's
-#                        ~/.claude + ~/.codex OAuth credentials so harness-spawned agents
+#                        ~/.claude + ~/.codex OAuth credentials so broker-spawned agents
 #                        can use the existing login without an ANTHROPIC_API_KEY /
 #                        OPENAI_API_KEY. Requires root. Args after --service flow through
-#                        to `swe-kitty-harness up` in the unit's ExecStart.
+#                        to `swe-kitty-broker up` in the unit's ExecStart.
 
 set -eu
 
@@ -28,7 +28,7 @@ UP_ARGS=""
 RUN_SERVICE=0
 SERVICE_UP_ARGS=""
 
-# Pre-parse our own flags. Anything after --up flows through to `swe-kitty-harness up`.
+# Pre-parse our own flags. Anything after --up flows through to `swe-kitty-broker up`.
 while [ $# -gt 0 ]; do
     case "$1" in
         --version)
@@ -45,13 +45,13 @@ while [ $# -gt 0 ]; do
             ;;
         --up)
             RUN_UP=1; shift
-            # Everything else is forwarded to the harness.
+            # Everything else is forwarded to the broker.
             UP_ARGS="$*"
             break
             ;;
         --service)
             RUN_SERVICE=1; shift
-            # Everything else is forwarded to the harness unit's ExecStart.
+            # Everything else is forwarded to the broker unit's ExecStart.
             SERVICE_UP_ARGS="$*"
             break
             ;;
@@ -73,20 +73,20 @@ need chmod
 need mkdir
 need mv
 
-# Stage G: the harness spawns a Node-based xterm.js sidecar so terminal
+# Stage G: the broker spawns a Node-based xterm.js sidecar so terminal
 # snapshots can be reflowed to the attaching client's viewport size.
-# Without Node the harness still runs, but falls back to raw PTY-byte
+# Without Node the broker still runs, but falls back to raw PTY-byte
 # snapshots which look wrong on any client whose viewport differs from
 # the original PTY size. Warn loudly so users know to install it.
 if command -v node >/dev/null 2>&1; then
     node_version="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || echo 0)"
     if [ "${node_version:-0}" -lt 20 ]; then
-        echo "install.sh: WARNING — node $(node --version 2>/dev/null) detected; the harness sidecar needs Node 20+." >&2
+        echo "install.sh: WARNING — node $(node --version 2>/dev/null) detected; the broker sidecar needs Node 20+." >&2
         echo "  Install Node 20+ (https://nodejs.org or https://github.com/nvm-sh/nvm) for size-correct snapshots." >&2
     fi
 else
     echo "install.sh: WARNING — node is not on PATH." >&2
-    echo "  The harness will still run, but terminal snapshots on (re)attach will not be reflowed to the client viewport." >&2
+    echo "  The broker will still run, but terminal snapshots on (re)attach will not be reflowed to the client viewport." >&2
     echo "  Install Node 20+ from https://nodejs.org or via NVM (https://github.com/nvm-sh/nvm) and re-run if you want size-correct snapshots." >&2
 fi
 
@@ -98,7 +98,7 @@ else
     die "need curl or wget on PATH"
 fi
 
-# os / arch detection — must match the matrix in .github/workflows/release-harness.yml.
+# os / arch detection — must match the matrix in .github/workflows/release-broker.yml.
 OS_RAW="$(uname -s)"
 case "$OS_RAW" in
     Linux)  OS="linux" ;;
@@ -133,17 +133,17 @@ fi
 # `releases/latest/download/<asset>` follows the same redirect as a
 # specific tag URL, so this asset URL works for both forms.
 if [ -z "$VERSION" ]; then
-    ASSET="https://github.com/$REPO/releases/latest/download/swe-kitty-harness-${OS}-${ARCH}"
+    ASSET="https://github.com/$REPO/releases/latest/download/swe-kitty-broker-${OS}-${ARCH}"
 else
-    ASSET="https://github.com/$REPO/releases/download/${VERSION}/swe-kitty-harness-${OS}-${ARCH}"
+    ASSET="https://github.com/$REPO/releases/download/${VERSION}/swe-kitty-broker-${OS}-${ARCH}"
 fi
 
-TMP="$(mktemp -t swekitty-harness.XXXXXX)" || die "mktemp failed"
+TMP="$(mktemp -t swekitty-broker.XXXXXX)" || die "mktemp failed"
 trap 'rm -f "$TMP"' EXIT
 
-echo "→ swe-kitty-harness ${VERSION:-latest} for ${OS}-${ARCH}"
+echo "→ swe-kitty-broker ${VERSION:-latest} for ${OS}-${ARCH}"
 echo "  asset:  $ASSET"
-echo "  bin:    $BIN_DIR/swe-kitty-harness"
+echo "  bin:    $BIN_DIR/swe-kitty-broker"
 
 # shellcheck disable=SC2086
 $FETCH "$ASSET" > "$TMP" || die "download failed: $ASSET"
@@ -159,10 +159,21 @@ case "$(head -c 4 "$TMP" | od -An -c 2>/dev/null | tr -d ' ')" in
 esac
 
 chmod +x "$TMP"
-mv "$TMP" "$BIN_DIR/swe-kitty-harness"
+mv "$TMP" "$BIN_DIR/swe-kitty-broker"
 trap - EXIT
 
-echo "✓ installed swe-kitty-harness to $BIN_DIR/swe-kitty-harness"
+# Strategy A migration: the server binary was renamed from
+# swe-kitty-harness to swe-kitty-broker. If an older binary is sitting
+# alongside the new one, remove it so we don't end up with two server
+# binaries on disk. The systemd unit (if installed via --service below)
+# is rewritten further down to point at the new binary; otherwise this
+# is a no-op for fresh installs.
+if [ -e "$BIN_DIR/swe-kitty-harness" ]; then
+    rm -f "$BIN_DIR/swe-kitty-harness"
+    echo "✓ removed legacy $BIN_DIR/swe-kitty-harness"
+fi
+
+echo "✓ installed swe-kitty-broker to $BIN_DIR/swe-kitty-broker"
 
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
@@ -191,7 +202,7 @@ if [ "$RUN_SERVICE" = "1" ]; then
     cat > /usr/local/bin/swekitty-mirror-auth <<MIRROR
 #!/bin/bash
 # Idempotent ExecStartPre — copies the deployer's Claude + Codex OAuth
-# credentials into the harness user's home so agents skip the
+# credentials into the broker user's home so agents skip the
 # ANTHROPIC_API_KEY / OPENAI_API_KEY path. Only copies when source is
 # newer; safe to re-run on every service start.
 set -eu
@@ -220,8 +231,17 @@ MIRROR
 
     # Make the binary discoverable from a stable system path so the unit
     # never breaks when --bin-dir is set to something exotic.
-    install -m 755 "$BIN_DIR/swe-kitty-harness" "$SVC_HOME/swe-kitty-harness"
-    chown "$SVC_USER:$SVC_USER" "$SVC_HOME/swe-kitty-harness"
+    install -m 755 "$BIN_DIR/swe-kitty-broker" "$SVC_HOME/swe-kitty-broker"
+    chown "$SVC_USER:$SVC_USER" "$SVC_HOME/swe-kitty-broker"
+
+    # Strategy A migration: existing installs had the binary at
+    # $SVC_HOME/swe-kitty-harness. The unit gets rewritten further
+    # down to point at the new path; drop the old binary so we don't
+    # leave a dead file in place. Idempotent on fresh installs.
+    if [ -e "$SVC_HOME/swe-kitty-harness" ]; then
+        rm -f "$SVC_HOME/swe-kitty-harness"
+        echo "✓ removed legacy $SVC_HOME/swe-kitty-harness"
+    fi
 
     SVC_ARGS="up"
     if [ -n "$SERVICE_UP_ARGS" ]; then
@@ -230,7 +250,7 @@ MIRROR
 
     cat > /etc/systemd/system/swe-kitty.service <<UNIT
 [Unit]
-Description=swe-kitty harness
+Description=swe-kitty broker
 After=network-online.target
 Wants=network-online.target
 
@@ -240,7 +260,7 @@ Group=$SVC_USER
 Type=simple
 WorkingDirectory=$SVC_HOME
 ExecStartPre=/usr/local/bin/swekitty-mirror-auth
-ExecStart=$SVC_HOME/swe-kitty-harness $SVC_ARGS
+ExecStart=$SVC_HOME/swe-kitty-broker $SVC_ARGS
 Restart=always
 RestartSec=2s
 StandardOutput=journal
@@ -263,17 +283,17 @@ fi
 # Show pairing QR right away if requested.
 if [ "$RUN_UP" = "1" ]; then
     echo
-    echo "→ launching swe-kitty-harness up $UP_ARGS"
+    echo "→ launching swe-kitty-broker up $UP_ARGS"
     # shellcheck disable=SC2086
-    exec "$BIN_DIR/swe-kitty-harness" up $UP_ARGS
+    exec "$BIN_DIR/swe-kitty-broker" up $UP_ARGS
 fi
 
 cat <<EOM
 
-Next: bring the harness up and pair the mobile app.
+Next: bring the broker up and pair the mobile app.
 
-  swe-kitty-harness up --local     # LAN: mDNS + QR
-  swe-kitty-harness up             # explicit URL
+  swe-kitty-broker up --local     # LAN: mDNS + QR
+  swe-kitty-broker up             # explicit URL
 
 Scan the printed QR with the SweKitty iOS / Android app.
 EOM

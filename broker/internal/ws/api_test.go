@@ -25,7 +25,7 @@ func TestCapabilitiesEndpoint(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["name"] != "swe-kitty-harness" {
+	if body["name"] != "swe-kitty-broker" {
 		t.Fatalf("unexpected name: %v", body["name"])
 	}
 	assistants, _ := body["assistants"].([]any)

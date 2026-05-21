@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/session"
+	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 )
 
 type apiErrorEnvelope struct {
@@ -70,7 +70,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := capabilitiesResponse{
-		Name:       "swe-kitty-harness",
+		Name:       "swe-kitty-broker",
 		Protocol:   "2026-05-18",
 		Assistants: s.Sessions.AssistantNames(),
 	}

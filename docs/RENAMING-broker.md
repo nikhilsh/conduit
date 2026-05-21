@@ -1,4 +1,4 @@
-# Renaming `harness/` → `broker/`
+# Renaming `broker/` → `broker/`
 
 Written 2026-05-21. Companion to `docs/TESTING-STRATEGY.md`.
 
@@ -6,9 +6,9 @@ Written 2026-05-21. Companion to `docs/TESTING-STRATEGY.md`.
 
 We've been calling the Go server component `harness` since the first commit. The word is wrong, and it actively impedes any conversation about real test harnesses for the mobile apps. From [TESTING-STRATEGY.md](./TESTING-STRATEGY.md):
 
-> In software engineering, a "test harness" is scaffolding that drives the system under test. What we call `swe-kitty-harness` is: a WebSocket server, an agent process manager (spawns Claude/Codex in PTYs), a session/state broker, a snapshot ring + sidecar coordinator. That's a **gateway** or **broker**, not a harness.
+> In software engineering, a "test harness" is scaffolding that drives the system under test. What we call `swe-kitty-broker` is: a WebSocket server, an agent process manager (spawns Claude/Codex in PTYs), a session/state broker, a snapshot ring + sidecar coordinator. That's a **gateway** or **broker**, not a harness.
 
-The word snowballed across the repo (`harness/`, `swe-kitty-harness` binary, `release-harness.yml`, install scripts, docs, even memory files). It needs to come out cleanly in one PR so we can use "harness" correctly going forward.
+The word snowballed across the repo (`broker/`, `swe-kitty-broker` binary, `release-broker.yml`, install scripts, docs, even memory files). It needs to come out cleanly in one PR so we can use "harness" correctly going forward.
 
 ## Naming
 
@@ -31,14 +31,14 @@ Alternatives considered:
 
 | Before | After |
 | --- | --- |
-| `harness/` | `broker/` |
-| `harness/cmd/swe-kitty-harness/` | `broker/cmd/swe-kitty-broker/` |
-| `harness/internal/session/` | `broker/internal/session/` |
-| `harness/internal/ws/` | `broker/internal/ws/` |
-| `harness/internal/agents/` | `broker/internal/agents/` |
-| `harness/internal/termgrid/` | `broker/internal/termgrid/` |
-| `harness/sidecar/` | `broker/sidecar/` |
-| `harness/go.mod`, `harness/go.sum` | `broker/go.mod`, `broker/go.sum` |
+| `broker/` | `broker/` |
+| `broker/cmd/swe-kitty-broker/` | `broker/cmd/swe-kitty-broker/` |
+| `broker/internal/session/` | `broker/internal/session/` |
+| `broker/internal/ws/` | `broker/internal/ws/` |
+| `broker/internal/agents/` | `broker/internal/agents/` |
+| `broker/internal/termgrid/` | `broker/internal/termgrid/` |
+| `broker/sidecar/` | `broker/sidecar/` |
+| `broker/go.mod`, `broker/go.sum` | `broker/go.mod`, `broker/go.sum` |
 
 ### Go module path
 
@@ -48,22 +48,22 @@ Every `internal/...` import inside the module gets updated. The `find`/`sed` is 
 
 ### Binary name
 
-`swe-kitty-harness` → `swe-kitty-broker`
+`swe-kitty-broker` → `swe-kitty-broker`
 
-This breaks every `/opt/swe-kitty/swe-kitty-harness` install on a live VPS. See **Migration** below.
+This breaks every `/opt/swe-kitty/swe-kitty-broker` install on a live VPS. See **Migration** below.
 
 ### Workflows
 
 | Before | After |
 | --- | --- |
-| `.github/workflows/release-harness.yml` | `.github/workflows/release-broker.yml` |
+| `.github/workflows/release-broker.yml` | `.github/workflows/release-broker.yml` |
 | `ci.yml` job `harness (go)` | `ci.yml` job `broker (go)` |
 | `release.yml` step `harness / cross-compile...` | `release.yml` step `broker / cross-compile...` |
-| Release artifact `swe-kitty-harness-${OS}-${ARCH}.tar.gz` | `swe-kitty-broker-${OS}-${ARCH}.tar.gz` |
+| Release artifact `swe-kitty-broker-${OS}-${ARCH}.tar.gz` | `swe-kitty-broker-${OS}-${ARCH}.tar.gz` |
 
 ### Scripts
 
-- `scripts/install.sh`: every `swe-kitty-harness` token → `swe-kitty-broker`. Detect old install, offer to remove the old binary alongside placing the new one.
+- `scripts/install.sh`: every `swe-kitty-broker` token → `swe-kitty-broker`. Detect old install, offer to remove the old binary alongside placing the new one.
 - `scripts/remote-bootstrap.sh`: same.
 
 ### Environment variables
@@ -91,23 +91,23 @@ The renaming PR must distinguish these. Sense (1) → `broker`. Sense (2) → le
 
 ## Migration path for existing VPS installs
 
-The binary path changes from `/opt/swe-kitty/swe-kitty-harness` to `/opt/swe-kitty/swe-kitty-broker`. Existing installs need a one-time fixup.
+The binary path changes from `/opt/swe-kitty/swe-kitty-broker` to `/opt/swe-kitty/swe-kitty-broker`. Existing installs need a one-time fixup.
 
 **Strategy A — install.sh side-by-side (recommended).** The new `install.sh` lays down the new binary, updates the systemd unit's `ExecStart=`, removes the old binary. Single command for the user; no manual cleanup.
 
 ```bash
 # After the rename ships:
 ssh vps "curl -fsSL https://swe-kitty.fyra.dev/install.sh | sudo bash"
-# The script detects /opt/swe-kitty/swe-kitty-harness, replaces it.
+# The script detects /opt/swe-kitty/swe-kitty-broker, replaces it.
 ```
 
-**Strategy B — symlink for one release cycle.** Drop `swe-kitty-broker` as the new binary AND a symlink `swe-kitty-harness → swe-kitty-broker` so unmodified systemd units keep working. Remove the symlink in the next release.
+**Strategy B — symlink for one release cycle.** Drop `swe-kitty-broker` as the new binary AND a symlink `swe-kitty-broker → swe-kitty-broker` so unmodified systemd units keep working. Remove the symlink in the next release.
 
 **Decision: Strategy A.** Cleaner. Less code in install.sh long-term.
 
 ## Risks
 
-- **GitHub release artifact URLs change.** Anyone hot-linking `swe-kitty-harness-linux-amd64.tar.gz` from an external script breaks. Mitigation: cut one release that publishes BOTH the old and new names; deprecate the old name in the release after that.
+- **GitHub release artifact URLs change.** Anyone hot-linking `swe-kitty-broker-linux-amd64.tar.gz` from an external script breaks. Mitigation: cut one release that publishes BOTH the old and new names; deprecate the old name in the release after that.
 - **Memory file references.** The memory file `project_swe_kitty.md` mentions "harness" repeatedly. Need to update prose but keep the slug.
 - **External docs / blog posts / Slack messages.** Out of our control; one-line "we renamed harness → broker" note in the next release notes covers it.
 
@@ -115,7 +115,7 @@ ssh vps "curl -fsSL https://swe-kitty.fyra.dev/install.sh | sudo bash"
 
 1. `git mv harness broker`
 2. Sed pass over the whole tree: `github.com/nikhilsh/swe-kitty/harness` → `github.com/nikhilsh/swe-kitty/broker`
-3. Binary name change in `release.yml`, `release-harness.yml` → `release-broker.yml`, plus the build commands inside.
+3. Binary name change in `release.yml`, `release-broker.yml` → `release-broker.yml`, plus the build commands inside.
 4. CI job rename in `ci.yml`.
 5. `scripts/install.sh` rewrite for Strategy A.
 6. Doc pass: replace "harness" in server-component sense, keep in dev-harness sense.
@@ -129,4 +129,4 @@ Single PR. Big diff, but mechanical. Reviewable by reading the workflow + script
 2. Land **the rename**.
 3. Add the iOS / Android test targets per the testing doc.
 
-Reason: doing the rename before adding tests means there's no working-but-renamed-twice churn. Doing tests before the rename means the first test file lives at `harness/internal/...` and immediately needs to be moved.
+Reason: doing the rename before adding tests means there's no working-but-renamed-twice churn. Doing tests before the rename means the first test file lives at `broker/internal/...` and immediately needs to be moved.

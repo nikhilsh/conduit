@@ -4,7 +4,7 @@ Entry point for new contributors. For full motivation, roadmap, and v1 scope, se
 
 ## One-paragraph summary
 
-A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) running on **`swe-kitty-harness`** — our own Go server that owns PTYs, git worktrees, and Docker-spawned agent containers. Each *project* is a tab in the app; *within* a project, the user switches between Terminal / Agent Chat / Browser-preview views. Agents are interchangeable mid-session via a structured HTML handoff document. The harness checkpoints session state every 60s; long-running sessions survive crashes, network blips, and agent swaps.
+A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) running on **`swe-kitty-broker`** — our own Go server that owns PTYs, git worktrees, and Docker-spawned agent containers. Each *project* is a tab in the app; *within* a project, the user switches between Terminal / Agent Chat / Browser-preview views. Agents are interchangeable mid-session via a structured HTML handoff document. The broker checkpoints session state every 60s; long-running sessions survive crashes, network blips, and agent swaps.
 
 ## Layers
 
@@ -18,7 +18,7 @@ A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) 
 └────────────────────┬────────────────────────────┘
                      │ WebSocket
 ┌────────────────────┴────────────────────────────┐
-│  swe-kitty-harness (Go)                          │  ← PTY, worktrees, Docker, checkpoints
+│  swe-kitty-broker (Go)                          │  ← PTY, worktrees, Docker, checkpoints
 └────────────────────┬────────────────────────────┘
                      │ docker run
 ┌────────────────────┴────────────────────────────┐
@@ -42,13 +42,13 @@ These four `docs/*.md` are **frozen contracts** — they parallel-decouple work 
 
 ```
 swe-kitty/
-├── .swe-kitty/                  dev harness state (read by swe-kitty-harness)
+├── .swe-kitty/                  dev harness state (read by swe-kitty-broker)
 │   ├── config.toml
 │   ├── agents/                  dev-time adapter TOMLs
 │   ├── tasks/                   task briefs for parallel agents
 │   └── memory/                  project + session HTML memory
-├── harness/                     Go server
-│   ├── cmd/swe-kitty-harness/
+├── broker/                     Go server
+│   ├── cmd/swe-kitty-broker/
 │   └── internal/{session,ws,agents,auth,memory}/
 ├── core/                        Rust shared core
 │   ├── src/{lib,transport,session,views,discovery}.rs
@@ -63,8 +63,8 @@ swe-kitty/
 
 ## Why two adapter directories
 
-- `.swe-kitty/agents/*.toml` — what `swe-kitty-harness` reads when working **on this repo** (dev-time)
-- `agents/*.toml` — what **swe-kitty-harness** uses when running the shipped product
+- `.swe-kitty/agents/*.toml` — what `swe-kitty-broker` reads when working **on this repo** (dev-time)
+- `agents/*.toml` — what **swe-kitty-broker** uses when running the shipped product
 
 Same schema, separate scopes. A change to dev tooling never breaks the product.
 
@@ -74,7 +74,7 @@ Renders directly in the in-app browser, machine-readable via `data-section` attr
 
 ## Why interchangeable agents
 
-The agent is just a CLI in a Docker container connected to a PTY. The harness doesn't know what's inside. The only contract is: read `HANDOFF.html` on start, trap `SIGUSR1` to write `HANDOFF-OUT.html`. Adding a new agent = one TOML + one Dockerfile.
+The agent is just a CLI in a Docker container connected to a PTY. The broker doesn't know what's inside. The only contract is: read `HANDOFF.html` on start, trap `SIGUSR1` to write `HANDOFF-OUT.html`. Adding a new agent = one TOML + one Dockerfile.
 
 ## Why long-running matters
 

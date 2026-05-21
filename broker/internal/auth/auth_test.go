@@ -20,7 +20,7 @@ func TestMintProducesValidToken(t *testing.T) {
 }
 
 func TestAdoptHonoursCallerSuppliedToken(t *testing.T) {
-	// Mirrors the SWE_KITTY_TOKEN code path in cmd/swe-kitty-harness/main.go:
+	// Mirrors the SWE_KITTY_TOKEN code path in cmd/swe-kitty-broker/main.go:
 	// an upstream orchestrator (the mobile SSH-bootstrap) picks the bearer
 	// so it doesn't have to scrape it back out of `docker logs`.
 	s := NewStore()

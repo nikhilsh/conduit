@@ -71,16 +71,16 @@ jobs:
       release_tag: ${{ needs.prepare.outputs.release_tag }}
     secrets: inherit
 
-  harness:
-    name: harness
+  broker:
+    name: broker
     needs: prepare
-    uses: ./.github/workflows/release-harness.yml
+    uses: ./.github/workflows/release-broker.yml
     with:
       release_tag: ${{ needs.prepare.outputs.release_tag }}
     secrets: inherit
 
-  harness-image:
-    name: harness docker image (ghcr)
+  broker-image:
+    name: broker docker image (ghcr)
     needs: prepare
     runs-on: ubuntu-24.04
     permissions:
@@ -120,7 +120,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: harness/docker/Dockerfile
+          file: broker/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
@@ -132,7 +132,7 @@ jobs:
 
   deploy-website:
     name: deploy website to Fyra
-    needs: [prepare, ios, android, harness, harness-image]
+    needs: [prepare, ios, android, broker, broker-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -152,10 +152,10 @@ jobs:
           for required in \
             SweKitty.ipa \
             app-release.apk \
-            swe-kitty-harness-linux-amd64 \
-            swe-kitty-harness-linux-arm64 \
-            swe-kitty-harness-darwin-amd64 \
-            swe-kitty-harness-darwin-arm64; do
+            swe-kitty-broker-linux-amd64 \
+            swe-kitty-broker-linux-arm64 \
+            swe-kitty-broker-darwin-amd64 \
+            swe-kitty-broker-darwin-arm64; do
             if ! jq -e --arg name "$required" '.assets[] | select(.name == $name)' >/dev/null <<<"$release_json"; then
               missing+=("$required")
             fi

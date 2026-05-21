@@ -1,6 +1,6 @@
 # Memory format (frozen contract v1)
 
-Inter-agent handoff and long-running-session continuity in swe-kitty rely on a structured HTML document. This file specifies the schema. Anything outside this schema is undefined behavior; the harness validator will reject non-conforming HTML.
+Inter-agent handoff and long-running-session continuity in swe-kitty rely on a structured HTML document. This file specifies the schema. Anything outside this schema is undefined behavior; the broker validator will reject non-conforming HTML.
 
 HTML was chosen over Markdown because:
 - It renders directly in the mobile in-app browser (no Markdown engine to ship)
@@ -37,7 +37,7 @@ A document declares its scope via `<html data-scope="project|session">`.
 </html>
 ```
 
-The `data-swe-kitty-memory` version attribute is mandatory. Schema breaking changes bump it to `v2`; the harness must reject mismatched versions with a clear error.
+The `data-swe-kitty-memory` version attribute is mandatory. Schema breaking changes bump it to `v2`; the broker must reject mismatched versions with a clear error.
 
 ## 3. Required sections
 
@@ -71,7 +71,7 @@ A `<dl>` of key/value metadata. Keys vary by scope; see §3.2 and §3.3.
 
 ## 4. The `handoff` section
 
-When `switch_agent` fires (or an agent exits cleanly), the agent writes its outgoing brief to `/workspace/.swe-kitty/HANDOFF-OUT.html`. The harness parses the `<section data-section="handoff">` from that file and merges it into the session memory's own `handoff` section (removing the `hidden` attribute).
+When `switch_agent` fires (or an agent exits cleanly), the agent writes its outgoing brief to `/workspace/.swe-kitty/HANDOFF-OUT.html`. The broker parses the `<section data-section="handoff">` from that file and merges it into the session memory's own `handoff` section (removing the `hidden` attribute).
 
 The incoming agent's startup hook (`on_start`) renders the full session memory into `/workspace/.swe-kitty/HANDOFF.html`; the entrypoint script feeds it as system-prompt prefix.
 
@@ -102,8 +102,8 @@ The `swe-kitty memory` CLI validates on every write. Reject if:
 
 ## 6. Editing rules
 
-- **Single writer per session**: the harness holds a file lock (`flock(2)`) on the session HTML during writes. Agents inside containers SHOULD NOT write the session HTML directly — they emit `HANDOFF-OUT.html` and the harness merges.
-- **Concurrent edits**: if a human edits the session HTML in the worktree while the agent is running, the harness detects via mtime+hash on the next checkpoint and merges by keeping the human's section content and overwriting only `meta` and `env-snapshot`.
+- **Single writer per session**: the broker holds a file lock (`flock(2)`) on the session HTML during writes. Agents inside containers SHOULD NOT write the session HTML directly — they emit `HANDOFF-OUT.html` and the broker merges.
+- **Concurrent edits**: if a human edits the session HTML in the worktree while the agent is running, the broker detects via mtime+hash on the next checkpoint and merges by keeping the human's section content and overwriting only `meta` and `env-snapshot`.
 - **Atomicity**: writes are temp-file + rename(2) within the same dir.
 
 ## 7. CLI

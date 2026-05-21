@@ -18,7 +18,7 @@ gives us correct cell-grid sizing in response to layout changes.
 
 Stage F (PR #8 — Go `vt10x` emulator on the server, then ship cells
 to the client) was cancelled because it required deep changes to the
-harness ring buffer and broke the snapshot-replay contract. Stage F'
+broker ring buffer and broke the snapshot-replay contract. Stage F'
 keeps the wire protocol untouched (still raw bytes, still per-session
 ring) and only swaps the local renderer.
 
@@ -63,7 +63,7 @@ The page registers a single user-content message handler called
 Bytes flow in the same direction as before — only the renderer changed:
 
 ```
-harness ring buffer → WS → SessionStore.terminalBuffer[id] →
+broker ring buffer → WS → SessionStore.terminalBuffer[id] →
   delta → base64 → window.feedBytes → xterm.write
 ```
 
@@ -77,7 +77,7 @@ Wired but not yet persisted. The intended flow:
 2. On re-attach, Swift feeds the stashed snapshot first, then resumes
    the live byte stream.
 
-This gives us fast warm-resume independent of the harness ring-buffer
+This gives us fast warm-resume independent of the broker ring-buffer
 size, and is the migration path for persisting the rendered grid
 across cold launches.
 

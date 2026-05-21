@@ -1,18 +1,18 @@
-# Plan: `swe-kitty` — phone-first AI coding harness with per-project multi-view, built under its own harness
+# Plan: `swe-kitty` — phone-first AI coding broker with per-project multi-view, built under its own dev harness
 
 ## How To Read This Document
 
 - **Status Snapshot** below is the current reality and should drive execution.
-- **Part A onward** preserves the detailed target architecture and the original (2026-04) bootstrap plan, including framing that referenced upstream `swe-swe` as the harness for dev work. That dependency is gone — swe-kitty ships its own `swe-kitty-harness` binary now — but the historical text is preserved verbatim below so the design rationale isn't lost. The newer execution layer is [`PLAN-2026-05-19.md`](PLAN-2026-05-19.md).
+- **Part A onward** preserves the detailed target architecture and the original (2026-04) bootstrap plan, including framing that referenced upstream `swe-swe` as the harness for dev work. That dependency is gone — swe-kitty ships its own `swe-kitty-broker` binary now — but the historical text is preserved verbatim below so the design rationale isn't lost. The newer execution layer is [`PLAN-2026-05-19.md`](PLAN-2026-05-19.md).
 - If there is any mismatch, treat the Status Snapshot + newer focused docs (`RELEASE.md`, `MOBILE-FEATURE-BACKLOG.md`, `NEXT-RELEASE.md`, `PLAN-2026-05-19.md`) as the source of truth for immediate work.
 
 ## Status Snapshot (May 18, 2026)
 
 ### Done
 - Repository, CI, and tagged release automation are active.
-- Harness one-line bootstrap is active:
+- Broker one-line bootstrap is active:
   - `install.sh` download/install
-  - `swe-kitty-harness up --local` prints bearer token + pairing QR + `swekitty://` deep link
+  - `swe-kitty-broker up --local` prints bearer token + pairing QR + `swekitty://` deep link
 - iOS and Android shipping flow is tag-driven (release workflows + orchestrator + website deploy).
 - Rust core has:
   - reconnect/liveness handling
@@ -42,7 +42,7 @@ Originally this plan started from an empty working tree (`/root/developer/projec
 
 Two threads run through this plan, and they must not be conflated:
 
-1. **What we are building** — a native iOS + Android app that drives AI coding agents on a harness server. Per-project the app shows multiple **views** (terminal / agent-chat / browser-preview), and the user switches between views inside one project. A separate top-level nav switches between projects.
+1. **What we are building** — a native iOS + Android app that drives AI coding agents on a broker server. Per-project the app shows multiple **views** (terminal / agent-chat / browser-preview), and the user switches between views inside one project. A separate top-level nav switches between projects.
 2. **How we are building it** — local development itself runs under a swe-swe-style harness. Multiple agents (Claude Code, Codex) work on this repo in parallel via per-agent git worktrees, each in its own PTY/container, all pushing to the same GitHub remote. The repo ships a `.swe-kitty/` config so any team member (or AI agent) can `swe-swe up` and instantly get the same harnessed dev environment.
 
 Reference projects:
@@ -50,7 +50,7 @@ Reference projects:
 - **[litter](https://github.com/dnakov/litter)** — Native iOS+Android Codex client with Rust shared core (`codex-mobile-client`) exposed through UniFFI bindings; ad-hoc/TestFlight CI scripts
 
 v1 scope decisions (from clarifying Q&A):
-- Harness host: **both local LAN and remote VPS**
+- Broker host: **both local LAN and remote VPS**
 - Agents v1: **Claude Code + Codex**
 - iOS: **ad-hoc signed IPA → GitHub Release** (sideload via AltStore/Sideloadly)
 - Android: **signed APK → GitHub Release** (no Play Console)
@@ -124,15 +124,15 @@ Documents the harness workflow so a human contributor or a third agent can drop 
 
 ---
 
-## Part B — The product: `swe-kitty` mobile app + harness server
+## Part B — The product: `swe-kitty` mobile app + broker server
 
 ### Repo layout
 
 ```
 swe-kitty/                         # local: kitty-swe, remote: nikhilsh/swe-kitty
 ├── .swe-kitty/                    # dev harness config (Part A)
-├── harness/                       # Go server (swe-swe-derived, slimmed)
-│   ├── cmd/swe-kitty-harness/
+├── broker/                       # Go server (swe-swe-derived, slimmed)
+│   ├── cmd/swe-kitty-broker/
 │   ├── internal/session/          # PTY + worktree manager
 │   ├── internal/ws/               # WebSocket protocol
 │   ├── internal/agents/           # adapter registry
@@ -155,7 +155,7 @@ swe-kitty/                         # local: kitty-swe, remote: nikhilsh/swe-kitt
 │   ├── ci.yml
 │   ├── release-ios.yml
 │   ├── release-android.yml
-│   └── release-harness.yml
+│   └── release-broker.yml
 ├── Makefile
 ├── CONTRIBUTING.md
 └── docs/
@@ -196,7 +196,7 @@ swe-kitty/                         # local: kitty-swe, remote: nikhilsh/swe-kitt
                                │  WebSocket (binary + JSON)
                                ▼
               ┌────────────────────────────────────┐
-              │  swe-kitty-harness (Go)            │
+              │  swe-kitty-broker (Go)            │
               │  - HTTP+WS on :1977                │
               │  - SessionManager (PTY+worktree)   │
               │  - Docker-spawned agent containers │
@@ -212,7 +212,7 @@ swe-kitty/                         # local: kitty-swe, remote: nikhilsh/swe-kitt
         └──────────────────┘  └──────────────────┘
 ```
 
-### B1. Harness server (`harness/`)
+### B1. Harness server (`broker/`)
 
 Slimmed fork of swe-swe's server. Keep:
 - WebSocket framing **byte-identical** to swe-swe (`docs/websocket-protocol.md`) so the swe-swe browser UI also works against our server during dev
@@ -224,7 +224,7 @@ Slimmed fork of swe-swe's server. Keep:
 Add:
 - `switch_agent` JSON control message → server kills container, re-spawns with new adapter, **keeps worktree + scrollback** (Claude can hand off to Codex on the same branch)
 - `view_event` JSON messages for the **chat view**: separate stream so the mobile chat tab doesn't have to scrape PTY output (see B5)
-- mDNS advertise (`_swe-kitty._tcp.local`) when `--local` flag set; bearer token printed as QR on `swe-kitty-harness up`
+- mDNS advertise (`_swe-kitty._tcp.local`) when `--local` flag set; bearer token printed as QR on `swe-kitty-broker up`
 - `--public-url https://…` flag for remote mode; runs TLS-terminated behind Caddy
 
 **Session manager** (`internal/session/`):
@@ -242,7 +242,7 @@ command = ["claude"]
 args = ["--dangerously-skip-permissions"]
 env_passthrough = ["ANTHROPIC_API_KEY"]
 workdir = "/workspace"
-# Optional MCP bridge: agent emits chat events to this port → harness forwards as view_event
+# Optional MCP bridge: agent emits chat events to this port → broker forwards as view_event
 chat_event_port_env = "AGENT_CHAT_PORT"
 ```
 
@@ -364,7 +364,7 @@ git push -u origin main
 ```
 
 ### C2. `.github/workflows/ci.yml` — every PR
-- `harness`: `go vet`, `go test ./...`, `golangci-lint`
+- `broker`: `go vet`, `go test ./...`, `golangci-lint`
 - `core`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
 - `ios-build`: macOS runner, `make bindings`, build-rust, `xcodebuild -scheme SweKitty -destination 'platform=iOS Simulator,name=iPhone 16' build` (no signing)
 - `android-build`: `./gradlew assembleDebug`
@@ -401,7 +401,7 @@ Steps:
 4. `./gradlew assembleRelease` (signing config reads env)
 5. `gh release upload $TAG app/build/outputs/apk/release/app-release.apk`
 
-### C5. `.github/workflows/release-harness.yml` — on tag `v*`
+### C5. `.github/workflows/release-broker.yml` — on tag `v*`
 Cross-compile the Go server for `linux/{amd64,arm64}` and `darwin/{amd64,arm64}` + `install.sh`. Attach to the same Release.
 
 ---
@@ -483,7 +483,7 @@ Project memory captures cross-session truth (architecture decisions, conventions
 </html>
 ```
 
-Each `<section>` has a `data-section` attribute so the harness can parse + diff sections without an HTML AST library — a strict subset of HTML5 the harness validates on write.
+Each `<section>` has a `data-section` attribute so the broker can parse + diff sections without an HTML AST library — a strict subset of HTML5 the broker validates on write.
 
 ### Agent adapter integration
 
@@ -496,14 +496,14 @@ on_exit  = "swe-kitty memory checkpoint --session $SESSION_UUID --reason 'exit'"
 on_swap  = "swe-kitty memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"
 ```
 
-- `on_start`: harness writes the current session memory into the worktree as `HANDOFF.html`; the agent's startup prompt (handled inside the Docker image's entrypoint) instructs the agent to read it before doing anything else
-- `on_exit` / `on_swap`: harness invokes a small CLI (part of `swe-kitty-harness`) that parses the agent's outgoing chat log + last-known scrollback and updates the session HTML
+- `on_start`: broker writes the current session memory into the worktree as `HANDOFF.html`; the agent's startup prompt (handled inside the Docker image's entrypoint) instructs the agent to read it before doing anything else
+- `on_exit` / `on_swap`: broker invokes a small CLI (part of `swe-kitty-broker`) that parses the agent's outgoing chat log + last-known scrollback and updates the session HTML
 
 For Claude Code: image entrypoint sets `--system-prompt-file /workspace/HANDOFF.html` (or prepends its contents). For Codex: same pattern via Codex's system-prompt mechanism. Documented in `docs/AGENT-ADAPTERS.md`.
 
 ### CLI: `swe-kitty memory`
 
-A subcommand of the harness binary so it works locally without the server:
+A subcommand of the broker binary so it works locally without the server:
 
 - `swe-kitty memory init` — scaffolds `.swe-kitty/memory/` with empty templates
 - `swe-kitty memory render --session <uuid>` — emits the current HTML
@@ -520,7 +520,7 @@ The Chat view in the app has a "Memory" affordance (icon top-right) → opens th
 
 ## Part D'' — Long-running sessions: checkpoints, watchdogs, agent swap continuity
 
-Sessions must survive: agent crashes, container OOM, harness restart, network blips, mid-session agent swaps, and overnight idle. The user phrased it: **"long running sessions with constant checks and ability to switch out agents and not lose where we are"**.
+Sessions must survive: agent crashes, container OOM, broker restart, network blips, mid-session agent swaps, and overnight idle. The user phrased it: **"long running sessions with constant checks and ability to switch out agents and not lose where we are"**.
 
 ### Three persistence rails
 
@@ -530,7 +530,7 @@ Sessions must survive: agent crashes, container OOM, harness restart, network bl
 | **Memory HTML** | Structured agent state (Part D') | `.swe-kitty/memory/sessions/<uuid>.html` | Every 60s + on event |
 | **Worktree** | Code changes themselves | git worktree | Every commit (agent-driven) + auto-WIP every 5 min |
 
-A session is **recoverable** iff all three rails are intact on disk. The harness verifies this on every checkpoint.
+A session is **recoverable** iff all three rails are intact on disk. The broker verifies this on every checkpoint.
 
 ### Session manager additions (extends Part B1)
 
@@ -540,11 +540,11 @@ internal/session/
 ├── checkpoint.go     ← NEW: periodic + event-driven snapshots
 ├── watchdog.go       ← NEW: liveness probes + auto-restart policy
 ├── handoff.go        ← NEW: agent-swap atomicity
-└── recovery.go       ← NEW: replay on harness restart
+└── recovery.go       ← NEW: replay on broker restart
 ```
 
 **Checkpointer** (`checkpoint.go`):
-- Fires on a 60s ticker, on every `switch_agent`, before `exit`, and on `SIGTERM` to the harness
+- Fires on a 60s ticker, on every `switch_agent`, before `exit`, and on `SIGTERM` to the broker
 - Atomically:
   1. Pauses PTY drain into a buffer
   2. Writes scrollback ring to disk (rename + fsync)
@@ -572,8 +572,8 @@ internal/session/
 6. Notify mobile clients via `status` message: `{phase: "swapped", from: "claude", to: "codex"}`
 
 **Recovery** (`recovery.go`):
-- On `swe-kitty-harness up`, scans `.swe-kitty/sessions/*/` for sessions
-- For each: re-creates the PTY, replays scrollback from disk, re-attaches the (still-running, since Docker survives harness restart by default) container OR re-spawns it if `--restart unless-stopped` policy lost it
+- On `swe-kitty-broker up`, scans `.swe-kitty/sessions/*/` for sessions
+- For each: re-creates the PTY, replays scrollback from disk, re-attaches the (still-running, since Docker survives broker restart by default) container OR re-spawns it if `--restart unless-stopped` policy lost it
 - Clients reconnecting receive the gzip snapshot as usual; from their POV nothing happened
 
 ### Constant checks for the user
@@ -591,9 +591,9 @@ A "Health" badge in the mobile project header reflects three states:
 | Container OOM | Same as above |
 | Harness process killed (SIGKILL) | On restart, all sessions recovered from disk; clients reconnect transparently |
 | Mid-PR agent swap | New agent has identical context; sees diff-so-far in `HANDOFF.html`; existing git stash auto-restored if requested |
-| Phone loses network 1h | Sessions keep running on harness; on reconnect, gzip snapshot brings UI up to date |
-| Concurrent edits to memory HTML | File lock + write-rename; harness is single writer per session |
-| User force-quits mobile app | No effect on harness; sessions continue; reopen app → resume |
+| Phone loses network 1h | Sessions keep running on broker; on reconnect, gzip snapshot brings UI up to date |
+| Concurrent edits to memory HTML | File lock + write-rename; broker is single writer per session |
+| User force-quits mobile app | No effect on broker; sessions continue; reopen app → resume |
 
 ---
 
@@ -602,30 +602,30 @@ A "Health" badge in the mobile project header reflects three states:
 (Each step ends with a commit pushed to `nikhilsh/swe-kitty`. Steps that can fan out to parallel agent worktrees are tagged ⟂.)
 
 1. **Bootstrap** — `git init`, push to `nikhilsh/swe-kitty`, scaffold `.swe-kitty/` (Part A), write `docs/WEBSOCKET-PROTOCOL.md`, `docs/AGENT-ADAPTERS.md`, **`docs/MEMORY-FORMAT.md`** (HTML schema from Part D'), `docs/SESSION-LIFECYCLE.md` (checkpoints + recovery from Part D''). These four contracts are frozen here so the next four steps can parallelize. Includes `CONTRIBUTING.md`, CI workflow skeleton, `.gitignore`, project-level `.swe-kitty/memory/index.html` seed
-2. ⟂ **Harness server core** — `harness/cmd/swe-kitty-harness/main.go` + `internal/session/manager.go` + `internal/ws/server.go`. One hardcoded agent working end-to-end with `wscat`
+2. ⟂ **Harness server core** — `broker/cmd/swe-kitty-broker/main.go` + `internal/session/manager.go` + `internal/ws/server.go`. One hardcoded agent working end-to-end with `wscat`
 3. ⟂ **Rust core** — `core/swe-kitty-core.udl`, `transport.rs`, `session.rs`, `views.rs`; `cargo test` with mock WS server
-4. **Agent adapters** — `internal/agents/registry.go`, `agents/{claude,codex}.toml`, `harness/docker/{claude,codex}.Dockerfile`, `switch_agent` wired but without handoff yet
+4. **Agent adapters** — `internal/agents/registry.go`, `agents/{claude,codex}.toml`, `broker/docker/{claude,codex}.Dockerfile`, `switch_agent` wired but without handoff yet
 5. **Memory + checkpoint subsystem** — `swe-kitty memory` subcommand, `internal/session/{checkpoint,handoff,recovery,watchdog}.go`, HTML schema validator, agent-swap end-to-end with handoff section round-trip. **Cannot defer to v2** per user requirement
 6. ⟂ **iOS shell** — xcodegen + project.yml + build-rust.sh + xcframework; `ProjectListView`, `ProjectView` with view picker, terminal tab only
 7. ⟂ **Android shell** — Gradle + build-rust.sh + JNI; drawer + project screen with view tabs, terminal page only
 8. **Chat view + browser view** on both platforms; `view_event` plumbing; "Memory" affordance in chat header that opens session HTML in the in-app browser
 9. **Auth + discovery** — QR flow, mDNS, remote URL path; bearer token persisted in Keychain / EncryptedSharedPreferences
 10. **CI green** — all 4 workflows pass on a no-op PR
-11. **Release smoke** — `git tag v0.0.1`, verify IPA + APK + harness binaries on the Release; sideload on real device; connect to a `$5` VPS over LTE; run the Part D'' failure-mode matrix on the real hardware
+11. **Release smoke** — `git tag v0.0.1`, verify IPA + APK + broker binaries on the Release; sideload on real device; connect to a `$5` VPS over LTE; run the Part D'' failure-mode matrix on the real hardware
 
 ---
 
 ## Part E — End-to-end verification
 
 1. **Dev harness sanity**: fresh clone → `npm i -g swe-swe && swe-swe up` reads `.swe-kitty/config.toml`, lets you spawn parallel Claude + Codex sessions on this repo, each on its own worktree
-2. **Harness server**: `go run ./cmd/swe-kitty-harness up` → QR + `:1977`. `wscat` to `/ws/$(uuidgen)?assistant=claude` echoes PTY
+2. **Harness server**: `go run ./cmd/swe-kitty-broker up` → QR + `:1977`. `wscat` to `/ws/$(uuidgen)?assistant=claude` echoes PTY
 3. **Agent swap**: `{"type":"switch_agent","assistant":"codex"}` in same session → container replaced, worktree preserved
-4. **Core**: `cargo test` against mock WS; `cargo run --example cli-driver` against real harness
+4. **Core**: `cargo test` against mock WS; `cargo run --example cli-driver` against real broker
 5. **iOS sim**: Xcode → iPhone 16, scan QR (dev: paste), spawn Claude session, swipe View picker: Terminal types and echoes → Chat shows agent messages → Browser shows `npm run dev` preview
 6. **Android emu**: same flow on Pixel 8
 7. **CI**: open a no-op PR → 4 jobs green
-8. **Release**: `git tag v0.0.1 && git push --tags` → 3 workflows run → Release has `swe-kitty-harness-{linux,darwin}-{amd64,arm64}`, `SweKitty.ipa`, `SweKitty.apk`
-9. **Sideload + remote**: install IPA via AltStore (UDID registered), install APK on Pixel; spin up VPS with Caddy + `swe-kitty-harness up --public-url …`; connect from LTE; verify all three views work over the public internet
+8. **Release**: `git tag v0.0.1 && git push --tags` → 3 workflows run → Release has `swe-kitty-broker-{linux,darwin}-{amd64,arm64}`, `SweKitty.ipa`, `SweKitty.apk`
+9. **Sideload + remote**: install IPA via AltStore (UDID registered), install APK on Pixel; spin up VPS with Caddy + `swe-kitty-broker up --public-url …`; connect from LTE; verify all three views work over the public internet
 
 ---
 
@@ -642,7 +642,7 @@ Versions are deliberate, not aspirational. Each one ends in a tagged GitHub Rele
 - Agent adapter system + Codex adapter; `switch_agent` works but no handoff yet (step 4)
 - iOS shell with **terminal view only**, manual endpoint+token entry (step 6)
 - CI: lint/test/build-sim (step 10 partial)
-- **Exit criterion:** type in iOS terminal view → Claude responds; manually swap to Codex via app menu → Codex responds; sessions survive app backgrounding but **not** harness restart
+- **Exit criterion:** type in iOS terminal view → Claude responds; manually swap to Codex via app menu → Codex responds; sessions survive app backgrounding but **not** broker restart
 
 ### v0.2 — "I can leave and come back" (≈ 2 weeks)
 **Goal:** the long-running-session requirement (Part D'').
@@ -661,10 +661,10 @@ Versions are deliberate, not aspirational. Each one ends in a tagged GitHub Rele
 - **Exit criterion:** start `npm run dev` in terminal tab → see preview in browser tab → see agent's structured progress in chat tab, all from same project
 
 ### v0.4 — "off my laptop" (≈ 1 week)
-**Goal:** remote + LAN harness production-ready.
+**Goal:** remote + LAN broker production-ready.
 - Auth + discovery (step 9): QR + mDNS + remote URL
 - Caddy + TLS docs for VPS deployment
-- Release pipeline complete: signed IPA + signed APK + cross-compiled harness binaries (step 11)
+- Release pipeline complete: signed IPA + signed APK + cross-compiled broker binaries (step 11)
 - **Exit criterion:** sideload IPA via AltStore, install APK on Android, both connect to a $5 VPS over LTE; full Part E verification passes
 
 ### v1.0 — "ship it" (polish window)
@@ -693,7 +693,7 @@ Versions are deliberate, not aspirational. Each one ends in a tagged GitHub Rele
 - Web client (the swe-swe browser UI already works against our server during dev; no need to ship our own)
 - Self-hosted multi-tenant SaaS
 - In-app billing / paid tiers
-- Windows/Linux desktop apps (the harness binary already runs there; the mobile is the product)
+- Windows/Linux desktop apps (the broker binary already runs there; the mobile is the product)
 
 ---
 
@@ -707,9 +707,9 @@ Versions are deliberate, not aspirational. Each one ends in a tagged GitHub Rele
 
 1. `.swe-kitty/config.toml`, `.swe-kitty/env.example`, `.swe-kitty/agents/{claude,codex}.toml`, `.swe-kitty/tasks/*.md`, `.swe-kitty/README.md`, `.swe-kitty/memory/index.html` (project), `.swe-kitty/memory/memory.css`, `.swe-kitty/memory/session-template.html`, `CONTRIBUTING.md`
 2. `docs/WEBSOCKET-PROTOCOL.md`, `docs/AGENT-ADAPTERS.md`, `docs/MEMORY-FORMAT.md`, `docs/SESSION-LIFECYCLE.md`, `docs/ARCHITECTURE.md`
-3. `harness/cmd/swe-kitty-harness/main.go`, `harness/internal/session/{manager,checkpoint,handoff,recovery,watchdog}.go`, `harness/internal/{ws,agents,auth,memory}/*.go`, `harness/docker/{claude,codex}.Dockerfile`, `agents/{claude,codex}.toml`
+3. `broker/cmd/swe-kitty-broker/main.go`, `broker/internal/session/{manager,checkpoint,handoff,recovery,watchdog}.go`, `broker/internal/{ws,agents,auth,memory}/*.go`, `broker/docker/{claude,codex}.Dockerfile`, `agents/{claude,codex}.toml`
 4. `core/swe-kitty-core.udl`, `core/src/{lib,transport,session,views,discovery}.rs`, `core/Cargo.toml`
 5. `apps/ios/project.yml`, `apps/ios/build-rust.sh`, `apps/ios/Sources/{SessionStore,Views/ProjectListView,Views/ProjectView,Views/TerminalTab,Views/ChatTab,Views/BrowserTab,Views/MemoryButton}.swift`, `apps/ios/ExportOptions.plist`
 6. `apps/android/build-rust.sh`, `apps/android/app/build.gradle.kts`, `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/{MainActivity,ProjectListScreen,ProjectScreen,TerminalPage,ChatPage,BrowserPage,MemoryButton}.kt`
-7. `.github/workflows/{ci,release-ios,release-android,release-harness}.yml`
+7. `.github/workflows/{ci,release-ios,release-android,release-broker}.yml`
 8. `docs/INSTALL-{IOS,ANDROID}.md`, `docs/SELF-HOST.md`, `Makefile`, `.gitignore`

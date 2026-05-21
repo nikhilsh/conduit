@@ -1,4 +1,4 @@
-name: release-harness
+name: release-broker
 
 on:
   workflow_call:
@@ -13,7 +13,7 @@ env:
 
 jobs:
   build-binaries:
-    name: cross-compile harness
+    name: cross-compile broker
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -31,61 +31,61 @@ jobs:
           go-version: '1.22'
       - uses: actions/setup-node@v4
         with:
-          # Stage G: the harness spawns a Node sidecar (@xterm/headless)
+          # Stage G: the broker spawns a Node sidecar (@xterm/headless)
           # to keep size-correct terminal grids per session. We install
           # its deps here so the release tarball ships the sidecar dir
           # alongside the Go binary.
           node-version: '20'
 
       - name: Build
-        if: hashFiles('harness/go.mod') != ''
+        if: hashFiles('broker/go.mod') != ''
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
           RELEASE_TAG: ${{ inputs.release_tag }}
-        working-directory: harness
+        working-directory: broker
         run: |
           mkdir -p dist
           go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
-            -o dist/swe-kitty-harness-${GOOS}-${GOARCH} ./cmd/swe-kitty-harness
+            -o dist/swe-kitty-broker-${GOOS}-${GOARCH} ./cmd/swe-kitty-broker
 
       - name: Install sidecar runtime deps
-        if: hashFiles('harness/sidecar/package.json') != ''
-        working-directory: harness/sidecar
+        if: hashFiles('broker/sidecar/package.json') != ''
+        working-directory: broker/sidecar
         run: npm install --omit=dev
 
-      - name: Bundle harness + sidecar tarball
-        if: hashFiles('harness/sidecar/package.json') != ''
+      - name: Bundle broker + sidecar tarball
+        if: hashFiles('broker/sidecar/package.json') != ''
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        working-directory: harness
+        working-directory: broker
         run: |
           STAGE="dist/stage-${GOOS}-${GOARCH}"
           mkdir -p "${STAGE}/sidecar"
-          cp "dist/swe-kitty-harness-${GOOS}-${GOARCH}" "${STAGE}/swe-kitty-harness"
+          cp "dist/swe-kitty-broker-${GOOS}-${GOARCH}" "${STAGE}/swe-kitty-broker"
           cp -R sidecar/sidecar.js sidecar/package.json sidecar/README.md sidecar/node_modules "${STAGE}/sidecar/"
-          tar -C "${STAGE}" -czf "dist/swe-kitty-harness-${GOOS}-${GOARCH}.tar.gz" .
+          tar -C "${STAGE}" -czf "dist/swe-kitty-broker-${GOOS}-${GOARCH}.tar.gz" .
 
       - name: Upload binary to GitHub Release
-        if: hashFiles('harness/go.mod') != ''
+        if: hashFiles('broker/go.mod') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           gh release upload "${RELEASE_TAG}" \
-            harness/dist/swe-kitty-harness-${{ matrix.goos }}-${{ matrix.goarch }} \
+            broker/dist/swe-kitty-broker-${{ matrix.goos }}-${{ matrix.goarch }} \
             --clobber
 
-      - name: Upload harness+sidecar bundle to GitHub Release
-        if: hashFiles('harness/sidecar/package.json') != ''
+      - name: Upload broker+sidecar bundle to GitHub Release
+        if: hashFiles('broker/sidecar/package.json') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           gh release upload "${RELEASE_TAG}" \
-            harness/dist/swe-kitty-harness-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
+            broker/dist/swe-kitty-broker-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
             --clobber
 
   upload-installer:

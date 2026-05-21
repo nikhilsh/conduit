@@ -15,7 +15,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
+	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
 )
 
 var handoffSectionPattern = regexp.MustCompile(`(?is)<section[^>]*data-section=["']handoff["'][^>]*>(.*?)</section>`)
