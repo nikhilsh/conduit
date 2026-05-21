@@ -71,6 +71,7 @@ type Session struct {
 	health            string
 	lastOutput        time.Time
 	lastCheckpoint    time.Time
+	startedAt         time.Time
 	handoffHTML       string
 	checkpointMu      sync.Mutex
 	lastMemoryModTime time.Time
@@ -135,6 +136,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		health:     "healthy",
 		reasonCode: "ok",
 		lastOutput: time.Now().UTC(),
+		startedAt:  time.Now().UTC(),
 	}
 	s.applyPaths()
 	if err := s.prepareFilesystem(); err != nil {

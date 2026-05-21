@@ -13,6 +13,7 @@ type Status struct {
 	ExitCode       int
 	LastOutput     time.Time
 	LastCheckpoint time.Time
+	StartedAt      time.Time
 }
 
 func (s *Session) Status() Status {
@@ -25,6 +26,7 @@ func (s *Session) Status() Status {
 		ExitCode:       s.exitCode,
 		LastOutput:     s.lastOutput,
 		LastCheckpoint: s.lastCheckpoint,
+		StartedAt:      s.startedAt,
 	}
 }
 

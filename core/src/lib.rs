@@ -323,6 +323,10 @@ impl Inner {
                 assistant: assistant.clone(),
                 branch,
                 preview: None,
+                reasoning_effort: None,
+                cwd: None,
+                started_at: None,
+                last_activity_at: None,
             }),
         );
 

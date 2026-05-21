@@ -742,7 +742,11 @@ final class SessionStore {
                 yolo: status.yolo,
                 preview: status.preview,
                 sessionName: status.sessionName,
-                viewers: status.viewers
+                viewers: status.viewers,
+                reasoningEffort: status.reasoningEffort,
+                cwd: status.cwd,
+                startedAt: status.startedAt,
+                lastActivityAt: status.lastActivityAt
             )
             statusBySession[sessionID] = status
         }

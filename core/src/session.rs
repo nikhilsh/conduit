@@ -14,6 +14,22 @@ pub struct ProjectSession {
     pub assistant: String,
     pub branch: Option<String>,
     pub preview: Option<PreviewInfo>,
+    /// Per-agent reasoning effort label ("low" / "medium" / "high").
+    /// Threaded from the harness so the project header pill renders
+    /// the actual setting instead of a hardcoded "medium".
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// Absolute working directory the agent was spawned into.
+    /// Surfaced in SessionInfo and the path label under the pill.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// RFC3339Nano timestamp when the harness session was created.
+    #[serde(default)]
+    pub started_at: Option<String>,
+    /// RFC3339Nano timestamp of the most recent PTY byte received
+    /// from the agent process. Used for "last activity N min ago".
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -74,6 +90,22 @@ impl ProjectSessionState {
             self.session.preview = Some(preview.clone());
             self.browser.preview = Some(preview);
         }
+        // Carry the optional info-sheet fields through. apply_status is
+        // called on every `status` frame, so the last one wins — exactly
+        // what we want for last_activity_at (it ticks forward) and for
+        // any later config change to reasoning_effort.
+        if status.reasoning_effort.is_some() {
+            self.session.reasoning_effort = status.reasoning_effort.clone();
+        }
+        if status.cwd.is_some() {
+            self.session.cwd = status.cwd.clone();
+        }
+        if status.started_at.is_some() {
+            self.session.started_at = status.started_at.clone();
+        }
+        if status.last_activity_at.is_some() {
+            self.session.last_activity_at = status.last_activity_at.clone();
+        }
         self.terminal.rows = status.rows;
         self.terminal.cols = status.cols;
         self.status = Some(status);
@@ -122,6 +154,10 @@ mod tests {
             assistant: "claude".to_string(),
             branch: None,
             preview: None,
+            reasoning_effort: None,
+            cwd: None,
+            started_at: None,
+            last_activity_at: None,
         };
         let mut state = ProjectSessionState::new(session);
         state.push_chat_event(ChatEvent {

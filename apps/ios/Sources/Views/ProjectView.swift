@@ -133,10 +133,13 @@ struct ProjectView: View {
     }
 
     private var pathLabel: String {
-        // No first-class `cwd` on ProjectSession yet — `name` is the best
-        // proxy we have. Stage 3 will surface the real cwd via the
-        // SessionInfo screen + Rust core.
-        session.name
+        // Real cwd now threads from the harness status frame. Fall back
+        // to the session name (typically the workspace folder) when
+        // the harness hasn't emitted one yet (older builds).
+        if let cwd = session.cwd?.trimmingCharacters(in: .whitespaces), !cwd.isEmpty {
+            return cwd
+        }
+        return session.name
     }
 
     private var subtitle: String {
@@ -183,9 +186,15 @@ struct ProjectView: View {
         .accessibilityLabel("Switch agent")
     }
 
-    // TODO: thread reasoning effort from ProjectSession once Rust core
-    // surfaces it; hard-coded "medium" so the pill matches Litter today.
-    private var reasoningEffort: String { "medium" }
+    /// Reasoning effort surfaced by the harness status frame. Falls
+    /// back to "medium" when the harness hasn't emitted one (older
+    /// builds) so the pill always reads something.
+    private var reasoningEffort: String {
+        if let raw = session.reasoningEffort?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
+            return raw
+        }
+        return "medium"
+    }
 
     private var refreshButton: some View {
         Button {

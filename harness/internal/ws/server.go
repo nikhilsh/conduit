@@ -201,7 +201,7 @@ func (c *client) sendStatus(assistant string, created bool) error {
 	if reason == "" {
 		reason = "ok"
 	}
-	return c.writeJSON(map[string]any{
+	payload := map[string]any{
 		"type":        "status",
 		"session":     c.sess.ID,
 		"viewers":     1,
@@ -213,7 +213,23 @@ func (c *client) sendStatus(assistant string, created bool) error {
 		"phase":       st.Phase,
 		"reason_code": reason,
 		"ts":          time.Now().UTC().Format(time.RFC3339Nano),
-	})
+	}
+	// Info-sheet fields. Optional so older clients ignore unknown
+	// keys safely; the iOS/Android decoder reads them via #[serde(default)].
+	if cwd := c.sess.WorkspaceDir(); cwd != "" {
+		payload["cwd"] = cwd
+	}
+	if !st.StartedAt.IsZero() {
+		payload["started_at"] = st.StartedAt.Format(time.RFC3339Nano)
+	}
+	if !st.LastOutput.IsZero() {
+		payload["last_activity_at"] = st.LastOutput.Format(time.RFC3339Nano)
+	}
+	// `reasoning_effort` is a placeholder until adapter configs surface
+	// it. iOS already shows "medium" as a fallback, so emitting the
+	// same value is a no-op visually but keeps the schema consistent.
+	payload["reasoning_effort"] = "medium"
+	return c.writeJSON(payload)
 }
 
 // sendSnapshot gzips `data` and emits one or more 0x02 chunked frames.

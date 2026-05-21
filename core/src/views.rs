@@ -36,6 +36,21 @@ pub struct SessionStatus {
     pub preview: Option<PreviewInfo>,
     pub session_name: Option<String>,
     pub viewers: Option<u32>,
+    /// Per-agent reasoning effort ("low" / "medium" / "high") read
+    /// from the agent toml. The pill in the project header tracks
+    /// this so users can see what they're paying for at a glance.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// Absolute working directory the agent was spawned into.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// RFC3339Nano timestamp the harness session was created.
+    #[serde(default)]
+    pub started_at: Option<String>,
+    /// RFC3339Nano timestamp of the most recent PTY byte from the
+    /// agent. Useful for "last seen N min ago" in the info sheet.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
