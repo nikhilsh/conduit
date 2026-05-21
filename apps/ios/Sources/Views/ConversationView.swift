@@ -642,6 +642,27 @@ private struct ConversationPendingInputCard: View {
     }
 }
 
+/// Locks the design intent for the user-message rendering. The test
+/// suite asserts this stays `.flat` so a future change can't silently
+/// re-introduce the bubble background without a paired test update.
+///
+/// - `.flat`: Claude.ai-style — right-aligned plain text in the accent
+///   color, no background, no rounded rect. Current design.
+/// - `.bubble`: legacy iMessage-style — right-aligned text with a
+///   `RoundedRectangle.fill(SweKittyTheme.surfaceLight)` background.
+enum UserMessageStyle: Equatable {
+    case flat
+    case bubble
+}
+
+/// Single source of truth for the user-message style. Read by
+/// `ConversationBubbleContainer` for layout decisions and asserted in
+/// `ConversationRendererTests.userMessageStyleIsFlat` so a regression
+/// that re-adds the bubble fails the test suite, not just the eye-test.
+enum ConversationStyle {
+    static let userMessage: UserMessageStyle = .flat
+}
+
 private struct ConversationBubbleContainer<Content: View>: View {
     let role: ConversationRole
     let timestamp: String
@@ -649,28 +670,24 @@ private struct ConversationBubbleContainer<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        // Litter's actual conversation pattern (from the generative-UI
-        // screenshot): user messages get a SUBTLE light-gray rounded
-        // rect right-aligned; assistant messages flow as plain text,
-        // full width, no role label, no container. No avatars, no
-        // big timestamps — just the text itself. Body uses a
-        // monospaced font (codex aesthetic).
+        // Conversation pattern: user messages render Claude.ai-style as
+        // plain right-aligned text in the accent color (no bubble, no
+        // background). Assistant messages flow as full-width markdown.
+        // No avatars, no big timestamps — just the text itself.
         switch role {
         case .user:
-            // Claude's iOS chat pattern: a small dark-gray pill, right-
-            // aligned, capped near 78% width via a leading gutter. The
-            // previous copper-tinted bubble drew the eye too much for
-            // what's typically a short prompt; muting it keeps the
-            // assistant's flow as the focal point of the transcript.
+            // Claude.ai user-message pattern: right-aligned plain text
+            // in the copper accent color, capped near 78% width via a
+            // leading gutter. The prior `RoundedRectangle.fill(
+            // surfaceLight)` background framed every short prompt like
+            // an iMessage bubble; dropping it lets the assistant's
+            // markdown flow stay the focal point of the transcript.
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 content()
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(SweKittyTheme.surfaceLight)
-                    )
+                    .foregroundStyle(SweKittyTheme.accent)
+                    .multilineTextAlignment(.trailing)
+                    .modifier(UserMessageBackground(style: ConversationStyle.userMessage))
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 56)
@@ -682,6 +699,31 @@ private struct ConversationBubbleContainer<Content: View>: View {
             // shouldn't normally hit, but stays safe.
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Optional background for user messages. Under `.flat` (current
+/// design) the modifier is a no-op so the user text renders as plain
+/// right-aligned content. Under `.bubble` we restore the legacy
+/// padded `RoundedRectangle.fill(surfaceLight)` for parity with the
+/// previous design — kept around as a code path so the test fixture
+/// (and any future toggle) can exercise both branches.
+private struct UserMessageBackground: ViewModifier {
+    let style: UserMessageStyle
+
+    func body(content: Content) -> some View {
+        switch style {
+        case .flat:
+            content
+        case .bubble:
+            content
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(SweKittyTheme.surfaceLight)
+                )
         }
     }
 }
