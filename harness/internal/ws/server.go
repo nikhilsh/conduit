@@ -384,7 +384,11 @@ func (c *client) handleText(payload []byte) {
 		// Mobile-side optimistic local echo (SessionStore.sendChat)
 		// handles the chat-tab visibility for the outgoing message.
 		if env.Msg != "" {
-			_, _ = c.sess.Write([]byte(env.Msg + "\n"))
+			// TUI agents (Claude, Codex) submit on CR, not LF — writing
+			// "\n" left the typed text in the prompt without actually
+			// being entered, forcing users to switch to the Terminal
+			// tab and press Return manually.
+			_, _ = c.sess.Write([]byte(env.Msg + "\r"))
 		}
 	case "rename_session", "toggle_yolo":
 		// Acknowledged in v1 protocol but still no-op here.

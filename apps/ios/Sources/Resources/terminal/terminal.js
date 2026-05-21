@@ -65,6 +65,11 @@
     }
 
     term.onData(function (d) {
+      // The iOS soft keyboard's Return key emits LF; TUI agents (Claude,
+      // Codex) expect CR for Enter. Normalize so users don't need a
+      // hardware-style workflow just to submit a prompt.
+      if (d === "\n") d = "\r";
+      else if (d === "\r\n") d = "\r";
       post({ type: "input", data: d });
     });
 
@@ -75,6 +80,38 @@
     window.addEventListener("resize", function () {
       try { fit.fit(); } catch (e) { /* ignore */ }
     });
+
+    // Touch scroll. With the outer WKWebView scrollView disabled (so it
+    // doesn't compete with xterm.js for pans), the inner .xterm-viewport
+    // does NOT receive native momentum scrolling on iOS — touchmove
+    // events fire but no scroll happens. Wire it manually: translate
+    // vertical drag distance into term.scrollLines.
+    var termEl = document.getElementById("term");
+    var lastTouchY = null;
+    function cellHeightPx() {
+      // xterm.js doesn't expose cell height as a public API; estimate
+      // from fontSize. Menlo 13pt at default lineHeight ≈ 17px. A small
+      // overshoot here just means scrolling feels slightly less twitchy.
+      return Math.max(12, Math.round((term.options.fontSize || 13) * 1.3));
+    }
+    termEl.addEventListener("touchstart", function (e) {
+      if (e.touches.length === 1) lastTouchY = e.touches[0].clientY;
+    }, { passive: true });
+    termEl.addEventListener("touchmove", function (e) {
+      if (e.touches.length !== 1 || lastTouchY === null) return;
+      var y = e.touches[0].clientY;
+      var dy = lastTouchY - y;
+      var ch = cellHeightPx();
+      var lines = (dy >= 0 ? Math.floor(dy / ch) : Math.ceil(dy / ch));
+      if (lines !== 0) {
+        term.scrollLines(lines);
+        lastTouchY = y;
+        e.preventDefault();
+      }
+    }, { passive: false });
+    termEl.addEventListener("touchend", function () {
+      lastTouchY = null;
+    }, { passive: true });
 
     window.feedBytes = function (b64) {
       var bin = atob(b64);

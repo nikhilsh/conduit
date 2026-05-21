@@ -12,39 +12,38 @@ struct ChatTab: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if events.isEmpty {
-                            emptyState
-                        } else {
-                            ConversationTimelineView(events: events) { reply in
-                                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    draft = reply
-                                } else {
-                                    draft += "\n" + reply
-                                }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if events.isEmpty {
+                        emptyState
+                    } else {
+                        ConversationTimelineView(events: events) { reply in
+                            if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                draft = reply
+                            } else {
+                                draft += "\n" + reply
                             }
                         }
-                        Color.clear.frame(height: 1).id("bottom")
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    Color.clear.frame(height: 1).id("bottom")
                 }
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8)
-                        .onChanged { _ in autoFollow = false }
-                )
-                .onChange(of: events.count) { _, _ in
-                    guard autoFollow else { return }
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-                .onAppear {
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { _ in autoFollow = false }
+            )
+            .onChange(of: events.count) { _, _ in
+                guard autoFollow else { return }
+                withAnimation(.easeOut(duration: 0.18)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
+            }
+            .onAppear {
+                proxy.scrollTo("bottom", anchor: .bottom)
             }
             .overlay(alignment: .bottomTrailing) {
                 if !autoFollow && !events.isEmpty {
@@ -62,9 +61,19 @@ struct ChatTab: View {
                     .padding(.bottom, 10)
                 }
             }
-            Divider().background(SweKittyTheme.separator)
-            composer
-                .padding(10)
+            // Pin the composer as a bottom safe-area inset so iOS always
+            // reserves room for it above the keyboard. Previously the
+            // composer was a plain VStack sibling and the focused
+            // TextField could end up under the keyboard during the
+            // animation, especially after rotation.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider().background(SweKittyTheme.separator)
+                    composer
+                        .padding(10)
+                }
+                .background(.regularMaterial)
+            }
         }
     }
 
