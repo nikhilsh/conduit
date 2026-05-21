@@ -173,26 +173,37 @@ struct SessionInfoView: View {
         }
     }
 
-    // TODO: thread reasoning effort through ProjectSession; placeholder
-    // "medium" for now.
-    private var reasoningEffortLabel: String { "medium" }
+    /// Reasoning effort surfaced by the harness status frame; falls
+    /// back to "medium" when the harness hasn't emitted one yet.
+    private var reasoningEffortLabel: String {
+        if let raw = session.reasoningEffort?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
+            return raw
+        }
+        return "medium"
+    }
 
-    /// Folder path proxy — see ProjectView for the same fallback. When
-    /// `cwd` lands on ProjectSession this returns the real path.
-    private var folderPath: String { session.name }
+    /// Real cwd from the harness; falls back to the session name (the
+    /// workspace folder) when the harness hasn't emitted one yet.
+    private var folderPath: String {
+        if let cwd = session.cwd?.trimmingCharacters(in: .whitespaces), !cwd.isEmpty {
+            return cwd
+        }
+        return session.name
+    }
 
     private struct TimeLine { let created: String; let touched: String }
 
     private var timeLine: TimeLine? {
-        // ProjectSession has no `createdAt`/`updatedAt` yet. Best effort:
-        // derive bookends from the first/last ConversationItem timestamps.
-        guard let first = events.first, let last = events.last else { return nil }
-        guard
-            let firstDate = Self.parseTimestamp(first.ts),
-            let lastDate = Self.parseTimestamp(last.ts)
-        else { return nil }
-        let createdRel = Self.relativeFormatter.localizedString(for: firstDate, relativeTo: Date())
-        let touchedRel = Self.relativeFormatter.localizedString(for: lastDate, relativeTo: Date())
+        // Prefer the authoritative timestamps from the harness status
+        // frame; fall back to the first/last ConversationItem ts for
+        // older builds that haven't shipped the new fields yet.
+        let createdDate = session.startedAt.flatMap(Self.parseTimestamp)
+            ?? events.first.flatMap { Self.parseTimestamp($0.ts) }
+        let touchedDate = session.lastActivityAt.flatMap(Self.parseTimestamp)
+            ?? events.last.flatMap { Self.parseTimestamp($0.ts) }
+        guard let createdDate, let touchedDate else { return nil }
+        let createdRel = Self.relativeFormatter.localizedString(for: createdDate, relativeTo: Date())
+        let touchedRel = Self.relativeFormatter.localizedString(for: touchedDate, relativeTo: Date())
         return TimeLine(
             created: "created \(createdRel)",
             touched: "touched \(touchedRel)"
