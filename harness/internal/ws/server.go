@@ -384,6 +384,10 @@ func (c *client) handleText(payload []byte) {
 		// Mobile-side optimistic local echo (SessionStore.sendChat)
 		// handles the chat-tab visibility for the outgoing message.
 		if env.Msg != "" {
+			// Prime the chat scraper to capture the agent's reply.
+			// Must happen before the Write — drain may start producing
+			// reply bytes immediately, and we want them captured.
+			c.sess.MarkUserChatSent(env.Msg)
 			// TUI agents (Claude, Codex) submit on CR, not LF — writing
 			// "\n" left the typed text in the prompt without actually
 			// being entered, forcing users to switch to the Terminal

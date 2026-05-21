@@ -105,7 +105,7 @@ struct ChatTab: View {
             Text("No conversation yet")
                 .font(.headline)
                 .foregroundStyle(SweKittyTheme.textPrimary)
-            Text("Type a message below. Until the structured-chat adapter lands, replies from \(session.assistant) arrive in the **Terminal** tab — the chat tab here just records what you've sent.")
+            Text("Send a message to \(session.assistant). Replies appear here as structured turns; the **Terminal** tab still shows the raw TUI if you want to peek at the unparsed stream.")
                 .font(.subheadline)
                 .foregroundStyle(SweKittyTheme.textSecondary)
         }

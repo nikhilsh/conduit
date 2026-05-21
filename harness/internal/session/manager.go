@@ -79,6 +79,11 @@ type Session struct {
 	// termgrid is the optional headless xterm.js sidecar handle. nil
 	// when node isn't installed; callers must treat it as best-effort.
 	termgrid *termgrid.Manager
+
+	// chatScraper turns PTY output back into structured chat_event
+	// JSON frames. Lives for the life of the session; capturing
+	// state is gated on the user actually sending a chat message.
+	scraper *chatScraper
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
@@ -178,6 +183,8 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		}
 		return nil, err
 	}
+	s.scraper = newChatScraper(s.PublishText)
+	go s.scraper.run(s.closed)
 	go s.drain(f)
 	s.startBackgroundLoops()
 	return s, nil
@@ -303,8 +310,46 @@ func (s *Session) WorkspaceDir() string {
 }
 
 // Close terminates the session. Idempotent.
+// PublishText broadcasts an already-serialized JSON frame to every
+// text subscriber. Same drop-oldest backpressure policy as fanout —
+// the scraper must never block the PTY drain.
+func (s *Session) PublishText(payload []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ch := range s.textSubs {
+		select {
+		case ch <- payload:
+		default:
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- payload:
+			default:
+			}
+		}
+	}
+}
+
+// MarkUserChatSent primes the chat scraper to capture the next
+// assistant reply. Called by the websocket chat handler right before
+// the user's message is written into the PTY.
+func (s *Session) MarkUserChatSent(msg string) {
+	if s.scraper != nil {
+		s.scraper.markUserSent(msg)
+	}
+}
+
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
+		if s.scraper != nil {
+			// One last flush in case a reply was in flight when the
+			// session ends, so the user still sees the assistant's
+			// last turn.
+			s.scraper.flush()
+			s.scraper.stop()
+		}
 		_ = s.Checkpoint("exit")
 		_ = s.pty.Close()
 		exitCode := 0
@@ -371,6 +416,9 @@ func (s *Session) drain(f *os.File) {
 			copy(chunk, buf[:n])
 			s.append(chunk)
 			s.fanout(chunk)
+			if s.scraper != nil {
+				s.scraper.feed(chunk)
+			}
 			s.mu.Lock()
 			tg := s.termgrid
 			s.mu.Unlock()
