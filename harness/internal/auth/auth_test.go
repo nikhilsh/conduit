@@ -51,7 +51,10 @@ func TestAdoptRejectsShortTokens(t *testing.T) {
 func TestAdoptIsIdempotent(t *testing.T) {
 	s := NewStore()
 	tok := "stable-token-abcdef-1234567890"
-	if !s.Adopt(tok) || !s.Adopt(tok) {
+	if !s.Adopt(tok) {
+		t.Fatal("Adopt rejected fresh token")
+	}
+	if !s.Adopt(tok) {
 		t.Fatal("Adopt should be idempotent on the same input")
 	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
