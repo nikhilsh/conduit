@@ -514,16 +514,22 @@ private struct ConversationBubbleContainer<Content: View>: View {
         // monospaced font (codex aesthetic).
         switch role {
         case .user:
-            HStack {
-                Spacer(minLength: 48)
+            // Litter has bubbles for the USER role only — orange-tinted,
+            // right-aligned, capped near 78% width via a leading gutter.
+            // (SwiftUI doesn't allow `.infinity * 0.78`; HStack + Spacer
+            // with a leading padding keeps it portable across iOS 16.)
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
                 content()
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                     .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(SweKittyTheme.surfaceLight.opacity(0.75))
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(SweKittyTheme.accentStrong.opacity(0.22))
                     )
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, 56)
         case .assistant:
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -574,9 +580,18 @@ private struct ConversationMarkdownBlock: View {
         // (litter / codex aesthetic) but the user can flip to system in
         // Settings → Font.
         .font(appearance.bodyFont())
-        .foregroundStyle(role == .system ? SweKittyTheme.textSecondary : SweKittyTheme.textBody)
+        .foregroundStyle(foregroundForRole)
         .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: role == .user ? nil : .infinity, alignment: .leading)
+    }
+
+    private var foregroundForRole: Color {
+        switch role {
+        case .user: return SweKittyTheme.textPrimary
+        case .system: return SweKittyTheme.textSecondary
+        default: return SweKittyTheme.textBody
+        }
     }
 }
 

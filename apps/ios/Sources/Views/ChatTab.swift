@@ -141,13 +141,16 @@ struct ChatTab: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.subheadline.weight(.bold))
-                        .foregroundStyle(SweKittyTheme.textPrimary)
-                        .frame(width: 36, height: 36)
-                        .glassCircle(tint: SweKittyTheme.surface.opacity(0.7))
+                        .foregroundStyle(SweKittyTheme.accentStrong)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            Circle()
+                                .stroke(SweKittyTheme.accentStrong, lineWidth: 1.4)
+                        )
                 }
                 .buttonStyle(.plain)
 
-                TextField("Message \(session.assistant)…", text: $draft, axis: .vertical)
+                TextField("Message swe-kitty…", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...6)
                     .padding(.vertical, 8)
