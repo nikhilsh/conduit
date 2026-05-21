@@ -75,40 +75,62 @@ struct ProjectView: View {
 
     private var lifecycle: SessionLifecycle? { store.sessionLifecycle[session.id] }
 
-    /// Litter-style header card:
-    /// Row 1: centered agent pill (green dot · name · effort · chevron) with
-    ///        compact refresh + info icon buttons on the trailing edge.
-    /// Row 2: `path · branch · running` one-line muted mono caption.
-    /// Row 3: Terminal / Chat / Browser segmented picker (heightened — this
-    ///        is the "main idea" per chat window in our app, per the plan).
+    /// Litter Stage 2 header — three explicit rows.
+    ///
+    /// Row 1 (`controlsRow`): centered compound agent dropdown (status dot ·
+    ///   agent name · reasoning effort · chevron.down) with two glass-capsule
+    ///   icon circles (refresh + info) trailing. Back button stays in the
+    ///   NavigationStack toolbar so the leading slot is intentionally empty
+    ///   in the ZStack and the pill reads as the visual center.
+    /// Row 2 (`pathRow`): one-line `path · branch · running` mono caption
+    ///   (built from `captionLabel`), middle-truncated, muted — keeps PR A's
+    ///   single-line tightening inside the new three-row factoring.
+    /// Row 3 (`tabPickerRow`): Terminal / Chat / Browser segmented picker
+    ///   wrapped in a subtle glass surface and heightened so it reads as
+    ///   the primary affordance — this is "the main idea per chat window."
     private var header: some View {
         VStack(spacing: 8) {
-            ZStack {
-                agentPill
-                HStack(spacing: 8) {
-                    Spacer()
-                    MemoryButton(tab: $tab, mode: $browserMode)
-                    HStack(spacing: 4) {
-                        refreshButton
-                        infoButton
-                    }
-                }
-            }
-            // One-line caption beneath the agent pill: `path · branch ·
-            // running`. Single muted mono line replaces the prior
-            // folder-icon + two-segment row so the tab picker sits one
-            // row closer to the top of the visible header.
-            Text(captionLabel)
-                .font(.caption2.monospaced())
-                .foregroundStyle(SweKittyTheme.textMuted)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .center)
-            tabPicker
+            controlsRow
+            pathRow
+            tabPickerRow
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .glassRoundedRect()
+    }
+
+    /// Row 1 — control bar. ZStack so the compound agent dropdown is
+    /// truly centered regardless of trailing icon width, matching litter.
+    private var controlsRow: some View {
+        ZStack {
+            agentPill
+            HStack(spacing: 6) {
+                Spacer()
+                refreshButton
+                infoButton
+            }
+        }
+    }
+
+    /// Row 2 — single mono caption combining `path · branch · running`
+    /// (and any lifecycle label). Preserves PR A's tightening inside the
+    /// new three-row factoring: one line, middle-truncated, muted.
+    private var pathRow: some View {
+        Text(captionLabel)
+            .font(.caption2.monospaced())
+            .foregroundStyle(SweKittyTheme.textMuted)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    /// Row 3 — tab picker. Wrapped in a glass surface and side-padded so
+    /// it reads as the dominant affordance in the header.
+    private var tabPickerRow: some View {
+        tabPicker
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .glassRoundedRect(cornerRadius: SweKittyTheme.smallCornerRadius)
     }
 
     private var pathLabel: String {
@@ -180,35 +202,34 @@ struct ProjectView: View {
         return "medium"
     }
 
-    private var refreshButton: some View {
-        Button {
-            // Note: SessionStore has no `refresh(sessionID:)` method, so
-            // we fall back to `reconnect()` which re-establishes the
-            // harness stream and re-emits the session snapshot.
-            store.reconnect()
-        } label: {
-            Image(systemName: "arrow.clockwise")
+    /// Trailing icon button — glass-capsule circle to match litter's
+    /// per-icon container treatment. Reused by both refresh + info.
+    private func headerIconButton(systemImage: String, accessibility: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(SweKittyTheme.accentStrong)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+                .frame(width: 32, height: 32)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Reconnect")
+        .glassCircle()
+        .accessibilityLabel(accessibility)
+    }
+
+    private var refreshButton: some View {
+        // Note: SessionStore has no `refresh(sessionID:)` method, so
+        // we fall back to `reconnect()` which re-establishes the
+        // harness stream and re-emits the session snapshot.
+        headerIconButton(systemImage: "arrow.clockwise", accessibility: "Reconnect") {
+            store.reconnect()
+        }
     }
 
     private var infoButton: some View {
-        Button {
+        headerIconButton(systemImage: "info.circle", accessibility: "Session info") {
             showInfo = true
-        } label: {
-            Image(systemName: "info.circle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(SweKittyTheme.accentStrong)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Session info")
     }
 
     /// The Terminal / Chat / Browser segmented picker. Plan calls for this
@@ -231,5 +252,71 @@ struct ProjectView: View {
         case .chat:     ChatTab(session: session)
         case .browser:  BrowserTab(session: session, mode: browserMode)
         }
+    }
+}
+
+/// Pure-data description of the litter Stage 2 header. Lifted out of
+/// the SwiftUI view so unit tests can assert the three-row structure
+/// and the compound-dropdown contents without standing up a host
+/// controller. The view body references the same computed values, so
+/// drift between the model and the rendered surface is loud.
+struct ProjectHeaderModel: Equatable {
+    /// Three rows, in render order. Matches the litter reference and
+    /// the spec in `docs/PLAN-LITTER-UI.md` Stage 2.
+    enum Row: String, CaseIterable {
+        case controls
+        case path
+        case tabPicker
+    }
+
+    static let rows: [Row] = Row.allCases
+
+    /// Centered compound-dropdown payload: status dot color key,
+    /// agent name, reasoning-effort label, plus a chevron flag so the
+    /// "this is a dropdown" affordance is asserted in tests.
+    struct AgentPill: Equatable {
+        let healthKey: String
+        let agentName: String
+        let reasoningEffort: String
+        let showsChevron: Bool
+    }
+
+    let agentPill: AgentPill
+    let pathLabel: String
+    let pathSubtitle: String
+
+    static func from(session: ProjectSession,
+                     status: SessionStatus?,
+                     lifecycleLabel: String?) -> ProjectHeaderModel {
+        let pathLabel: String = {
+            if let cwd = session.cwd?.trimmingCharacters(in: .whitespaces), !cwd.isEmpty {
+                return cwd
+            }
+            return session.name
+        }()
+
+        let reasoning: String = {
+            if let raw = session.reasoningEffort?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
+                return raw
+            }
+            return "medium"
+        }()
+
+        let subtitleParts: [String] = [
+            session.branch.flatMap { $0.isEmpty ? nil : $0 } ?? "no branch",
+            status?.phase ?? "ready",
+            lifecycleLabel,
+        ].compactMap { $0 }
+
+        return ProjectHeaderModel(
+            agentPill: AgentPill(
+                healthKey: status?.health ?? "unknown",
+                agentName: session.assistant,
+                reasoningEffort: reasoning,
+                showsChevron: true
+            ),
+            pathLabel: pathLabel,
+            pathSubtitle: subtitleParts.joined(separator: " · ")
+        )
     }
 }

@@ -123,11 +123,11 @@ struct ChatTab: View {
         .glassRect(cornerRadius: 18, tint: agentTint.opacity(0.16))
     }
 
-    /// Claude-iOS-style composer: a single rounded surface with the
-    /// text field on top and a row of affordances (Code / paperclip /
-    /// mic / send-or-stop) below. A `Connecting` pill sits above the
-    /// surface while we're waiting on the agent's reply, mirroring
-    /// the screenshot reference.
+    /// Litter Stage 2 composer — a single rounded-rect glass surface
+    /// laid out as `[+]  TextField  [mic | send]`. Quick-reply chips
+    /// and the "Connecting" pill stack above it; the agent-switcher
+    /// pill that used to live inline here is gone (now redundant with
+    /// the header dropdown introduced in this stage).
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !quickReplies.isEmpty {
@@ -155,52 +155,71 @@ struct ChatTab: View {
                 connectingPill
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                TextField("Add feedback…", text: $draft, axis: .vertical)
+            HStack(alignment: .bottom, spacing: 10) {
+                plusButton
+                TextField(Self.placeholder(for: session.assistant),
+                          text: $draft,
+                          axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...6)
-                    .padding(.horizontal, 4)
-
-                HStack(spacing: 14) {
-                    composerAffordance(systemImage: "chevron.left.forwardslash.chevron.right",
-                                       label: "Code") {
-                        // Placeholder: future code-block insertion. Mirrors
-                        // the reference label exactly so the row reads the
-                        // same as Claude's app while we wait for the real
-                        // affordance to land.
-                    }
-                    Spacer(minLength: 0)
-                    composerIcon(systemImage: "paperclip") {
-                        // Reserved for attach (file / image / snippet).
-                    }
-                    InlineVoiceButton { transcript in
-                        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            draft = trimmed
-                        } else {
-                            draft += " " + trimmed
-                        }
-                    }
-                    sendOrStopButton
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                trailingControl
             }
             .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(.thinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(SweKittyTheme.border.opacity(0.5), lineWidth: 1)
-            )
+            .padding(.vertical, 8)
+            .glassRoundedRect()
         }
         .onChange(of: events.count) { _, _ in
             let assistantNow = events.filter { $0.role.lowercased() == "assistant" }.count
             if awaitingReply && assistantNow > assistantCountAtSend {
                 awaitingReply = false
+            }
+        }
+    }
+
+    /// Composer placeholder text. Exposed as a static helper so unit
+    /// tests can assert the wording (Stage 2 acceptance: reads
+    /// "Message <agent>…" using the active SessionStore agent).
+    static func placeholder(for assistant: String) -> String {
+        let trimmed = assistant.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "agent" : trimmed
+        return "Message \(name)\u{2026}"
+    }
+
+    /// Leading `+` button — no-op for now. The plus affordance maps to
+    /// future attach / quick-action behaviour; wiring lands in a
+    /// follow-up so this stage is contained to the visual restyle.
+    private var plusButton: some View {
+        Button {
+            // TODO: wire to attach / quick-actions in a follow-up PR.
+        } label: {
+            Image(systemName: "plus")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(SweKittyTheme.textSecondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(true)
+        .opacity(0.55)
+        .accessibilityLabel("Attach")
+    }
+
+    /// Trailing slot — mic when there's no draft, send (or stop while
+    /// awaiting) when there is. Folds into the single rounded-rect.
+    @ViewBuilder
+    private var trailingControl: some View {
+        if awaitingReply || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sendOrStopButton
+        } else {
+            InlineVoiceButton { transcript in
+                let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    draft = trimmed
+                } else {
+                    draft += " " + trimmed
+                }
             }
         }
     }
@@ -225,30 +244,6 @@ struct ChatTab: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(SweKittyTheme.border.opacity(0.5), lineWidth: 1)
         )
-    }
-
-    private func composerAffordance(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.subheadline.weight(.semibold))
-                Text(label)
-                    .font(.subheadline.weight(.medium))
-            }
-            .foregroundStyle(SweKittyTheme.textSecondary)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func composerIcon(systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.body.weight(.regular))
-                .foregroundStyle(SweKittyTheme.textSecondary)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder
