@@ -195,7 +195,7 @@ final class SessionStore {
     var statusBySession: [String: SessionStatus] = [:]
 
     /// Append-only terminal scrollback per session. TerminalTab observes this and
-    /// re-feeds the SwiftTerm view on appear / after reconnect.
+    /// re-feeds the WKTerminalView on appear / after reconnect.
     var terminalBuffer: [String: Data] = [:]
 
     /// Chat log per session, oldest first.
