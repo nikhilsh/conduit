@@ -34,7 +34,13 @@ struct TerminalTabXterm: View {
                 store.terminalSnapshot[sessionID] = snapshot
             }
         )
-        .ignoresSafeArea(edges: .bottom)
+        // Scope: `.container` lets us extend under the home-indicator
+        // inset (so the terminal still draws full-bleed at rest) WITHOUT
+        // ignoring the keyboard safe area. The previous `.ignoresSafeArea(
+        // edges: .bottom)` form ignored everything including the soft
+        // keyboard, so the bottom rows of PTY output were hidden under
+        // the keyboard while typing. Available since iOS 14.
+        .ignoresSafeArea(.container, edges: .bottom)
     }
 }
 

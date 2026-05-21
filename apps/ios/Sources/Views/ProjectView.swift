@@ -35,20 +35,15 @@ struct ProjectView: View {
         .padding(.bottom, 0)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // Claude-style stacked title: project name on top, agent
-            // role underneath. Replaces the bare UUID `navigationTitle`
-            // which read as session-internal plumbing.
+            // Single-line title only — the prior "claude · Remote control"
+            // subtitle duplicated the agent pill ("claude medium") that
+            // already sits one row below in the header card. Dropping it
+            // saves a row of vertical chrome and removes redundant text.
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text(navTitle)
-                        .font(.headline)
-                        .foregroundStyle(SweKittyTheme.textPrimary)
-                        .lineLimit(1)
-                    Text(navSubtitle)
-                        .font(.caption2)
-                        .foregroundStyle(SweKittyTheme.textSecondary)
-                        .lineLimit(1)
-                }
+                Text(navTitle)
+                    .font(.headline)
+                    .foregroundStyle(SweKittyTheme.textPrimary)
+                    .lineLimit(1)
             }
         }
         .tint(SweKittyTheme.accentStrong)
@@ -78,17 +73,12 @@ struct ProjectView: View {
         return trimmed
     }
 
-    /// Small second-line label under the title — the agent + role
-    /// (mirrors Claude's "Remote control" subtitle).
-    private var navSubtitle: String {
-        session.assistant.isEmpty ? "Remote control" : "\(session.assistant) · Remote control"
-    }
     private var lifecycle: SessionLifecycle? { store.sessionLifecycle[session.id] }
 
     /// Litter-style header card:
     /// Row 1: centered agent pill (green dot · name · effort · chevron) with
     ///        compact refresh + info icon buttons on the trailing edge.
-    /// Row 2: folder path under the pill (mono, muted, middle-truncated).
+    /// Row 2: `path · branch · running` one-line muted mono caption.
     /// Row 3: Terminal / Chat / Browser segmented picker (heightened — this
     ///        is the "main idea" per chat window in our app, per the plan).
     private var header: some View {
@@ -104,27 +94,16 @@ struct ProjectView: View {
                     }
                 }
             }
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                    .font(.caption2)
-                    .foregroundStyle(SweKittyTheme.textMuted)
-                Text(pathLabel)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(SweKittyTheme.textMuted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if !subtitle.isEmpty {
-                    Text("·")
-                        .font(.caption2)
-                        .foregroundStyle(SweKittyTheme.textMuted)
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(SweKittyTheme.textMuted)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
+            // One-line caption beneath the agent pill: `path · branch ·
+            // running`. Single muted mono line replaces the prior
+            // folder-icon + two-segment row so the tab picker sits one
+            // row closer to the top of the visible header.
+            Text(captionLabel)
+                .font(.caption2.monospaced())
+                .foregroundStyle(SweKittyTheme.textMuted)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .center)
             tabPicker
         }
         .padding(.horizontal, 12)
@@ -142,8 +121,13 @@ struct ProjectView: View {
         return session.name
     }
 
-    private var subtitle: String {
+    /// One-line `path · branch · running` caption used directly beneath
+    /// the agent pill. Replaces the prior split (icon + path on its own
+    /// row, then subtitle on a second row) so the header sheds vertical
+    /// chrome and the tab picker climbs closer to the top.
+    private var captionLabel: String {
         let parts: [String] = [
+            pathLabel,
             session.branch.flatMap { $0.isEmpty ? nil : $0 } ?? "no branch",
             status?.phase ?? "ready",
             lifecycleLabel,
