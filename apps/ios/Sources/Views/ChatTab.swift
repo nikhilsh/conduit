@@ -14,6 +14,12 @@ struct ChatTab: View {
     /// onChange clears `awaitingReply` only after the *next* reply
     /// (not on the local user-echo we append optimistically).
     @State private var assistantCountAtSend: Int = 0
+    /// Composer modals triggered from the `+` and expand buttons.
+    @State private var showAttachSheet = false
+    @State private var showExpandedComposer = false
+    /// In-flight attachments captured by ComposerAttachSheet; folded
+    /// into the next send via `composeOutgoingMessage`.
+    @State private var pendingAttachments: [ComposerAttachment] = []
 
     private var agentTint: Color {
         SweKittyTheme.accent(forAgent: session.assistant)
@@ -151,6 +157,18 @@ struct ChatTab: View {
                 }
             }
 
+            // Context chips strip — appears above the composer only
+            // when at least one context is pinned to this session.
+            ContextBarView(contexts: pinnedContexts) { id in
+                store.unpinContext(id, from: session.id)
+            }
+
+            // Pending attachments preview — same chip shape as
+            // context, but lives inline so it dismisses on send.
+            if !pendingAttachments.isEmpty {
+                pendingAttachmentStrip
+            }
+
             if awaitingReply {
                 connectingPill
             }
@@ -163,6 +181,7 @@ struct ChatTab: View {
                     .textFieldStyle(.plain)
                     .lineLimit(1...6)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                expandButton
                 trailingControl
             }
             .padding(.horizontal, 12)
@@ -175,6 +194,61 @@ struct ChatTab: View {
                 awaitingReply = false
             }
         }
+        .sheet(isPresented: $showAttachSheet) {
+            ComposerAttachSheet { attachment in
+                pendingAttachments.append(attachment)
+            }
+        }
+        .fullScreenCover(isPresented: $showExpandedComposer) {
+            ExpandedComposerView(
+                draft: $draft,
+                placeholder: Self.placeholder(for: session.assistant),
+                accentTint: agentTint,
+                onSend: dispatchSend
+            )
+        }
+    }
+
+    /// Pinned context list for the current session — empty array if
+    /// nothing pinned, which keeps `ContextBarView` rendering an
+    /// EmptyView.
+    private var pinnedContexts: [PinnedContext] {
+        store.pinnedContexts[session.id] ?? []
+    }
+
+    /// Inline preview of attachments that have been picked but not
+    /// yet sent. Tap the x to drop one before sending.
+    private var pendingAttachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(pendingAttachments) { att in
+                    HStack(spacing: 6) {
+                        Image(systemName: att.kind.iconName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(SweKittyTheme.textSecondary)
+                        Text(att.filename)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(SweKittyTheme.textBody)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button {
+                            pendingAttachments.removeAll { $0.id == att.id }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(SweKittyTheme.textSecondary)
+                                .frame(width: 18, height: 18)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove attachment \(att.filename)")
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .glassCapsule(interactive: false, tint: SweKittyTheme.warning.opacity(0.22))
+                }
+            }
+            .padding(.vertical, 2)
+        }
     }
 
     /// Composer placeholder text. Exposed as a static helper so unit
@@ -186,12 +260,12 @@ struct ChatTab: View {
         return "Message \(name)\u{2026}"
     }
 
-    /// Leading `+` button — no-op for now. The plus affordance maps to
-    /// future attach / quick-action behaviour; wiring lands in a
-    /// follow-up so this stage is contained to the visual restyle.
+    /// Leading `+` button — opens the attach sheet. Image / file
+    /// picks fold into `pendingAttachments`, which the next send
+    /// inlines into the outgoing chat message.
     private var plusButton: some View {
         Button {
-            // TODO: wire to attach / quick-actions in a follow-up PR.
+            showAttachSheet = true
         } label: {
             Image(systemName: "plus")
                 .font(.body.weight(.semibold))
@@ -200,16 +274,72 @@ struct ChatTab: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(true)
-        .opacity(0.55)
         .accessibilityLabel("Attach")
+    }
+
+    /// Expand-into-fullscreen-editor button, sits between the text
+    /// field and the mic/send. Hidden while awaiting a reply so the
+    /// stop button stays the dominant trailing affordance.
+    private var expandButton: some View {
+        Button {
+            showExpandedComposer = true
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(SweKittyTheme.textSecondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Expand composer")
+    }
+
+    /// Folds the draft text + any pending attachments + any pinned
+    /// contexts into a single outgoing chat message. Inlined here
+    /// rather than on SessionStore because it's purely a presentation
+    /// concern — the store accepts a single string.
+    private func composeOutgoingMessage(_ draft: String) -> String {
+        var pieces: [String] = []
+        let chips = pinnedContexts
+        if !chips.isEmpty {
+            let formatted = chips.map { ctx in
+                "[pinned \(ctx.kind.rawValue): \(ctx.label)]\n\(ctx.payload)"
+            }.joined(separator: "\n\n")
+            pieces.append(formatted)
+        }
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            pieces.append(trimmed)
+        }
+        for att in pendingAttachments {
+            pieces.append(att.inlineBlock)
+        }
+        return pieces.joined(separator: "\n\n")
+    }
+
+    /// Shared send path used by both the trailing send button and
+    /// the expanded composer's "Send" toolbar item.
+    private func dispatchSend() {
+        let outgoing = composeOutgoingMessage(draft)
+        let trimmed = outgoing.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        assistantCountAtSend = events.filter { $0.role.lowercased() == "assistant" }.count
+        store.sendChat(sessionID: session.id, message: trimmed)
+        draft = ""
+        pendingAttachments.removeAll()
+        autoFollow = true
+        awaitingReply = true
     }
 
     /// Trailing slot — mic when there's no draft, send (or stop while
     /// awaiting) when there is. Folds into the single rounded-rect.
+    /// Attachments queued without any text also flip the slot to a
+    /// send button so the user has a way to fire them off.
     @ViewBuilder
     private var trailingControl: some View {
-        if awaitingReply || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let hasDraft = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttachments = !pendingAttachments.isEmpty
+        if awaitingReply || hasDraft || hasAttachments {
             sendOrStopButton
         } else {
             InlineVoiceButton { transcript in
@@ -263,21 +393,14 @@ struct ChatTab: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
-        } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Empty draft and not awaiting: the voice button has already
-            // claimed this slot in the row above. Render a placeholder
-            // so the layout doesn't jump when the user starts typing.
+        } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pendingAttachments.isEmpty {
+            // Empty draft, no attachments, not awaiting: the voice
+            // button has already claimed this slot in the row above.
+            // Render a placeholder so the layout doesn't jump when
+            // the user starts typing.
             Color.clear.frame(width: 36, height: 36)
         } else {
-            Button {
-                let msg = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !msg.isEmpty else { return }
-                assistantCountAtSend = events.filter { $0.role.lowercased() == "assistant" }.count
-                store.sendChat(sessionID: session.id, message: msg)
-                draft = ""
-                autoFollow = true
-                awaitingReply = true
-            } label: {
+            Button(action: dispatchSend) {
                 Image(systemName: "arrow.up")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(SweKittyTheme.textOnAccent)

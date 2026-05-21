@@ -156,6 +156,40 @@ struct HostKeyPrompt: Identifiable, Equatable {
     let fingerprint: String
 }
 
+/// One pinned context (file, URL, or snippet) that the composer
+/// surfaces as a chip above the text field. The payload is what the
+/// next `sendChat` should fold into the outgoing message; `label` is
+/// the short string the chip renders. Identifiable so chip rows can
+/// animate inserts/removes cleanly with `ForEach`.
+struct PinnedContext: Identifiable, Equatable {
+    enum Kind: String, Equatable, Codable {
+        case file
+        case url
+        case snippet
+    }
+    let id: UUID
+    let kind: Kind
+    let label: String
+    let payload: String
+
+    init(id: UUID = UUID(), kind: Kind, label: String, payload: String) {
+        self.id = id
+        self.kind = kind
+        self.label = label
+        self.payload = payload
+    }
+
+    /// SF Symbol used by the chip view. Centralized here so chip
+    /// rendering is data-driven and the model is easy to test.
+    var iconName: String {
+        switch kind {
+        case .file:    return "doc.text"
+        case .url:     return "link"
+        case .snippet: return "text.quote"
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class SessionStore {
@@ -210,6 +244,12 @@ final class SessionStore {
     var chatLog: [String: [ChatEvent]] = [:]
     /// Typed conversation timeline per session, oldest first.
     var conversationLog: [String: [ConversationItem]] = [:]
+
+    /// Manually pinned context per session — rendered above the
+    /// composer as removable chips. PR ios-composer-parity introduces
+    /// the data model and the manual `pinContext` API; a follow-up PR
+    /// wires drag-from-Files and snippet-from-message into it.
+    var pinnedContexts: [String: [PinnedContext]] = [:]
 
     /// Last-known preview info per session (nil until the agent reports one).
     var preview: [String: PreviewInfo] = [:]
@@ -678,6 +718,31 @@ final class SessionStore {
     func resize(sessionID: String, rows: UInt16, cols: UInt16) {
         guard let client else { return }
         Task { try? await client.resize(sessionId: sessionID, rows: rows, cols: cols) }
+    }
+
+    // MARK: - Pinned context
+
+    /// Pin a context chip onto `sessionID`. No-op if an identical
+    /// chip (same kind + payload) is already pinned — keeps the UI
+    /// from accumulating duplicates when the same file is dragged
+    /// in twice.
+    func pinContext(_ ctx: PinnedContext, for sessionID: String) {
+        var list = pinnedContexts[sessionID] ?? []
+        guard !list.contains(where: { $0.kind == ctx.kind && $0.payload == ctx.payload }) else { return }
+        list.append(ctx)
+        pinnedContexts[sessionID] = list
+    }
+
+    /// Remove a pinned context by id. Used by ContextBar's tap-to-
+    /// dismiss affordance.
+    func unpinContext(_ id: UUID, from sessionID: String) {
+        guard var list = pinnedContexts[sessionID] else { return }
+        list.removeAll { $0.id == id }
+        if list.isEmpty {
+            pinnedContexts.removeValue(forKey: sessionID)
+        } else {
+            pinnedContexts[sessionID] = list
+        }
     }
 
     // MARK: - Internal
