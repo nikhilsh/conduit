@@ -6,6 +6,14 @@ struct ChatTab: View {
 
     @State private var draft: String = ""
     @State private var autoFollow = true
+    /// Local flag set when the user sends a chat; cleared when a new
+    /// assistant ConversationItem arrives. Drives the "Connecting"
+    /// pill above the composer.
+    @State private var awaitingReply = false
+    /// Snapshot of the assistant-event count at send-time, so the
+    /// onChange clears `awaitingReply` only after the *next* reply
+    /// (not on the local user-echo we append optimistically).
+    @State private var assistantCountAtSend: Int = 0
 
     private var agentTint: Color {
         SweKittyTheme.accent(forAgent: session.assistant)
@@ -115,11 +123,11 @@ struct ChatTab: View {
         .glassRect(cornerRadius: 18, tint: agentTint.opacity(0.16))
     }
 
-    /// Litter-style composer: single rounded-rect with a leading `+`
-    /// button, the message field, and a trailing mic. Send becomes a
-    /// dedicated copper circle only when the draft has content (mic
-    /// otherwise — same row position, no layout jump). Agent selector
-    /// moved to the header dropdown; no per-row pill here.
+    /// Claude-iOS-style composer: a single rounded surface with the
+    /// text field on top and a row of affordances (Code / paperclip /
+    /// mic / send-or-stop) below. A `Connecting` pill sits above the
+    /// surface while we're waiting on the agent's reply, mirroring
+    /// the screenshot reference.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !quickReplies.isEmpty {
@@ -143,30 +151,28 @@ struct ChatTab: View {
                 }
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
-                Button {
-                    // Reserved for the litter `+` affordance — file
-                    // attach / quick-snippet / image. Stage 5 wires it.
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(SweKittyTheme.accentStrong)
-                        .frame(width: 28, height: 28)
-                        .background(
-                            Circle()
-                                .stroke(SweKittyTheme.accentStrong, lineWidth: 1.4)
-                        )
-                }
-                .buttonStyle(.plain)
+            if awaitingReply {
+                connectingPill
+            }
 
-                TextField("Message swe-kitty…", text: $draft, axis: .vertical)
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Add feedback…", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...6)
-                    .padding(.vertical, 8)
                     .padding(.horizontal, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                HStack(spacing: 14) {
+                    composerAffordance(systemImage: "chevron.left.forwardslash.chevron.right",
+                                       label: "Code") {
+                        // Placeholder: future code-block insertion. Mirrors
+                        // the reference label exactly so the row reads the
+                        // same as Claude's app while we wait for the real
+                        // affordance to land.
+                    }
+                    Spacer(minLength: 0)
+                    composerIcon(systemImage: "paperclip") {
+                        // Reserved for attach (file / image / snippet).
+                    }
                     InlineVoiceButton { transcript in
                         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmed.isEmpty else { return }
@@ -176,27 +182,115 @@ struct ChatTab: View {
                             draft += " " + trimmed
                         }
                     }
-                } else {
-                    Button {
-                        let msg = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !msg.isEmpty else { return }
-                        store.sendChat(sessionID: session.id, message: msg)
-                        draft = ""
-                        autoFollow = true
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(SweKittyTheme.textOnAccent)
-                            .frame(width: 36, height: 36)
-                            .background(agentTint)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
+                    sendOrStopButton
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .glassRoundedRect(cornerRadius: 24)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(.thinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(SweKittyTheme.border.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .onChange(of: events.count) { _, _ in
+            let assistantNow = events.filter { $0.role.lowercased() == "assistant" }.count
+            if awaitingReply && assistantNow > assistantCountAtSend {
+                awaitingReply = false
+            }
+        }
+    }
+
+    private var connectingPill: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.mini)
+                .tint(SweKittyTheme.textSecondary)
+            Text("Connecting")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(SweKittyTheme.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.thinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(SweKittyTheme.border.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    private func composerAffordance(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                Text(label)
+                    .font(.subheadline.weight(.medium))
+            }
+            .foregroundStyle(SweKittyTheme.textSecondary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func composerIcon(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.regular))
+                .foregroundStyle(SweKittyTheme.textSecondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var sendOrStopButton: some View {
+        if awaitingReply {
+            // Stop button — visually distinct so the user knows the
+            // agent is still working. Tap is a no-op for now; harness
+            // doesn't expose a "cancel turn" yet.
+            Button {
+                // Future: store.cancelChat(sessionID: session.id)
+            } label: {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(SweKittyTheme.textPrimary)
+                    .frame(width: 18, height: 18)
+                    .frame(width: 36, height: 36)
+                    .background(SweKittyTheme.surfaceLight)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Empty draft and not awaiting: the voice button has already
+            // claimed this slot in the row above. Render a placeholder
+            // so the layout doesn't jump when the user starts typing.
+            Color.clear.frame(width: 36, height: 36)
+        } else {
+            Button {
+                let msg = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !msg.isEmpty else { return }
+                assistantCountAtSend = events.filter { $0.role.lowercased() == "assistant" }.count
+                store.sendChat(sessionID: session.id, message: msg)
+                draft = ""
+                autoFollow = true
+                awaitingReply = true
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(SweKittyTheme.textOnAccent)
+                    .frame(width: 36, height: 36)
+                    .background(agentTint)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
