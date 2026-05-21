@@ -66,9 +66,20 @@ Text frames are UTF-8 JSON objects with a `type` field.
   "yolo": false,
   "health": "healthy" | "warning" | "dead",
   "phase": "running" | "swapping" | "stalled" | "exited",
-  "preview": { "port": 3001, "url": "/preview/<uuid>/" }
+  "reason_code": "ok",
+  "preview": { "port": 3001, "url": "/preview/<uuid>/" },
+  "reasoning_effort": "low" | "medium" | "high",
+  "cwd": "/abs/path/to/agent/workdir",
+  "started_at": "2026-05-21T08:00:00.000Z",
+  "last_activity_at": "2026-05-21T09:12:34.500Z"
 }
 ```
+
+Field notes (post-#16 additions; all optional, older clients ignore unknown keys):
+- `reasoning_effort` — per-agent label read from `agents/<name>.toml`'s `reasoning_effort` field. Falls back to `"medium"` when the toml didn't specify.
+- `cwd` — absolute path of the agent's working directory (the broker's `workspaceDir`).
+- `started_at` — RFC3339Nano timestamp of session construction (broker stamps once at `newSession`).
+- `last_activity_at` — RFC3339Nano timestamp of the most recent PTY byte from the agent process.
 
 ```json
 { "type": "view_event",
@@ -82,6 +93,8 @@ Text frames are UTF-8 JSON objects with a `type` field.
   }
 }
 ```
+
+The `view: "chat"` shape is emitted by the broker's Tier 1 PTY scraper (`broker/internal/session/chatscraper.go`, added in #13) after every chat turn — `markUserSent` arms it, idle gap >700ms after the last assistant-side byte flushes one event. ANSI is stripped and border-only lines are dropped before emit. Tunables: `KITTY_CHAT_IDLE_MS` (default 700), `KITTY_CHAT_TURN_MAX_MS` (default 30000).
 
 ```json
 { "type": "exit", "session": "<uuid>", "code": 0 }
@@ -102,6 +115,10 @@ Text frames are UTF-8 JSON objects with a `type` field.
 { "type": "exit" }                             // request session shutdown
 { "type": "chat", "from": "username", "msg": "..." }
 ```
+
+`chat` notes:
+- The broker writes `msg + "\r"` (CR, not LF) into the agent's PTY stdin. Fixed in #12 — TUI agents (Claude, Codex) submit on CR; LF left text in the prompt without entering it.
+- Each `chat` send primes the broker's PTY scraper to capture the assistant's reply and emit it back as `view_event { view: "chat" }`. Echo-suppression on the scraper means an agent that redraws the user's input bar verbatim is not re-shipped as an "assistant" reply.
 
 Unknown `type` values are logged and ignored — never close the socket for them. This keeps the protocol forward-extensible.
 
@@ -142,3 +159,8 @@ Closing the socket does NOT stop the session. Sessions live until an explicit `{
 - Error responses are JSON: `{"error":{"code":"...","message":"..."}}`.
 
 Status/exit payloads include machine-readable `reason_code` (examples: `ok`, `agent_switched`, `agent_switch_in_progress`, `process_exited`, `session_closed`).
+
+### Health endpoints
+
+- `GET /health` — soft liveness. Returns `200 ok\n` as long as the broker process is responding. Trivial; kept for backwards-compat curl scripts.
+- `GET /healthz` — strict liveness (added in #26). Returns JSON `{live, sidecar_expected, sidecar_healthy, sidecar_error?}`. **503** when the Node sidecar was expected at startup but isn't answering its 5s Ping; 200 otherwise. Wire into systemd `Restart=on-failure` or LB health checks — silent sidecar crashes now surface as a degraded health status instead of garbled terminal snapshots.
