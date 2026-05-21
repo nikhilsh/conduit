@@ -101,16 +101,12 @@ struct HomeView: View {
         HStack(spacing: 14) {
             iconButton(systemImage: "gearshape.fill", action: { showSettings = true })
             Spacer()
-            VStack(spacing: 0) {
-                Text("SweKitty")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(SweKittyTheme.textPrimary)
-                Text(store.endpoint.isComplete ? store.endpoint.displayHost : "no harness")
-                    .font(.caption2)
-                    .foregroundStyle(SweKittyTheme.textMuted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            Image("KittyMark")
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 32, height: 32)
+                .cornerRadius(7)
+                .accessibilityLabel("SweKitty")
             Spacer()
             iconButton(systemImage: "list.bullet", action: { showSearch = true })
         }
@@ -178,7 +174,7 @@ private struct HomeSessionRow: View {
             indicator
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(.title3, design: .monospaced).weight(.bold))
                     .foregroundStyle(SweKittyTheme.textPrimary)
                     .lineLimit(1)
                 Text(subtitle)
@@ -187,12 +183,9 @@ private struct HomeSessionRow: View {
                     .lineLimit(1)
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(SweKittyTheme.textMuted.opacity(0.7))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .contentShape(Rectangle())
     }
 
@@ -228,8 +221,13 @@ private struct HomeSessionRow: View {
     private var subtitle: String {
         switch entry {
         case .real(let s):
+            // ProjectSession has no createdAt/lastTouchedAt yet, so the
+            // relative-time slot falls back to "{assistant} · {phase}" while
+            // still appending the endpoint host so each row tells you which
+            // harness it belongs to (matches the Litter "now · ip" cadence).
             let phase = status?.phase ?? "ready"
-            return "\(s.assistant) · \(phase)"
+            let host = store.endpoint.isComplete ? store.endpoint.displayHost : "local"
+            return "\(s.assistant) · \(phase) · \(host)"
         case .creating(let placeholderID):
             if case .failed(let msg) = store.sessionLifecycle[placeholderID] { return msg }
             return "asking harness…"

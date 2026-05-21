@@ -54,10 +54,13 @@ struct ServerTabsStrip: View {
                 Text("server")
                     .font(.subheadline.weight(.semibold))
             }
-            .foregroundStyle(SweKittyTheme.textSecondary)
+            .foregroundStyle(SweKittyTheme.accentStrong)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .glassCapsule(interactive: true, tint: SweKittyTheme.surface.opacity(0.55))
+            .background(
+                Capsule()
+                    .stroke(SweKittyTheme.accentStrong, lineWidth: 1.5)
+            )
         }
         .buttonStyle(.plain)
     }

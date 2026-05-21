@@ -39,12 +39,11 @@ struct BottomActionBar: View {
         Button(action: onPlus) {
             Image(systemName: "plus")
                 .font(.title.weight(.bold))
-                .foregroundStyle(SweKittyTheme.textOnAccent)
-                .frame(width: 68, height: 68)
+                .foregroundStyle(SweKittyTheme.accentStrong)
+                .frame(width: 64, height: 64)
                 .background(
                     Circle()
-                        .fill(SweKittyTheme.accentStrong)
-                        .shadow(color: SweKittyTheme.accentStrong.opacity(0.45), radius: 18, y: 8)
+                        .stroke(SweKittyTheme.accentStrong, lineWidth: 2)
                 )
         }
         .buttonStyle(.plain)
