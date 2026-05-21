@@ -52,7 +52,16 @@ struct WKTerminalView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: "term")
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        // KeyableWKWebView injects our custom Esc/Tab/Arrows/Return
+        // bar over the soft keyboard. The bar's onSend pipes back
+        // through the same input callback as keystrokes from xterm.js,
+        // so the harness can't tell them apart on the wire.
+        let webView = KeyableWKWebView(frame: .zero, configuration: config)
+        let bar = TerminalAccessoryBar()
+        bar.onSend = { [weak coordinator = context.coordinator] bytes in
+            coordinator?.onInput(bytes)
+        }
+        webView.terminalAccessoryView = bar
         webView.navigationDelegate = context.coordinator
         webView.scrollView.isScrollEnabled = false // xterm.js handles its own scrollback
         webView.isOpaque = false
@@ -197,4 +206,19 @@ struct WKTerminalView: UIViewRepresentable {
             // for that message so we know the renderer is mounted.
         }
     }
+}
+
+/// `WKWebView` subclass that exposes a custom `inputAccessoryView`.
+/// WKWebView's default `inputAccessoryView` is `nil`; the soft keyboard
+/// gets its own bar but there is no public hook to attach our toolbar
+/// without subclassing. This is the documented workaround used by
+/// every iOS terminal app on the App Store.
+final class KeyableWKWebView: WKWebView {
+    var terminalAccessoryView: UIView?
+
+    override var inputAccessoryView: UIView? { terminalAccessoryView }
+
+    // `canBecomeFirstResponder` defaults to whatever WKWebView's
+    // hidden text-input internals say. Don't override — let the
+    // existing first-responder choreography stand.
 }
