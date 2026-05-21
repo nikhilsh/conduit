@@ -65,17 +65,22 @@ fn full_session_lifecycle_user_assistant_tool_diff_exit() {
     store.register_session(project("s1", "claude"));
     store.apply_lifecycle("s1", SessionLifecycle::Creating);
 
-    store.apply_status(status("s1", "live", "green", Some("medium"), Some("Fix #42")));
+    store.apply_status(status(
+        "s1",
+        "live",
+        "green",
+        Some("medium"),
+        Some("Fix #42"),
+    ));
     assert_eq!(store.lifecycle("s1"), Some(SessionLifecycle::Live));
 
-    store.apply_chat("s1", chat("user", "Fix the off-by-one", "2026-05-21T00:00:00Z"));
     store.apply_chat(
         "s1",
-        chat(
-            "assistant",
-            "Looking at the loop",
-            "2026-05-21T00:00:01Z",
-        ),
+        chat("user", "Fix the off-by-one", "2026-05-21T00:00:00Z"),
+    );
+    store.apply_chat(
+        "s1",
+        chat("assistant", "Looking at the loop", "2026-05-21T00:00:01Z"),
     );
     store.apply_chat(
         "s1",
@@ -116,10 +121,7 @@ fn idempotent_replay_after_reconnect() {
     // reconnect (the reconnect worker doesn't dedupe — that's our job).
     for _ in 0..3 {
         store.apply_chat("s1", chat("user", "do it", "2026-05-21T00:00:00Z"));
-        store.apply_chat(
-            "s1",
-            chat("assistant", "ok", "2026-05-21T00:00:01Z"),
-        );
+        store.apply_chat("s1", chat("assistant", "ok", "2026-05-21T00:00:01Z"));
         store.apply_status(status("s1", "live", "green", Some("high"), None));
     }
     let snap = store.get("s1").unwrap();
@@ -135,7 +137,13 @@ fn out_of_order_chat_before_status_for_unknown_session() {
     // the platform layer didn't know about yet (live join from another
     // device, for example). apply_status should still install the
     // placeholder so subsequent chats fold in.
-    store.apply_status(status("s_remote", "live", "green", Some("low"), Some("alt")));
+    store.apply_status(status(
+        "s_remote",
+        "live",
+        "green",
+        Some("low"),
+        Some("alt"),
+    ));
     store
         .apply_chat(
             "s_remote",

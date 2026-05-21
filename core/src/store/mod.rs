@@ -124,12 +124,9 @@ impl SessionStore {
     pub fn apply_chat(&self, session_id: &str, event: ChatEvent) -> Option<ProjectSessionState> {
         let mut inner = self.inner.lock();
         let state = inner.sessions.get_mut(session_id)?;
-        if state
-            .chat
-            .events
-            .iter()
-            .any(|prev| prev.role == event.role && prev.content == event.content && prev.ts == event.ts)
-        {
+        if state.chat.events.iter().any(|prev| {
+            prev.role == event.role && prev.content == event.content && prev.ts == event.ts
+        }) {
             return Some(state.clone());
         }
         state.push_chat_event(event);
@@ -144,25 +141,22 @@ impl SessionStore {
     pub fn apply_status(&self, status: SessionStatus) -> ProjectSessionState {
         let mut inner = self.inner.lock();
         let session_id = status.session.clone();
-        let state = inner
-            .sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| {
-                ProjectSessionState::new(ProjectSession {
-                    id: session_id.clone(),
-                    name: status
-                        .session_name
-                        .clone()
-                        .unwrap_or_else(|| session_id.clone()),
-                    assistant: status.assistant.clone(),
-                    branch: None,
-                    preview: status.preview.clone(),
-                    reasoning_effort: status.reasoning_effort.clone(),
-                    cwd: status.cwd.clone(),
-                    started_at: status.started_at.clone(),
-                    last_activity_at: status.last_activity_at.clone(),
-                })
-            });
+        let state = inner.sessions.entry(session_id.clone()).or_insert_with(|| {
+            ProjectSessionState::new(ProjectSession {
+                id: session_id.clone(),
+                name: status
+                    .session_name
+                    .clone()
+                    .unwrap_or_else(|| session_id.clone()),
+                assistant: status.assistant.clone(),
+                branch: None,
+                preview: status.preview.clone(),
+                reasoning_effort: status.reasoning_effort.clone(),
+                cwd: status.cwd.clone(),
+                started_at: status.started_at.clone(),
+                last_activity_at: status.last_activity_at.clone(),
+            })
+        });
         state.apply_status(status);
         // A status frame implies the session is at least live (the apps'
         // `ingestStatus` also flips lifecycle from `creating` -> `live`).
@@ -336,10 +330,7 @@ mod tests {
         let store = SessionStore::new();
         store.register_session(project("s1"));
         let snap = store
-            .apply_chat(
-                "s1",
-                chat("assistant", "thinking…", "2026-05-21T00:00:01Z"),
-            )
+            .apply_chat("s1", chat("assistant", "thinking…", "2026-05-21T00:00:01Z"))
             .unwrap();
         assert_eq!(snap.chat.conversation[0].role, "assistant");
         assert_eq!(snap.chat.conversation[0].kind, "message");
@@ -461,10 +452,7 @@ mod tests {
         store.register_session(project("s1"));
         store.apply_status(status("s1", "live", Some("high")));
         store.apply_chat("s1", chat("user", "go", "2026-05-21T00:00:00Z"));
-        store.apply_chat(
-            "s1",
-            chat("assistant", "done", "2026-05-21T00:00:01Z"),
-        );
+        store.apply_chat("s1", chat("assistant", "done", "2026-05-21T00:00:01Z"));
         let snap = store.apply_exit("s1", 0).unwrap();
         assert!(snap.exited);
         assert_eq!(snap.chat.conversation.len(), 2);
@@ -479,10 +467,7 @@ mod tests {
         // should just refresh metadata.
         let store = SessionStore::new();
         store.register_session(project("s1"));
-        store.apply_chat(
-            "s1",
-            chat("assistant", "early msg", "2026-05-21T00:00:00Z"),
-        );
+        store.apply_chat("s1", chat("assistant", "early msg", "2026-05-21T00:00:00Z"));
         store.apply_status(status("s1", "live", Some("medium")));
         let snap = store.get("s1").unwrap();
         assert_eq!(snap.chat.conversation.len(), 1);
@@ -547,7 +532,9 @@ mod tests {
         );
         assert_eq!(
             store.lifecycle("pending-1"),
-            Some(SessionLifecycle::FailedToStart("connection refused".to_string()))
+            Some(SessionLifecycle::FailedToStart(
+                "connection refused".to_string()
+            ))
         );
     }
 }
