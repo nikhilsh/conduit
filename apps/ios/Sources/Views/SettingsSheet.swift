@@ -1,18 +1,21 @@
 import SwiftUI
 
-/// Settings — sectioned IA matching the litter reference: Support /
-/// Appearance / Font / Conversation / Servers / Harness / About /
-/// Experimental. The big pairing form is gone — adding a server (any of
-/// QR / mDNS / SSH / manual) goes through [`AddServerSheet`].
+/// Settings — Litter-style sectioned IA. Sentence-case bold section
+/// headers (`SettingsSectionHeader`) replace the old uppercased mono
+/// labels. New sections at the top mirror the Litter reference:
+/// Support · Theme · Font · Conversation · Pet · Experimental. The
+/// existing Saved Servers / Paired Harness / Pairing / Harness Status /
+/// About sections continue to live below them unchanged (Stage C will
+/// rework the server UI).
 struct SettingsSheet: View {
     @Environment(SessionStore.self) private var store
     @Environment(AppearanceStore.self) private var appearance
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.openURL) private var openURL
 
     @State private var showAddServer = false
     @State private var showAppearance = false
+    @State private var showExperimental = false
 
     private let sponsorURL = URL(string: "https://github.com/sponsors/nikhilsh")!
 
@@ -25,13 +28,14 @@ struct SettingsSheet: View {
                 ScrollView {
                     VStack(spacing: 22) {
                         supportSection
-                        appearanceSection
+                        themeSection
                         fontSection
                         conversationSection
+                        petSection
+                        experimentalSection
                         serversSection
                         harnessSection
                         aboutSection
-                        experimentalSection
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
@@ -42,8 +46,23 @@ struct SettingsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .tint(SweKittyTheme.accentStrong)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { dismiss() } label: {
+                        Text("Done")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(SweKittyTheme.accentStrong)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule()
+                                    .fill(SweKittyTheme.accentStrong.opacity(0.18))
+                            )
+                            .overlay(
+                                Capsule()
+                                    .stroke(SweKittyTheme.accentStrong.opacity(0.55), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .sheet(isPresented: $showAddServer) {
@@ -55,64 +74,137 @@ struct SettingsSheet: View {
                     .environment(appearance)
                     .presentationDetents([.medium, .large])
             }
+            .sheet(isPresented: $showExperimental) {
+                ExperimentalFeaturesSheet()
+                    .presentationDetents([.medium, .large])
+            }
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Litter-style sections
 
     private var supportSection: some View {
-        SettingsSection(title: "Support") {
-            SettingsRow(
-                icon: "heart.fill",
-                title: "Sponsor on GitHub",
-                subtitle: "Help fund continued development"
-            ) {
-                openURL(sponsorURL)
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Support")
+            VStack(alignment: .leading, spacing: 10) {
+                Link(destination: sponsorURL) {
+                    SettingsLinkRowContent(
+                        icon: "pawprint.fill",
+                        title: "Tip the Kitty",
+                        subtitle: nil
+                    )
+                }
+                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
         }
     }
 
-    private var appearanceSection: some View {
-        SettingsSection(title: "Appearance") {
-            SettingsRow(
-                icon: "paintpalette.fill",
-                title: "Theme",
-                subtitle: appearance.themeMode.label
-            ) {
-                showAppearance = true
+    private var themeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Theme")
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsRow(
+                    icon: "paintbrush.pointed.fill",
+                    title: "Appearance",
+                    subtitle: nil
+                ) {
+                    showAppearance = true
+                }
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
         }
     }
 
     private var fontSection: some View {
-        SettingsSection(title: "Font") {
-            @Bindable var bindable = appearance
-            ForEach(Array(AppearanceStore.FontFamily.allCases.enumerated()), id: \.element.id) { idx, choice in
-                SettingsPickerRow(
-                    icon: choice == .monospaced ? "chevron.left.forwardslash.chevron.right" : "textformat",
-                    title: choice.label,
-                    isSelected: appearance.fontFamily == choice
-                ) {
-                    bindable.fontFamily = choice
-                }
-                if idx < AppearanceStore.FontFamily.allCases.count - 1 {
-                    Divider().background(SweKittyTheme.separator)
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Font")
+            VStack(alignment: .leading, spacing: 10) {
+                @Bindable var bindable = appearance
+                ForEach(Array(AppearanceStore.FontFamily.allCases.enumerated()), id: \.element.id) { idx, choice in
+                    FontSampleRow(
+                        family: choice,
+                        isSelected: appearance.fontFamily == choice
+                    ) {
+                        bindable.fontFamily = choice
+                    }
+                    if idx < AppearanceStore.FontFamily.allCases.count - 1 {
+                        Divider().background(SweKittyTheme.separator)
+                    }
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
         }
     }
 
     private var conversationSection: some View {
-        SettingsSection(title: "Conversation") {
-            @Bindable var bindable = appearance
-            SettingsToggleRow(
-                icon: "rectangle.compress.vertical",
-                title: "Collapse Turns",
-                subtitle: "Show only summaries; tap to expand",
-                isOn: $bindable.collapseTurns
-            )
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Conversation")
+            VStack(alignment: .leading, spacing: 10) {
+                @Bindable var bindable = appearance
+                SettingsToggleRow(
+                    icon: "arrow.up.and.line.horizontal.and.arrow.down",
+                    title: "Collapse Turns",
+                    subtitle: "Collapse previous turns into cards",
+                    isOn: $bindable.collapseTurns
+                )
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
         }
     }
+
+    private var petSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Pet")
+            VStack(alignment: .leading, spacing: 10) {
+                // TODO: wire Wake Pet endpoint
+                SettingsRow(
+                    icon: "pawprint.fill",
+                    title: "Wake Pet",
+                    subtitle: nil
+                ) {
+                    print("wake pet")
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
+        }
+    }
+
+    private var experimentalSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Experimental")
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsRow(
+                    icon: "flask.fill",
+                    title: "Experimental Features",
+                    subtitle: nil
+                ) {
+                    showExperimental = true
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
+        }
+    }
+
+    // MARK: - Legacy sections (Stage C will rework)
 
     @ViewBuilder
     private var serversSection: some View {
@@ -209,15 +301,6 @@ struct SettingsSheet: View {
         }
     }
 
-    private var experimentalSection: some View {
-        SettingsSection(title: "Experimental") {
-            Text("Voice dictation and debug flags arrive in a later stage of the litter rebuild.")
-                .font(.footnote)
-                .foregroundStyle(SweKittyTheme.textMuted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
     /// Only show the manual Reconnect affordance when the link
     /// actually needs intervention.
     private var shouldShowReconnect: Bool {
@@ -255,7 +338,28 @@ enum PairingURL {
 
 // MARK: - Building blocks
 
-/// Section: small uppercased mono label + a glass card containing rows.
+/// Litter-style section header: sentence-case, bold title3, left-aligned.
+/// Used by the new top-of-settings sections in place of the old
+/// uppercased monospaced caption2 labels.
+struct SettingsSectionHeader: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.title3.weight(.bold))
+            .foregroundStyle(SweKittyTheme.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 4)
+    }
+}
+
+/// Legacy section: small uppercased mono label + a glass card. Still
+/// used by Servers / Harness / About until Stage C reworks them.
 struct SettingsSection<Content: View>: View {
     let title: String
     @ViewBuilder var content: () -> Content
@@ -290,31 +394,52 @@ struct SettingsRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.body)
-                    .frame(width: 22)
-                    .foregroundStyle(iconTint)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(titleTint)
-                    if let subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(SweKittyTheme.textMuted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(SweKittyTheme.textMuted)
-            }
-            .contentShape(Rectangle())
+            SettingsLinkRowContent(
+                icon: icon,
+                title: title,
+                subtitle: subtitle,
+                iconTint: iconTint,
+                titleTint: titleTint
+            )
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Shared row body so both `SettingsRow` (Button) and `Link` rows
+/// render identically. Renders: icon · title (+ optional subtitle) ·
+/// chevron-right.
+struct SettingsLinkRowContent: View {
+    let icon: String
+    let title: String
+    var subtitle: String? = nil
+    var iconTint: Color = SweKittyTheme.accentStrong
+    var titleTint: Color = SweKittyTheme.textPrimary
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.body)
+                .frame(width: 22)
+                .foregroundStyle(iconTint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(titleTint)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(SweKittyTheme.textMuted)
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -349,7 +474,8 @@ struct SettingsToggleRow: View {
     }
 }
 
-/// Radio-style picker row used by the inline Font section.
+/// Radio-style picker row used by the legacy `AppearanceSheet`'s Theme
+/// section. (The new Font section uses `FontSampleRow` instead.)
 struct SettingsPickerRow: View {
     let icon: String
     let title: String
@@ -374,6 +500,82 @@ struct SettingsPickerRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Font picker row used by the Litter-style Font section: bold family
+/// label plus a secondary "The quick brown fox" sample rendered in the
+/// matching face. Selected row gets a trailing orange checkmark.
+struct FontSampleRow: View {
+    let family: AppearanceStore.FontFamily
+    let isSelected: Bool
+    let action: () -> Void
+
+    private static let sampleText = "The quick brown fox"
+
+    private var sampleFont: Font {
+        switch family {
+        case .monospaced: return .system(.body, design: .monospaced)
+        case .system:     return .body
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(family.label)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(SweKittyTheme.textPrimary)
+                    Text(Self.sampleText)
+                        .font(sampleFont)
+                        .foregroundStyle(SweKittyTheme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.accentStrong)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Placeholder for the Experimental Features sheet — flagged features
+/// will move here as they land.
+private struct ExperimentalFeaturesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                SweKittyTheme.backgroundGradient(for: colorScheme)
+                    .ignoresSafeArea()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Nothing here yet — flagged features land in this sheet.")
+                        .font(.subheadline)
+                        .foregroundStyle(SweKittyTheme.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 24)
+            }
+            .navigationTitle("Experimental Features")
+            .navigationBarTitleDisplayMode(.inline)
+            .tint(SweKittyTheme.accentStrong)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 
