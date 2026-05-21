@@ -150,8 +150,18 @@ jobs:
             -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
             -skipPackagePluginValidation \
             -skipMacroValidation \
+            -resultBundlePath build/SweKitty.xcresult \
             SENTRY_DSN="$SENTRY_DSN_IOS" \
             test
+      - name: Upload xcresult bundle on test failure
+        if: failure() && steps.detect.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcresult
+          path: apps/ios/build/SweKitty.xcresult
+          # 14 days is enough for a PR to land; longer just costs storage.
+          retention-days: 14
+          if-no-files-found: ignore
 
   android-build:
     name: android debug build
@@ -203,3 +213,18 @@ jobs:
         if: steps.detect.outputs.skip != 'true' && hashFiles('apps/android/app/src/test/**/*.kt') != ''
         working-directory: apps/android
         run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - name: Upload test + Roborazzi reports on failure
+        if: failure() && steps.detect.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          # JUnit reports + Roborazzi snapshot output (compare/diff
+          # PNGs) live under standard gradle paths. Both get included
+          # so an agent reviewing the PR can read failure detail and
+          # visual diffs without re-running CI locally.
+          path: |
+            apps/android/app/build/reports/tests
+            apps/android/app/build/outputs/roborazzi
+            apps/android/app/src/test/snapshots
+          retention-days: 14
+          if-no-files-found: ignore
