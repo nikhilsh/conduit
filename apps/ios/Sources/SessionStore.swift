@@ -722,7 +722,11 @@ final class SessionStore {
         }
     }
 
-    fileprivate func ingestStatus(_ status: SessionStatus) {
+    // `internal` (not `fileprivate`) so SweKittyTests can drive this
+    // path directly — same rationale as `ingestChat` above. The status
+    // frame carries `reasoningEffort` / `cwd` / `startedAt` etc. and
+    // a test confirms `statusBySession` reflects those fields end-to-end.
+    func ingestStatus(_ status: SessionStatus) {
         statusBySession[status.session] = status
         if let p = status.preview { preview[status.session] = p }
         if sessionLifecycle[status.session] == nil ||

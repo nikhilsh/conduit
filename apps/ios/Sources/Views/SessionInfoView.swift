@@ -94,8 +94,10 @@ struct SessionInfoView: View {
                     tint: SweKittyTheme.accent(forAgent: session.assistant),
                     monospaced: true
                 )
-                // TODO: thread reasoning effort through ProjectSession;
-                // placeholder "medium" for now.
+                // Reasoning effort pill — reads `session.reasoningEffort`
+                // (populated by `ProjectSessionState.apply_status` from the
+                // `reasoning_effort` field on the broker's status frame).
+                // Falls back to "medium" when the harness hasn't emitted one.
                 AgentPill(
                     label: reasoningEffortLabel,
                     tint: SweKittyTheme.surface.opacity(0.7),

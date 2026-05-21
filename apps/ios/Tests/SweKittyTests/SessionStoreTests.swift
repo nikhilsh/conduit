@@ -65,4 +65,39 @@ struct SessionStoreTests {
         // conversationLog stays whatever it was (empty by default).
         #expect(store.chatLog[sessionID]?.count == 1)
     }
+
+    @Test func ingestStatusCarriesReasoningEffortThrough() {
+        // Closes the "thread reasoning effort through ProjectSession"
+        // TODO that used to live in SessionInfoView.swift. The Rust
+        // core already folds `SessionStatus.reasoning_effort` into the
+        // owning `ProjectSession` via `apply_status`; this test pins
+        // the Swift side so a future refactor doesn't quietly drop
+        // the field on the floor between the WS delegate callback and
+        // the `statusBySession` dictionary the info sheet reads from.
+        let store = SessionStore()
+        let sessionID = "test-effort-\(UUID().uuidString)"
+
+        let status = SessionStatus(
+            session: sessionID,
+            assistant: "claude",
+            phase: "running",
+            health: "healthy",
+            rows: 40,
+            cols: 120,
+            yolo: false,
+            preview: nil,
+            sessionName: "demo",
+            viewers: 1,
+            reasoningEffort: "high",
+            cwd: "/tmp/work",
+            startedAt: "2026-05-21T08:00:00Z",
+            lastActivityAt: "2026-05-21T08:01:00Z"
+        )
+        store.ingestStatus(status)
+
+        let stored = store.statusBySession[sessionID]
+        #expect(stored?.reasoningEffort == "high")
+        #expect(stored?.cwd == "/tmp/work")
+        #expect(stored?.assistant == "claude")
+    }
 }

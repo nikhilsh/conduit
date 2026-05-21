@@ -3,10 +3,16 @@ import SwiftUI
 /// Settings — Litter-style sectioned IA. Sentence-case bold section
 /// headers (`SettingsSectionHeader`) replace the old uppercased mono
 /// labels. New sections at the top mirror the Litter reference:
-/// Support · Theme · Font · Conversation · Pet · Experimental. The
+/// Support · Theme · Font · Conversation · Experimental. The
 /// existing Saved Servers / Paired Harness / Pairing / Harness Status /
 /// About sections continue to live below them unchanged (Stage C will
 /// rework the server UI).
+///
+/// Note: the old "Pet" section housed a "Wake Pet" button that was
+/// wired to a stub (`print("wake pet")`). The broker has no concept
+/// of an idle / sleeping agent — PTY-backed assistants (Claude /
+/// Codex) are persistent processes — so there was no real endpoint
+/// to call. The section was removed rather than backed by a no-op.
 struct SettingsSheet: View {
     @Environment(SessionStore.self) private var store
     @Environment(AppearanceStore.self) private var appearance
@@ -31,7 +37,6 @@ struct SettingsSheet: View {
                         themeSection
                         fontSection
                         conversationSection
-                        petSection
                         experimentalSection
                         serversSection
                         harnessSection
@@ -157,26 +162,6 @@ struct SettingsSheet: View {
                     subtitle: "Collapse previous turns into cards",
                     isOn: $bindable.collapseTurns
                 )
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassRoundedRect()
-        }
-    }
-
-    private var petSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SettingsSectionHeader("Pet")
-            VStack(alignment: .leading, spacing: 10) {
-                // TODO: wire Wake Pet endpoint
-                SettingsRow(
-                    icon: "pawprint.fill",
-                    title: "Wake Pet",
-                    subtitle: nil
-                ) {
-                    print("wake pet")
-                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
