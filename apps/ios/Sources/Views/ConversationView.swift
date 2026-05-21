@@ -822,6 +822,11 @@ private struct ConversationCodeBlock: View {
     let language: String?
     let content: String
 
+    /// Resolved canonical highlight.js id. `nil` means "language not in
+    /// the supported set" — `SyntaxHighlightedCodeBlock` falls through
+    /// to plain monospace in that case.
+    private var resolvedLanguage: String? { SyntaxLanguage.fromFence(language) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let language, !language.isEmpty {
@@ -830,11 +835,7 @@ private struct ConversationCodeBlock: View {
                     .foregroundStyle(SweKittyTheme.textSecondary)
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(content)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(SweKittyTheme.textPrimary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                SyntaxHighlightedCodeBlock(language: resolvedLanguage, content: content)
             }
         }
         .padding(12)
@@ -1143,13 +1144,23 @@ private struct ConversationDiffBlock: View {
                     .buttonStyle(.plain)
 
                     if expandedFileIDs.contains(file.id) {
+                        // Per-line highlighting: pick the language from
+                        // the diff file's extension (`foo.swift` →
+                        // "swift") so additions/deletions still wear
+                        // the +/- gutter + tint but the payload picks
+                        // up syntax color. Unrecognized extensions
+                        // fall back to monospace inside
+                        // SyntaxHighlightedDiffLine.
+                        let lang = SyntaxLanguage.fromPath(file.path)
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(Array(file.lines.enumerated()), id: \.offset) { _, line in
-                                Text(line)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(color(for: line))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .textSelection(.enabled)
+                                SyntaxHighlightedDiffLine(
+                                    line: line,
+                                    language: lang,
+                                    tint: color(for: line)
+                                )
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
                             }
                         }
                     }

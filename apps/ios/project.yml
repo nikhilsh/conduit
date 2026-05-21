@@ -25,6 +25,18 @@ packages:
     # Test-target dep only; never linked into the app.
     url: https://github.com/pointfreeco/swift-snapshot-testing
     from: 1.17.0
+  HighlightSwift:
+    # SwiftUI wrapper around highlight.js. Matches litter's code-block
+    # rendering so fenced ``` swift / ts / py / ... blocks and diff
+    # lines pick up syntax color instead of flat monospace. See
+    # docs/PLAN-2026-05-19.md "Code block view with syntax
+    # highlighting (HighlightSwift on iOS, Prism4j on Android)".
+    # `Sources/Views/SyntaxHighlighting.swift` gates usage behind
+    # `#if canImport(HighlightSwift)` so removing this line still
+    # leaves a working monospace fallback if the package ever stalls
+    # the SPM resolve.
+    url: https://github.com/appstefan/highlightswift
+    from: 1.1.0
 
 targets:
   SweKitty:
@@ -50,6 +62,7 @@ targets:
         embed: true
         codeSign: true
       - package: Sentry
+      - package: HighlightSwift
     info:
       path: Sources/Info.plist
       properties:
