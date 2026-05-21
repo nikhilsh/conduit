@@ -140,6 +140,14 @@
       term.write(arr);
     };
 
+    // Write an already-ANSI-encoded string straight to xterm. Used by
+    // the native side to replay the previous render state from a
+    // serializeState() snapshot — strings round-trip cleanly through
+    // evaluateJavaScript so no base64 is needed for this path.
+    window.writeRaw = function (s) {
+      term.write(s);
+    };
+
     window.serializeState = function () {
       return serializer.serialize();
     };

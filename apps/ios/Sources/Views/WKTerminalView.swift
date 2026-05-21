@@ -5,6 +5,15 @@ import WebKit
 /// terminal view. Replaces the SwiftTerm-backed `TerminalTab` for the
 /// `.terminal` project tab. Surface is intentionally the same: take a
 /// `ProjectSession` and read/write via the shared `SessionStore`.
+///
+/// Snapshot lifecycle: when the SwiftUI view leaves the hierarchy
+/// (tab switch, background, etc.), `WKTerminalView.dismantleUIView`
+/// fires; the coordinator calls `window.serializeState()` and
+/// forwards the result to `store.terminalSnapshot[sessionID]` via
+/// `onSnapshotCapture`. On next attach, that snapshot is read by
+/// `initialSnapshot` and fed into the fresh xterm.js before live
+/// PTY bytes — so the user sees their previous screen state
+/// instantly instead of an empty terminal waiting for replay.
 struct TerminalTabXterm: View {
     @Environment(SessionStore.self) private var store
     let session: ProjectSession
@@ -14,11 +23,15 @@ struct TerminalTabXterm: View {
             sessionID: session.id,
             bufferProvider: { store.terminalBuffer[session.id] ?? Data() },
             bufferRevision: store.terminalBuffer[session.id]?.count ?? 0,
+            initialSnapshot: store.terminalSnapshot[session.id],
             onInput: { bytes in
                 store.sendInput(sessionID: session.id, bytes: bytes)
             },
             onResize: { rows, cols in
                 store.resize(sessionID: session.id, rows: UInt16(rows), cols: UInt16(cols))
+            },
+            onSnapshotCapture: { [sessionID = session.id] snapshot in
+                store.terminalSnapshot[sessionID] = snapshot
             }
         )
         .ignoresSafeArea(edges: .bottom)
@@ -41,11 +54,20 @@ struct WKTerminalView: UIViewRepresentable {
     let sessionID: String
     let bufferProvider: () -> Data
     let bufferRevision: Int
+    /// If non-nil, fed to xterm.js immediately after `ready` (before any
+    /// `bufferProvider()` deltas). Used to restore the previous render
+    /// state when the view is re-entered after a SwiftUI dismantle.
+    var initialSnapshot: String?
     let onInput: (Data) -> Void
     let onResize: (Int, Int) -> Void
+    /// Called during dismantleUIView with the result of
+    /// `window.serializeState()`. Forwarded asynchronously because
+    /// evaluateJavaScript is async; the closure is held by SwiftUI
+    /// and survives the representable's own destruction.
+    var onSnapshotCapture: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onInput: onInput, onResize: onResize)
+        Coordinator(onInput: onInput, onResize: onResize, initialSnapshot: initialSnapshot)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -93,6 +115,10 @@ struct WKTerminalView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
+        // Refresh the capture closure on every update — the parent
+        // struct may have rebuilt with a new SessionStore reference,
+        // and we want dismantleUIView to use the latest binding.
+        coordinator.onSnapshotCapture = onSnapshotCapture
         let buf = bufferProvider()
         let last = coordinator.lastFedByteCount
 
@@ -110,19 +136,21 @@ struct WKTerminalView: UIViewRepresentable {
         }
     }
 
-    /// Convenience for callers that want to capture the rendered state
-    /// before backgrounding. Today the snapshot is only logged — a
-    /// future PR will persist it through SessionStore so the next
-    /// attach can replay it locally.
-    func teardown() {
-        // Coordinator is not directly reachable from the representable
-        // outside the SwiftUI update cycle; callers should hold the
-        // view and trigger this via SessionStore in a follow-up PR.
+    /// SwiftUI lifecycle hook fired when the view is removed from the
+    /// hierarchy. Capture the xterm.js render state here so the next
+    /// attach can replay it. evaluateJavaScript is async; the closure
+    /// SwiftUI retains is alive for the duration of the call even
+    /// though the representable struct is gone by then.
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.captureSnapshotIfReady()
     }
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let onInput: (Data) -> Void
         let onResize: (Int, Int) -> Void
+        /// Refreshed from the representable on every updateUIView so
+        /// the latest closure runs at dismantle time.
+        var onSnapshotCapture: ((String) -> Void)?
         weak var webView: WKWebView?
         var lastFedByteCount: Int = 0
         var ready: Bool = false
@@ -130,10 +158,32 @@ struct WKTerminalView: UIViewRepresentable {
         var pendingChunks: [String] = []
         /// If true, the next flush should reset the terminal first.
         var pendingReset: Bool = false
+        /// Replay state from a prior dismantle. Fed into xterm.js
+        /// right after `ready` posts, before live PTY bytes.
+        let initialSnapshot: String?
 
-        init(onInput: @escaping (Data) -> Void, onResize: @escaping (Int, Int) -> Void) {
+        init(
+            onInput: @escaping (Data) -> Void,
+            onResize: @escaping (Int, Int) -> Void,
+            initialSnapshot: String? = nil
+        ) {
             self.onInput = onInput
             self.onResize = onResize
+            self.initialSnapshot = initialSnapshot
+        }
+
+        /// Called from `WKTerminalView.dismantleUIView`. Asks xterm.js
+        /// for its current serialized state via the SerializeAddon
+        /// vendored in the JS bundle, then forwards the result to
+        /// `onSnapshotCapture` so SessionStore can stash it for the
+        /// next attach. Safe to call when not ready (no-op) or when
+        /// onSnapshotCapture is nil (no-op).
+        func captureSnapshotIfReady() {
+            guard let webView, ready, let sink = onSnapshotCapture else { return }
+            webView.evaluateJavaScript("window.serializeState()") { value, _ in
+                guard let snapshot = value as? String, !snapshot.isEmpty else { return }
+                sink(snapshot)
+            }
         }
 
         func feedOrQueue(b64: String) {
@@ -180,6 +230,24 @@ struct WKTerminalView: UIViewRepresentable {
             switch type {
             case "ready":
                 ready = true
+                // Replay the prior snapshot first so the user sees
+                // their last screen state instantly, then flush any
+                // PTY bytes that arrived during the JS bootstrap.
+                if let initial = initialSnapshot, !initial.isEmpty, let webView {
+                    // Pass the snapshot as an argument to a function
+                    // invoked via callAsyncJavaScript so we don't have
+                    // to hand-escape every quote and newline in a
+                    // serialized ANSI stream (which contains plenty of
+                    // both). The function calls window.writeRaw added
+                    // to terminal.js for this exact purpose.
+                    webView.callAsyncJavaScript(
+                        "window.reset(); window.writeRaw(s); return null;",
+                        arguments: ["s": initial],
+                        in: nil,
+                        in: .page,
+                        completionHandler: nil
+                    )
+                }
                 flushPending()
             case "input":
                 if let data = body["data"] as? String,
