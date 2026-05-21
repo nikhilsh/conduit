@@ -91,6 +91,10 @@ targets:
             CFBundleURLName: sh.nikhil.swekitty.pairing
             CFBundleURLSchemes:
               - swekitty
+        # Required by iOS so the app may call Activity.request(...) to
+        # surface the active turn on the lock screen / Dynamic Island.
+        # See apps/ios/Sources/Models/TurnLiveActivityController.swift.
+        NSSupportsLiveActivities: true
         SentryDSN: $(SENTRY_DSN)
     settings:
       base:
