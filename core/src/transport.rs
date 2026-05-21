@@ -617,6 +617,14 @@ async fn handle_text(
         #[serde(default)]
         viewers: Option<u32>,
         #[serde(default)]
+        reasoning_effort: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        started_at: Option<String>,
+        #[serde(default)]
+        last_activity_at: Option<String>,
+        #[serde(default)]
         code: Option<i32>,
         #[serde(default)]
         view: Option<String>,
@@ -646,6 +654,10 @@ async fn handle_text(
                 preview: env.preview.clone(),
                 session_name: env.session_name,
                 viewers: env.viewers,
+                reasoning_effort: env.reasoning_effort,
+                cwd: env.cwd,
+                started_at: env.started_at,
+                last_activity_at: env.last_activity_at,
             };
             delegate.on_status(status);
             if let Some(p) = env.preview {
