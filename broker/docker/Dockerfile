@@ -1,4 +1,4 @@
-# swe-kitty single-container harness image.
+# swe-kitty single-container broker image.
 #
 # Distribution model — one container per `docker compose up`, all agents
 # pre-installed inside, `swe-kitty-broker` runs as user `app` (uid 1000).
@@ -8,9 +8,9 @@
 # itself is not root, and we don't pay the per-session docker-run overhead.
 #
 # Build from the repo root so the Go module + agent TOMLs are in context:
-#   docker build -f harness/docker/Dockerfile -t swekitty/harness:latest .
+#   docker build -f broker/docker/Dockerfile -t swekitty/broker:latest .
 # Or via docker compose:
-#   cd harness/docker && docker compose up -d --build
+#   cd broker/docker && docker compose up -d --build
 
 # Stage 1: cross-compile the harness binary against the linux target the
 # runtime image uses. Pin Go to 1.22 to match CI. `--platform=$BUILDPLATFORM`
@@ -22,12 +22,12 @@ FROM --platform=$BUILDPLATFORM golang:1.22-bookworm AS builder
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
-COPY harness/go.mod harness/go.sum ./harness/
-RUN cd harness && go mod download
+COPY broker/go.mod broker/go.sum ./broker/
+RUN cd broker && go mod download
 
-COPY harness ./harness/
+COPY broker ./broker/
 ARG RELEASE_TAG=docker-dev
-RUN cd harness \
+RUN cd broker \
     && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
          -trimpath \
          -ldflags "-s -w -X main.version=${RELEASE_TAG}" \

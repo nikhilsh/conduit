@@ -1,13 +1,13 @@
-# swe-kitty single-container harness deploy.
+# swe-kitty single-container broker deploy.
 #
-# Pattern (matches swe-swe's working model): one container per harness
-# instance, all agents baked inside, harness runs as `app` (uid 1000).
+# Pattern (matches swe-swe's working model): one container per broker
+# instance, all agents baked inside, broker runs as `app` (uid 1000).
 #
 # From repo root:
-#   docker compose -f harness/docker/docker-compose.yml up -d --build
+#   docker compose -f broker/docker/docker-compose.yml up -d --build
 #
 # Or from this directory:
-#   cd harness/docker && docker compose up -d --build
+#   cd broker/docker && docker compose up -d --build
 #
 # The pairing token prints to the journal — get it with:
 #   docker logs swe-kitty-broker 2>&1 | grep -E 'token:|pairing:' | tail -2
@@ -19,16 +19,16 @@ services:
     # tagged or dispatched release). `docker compose up -d` pulls it.
     # Pass `--build` to compile locally instead (uses the build: block
     # below); useful while iterating on the Dockerfile.
-    image: ghcr.io/nikhilsh/swe-kitty:${HARNESS_IMAGE_TAG:-latest}
+    image: ghcr.io/nikhilsh/swe-kitty:${BROKER_IMAGE_TAG:-latest}
     build:
-      # The build context is the repo root so we can COPY harness/ and
+      # The build context is the repo root so we can COPY broker/ and
       # agents/ in. Relative-from-this-file: ../..
       context: ../..
-      dockerfile: harness/docker/Dockerfile
+      dockerfile: broker/docker/Dockerfile
       args:
         RELEASE_TAG: ${RELEASE_TAG:-docker-dev}
     restart: unless-stopped
-    # Host networking so the harness's `--local` mDNS advertisement
+    # Host networking so the broker's `--local` mDNS advertisement
     # (multicast on 224.0.0.251:5353) escapes the container and reaches
     # the LAN — phone-side `_swe-kitty._tcp.local` browsers can't see
     # the advertiser otherwise. Trade-off: `ports:` is ignored under
@@ -36,7 +36,7 @@ services:
     # IP. On a single-box dev/prod setup (docs/SELF-HOST.md) that's the
     # intended deployment anyway.
     network_mode: host
-    # Append `--local` so the harness advertises on LAN by default.
+    # Append `--local` so the broker advertises on LAN by default.
     # Otherwise mirrors the Dockerfile's default CMD.
     command: ["up", "--addr", ":1977", "--agents-dir", "/etc/swe-kitty/agents", "--local"]
     env_file:
@@ -57,7 +57,7 @@ services:
     # Explicit, even though the image USERs to 1000:1000 already — makes
     # bind-mount permissions obvious to operators reading the file.
     user: "1000:1000"
-    # The harness manages PTYs; allocate a TTY for the entrypoint.
+    # The broker manages PTYs; allocate a TTY for the entrypoint.
     tty: true
     stdin_open: true
 
