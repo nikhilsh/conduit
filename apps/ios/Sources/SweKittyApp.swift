@@ -5,6 +5,14 @@ struct SweKittyApp: App {
     @State private var store = SessionStore()
     @State private var appearance = AppearanceStore()
     @State private var showSplash: Bool = true
+    /// Bridges the store's typed conversation stream into ActivityKit's
+    /// `TurnLiveActivity`. Initialized eagerly so the lock-screen card
+    /// can fire on the first tool call of the very first session — even
+    /// if the user backgrounds the app before opening the chat tab.
+    /// The controller is functionally a no-op until the widget target
+    /// lands in the follow-up PR; see TurnLiveActivityController for the
+    /// scope split.
+    private let liveActivity = TurnLiveActivityController.shared
 
     init() {
         Telemetry.configure()
@@ -22,6 +30,19 @@ struct SweKittyApp: App {
                         // AppearanceStore.init runs, so reapply the
                         // persisted choice once SwiftUI has mounted.
                         appearance.applyToWindows()
+                        // Drive an initial liveActivity ingest so any
+                        // session already in-flight at launch gets a
+                        // chance to surface on the lock screen.
+                        feedActiveSessionToLiveActivity()
+                    }
+                    .onChange(of: store.selectedSessionID) { _, _ in
+                        feedActiveSessionToLiveActivity()
+                    }
+                    .onChange(of: store.conversationLog) { _, _ in
+                        feedActiveSessionToLiveActivity()
+                    }
+                    .onChange(of: store.sessionLifecycle) { _, _ in
+                        feedActiveSessionToLiveActivity()
                     }
                     .onOpenURL { url in
                         applyPairingURL(url)
@@ -65,6 +86,33 @@ struct SweKittyApp: App {
                     store.resolveHostKeyPrompt(accept: false)
                 }
             }
+        )
+    }
+
+    /// Push the active session's latest tool/command frame into the Live
+    /// Activity controller. The controller is responsible for deciding
+    /// whether anything actually changes — this is a fire-and-forget
+    /// signal from the view layer.
+    @MainActor
+    private func feedActiveSessionToLiveActivity() {
+        guard let sessionID = store.selectedSessionID else { return }
+        let session = store.sessions.first(where: { $0.id == sessionID })
+        let agentName = session?.assistant
+            ?? store.statusBySession[sessionID]?.assistant
+            ?? "agent"
+        let latest = TurnLiveActivityMapping.latestRelevantItem(
+            from: store.conversationLog[sessionID] ?? []
+        )
+        let phase: String?
+        switch store.sessionLifecycle[sessionID] {
+        case .exited(let code): phase = "exited(\(code))"
+        default: phase = store.statusBySession[sessionID]?.phase
+        }
+        liveActivity.ingest(
+            sessionID: sessionID,
+            agentName: agentName,
+            latestItem: latest,
+            sessionPhase: phase
         )
     }
 
