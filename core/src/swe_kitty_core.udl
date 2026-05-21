@@ -64,6 +64,75 @@ dictionary ConversationItem {
     sequence<string> pending_options;
 };
 
+// -- SessionStoreCore reducer surface (see core/src/store/mod.rs) --
+//
+// Mirrors of the per-session view-state buckets the Rust reducer
+// folds events into. The apps' existing per-key Swift/Kotlin
+// dictionaries (terminalBuffer, chatLog, statusBySession, …)
+// stay as the read source of truth in this first PR; iOS will
+// `apply_*` the same event into the Rust store in parallel and
+// (debug builds) assert the two snapshots agree.
+
+dictionary TerminalViewState {
+    u16 rows;
+    u16 cols;
+    bytes scrollback;
+    boolean has_snapshot;
+};
+
+dictionary ChatViewState {
+    sequence<ChatEvent> events;
+    sequence<ConversationItem> conversation;
+};
+
+dictionary BrowserViewState {
+    PreviewInfo? preview;
+};
+
+dictionary ProjectSessionState {
+    ProjectSession session;
+    SessionStatus? status;
+    TerminalViewState terminal;
+    ChatViewState chat;
+    BrowserViewState browser;
+    boolean exited;
+    i32? exit_code;
+};
+
+[Enum]
+interface SessionLifecycleCore {
+    Creating();
+    Live();
+    Exited(i32 code);
+    FailedToStart(string reason);
+};
+
+interface SessionStoreCore {
+    constructor();
+
+    void register_session(ProjectSession session);
+    void forget_session(string session_id);
+
+    // Reducer entry points — one per existing Swift/Kotlin `ingest*`.
+    // Each returns the post-fold snapshot (or null if the session id
+    // was unknown and the event didn't synthesize one — only
+    // `apply_status` ever creates a placeholder).
+    ProjectSessionState? apply_chat(string session_id, ChatEvent event);
+    ProjectSessionState apply_status(SessionStatus status);
+    ProjectSessionState? apply_exit(string session_id, i32 code);
+    ProjectSessionState? apply_preview(string session_id, PreviewInfo preview);
+    ProjectSessionState? apply_snapshot(string session_id, bytes gunzipped);
+    ProjectSessionState? apply_pty_data(string session_id, bytes data);
+    void apply_lifecycle(string session_id, SessionLifecycleCore lifecycle);
+
+    // Read-only accessors.
+    ProjectSessionState? get(string session_id);
+    sequence<ProjectSession> sessions();
+    sequence<ConversationItem> conversation(string session_id);
+    SessionLifecycleCore? lifecycle(string session_id);
+    boolean contains(string session_id);
+};
+
 [Error]
 enum SweKittyError {
     "Connection",

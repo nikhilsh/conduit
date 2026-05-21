@@ -239,6 +239,17 @@ final class SessionStore {
     /// Path identifier we've seen so we don't nudge on first activation.
     private var lastPath: NWPath?
 
+    /// Shadow-write target: the shared Rust reducer (`core::store::SessionStoreCore`).
+    /// In this PR the Swift maps above are still the read source of truth;
+    /// every `ingest*` also folds the same event into `rustStore`, and a
+    /// debug-build assertion in each ingest path verifies the two stay in
+    /// sync. Flip `useRustStore` to false to bypass entirely if a later
+    /// reducer change ships a regression — kill switch for safe rollout.
+    /// PR follow-ups: (1) swap reads onto rustStore, (2) drop the Swift
+    /// maps, (3) port the same shadow-write into Android `SessionStore.kt`.
+    private let useRustStore = true
+    let rustStore = SessionStoreCore()
+
     init() {
         self.endpoint = Self.loadPersisted()
         self.savedServers = Self.loadSavedServers()
@@ -565,6 +576,9 @@ final class SessionStore {
         sessionCreationError = nil
         let pendingID = "pending-\(UUID().uuidString)"
         sessionLifecycle[pendingID] = .creating
+        if useRustStore {
+            rustStore.applyLifecycle(sessionId: pendingID, lifecycle: .creating)
+        }
         Task {
             do {
                 let id = try await client.createSession(assistant: assistant, branch: branch)
@@ -584,12 +598,22 @@ final class SessionStore {
                 }
                 self.sessionLifecycle[pendingID] = nil
                 self.sessionLifecycle[id] = .live
+                if self.useRustStore {
+                    self.rustStore.forgetSession(sessionId: pendingID)
+                    self.rustStore.applyLifecycle(sessionId: id, lifecycle: .live)
+                }
                 self.harness = .live
                 self.refreshSessions()
                 self.selectedSessionID = id
             } catch {
                 let detail = Self.describe(error)
                 self.sessionLifecycle[pendingID] = .failed(detail)
+                if self.useRustStore {
+                    self.rustStore.applyLifecycle(
+                        sessionId: pendingID,
+                        lifecycle: .failedToStart(reason: detail)
+                    )
+                }
                 self.sessionCreationError = detail
                 if Self.isAuth(error) {
                     self.harness = .failed("Pairing expired. Scan a new QR code from the harness.")
@@ -605,6 +629,9 @@ final class SessionStore {
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                     self.sessionLifecycle[pendingID] = nil
+                    if self.useRustStore {
+                        self.rustStore.forgetSession(sessionId: pendingID)
+                    }
                 }
             }
         }
@@ -635,6 +662,9 @@ final class SessionStore {
         Task {
             try? await client.exitSession(sessionId: sessionID)
             self.sessionLifecycle[sessionID] = nil
+            if self.useRustStore {
+                self.rustStore.forgetSession(sessionId: sessionID)
+            }
             self.refreshSessions()
             if self.selectedSessionID == sessionID { self.selectedSessionID = nil }
         }
@@ -671,7 +701,12 @@ final class SessionStore {
             pendingOptions: []
         )
         conversationLog[sessionID, default: []].append(item)
-        chatLog[sessionID, default: []].append(ChatEvent(role: "user", content: message, ts: now, files: []))
+        let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
+        chatLog[sessionID, default: []].append(localEvent)
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
+        }
         Task { try? await client.sendChat(sessionId: sessionID, msg: message) }
     }
 
@@ -693,8 +728,22 @@ final class SessionStore {
         }
     }
 
-    fileprivate func ingestPtyData(_ sessionID: String, _ bytes: Data) {
+    // `internal` access (not `fileprivate`) so SweKittyTests can drive
+    // the parity tests in SessionStoreRustParityTests. Same rationale
+    // as `ingestChat` / `ingestStatus`.
+    func ingestPtyData(_ sessionID: String, _ bytes: Data) {
         terminalBuffer[sessionID, default: Data()].append(bytes)
+        if useRustStore {
+            // Synthesize the session in Rust if Swift hasn't seen it yet —
+            // PTY data can race ahead of `register_session` from
+            // `create_session`. Without the placeholder the `apply_pty_data`
+            // returns nil and the parity check below would falsely fail.
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyPtyData(sessionId: sessionID, data: bytes)
+            #if DEBUG
+            assertRustScrollbackParity(sessionID)
+            #endif
+        }
     }
 
     // `internal` (not `fileprivate`) so SweKittyTests can drive this
@@ -705,6 +754,13 @@ final class SessionStore {
     func ingestChat(_ sessionID: String, _ event: ChatEvent) {
         chatLog[sessionID, default: []].append(event)
         refreshConversation(sessionID: sessionID)
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyChat(sessionId: sessionID, event: event)
+            #if DEBUG
+            assertRustChatLogParity(sessionID)
+            #endif
+        }
     }
 
     fileprivate func refreshConversation(sessionID: String) {
@@ -735,18 +791,41 @@ final class SessionStore {
         }
         harness = .live
         refreshSessions()
+        if useRustStore {
+            // `apply_status` is the one reducer entry that synthesizes a
+            // placeholder when the session id is unknown, so we don't
+            // need to call `ensureRustSessionPresent` here.
+            _ = rustStore.applyStatus(status: status)
+            #if DEBUG
+            assertRustStatusParity(status.session)
+            #endif
+        }
     }
 
-    fileprivate func ingestPreview(_ sessionID: String, _ p: PreviewInfo) {
+    func ingestPreview(_ sessionID: String, _ p: PreviewInfo) {
         preview[sessionID] = p
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyPreview(sessionId: sessionID, preview: p)
+            #if DEBUG
+            assertRustPreviewParity(sessionID)
+            #endif
+        }
     }
 
-    fileprivate func ingestSnapshot(_ sessionID: String, _ gunzipped: Data) {
+    func ingestSnapshot(_ sessionID: String, _ gunzipped: Data) {
         // Replace terminal scrollback with the authoritative snapshot from the server.
         terminalBuffer[sessionID] = gunzipped
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applySnapshot(sessionId: sessionID, gunzipped: gunzipped)
+            #if DEBUG
+            assertRustScrollbackParity(sessionID)
+            #endif
+        }
     }
 
-    fileprivate func ingestExit(_ sessionID: String, _ code: Int32) {
+    func ingestExit(_ sessionID: String, _ code: Int32) {
         sessionLifecycle[sessionID] = .exited(code)
         if var status = statusBySession[sessionID] {
             status = SessionStatus(
@@ -766,6 +845,13 @@ final class SessionStore {
                 lastActivityAt: status.lastActivityAt
             )
             statusBySession[sessionID] = status
+        }
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyExit(sessionId: sessionID, code: code)
+            #if DEBUG
+            assertRustLifecycleParity(sessionID)
+            #endif
         }
     }
 
@@ -1022,6 +1108,104 @@ final class SessionStore {
         }
         throw NSError(domain: "SessionStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for harness link"])
     }
+
+    // MARK: - Rust shadow-store helpers
+
+    /// Ensure the Rust store has at least a placeholder
+    /// `ProjectSessionState` for `sessionID` before applying an event
+    /// that would otherwise return nil. iOS' Swift maps tolerate
+    /// "apply chat to an unknown session id" (they auto-vivify the
+    /// dictionary entry); the Rust store only auto-vivifies on
+    /// `apply_status`. Without this nudge, every `apply_chat` /
+    /// `apply_pty_data` etc. that lands before the first `on_status`
+    /// would silently no-op and the parity asserts would fail.
+    fileprivate func ensureRustSessionPresent(_ sessionID: String) {
+        guard !rustStore.contains(sessionId: sessionID) else { return }
+        rustStore.registerSession(
+            session: ProjectSession(
+                id: sessionID,
+                name: sessionID,
+                assistant: statusBySession[sessionID]?.assistant ?? "claude",
+                branch: nil,
+                preview: preview[sessionID],
+                reasoningEffort: statusBySession[sessionID]?.reasoningEffort,
+                cwd: statusBySession[sessionID]?.cwd,
+                startedAt: statusBySession[sessionID]?.startedAt,
+                lastActivityAt: statusBySession[sessionID]?.lastActivityAt
+            )
+        )
+    }
+
+    #if DEBUG
+    /// Compare scrollback bytes Swift-side vs Rust-side for `sessionID`.
+    /// Off in release builds so the FFI hop + memcmp cost doesn't ride
+    /// every PTY frame. Reports a single assertionFailure with the size
+    /// delta so the test breakpoint can land directly on it.
+    fileprivate func assertRustScrollbackParity(_ sessionID: String) {
+        let swiftBytes = terminalBuffer[sessionID] ?? Data()
+        let rustBytes = rustStore.get(sessionId: sessionID)?.terminal.scrollback ?? Data()
+        assert(
+            swiftBytes == rustBytes,
+            "Rust/Swift scrollback diverged for \(sessionID): swift=\(swiftBytes.count) rust=\(rustBytes.count)"
+        )
+    }
+
+    fileprivate func assertRustChatLogParity(_ sessionID: String) {
+        let swiftEvents = chatLog[sessionID] ?? []
+        let rustEvents = rustStore.get(sessionId: sessionID)?.chat.events ?? []
+        // Compare counts first — the cheap signal — then by role/content
+        // tuple. We don't compare ts because the Rust dedup is on (role,
+        // content, ts) and matches the Swift order one-to-one.
+        assert(
+            swiftEvents.count == rustEvents.count
+                && zip(swiftEvents, rustEvents).allSatisfy {
+                    $0.role == $1.role && $0.content == $1.content && $0.ts == $1.ts
+                },
+            "Rust/Swift chat log diverged for \(sessionID): swift=\(swiftEvents.count) rust=\(rustEvents.count)"
+        )
+    }
+
+    fileprivate func assertRustStatusParity(_ sessionID: String) {
+        let swiftStatus = statusBySession[sessionID]
+        let rustStatus = rustStore.get(sessionId: sessionID)?.status
+        assert(
+            swiftStatus?.session == rustStatus?.session
+                && swiftStatus?.phase == rustStatus?.phase
+                && swiftStatus?.reasoningEffort == rustStatus?.reasoningEffort,
+            "Rust/Swift status diverged for \(sessionID)"
+        )
+    }
+
+    fileprivate func assertRustPreviewParity(_ sessionID: String) {
+        let swiftPreview = preview[sessionID]
+        let rustPreview = rustStore.get(sessionId: sessionID)?.browser.preview
+        assert(
+            swiftPreview?.port == rustPreview?.port
+                && swiftPreview?.url == rustPreview?.url,
+            "Rust/Swift preview diverged for \(sessionID)"
+        )
+    }
+
+    fileprivate func assertRustLifecycleParity(_ sessionID: String) {
+        // The Swift `SessionLifecycle` and Rust-bridged
+        // `SessionLifecycleCore` are intentionally separate types (the
+        // Swift one predates the FFI; their case names diverge —
+        // `.failed` vs `.failedToStart`). Map for comparison.
+        let swiftLifecycle = sessionLifecycle[sessionID]
+        let rustLifecycle = rustStore.lifecycle(sessionId: sessionID)
+        let parityOK: Bool
+        switch (swiftLifecycle, rustLifecycle) {
+        case (nil, nil): parityOK = true
+        case (.creating?, .creating?): parityOK = true
+        case (.live?, .live?): parityOK = true
+        case let (.exited(swiftCode)?, .exited(code: rustCode)?):
+            parityOK = swiftCode == rustCode
+        case (.failed?, .failedToStart?): parityOK = true
+        default: parityOK = false
+        }
+        assert(parityOK, "Rust/Swift lifecycle diverged for \(sessionID)")
+    }
+    #endif
 }
 
 private extension SessionStore {

@@ -19,10 +19,11 @@ use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+pub use store::{SessionLifecycleCore, SessionStoreCore};
 pub use transport::ConnectionHealth;
 pub use views::{
-    ChatEvent, ConversationItem, PreviewInfo, ProjectSession, ProjectSessionState, SessionStatus,
-    ViewEventFile,
+    BrowserViewState, ChatEvent, ChatViewState, ConversationItem, PreviewInfo, ProjectSession,
+    ProjectSessionState, SessionStatus, TerminalViewState, ViewEventFile,
 };
 
 uniffi::include_scaffolding!("swe_kitty_core");
