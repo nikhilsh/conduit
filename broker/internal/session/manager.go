@@ -398,6 +398,16 @@ func (s *Session) Close() {
 // Done returns a channel closed when the session ends.
 func (s *Session) Done() <-chan struct{} { return s.closed }
 
+// ReasoningEffort returns the per-agent label set in the adapter toml
+// (e.g. "low" / "medium" / "high"). Returns "" when the toml didn't
+// specify one; the ws layer falls back to "medium" so the iOS pill
+// always has something to render.
+func (s *Session) ReasoningEffort() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.adapter.ReasoningEffort
+}
+
 func (s *Session) SwitchAdapter(assistant string) error {
 	if s.switchFn == nil {
 		return errors.New("switch_agent unavailable")

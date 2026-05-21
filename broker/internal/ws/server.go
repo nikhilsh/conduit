@@ -225,10 +225,14 @@ func (c *client) sendStatus(assistant string, created bool) error {
 	if !st.LastOutput.IsZero() {
 		payload["last_activity_at"] = st.LastOutput.Format(time.RFC3339Nano)
 	}
-	// `reasoning_effort` is a placeholder until adapter configs surface
-	// it. iOS already shows "medium" as a fallback, so emitting the
-	// same value is a no-op visually but keeps the schema consistent.
-	payload["reasoning_effort"] = "medium"
+	// Per-agent reasoning effort comes from the adapter toml. Fall
+	// back to "medium" when the toml didn't specify one, so the iOS
+	// pill stays stable regardless of which agents are installed.
+	if effort := c.sess.ReasoningEffort(); effort != "" {
+		payload["reasoning_effort"] = effort
+	} else {
+		payload["reasoning_effort"] = "medium"
+	}
 	return c.writeJSON(payload)
 }
 

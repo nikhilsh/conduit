@@ -26,7 +26,12 @@ type Adapter struct {
 	EnvPassthrough   []string `toml:"env_passthrough"`
 	Workdir          string   `toml:"workdir"`
 	ChatEventPortEnv string   `toml:"chat_event_port_env"`
-	Hooks            Hooks    `toml:"hooks"`
+	// ReasoningEffort is a "low" / "medium" / "high" label surfaced
+	// on the iOS / Android agent pill. Optional; PR #16 hardcoded
+	// "medium" in the status frame as a placeholder, this carries
+	// the per-agent override when set in the toml.
+	ReasoningEffort string `toml:"reasoning_effort"`
+	Hooks           Hooks  `toml:"hooks"`
 }
 
 func (a Adapter) Validate() error {

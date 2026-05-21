@@ -8,6 +8,7 @@ args             = ["--dangerously-skip-permissions"]
 env_passthrough  = ["ANTHROPIC_API_KEY"]
 workdir          = "/workspace"
 chat_event_port_env = "AGENT_CHAT_PORT"
+reasoning_effort    = "medium"
 
 [hooks]
 on_start = "swe-kitty memory render --session $SESSION_UUID > /workspace/.swe-kitty/HANDOFF.html"
