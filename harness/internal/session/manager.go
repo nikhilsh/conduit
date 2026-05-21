@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/hinshun/vt10x"
 
 	"github.com/nikhilsh/swe-kitty/harness/internal/agents"
 )
@@ -41,9 +42,15 @@ type Session struct {
 	closeOnce sync.Once
 
 	mu       sync.Mutex
-	ring     []byte // circular scrollback
+	ring     []byte // circular scrollback (Phase 1: still authoritative)
 	ringPos  int
 	ringFull bool
+	// term mirrors PTY output into a real VT100 cell grid so a future
+	// Snapshot() can serialize a self-contained, replay-safe redraw
+	// instead of raw bytes. See docs/PLAN-TERMINAL-CELLS.md. Phase 1
+	// runs the emulator as a passive sink; Snapshot() does NOT yet
+	// consult it.
+	term     vt10x.Terminal
 	subs     map[chan []byte]struct{}
 	textSubs map[chan []byte]struct{}
 	switchFn func(string) error
@@ -98,6 +105,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		cols:         120,
 		closed:       make(chan struct{}),
 		ring:         make([]byte, ringSize),
+		term:         vt10x.New(vt10x.WithSize(120, 40)),
 		subs:         make(map[chan []byte]struct{}),
 		textSubs:     make(map[chan []byte]struct{}),
 		repoRoot:     opts.repoRoot,
@@ -175,7 +183,12 @@ func (s *Session) Resize(rows, cols uint16) error {
 	}
 	s.mu.Lock()
 	s.rows, s.cols = rows, cols
+	term := s.term
 	s.mu.Unlock()
+	if term != nil {
+		// vt10x.Resize takes (cols, rows) — opposite of pty.Setsize.
+		term.Resize(int(cols), int(rows))
+	}
 	return pty.Setsize(s.pty, &pty.Winsize{Rows: rows, Cols: cols})
 }
 
@@ -324,6 +337,14 @@ func (s *Session) append(p []byte) {
 			s.ringPos = 0
 			s.ringFull = true
 		}
+	}
+	// Phase 1: mirror PTY output into the cell emulator alongside the
+	// ring buffer. vt10x acquires its own internal lock and never blocks
+	// on PTY/network IO, so this is safe to call under s.mu. Errors from
+	// Write are not surfaced — the emulator is a best-effort sink and
+	// the ring remains authoritative for Snapshot().
+	if s.term != nil {
+		_, _ = s.term.Write(p)
 	}
 }
 
