@@ -13,14 +13,16 @@ import UIKit
 @Observable
 final class AppearanceStore {
     enum FontFamily: String, CaseIterable, Identifiable {
-        case monospaced
+        case serif
         case system
+        case monospaced
 
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .monospaced: return "Monospaced"
+            case .serif:      return "Serif"
             case .system:     return "System"
+            case .monospaced: return "Monospaced"
             }
         }
     }
@@ -73,8 +75,11 @@ final class AppearanceStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        // New default is serif (matches the Claude iOS chat reference);
+        // existing installs that explicitly chose monospaced/system keep
+        // their preference because the persisted rawValue still resolves.
         self.fontFamily = (defaults.string(forKey: Keys.font)
-            .flatMap(FontFamily.init(rawValue:))) ?? .monospaced
+            .flatMap(FontFamily.init(rawValue:))) ?? .serif
         self.themeMode = (defaults.string(forKey: Keys.theme)
             .flatMap(ThemeMode.init(rawValue:))) ?? .system
         self.collapseTurns = defaults.object(forKey: Keys.collapseTurns) as? Bool ?? false
@@ -83,8 +88,9 @@ final class AppearanceStore {
     /// SwiftUI `.font` value to use for chat body text.
     func bodyFont() -> Font {
         switch fontFamily {
-        case .monospaced: return .system(.body, design: .monospaced)
+        case .serif:      return .system(.body, design: .serif)
         case .system:     return .system(.body)
+        case .monospaced: return .system(.body, design: .monospaced)
         }
     }
 

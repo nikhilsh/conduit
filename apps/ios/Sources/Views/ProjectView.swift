@@ -33,8 +33,24 @@ struct ProjectView: View {
         .padding(.horizontal, 10)
         .padding(.top, 8)
         .padding(.bottom, 0)
-        .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Claude-style stacked title: project name on top, agent
+            // role underneath. Replaces the bare UUID `navigationTitle`
+            // which read as session-internal plumbing.
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 0) {
+                    Text(navTitle)
+                        .font(.headline)
+                        .foregroundStyle(SweKittyTheme.textPrimary)
+                        .lineLimit(1)
+                    Text(navSubtitle)
+                        .font(.caption2)
+                        .foregroundStyle(SweKittyTheme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+        }
         .tint(SweKittyTheme.accentStrong)
         .sheet(isPresented: $showInfo) {
             SessionInfoView(session: session)
@@ -47,6 +63,26 @@ struct ProjectView: View {
     }
 
     private var status: SessionStatus? { store.statusBySession[session.id] }
+
+    /// Friendly first-line title. Prefer the session's display name;
+    /// fall back to the agent name (rather than the raw UUID) so the
+    /// header reads like a project label, not internal plumbing.
+    private var navTitle: String {
+        let trimmed = session.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Sessions created from a fresh dial typically use the UUID as
+        // their name — when that's the case, prefer the assistant
+        // label so the header carries meaning at a glance.
+        if trimmed.isEmpty || trimmed == session.id {
+            return "swe-kitty"
+        }
+        return trimmed
+    }
+
+    /// Small second-line label under the title — the agent + role
+    /// (mirrors Claude's "Remote control" subtitle).
+    private var navSubtitle: String {
+        session.assistant.isEmpty ? "Remote control" : "\(session.assistant) · Remote control"
+    }
     private var lifecycle: SessionLifecycle? { store.sessionLifecycle[session.id] }
 
     /// Litter-style header card:

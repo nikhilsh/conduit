@@ -82,6 +82,11 @@ private enum ConversationRole: Equatable {
 private enum ConversationBlock: Equatable {
     case markdown(String)
     case code(language: String?, content: String)
+    /// Collapsed tool-activity row: chevron + summary label, expands to
+    /// the original tool lines. Detected from the assistant's scraped
+    /// content by `ConversationRenderer.blocks` when a run of
+    /// command-shaped lines appears between two prose paragraphs.
+    case toolSummary(label: String, detail: String)
 }
 
 private struct ConversationRenderer {
@@ -141,7 +146,116 @@ private struct ConversationRenderer {
             blocks = [.markdown(content)]
         }
 
-        return blocks
+        return collapseToolRuns(blocks)
+    }
+
+    /// Walks an already-tokenized markdown/code stream and groups
+    /// consecutive command-shaped lines inside each `.markdown` block
+    /// into a single `.toolSummary`. Detection is conservative — we
+    /// only collapse when a line clearly matches a tool-call shape so
+    /// regular prose with the occasional `$variable` doesn't disappear.
+    static func collapseToolRuns(_ blocks: [ConversationBlock]) -> [ConversationBlock] {
+        var out: [ConversationBlock] = []
+        for block in blocks {
+            switch block {
+            case .markdown(let text):
+                out.append(contentsOf: splitToolRuns(in: text))
+            default:
+                out.append(block)
+            }
+        }
+        return out
+    }
+
+    private static func splitToolRuns(in text: String) -> [ConversationBlock] {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var result: [ConversationBlock] = []
+        var prose: [String] = []
+        var tool: [String] = []
+        var toolCount = 0
+
+        func flushProse() {
+            let joined = prose.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty {
+                result.append(.markdown(joined))
+            }
+            prose.removeAll(keepingCapacity: true)
+        }
+        func flushTool() {
+            guard !tool.isEmpty else { return }
+            let detail = tool.joined(separator: "\n")
+            let label = toolSummaryLabel(forCount: toolCount)
+            result.append(.toolSummary(label: label, detail: detail))
+            tool.removeAll(keepingCapacity: true)
+            toolCount = 0
+        }
+
+        for line in lines {
+            if isToolLine(line) {
+                if !prose.isEmpty { flushProse() }
+                tool.append(line)
+                toolCount += 1
+            } else if isToolOutputContinuation(line, hasOpenTool: !tool.isEmpty) {
+                // Indented output following a tool line — keep it
+                // grouped with the same summary instead of breaking
+                // out into prose.
+                tool.append(line)
+            } else {
+                if !tool.isEmpty { flushTool() }
+                prose.append(line)
+            }
+        }
+        flushTool()
+        flushProse()
+        if result.isEmpty {
+            // No tool lines detected; preserve the original block so
+            // we don't lose blank-line spacing the caller may rely on.
+            result.append(.markdown(text))
+        }
+        return result
+    }
+
+    /// One-shot heuristic: a line is "tool-shaped" if it starts with a
+    /// shell prompt, a recognized verb, or a path-like edit marker.
+    private static func isToolLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return false }
+        if trimmed.hasPrefix("$ ") { return true }
+        let lower = trimmed.lowercased()
+        let verbs = [
+            "running ", "ran ", "executing ", "reading ", "read ",
+            "writing ", "wrote ", "editing ", "edited ", "listing ",
+            "searching ", "checking ", "building ", "testing ",
+        ]
+        for v in verbs {
+            if lower.hasPrefix(v) {
+                // Avoid eating mid-sentence prose like "Reading the
+                // docs..." — require a path-ish or short follow-up.
+                let tail = trimmed.dropFirst(v.count)
+                if tail.count < 80 && !tail.contains(". ") {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Lines indented under a tool block (4+ spaces or a tab) are
+    /// treated as captured output and stay in the collapsed summary.
+    private static func isToolOutputContinuation(_ line: String, hasOpenTool: Bool) -> Bool {
+        guard hasOpenTool else { return false }
+        if line.hasPrefix("    ") || line.hasPrefix("\t") { return true }
+        return false
+    }
+
+    private static func toolSummaryLabel(forCount n: Int) -> String {
+        // Claude-style chevron label. Count is the number of tool-shaped
+        // lines collapsed, not a perfect semantic count — close enough
+        // for "skim the activity" reads.
+        switch n {
+        case 1: return "Ran 1 step"
+        default: return "Ran \(n) steps"
+        }
     }
 
     static func toolSections(for event: ConversationItem) -> [ToolSection] {
@@ -198,6 +312,13 @@ private struct ConversationRenderer {
                 } else {
                     sections.append(.code(language: language, content: content))
                 }
+            case .toolSummary(_, let detail):
+                // Tool-role events already render as a ToolCard with
+                // command/stdout/stderr/files; nested tool summaries
+                // would just nest a chevron inside that card. Render
+                // the expanded detail directly as plain text so the
+                // tool card still shows the full context.
+                sections.append(.text(detail))
             }
         }
         return sections
@@ -514,10 +635,11 @@ private struct ConversationBubbleContainer<Content: View>: View {
         // monospaced font (codex aesthetic).
         switch role {
         case .user:
-            // Litter has bubbles for the USER role only — orange-tinted,
-            // right-aligned, capped near 78% width via a leading gutter.
-            // (SwiftUI doesn't allow `.infinity * 0.78`; HStack + Spacer
-            // with a leading padding keeps it portable across iOS 16.)
+            // Claude's iOS chat pattern: a small dark-gray pill, right-
+            // aligned, capped near 78% width via a leading gutter. The
+            // previous copper-tinted bubble drew the eye too much for
+            // what's typically a short prompt; muting it keeps the
+            // assistant's flow as the focal point of the transcript.
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 content()
@@ -525,7 +647,7 @@ private struct ConversationBubbleContainer<Content: View>: View {
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(SweKittyTheme.accentStrong.opacity(0.22))
+                            .fill(SweKittyTheme.surfaceLight)
                     )
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -554,7 +676,44 @@ private struct ConversationBlockStack: View {
                     ConversationMarkdownBlock(text: text, role: role)
                 case .code(let language, let content):
                     ConversationCodeBlock(language: language, content: content)
+                case .toolSummary(let label, let detail):
+                    ConversationToolSummaryBlock(label: label, detail: detail)
                 }
+            }
+        }
+    }
+}
+
+/// Claude-style collapsed chevron row that hides a chunk of tool
+/// activity behind a single tap. Tap reveals the raw lines verbatim;
+/// no extra formatting (the scraper has already stripped ANSI).
+private struct ConversationToolSummaryBlock: View {
+    let label: String
+    let detail: String
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textSecondary)
+                    Text(label)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(SweKittyTheme.textSecondary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                Text(detail)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(SweKittyTheme.textBody)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 22)
+                    .textSelection(.enabled)
             }
         }
     }
