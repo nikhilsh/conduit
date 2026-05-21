@@ -515,8 +515,9 @@ struct FontSampleRow: View {
 
     private var sampleFont: Font {
         switch family {
-        case .monospaced: return .system(.body, design: .monospaced)
+        case .serif:      return .system(.body, design: .serif)
         case .system:     return .body
+        case .monospaced: return .system(.body, design: .monospaced)
         }
     }
 

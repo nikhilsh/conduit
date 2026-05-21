@@ -514,10 +514,11 @@ private struct ConversationBubbleContainer<Content: View>: View {
         // monospaced font (codex aesthetic).
         switch role {
         case .user:
-            // Litter has bubbles for the USER role only — orange-tinted,
-            // right-aligned, capped near 78% width via a leading gutter.
-            // (SwiftUI doesn't allow `.infinity * 0.78`; HStack + Spacer
-            // with a leading padding keeps it portable across iOS 16.)
+            // Claude's iOS chat pattern: a small dark-gray pill, right-
+            // aligned, capped near 78% width via a leading gutter. The
+            // previous copper-tinted bubble drew the eye too much for
+            // what's typically a short prompt; muting it keeps the
+            // assistant's flow as the focal point of the transcript.
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 content()
@@ -525,7 +526,7 @@ private struct ConversationBubbleContainer<Content: View>: View {
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(SweKittyTheme.accentStrong.opacity(0.22))
+                            .fill(SweKittyTheme.surfaceLight)
                     )
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
