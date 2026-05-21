@@ -27,37 +27,51 @@ The TDD loop we want, in one paragraph: write a test that captures the *contract
 
 ## Per-platform plan
 
-### iOS — XCTest target
+### iOS — Swift Testing (unit) + XCTest (UI) + swift-snapshot-testing (visual)
+
+**Framework choice notes:**
+- **Swift Testing** (Apple's new framework, shipped with Xcode 16 in late 2024) is the recommended path for *unit* tests in new projects. Uses macros (`@Test`, `#expect`), runs in parallel by default, produces cleaner failure messages than `XCTAssert*`. We adopt it for unit work.
+- **XCTest** stays for UI tests (`XCUITest`) and any case where Swift Testing's macro model is awkward — they coexist in the same target.
+- **swift-snapshot-testing** (Point-Free, BSD-3) for visual regression. De facto standard; used by many large iOS codebases.
 
 **Setup (~half day):**
 - New target `SweKittyTests` in `apps/ios/project.yml`. Same code-signing as the app target but no entitlements needed.
 - Add to CI: `xcodebuild test -scheme SweKitty -destination 'platform=iOS Simulator,name=iPhone 16'` in `release-ios` cycle and `ci.yml`.
-- First test file: `apps/ios/Tests/SweKittyTests/ConversationRendererTests.swift` — table-driven against the `ConversationRenderer.blocks` parser from PR #15. Pure function, no UIKit; perfect first test.
+- First test file: `apps/ios/Tests/SweKittyTests/ConversationRendererTests.swift` — table-driven against the `ConversationRenderer.blocks` parser from PR #15, written in **Swift Testing** style (`@Test func collapsesConsecutiveBashLines() { ... }`). Pure function, no UIKit; perfect first test.
 
 **What to test first (priority order):**
 1. **`ConversationRenderer.blocks(for:)`** — assert that a fenced code block separates from prose; assert that consecutive `$ cmd` lines collapse into a `.toolSummary` with the right count; assert that "Reading the docs..." stays in markdown (the length-guard edge case I built but only eyeballed).
 2. **`AppearanceStore`** — assert that persisted `fontFamily` survives `init(defaults:)` round-trip; assert that `applyToWindows()` is a no-op when no scenes are connected (defends the theme fix from PR #11).
 3. **`SessionStore` chat ingest** — using a fake `Client` protocol, drive `ingestChat` and assert that `chatLog[sessionID]` + `conversationLog[sessionID]` get populated in lockstep, that user-echo dedupe works, that the `awaitingReply` clear-condition holds.
 
-**What to test next (snapshot tier):**
+**What to test next (snapshot + view tier):**
 - Add [`pointfreeco/swift-snapshot-testing`](https://github.com/pointfreeco/swift-snapshot-testing) as a Swift Package dependency.
 - Snapshot `ChatTab` with a representative `[ConversationItem]` fixture under each `AppearanceStore.FontFamily`. PRs that change rendering have to *intentionally* update snapshots; visual regressions stop being "user finds them in the screenshot".
 - Snapshot `SessionInfoView`, `AppearanceSheet`, the agent-pill states.
+- Consider [**ViewInspector**](https://github.com/nalexn/ViewInspector) for SwiftUI hierarchy introspection without taking pixel snapshots — a middle ground when we need to assert "this view contains a HealthDot" without committing to a specific render.
 
-### Android — JUnit + Robolectric
+### Android — JUnit 4 + MockK + Robolectric + Compose UI Testing + Paparazzi
+
+**Framework choice notes:**
+- **JUnit 4** as the default. JUnit 5 is modern and supports parameterized tests / parallel execution more cleanly, but Compose tooling (`ComposeTestRule`, etc.) assumes JUnit 4 and the JUnit 5 Android plugin adds setup friction. We start with JUnit 4 and revisit if/when Compose lands a JUnit 5 path.
+- **MockK** (Apache-2.0) for mocking. Kotlin-native, idiomatic for Kotlin (handles coroutines, sealed classes, top-level functions cleanly). De facto standard since ~2019 — Mockito-Kotlin is the older alternative but MockK has won.
+- **Robolectric** (Apache-2.0) lets us run "Android" tests on the JVM without an emulator. Standard for fast unit-testing of Android classes (View, Context, etc.).
+- **Compose UI Testing** (`androidx.compose.ui:ui-test-junit4`) for Compose views — the official Google framework.
+- **Paparazzi** (Cash App, Apache-2.0) for Compose snapshot testing on the JVM — the spiritual equivalent of swift-snapshot-testing for Android. Same value: visual regressions become explicit snapshot diffs in the PR.
 
 **Setup (~half day):**
 - New source set `apps/android/app/src/test/java/sh/nikhil/swekitty/`.
-- Add JUnit 5 + Robolectric to `build.gradle`. CI: `./gradlew :app:testDebugUnitTest` added next to the existing `assembleDebug`.
+- Add JUnit 4 + MockK + Robolectric to `build.gradle`. CI: `./gradlew :app:testDebugUnitTest` added next to the existing `assembleDebug`.
 - First test file: `TerminalBridgeTest.kt` against the JSON-parse path in `WebTerminal.kt` from PR #17 — the int-vs-double resize-event coercion is exactly the kind of thing nobody catches without a test.
 
 **What to test first:**
 1. **`TerminalBridge.postMessage`** — feed canned JSON strings, assert that `ready` flushes pending, that `input` calls `onInput` with UTF-8 bytes, that `resize` accepts both int and double values for cols/rows.
 2. **`SessionStore` chat ingest** — same shape as the iOS test above.
 
-**What to test next (Compose tier):**
+**What to test next (Compose + snapshot tier):**
 - Add `androidx.compose.ui:ui-test-junit4` + `compose-ui-test-manifest`.
-- Compose preview tests for `ChatPage`, the agent picker, the project list.
+- Add Paparazzi for snapshot tests of the same surfaces iOS snapshots: `ChatPage`, agent picker, project list.
+- Compose tree assertions (`hasText`, `assertIsDisplayed`) for interactive behavior; Paparazzi snapshots for visual regression.
 
 ### Rust core — already covered, expand the surface
 
