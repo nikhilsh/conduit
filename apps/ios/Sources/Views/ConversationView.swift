@@ -79,7 +79,13 @@ private enum ConversationRole: Equatable {
     }
 }
 
-private enum ConversationBlock: Equatable {
+// `ConversationBlock` and `ConversationRenderer` are intentionally
+// internal (not `private`) so `apps/ios/Tests/SweKittyTests/...` can
+// drive them as pure functions via `@testable import SweKitty`. The
+// rest of the file is still file-private; only the parser surface
+// area is exposed.
+
+enum ConversationBlock: Equatable {
     case markdown(String)
     case code(language: String?, content: String)
     /// Collapsed tool-activity row: chevron + summary label, expands to
@@ -89,7 +95,7 @@ private enum ConversationBlock: Equatable {
     case toolSummary(label: String, detail: String)
 }
 
-private struct ConversationRenderer {
+struct ConversationRenderer {
     static func blocks(for content: String) -> [ConversationBlock] {
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var blocks: [ConversationBlock] = []
@@ -417,7 +423,11 @@ private struct ConversationRenderer {
     }
 }
 
-private enum ToolSection: Equatable {
+// Promoted from `private` to internal because `ConversationRenderer`
+// is now internal (was private — exposed for tests) and its
+// `toolSections(...)` returns `[ToolSection]`; Swift requires the
+// return type be at least as visible as the method.
+enum ToolSection: Equatable {
     case meta(ToolMetadata)
     case command(String)
     case files([ViewEventFile])
@@ -428,7 +438,9 @@ private enum ToolSection: Equatable {
     case diff(String)
 }
 
-private struct ToolMetadata: Equatable {
+// Same visibility-promotion rationale as `ToolSection` above —
+// `ConversationRenderer.extractMetadata(...)` returns this type.
+struct ToolMetadata: Equatable {
     let exitCode: Int?
     let duration: String?
 }
