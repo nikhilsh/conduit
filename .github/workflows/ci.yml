@@ -27,6 +27,15 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Setup Node for sidecar
+        if: steps.detect.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install sidecar deps
+        if: steps.detect.outputs.skip != 'true' && hashFiles('harness/sidecar/package.json') != ''
+        working-directory: harness/sidecar
+        run: npm install --omit=dev --no-audit --no-fund
       - name: go vet
         if: steps.detect.outputs.skip != 'true'
         working-directory: harness
