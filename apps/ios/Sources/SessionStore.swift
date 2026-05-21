@@ -910,6 +910,27 @@ final class SessionStore {
         displayNames[session.id] ?? session.name
     }
 
+    /// Switch the active session — drives the iPhone `NavigationStack`
+    /// destination + the iPad detail pane. No reducer / Rust-core call;
+    /// the existing `onChange(of: store.selectedSessionID)` in
+    /// `HomeView` picks this up and pushes the target session.
+    ///
+    /// Lives here (not on a coordinator) so the multi-thread switcher
+    /// in `ThreadSwitcherSheet` and any future "jump to thread" deep
+    /// link have one place to call. Mirrors litter's
+    /// `ConversationThreadSwitcher` semantics. PR H owns the reducer
+    /// path; this is the navigation-level setter only.
+    func switchTo(sessionID: String) {
+        guard sessions.contains(where: { $0.id == sessionID })
+            || sessionLifecycle[sessionID] != nil
+        else {
+            // No-op if the target doesn't exist — guards against a
+            // stale row tap after a session exited and was reaped.
+            return
+        }
+        selectedSessionID = sessionID
+    }
+
     /// Locally rename a session — persisted to `UserDefaults`, no
     /// harness round-trip. Empty/whitespace strings clear the override.
     func renameSession(sessionID: String, to newName: String) {

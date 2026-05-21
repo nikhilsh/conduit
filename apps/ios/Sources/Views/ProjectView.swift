@@ -21,6 +21,8 @@ struct ProjectView: View {
     @State private var browserMode: BrowserMode = .preview
     @State private var showInfo: Bool = false
     @State private var showAgentPicker: Bool = false
+    @State private var showThreadSwitcher: Bool = false
+    @State private var showVoice: Bool = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -33,6 +35,19 @@ struct ProjectView: View {
         .padding(.horizontal, 10)
         .padding(.top, 8)
         .padding(.bottom, 0)
+        // Persistent in-session dock — visible across Terminal / Chat /
+        // Browser tabs. `safeAreaInset` parks it above the keyboard so
+        // it slides up with focus rather than getting buried. The
+        // ChatTab composer's own `safeAreaInset` stacks above this
+        // dock when chat is active, so both stay visible together.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            InSessionBottomBar(
+                context: InSessionContext(tab),
+                onThreads: { showThreadSwitcher = true },
+                onVoice: { showVoice = true },
+                onNewSession: { showAgentPicker = true }
+            )
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // Single-line title only — the prior "claude · Remote control"
@@ -54,6 +69,38 @@ struct ProjectView: View {
         }
         .sheet(isPresented: $showAgentPicker) {
             AgentPickerSheet(headerNote: nil).environment(store)
+        }
+        .sheet(isPresented: $showThreadSwitcher) {
+            ThreadSwitcherSheet(activeSession: session).environment(store)
+        }
+        .sheet(isPresented: $showVoice) {
+            VoiceDictationSheet { transcript in
+                routeVoice(transcript: transcript)
+            }
+        }
+    }
+
+    /// Per-tab voice routing. v1: chat is wired to the existing voice
+    /// path (transcript → `sendChat`). Terminal / browser are stubbed
+    /// behind a toast in `InSessionBottomBar` and never reach this
+    /// closure, but we defend the unreachable branches anyway so a
+    /// future "wire voice into terminal" change has one place to
+    /// extend.
+    private func routeVoice(transcript: String) {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        switch InSessionContext(tab) {
+        case .chat:
+            store.sendChat(sessionID: session.id, message: trimmed)
+        case .terminal:
+            // Reserved — feed as a line-terminated stdin write once
+            // we ship voice-to-terminal. For v1 the unsupported toast
+            // short-circuits before we get here.
+            let line = trimmed.hasSuffix("\n") ? trimmed : trimmed + "\n"
+            store.sendInput(sessionID: session.id, bytes: Data(line.utf8))
+        case .browser:
+            // No browser surface accepts text input today.
+            break
         }
     }
 
