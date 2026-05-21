@@ -20,6 +20,15 @@ struct HomeView: View {
     @State private var showVoice = false
     @State private var showAgentPicker = false
     @State private var selectedSessionID: String?
+    /// Long-lived LAN browser so discovered servers stream into the
+    /// home pill row as a litter-style "what's around me" affordance.
+    /// Lifetime is bound to the HomeView's presence on screen: started
+    /// in `.onAppear` and stopped in `.onDisappear` so we don't keep
+    /// the NetService browser open while the user is deep in a
+    /// session. Results dedupe against `savedServers` by host:port
+    /// inside `ServerPillRow` so the same advertiser doesn't show up
+    /// twice when the user has already saved it.
+    @State private var lanBrowser = LANDiscoveryBrowser()
 
     var body: some View {
         @Bindable var store = store
@@ -31,7 +40,10 @@ struct HomeView: View {
 
                 VStack(spacing: 14) {
                     topRow
-                    ServerTabsStrip(showAddServer: $showAddServer)
+                    ServerPillRow(
+                        discovered: lanBrowser.results,
+                        showAddServer: $showAddServer
+                    )
                     if let err = store.sessionCreationError {
                         InlineErrorBanner(message: err, onDismiss: { store.sessionCreationError = nil })
                             .padding(.horizontal, 14)
@@ -92,6 +104,13 @@ struct HomeView: View {
                 } else if store.harness == .disconnected {
                     store.connect()
                 }
+                // Stream mDNS results into the home pill row so the
+                // user discovers nearby brokers without having to
+                // open the dedicated DiscoveryView first.
+                lanBrowser.start()
+            }
+            .onDisappear {
+                lanBrowser.stop()
             }
             .tint(SweKittyTheme.accentStrong)
         }
