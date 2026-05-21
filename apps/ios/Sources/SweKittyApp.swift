@@ -4,6 +4,11 @@ import SwiftUI
 struct SweKittyApp: App {
     @State private var store = SessionStore()
     @State private var appearance = AppearanceStore()
+    /// App-lifetime owner for `NWPathMonitor`. Posts
+    /// `.networkBecameReachable` / `.networkInterfaceChanged` on
+    /// transitions; SessionStore subscribes and asks the Rust core
+    /// to drop+redial instead of waiting for the heartbeat timeout.
+    @State private var reachability = NetworkReachabilityObserver()
     @State private var showSplash: Bool = true
     /// Bridges the store's typed conversation stream into ActivityKit's
     /// `TurnLiveActivity`. Initialized eagerly so the lock-screen card

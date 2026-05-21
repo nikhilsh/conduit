@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import Observation
 import UIKit
 
@@ -274,10 +273,9 @@ final class SessionStore {
 
     private var client: SweKittyClient?
     private var delegate: StoreDelegate?
-    private var pathMonitor: NWPathMonitor?
     private var foregroundObserver: NSObjectProtocol?
-    /// Path identifier we've seen so we don't nudge on first activation.
-    private var lastPath: NWPath?
+    private var networkReachableObserver: NSObjectProtocol?
+    private var networkInterfaceObserver: NSObjectProtocol?
 
     /// Shadow-write target: the shared Rust reducer (`core::store::SessionStoreCore`).
     /// In this PR the Swift maps above are still the read source of truth;
@@ -302,10 +300,11 @@ final class SessionStore {
     }
 
     // No deinit cleanup: SessionStore lives for the app's lifetime
-    // (owned by SweKittyApp's @State), so the NWPathMonitor and the
-    // NotificationCenter observer are released only at process exit —
-    // and Swift 6 actor isolation forbids touching MainActor state from
-    // a nonisolated deinit anyway.
+    // (owned by SweKittyApp's @State), so the NotificationCenter
+    // observers are released only at process exit — and Swift 6 actor
+    // isolation forbids touching MainActor state from a nonisolated
+    // deinit anyway. The path monitor itself now lives on
+    // NetworkReachabilityObserver (also app-scoped).
 
     /// Tell every per-session worker in the Rust core that the network
     /// path probably changed. The worker drops its current socket and
@@ -326,25 +325,26 @@ final class SessionStore {
             self?.nudgeNetworkChange()
         }
 
-        // Wi-Fi↔LTE handoff, VPN flap, hotspot toggle. NWPathMonitor
-        // fires synchronously on its own queue; bounce to main and
-        // compare against the last seen path so we don't nudge on the
-        // initial subscription.
-        let monitor = NWPathMonitor()
-        monitor.pathUpdateHandler = { [weak self] path in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                defer { self.lastPath = path }
-                guard let prev = self.lastPath else { return }
-                if prev.availableInterfaces.map(\.type) != path.availableInterfaces.map(\.type)
-                    || prev.status != path.status
-                {
-                    self.nudgeNetworkChange()
-                }
-            }
+        // Path-level reachability is owned by NetworkReachabilityObserver
+        // (instantiated at app launch by SweKittyApp). We just listen for
+        // the coarse `unsatisfied→satisfied` and `interface-changed`
+        // edges and nudge the Rust core into immediate reconnect. The
+        // old inline `NWPathMonitor` lived here; A.9 hoisted it so the
+        // state machine is independently testable.
+        networkReachableObserver = NotificationCenter.default.addObserver(
+            forName: .networkBecameReachable,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.nudgeNetworkChange()
         }
-        monitor.start(queue: DispatchQueue(label: "swekitty.nwpath"))
-        self.pathMonitor = monitor
+        networkInterfaceObserver = NotificationCenter.default.addObserver(
+            forName: .networkInterfaceChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.nudgeNetworkChange()
+        }
     }
 
     // MARK: - Convenience derived state

@@ -2,9 +2,6 @@ package sh.nikhil.swekitty
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -19,6 +16,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import sh.nikhil.swekitty.state.NetworkReachabilityObserver
+import sh.nikhil.swekitty.state.ReachabilityEvent
+import sh.nikhil.swekitty.state.ReachabilityStatus
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -313,8 +313,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     private var client: SweKittyClient? = null
     private var prefs: android.content.SharedPreferences? = null
-    private var connectivity: ConnectivityManager? = null
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var reachability: NetworkReachabilityObserver? = null
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onResume(owner: LifecycleOwner) {
             // App came back from background — local sockets may be
@@ -356,33 +355,33 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
         val cm = appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return
-        connectivity = cm
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            // Fired on Wi-Fi↔LTE handoff, hotspot toggle, VPN flap. The
-            // exact sequence (lost/available) varies by Android version,
-            // so we nudge on either edge — Notify is idempotent.
-            override fun onAvailable(network: Network) {
-                client?.notifyNetworkChange()
-            }
-            override fun onLost(network: Network) {
-                client?.notifyNetworkChange()
+        // A.9 ("reachability-observer") hoisted the raw NetworkCallback
+        // wiring into [NetworkReachabilityObserver]. We collect its
+        // status flow and reduce each transition to "should we nudge
+        // the Rust core?" via the shared `classifyTransition` policy —
+        // same vocabulary the iOS surface uses.
+        val observer = NetworkReachabilityObserver(cm)
+        reachability = observer
+        var lastStatus: ReachabilityStatus = ReachabilityStatus.Unknown
+        viewModelScope.launch {
+            observer.status.collect { next ->
+                val prev = lastStatus
+                lastStatus = next
+                val event = NetworkReachabilityObserver.classifyTransition(prev, next)
+                if (event == ReachabilityEvent.BecameReachable ||
+                    event == ReachabilityEvent.InterfaceChanged) {
+                    client?.notifyNetworkChange()
+                }
             }
         }
-        networkCallback = cb
-        runCatching { cm.registerNetworkCallback(request, cb) }
+        observer.start()
     }
 
     override fun onCleared() {
         super.onCleared()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
-        val cm = connectivity
-        val cb = networkCallback
-        if (cm != null && cb != null) {
-            runCatching { cm.unregisterNetworkCallback(cb) }
-        }
+        reachability?.stop()
+        reachability = null
     }
 
     fun setEndpoint(url: String, token: String) {
