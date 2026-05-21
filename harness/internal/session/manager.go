@@ -489,6 +489,10 @@ type Manager struct {
 	// termgrid is the optional headless xterm.js sidecar. nil when node
 	// isn't installed at startup. Shared by all sessions.
 	termgrid *termgrid.Manager
+
+	// stopGC closes when Manager.Close is called; the background GC
+	// goroutine watches it to exit cleanly.
+	stopGC chan struct{}
 }
 
 type CreateOptions struct {
@@ -502,6 +506,7 @@ func NewManager(registry *agents.Registry) *Manager {
 		registry:  registry,
 		repoRoot:  repoRoot,
 		kittyRoot: kittyRoot,
+		stopGC:    make(chan struct{}),
 	}
 	if strings.TrimSpace(os.Getenv("SWE_KITTY_DISABLE_SIDECAR")) == "" {
 		tg, err := termgrid.NewManager()
@@ -516,6 +521,7 @@ func NewManager(registry *agents.Registry) *Manager {
 		}
 	}
 	m.loadRecentProjects()
+	m.startGCLoop(m.stopGC)
 	return m
 }
 
@@ -627,7 +633,17 @@ func (m *Manager) Close() {
 	}
 	tg := m.termgrid
 	m.termgrid = nil
+	stopGC := m.stopGC
+	m.stopGC = nil
 	m.mu.Unlock()
+	if stopGC != nil {
+		// Idempotent: Close-after-Close is rare but harmless.
+		select {
+		case <-stopGC:
+		default:
+			close(stopGC)
+		}
+	}
 	for _, s := range sessions {
 		s.Close()
 	}
