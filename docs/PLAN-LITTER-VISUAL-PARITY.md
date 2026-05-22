@@ -423,7 +423,7 @@ Files:
   - `ConversationHandoffCard` / `ConversationPendingInputCard`: convert from heavy glass cards to flat inline rows with a small leading tint dot.
   - Drop `border.opacity(0.55)` strokes on code/diff blocks.
 
-LOC: ~600 (over the 500 ceiling — consider splitting into PR 4a "header + composer" and PR 4b "conversation rendering"). 
+LOC: ~600 (over the 500 ceiling — consider splitting into PR 4a "header + composer" and PR 4b "conversation rendering").
 
 Acceptance: open a session, the chat area starts immediately below a hairline tab strip; assistant headings render larger; tool cards read flat; user message decision is documented.
 

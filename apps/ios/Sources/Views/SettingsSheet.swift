@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Settings — Litter-style sectioned IA. Sentence-case bold section
 /// headers (`SettingsSectionHeader`) replace the old uppercased mono
@@ -304,6 +305,12 @@ struct SettingsSheet: View {
         }
     }
 
+    /// About: app name + the build-provenance triple
+    /// (Version / Build / Release tag). The triple lets the user tell
+    /// us "I'm on 0.0.1 (13), 3f1a9c2, manual-2026-05-22-oauth-redesign"
+    /// in a bug report so we don't have to guess which IPA they
+    /// installed. The Build row supports long-press-to-copy so the SHA
+    /// can be pasted straight into a Linear ticket.
     private var aboutSection: some View {
         SettingsSection(title: "About") {
             HStack {
@@ -316,17 +323,35 @@ struct SettingsSheet: View {
                 Text("SweKitty")
                     .foregroundStyle(SweKittyTheme.textSecondary)
             }
-            if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            Divider().background(SweKittyTheme.separator)
+            HStack {
+                Image(systemName: "number")
+                    .frame(width: 22)
+                    .foregroundStyle(SweKittyTheme.accentStrong)
+                Text("Version")
+                    .foregroundStyle(SweKittyTheme.textBody)
+                Spacer()
+                Text("\(BuildInfo.marketingVersion) (\(BuildInfo.buildNumber))")
+                    .foregroundStyle(SweKittyTheme.textSecondary)
+                    .monospacedDigit()
+            }
+            Divider().background(SweKittyTheme.separator)
+            BuildSHARow(sha: BuildInfo.gitSHA)
+            if BuildInfo.isStamped {
                 Divider().background(SweKittyTheme.separator)
-                HStack {
-                    Image(systemName: "number")
+                HStack(alignment: .top) {
+                    Image(systemName: "tag")
                         .frame(width: 22)
                         .foregroundStyle(SweKittyTheme.accentStrong)
-                    Text("Version")
+                    Text("Release tag")
                         .foregroundStyle(SweKittyTheme.textBody)
                     Spacer()
-                    Text(version)
+                    Text(BuildInfo.releaseTag)
+                        .font(.footnote)
                         .foregroundStyle(SweKittyTheme.textSecondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                 }
             }
         }
@@ -339,6 +364,44 @@ struct SettingsSheet: View {
         switch store.harness {
         case .disconnected, .failed: return true
         default: return false
+        }
+    }
+}
+
+/// "Build" row in Settings → About. Renders the short git SHA the IPA
+/// was stamped with (or an em-dash + a hint for unstamped local
+/// builds), and offers a long-press menu that copies the SHA to the
+/// clipboard so the user can paste it into a bug report.
+///
+/// The copy menu is gated on `BuildInfo.isStamped` so an unstamped
+/// build doesn't tempt the user into copying the literal string
+/// "dev".
+struct BuildSHARow: View {
+    let sha: String
+
+    private var isStamped: Bool { sha != "dev" }
+
+    var body: some View {
+        HStack {
+            Image(systemName: "number.square")
+                .frame(width: 22)
+                .foregroundStyle(SweKittyTheme.accentStrong)
+            Text("Build")
+                .foregroundStyle(SweKittyTheme.textBody)
+            Spacer()
+            Text(isStamped ? sha : "— (dev)")
+                .font(.system(.subheadline, design: .monospaced))
+                .foregroundStyle(SweKittyTheme.textSecondary)
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            if isStamped {
+                Button {
+                    UIPasteboard.general.string = sha
+                } label: {
+                    Label("Copy SHA", systemImage: "doc.on.doc")
+                }
+            }
         }
     }
 }
