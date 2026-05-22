@@ -1,5 +1,7 @@
 package sh.nikhil.swekitty.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.util.Log
@@ -266,13 +268,17 @@ private fun buildTermuxTerminalView(
     )
     view.setTerminalViewClient(viewClient)
 
+    val sessionClient = BrokerTerminalSessionClient(
+        appContext = ctx.applicationContext,
+        onInput = onInput,
+    )
     val session = TerminalSession(
         /* shellPath = */ config.shellPath,
         /* cwd = */ config.cwd,
         /* args = */ config.args,
         /* env = */ config.env,
         /* transcriptRows = */ TermuxSessionConfig.TRANSCRIPT_ROWS,
-        /* client = */ NoopTerminalSessionClient,
+        /* client = */ sessionClient,
     )
     view.attachSession(session)
 
@@ -549,17 +555,61 @@ internal class BrokerTerminalViewClient(
 }
 
 /**
- * Stage 2 [TerminalSessionClient]. Title / bell / clipboard hooks
- * are still no-ops — those land with the Stage 3 polish pass — but
- * the log forwarders are real so Termux's internal logs surface in
- * `adb logcat`.
+ * Stage 3 [TerminalSessionClient]. Wires Termux's built-in
+ * selection-action-mode callbacks into the system clipboard and the
+ * broker:
+ *  - [onCopyTextToClipboard] runs when the user taps Copy in the
+ *    Termux floating toolbar after dragging a selection. We push the
+ *    text onto `ClipboardManager.primaryClip` so any other app can
+ *    paste it.
+ *  - [onPasteTextFromClipboard] runs when the user taps Paste. We
+ *    read the system clipboard and forward the bytes through
+ *    [SessionStore.sendInput] (`onInput`) so the broker — not the
+ *    silent local PTY — receives the input.
+ *
+ * Title / bell / cursor hooks remain no-ops; theming + bell handling
+ * are still queued for a polish pass. The log forwarders are real so
+ * Termux's internal logs surface in `adb logcat -s TermuxTerminalView`.
  */
-private object NoopTerminalSessionClient : TerminalSessionClient {
+internal class BrokerTerminalSessionClient(
+    private val appContext: Context,
+    private val onInput: (ByteArray) -> Unit,
+) : TerminalSessionClient {
     override fun onTextChanged(changedSession: TerminalSession?) {}
     override fun onTitleChanged(changedSession: TerminalSession?) {}
     override fun onSessionFinished(finishedSession: TerminalSession?) {}
-    override fun onCopyTextToClipboard(session: TerminalSession?, text: String?) {}
-    override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+
+    override fun onCopyTextToClipboard(session: TerminalSession?, text: String?) {
+        val payload = text ?: return
+        if (payload.isEmpty()) return
+        try {
+            val cm = appContext.getSystemService(Context.CLIPBOARD_SERVICE)
+                as? ClipboardManager ?: return
+            cm.setPrimaryClip(ClipData.newPlainText("swe-kitty terminal", payload))
+        } catch (t: Throwable) {
+            Log.w(TAG, "onCopyTextToClipboard failed", t)
+        }
+    }
+
+    override fun onPasteTextFromClipboard(session: TerminalSession?) {
+        try {
+            val cm = appContext.getSystemService(Context.CLIPBOARD_SERVICE)
+                as? ClipboardManager ?: return
+            val clip = cm.primaryClip ?: return
+            if (clip.itemCount == 0) return
+            val text = clip.getItemAt(0).coerceToText(appContext)?.toString() ?: return
+            if (text.isEmpty()) return
+            // Forward bytes to the broker. Termux normally calls
+            // `session.write(text)` here which would route the input
+            // into the local /system/bin/sleep PTY — pointless. Send
+            // the bytes directly to the broker instead, so the
+            // remote agent receives them.
+            onInput(text.toByteArray(Charsets.UTF_8))
+        } catch (t: Throwable) {
+            Log.w(TAG, "onPasteTextFromClipboard failed", t)
+        }
+    }
+
     override fun onBell(session: TerminalSession?) {}
     override fun onColorsChanged(session: TerminalSession?) {}
     override fun onTerminalCursorStateChange(state: Boolean) {}
@@ -627,5 +677,102 @@ internal class TermuxPlaceholderView(context: Context) : FrameLayout(context) {
     override fun performClick(): Boolean {
         super.performClick()
         return true
+    }
+}
+
+/**
+ * Pure-data Stage 3 selection rectangle. Termux's `TerminalView`
+ * owns the live selection UI (drag handles + floating action mode),
+ * so this type is *not* wired into the live mount today — the same
+ * rectangle shape lives inside `TextSelectionCursorController` in
+ * Termux. We keep it here so:
+ *  - the unit test ([TerminalSelectionRangeTest]) can lock the
+ *    text-extraction contract that mirrors the iOS
+ *    `TerminalSelectionRange.selectedText(from:)` helper, and
+ *  - a future Stage 3.1 pass that draws its own selection (e.g.
+ *    for the Compose accessory bar's "Send selection to chat"
+ *    button) can reuse this row/col + extraction logic without
+ *    re-inventing it.
+ *
+ * The range is **inclusive on both ends** — `start` and `end` both
+ * point at cells whose graphemes belong to the selection. A
+ * single-cell selection has `start == end`. [normalized] reorders the
+ * anchors so the upper-left is `start` (drag-backwards-friendly).
+ */
+internal data class TerminalSelectionAnchor(val row: Int, val col: Int)
+
+internal data class TerminalSelectionRange(
+    val start: TerminalSelectionAnchor,
+    val end: TerminalSelectionAnchor,
+) {
+    /**
+     * Reordered (start, end) so that `start` is strictly the
+     * upper-left anchor in reading order. Pure function so any caller
+     * that paints the highlight + the text extractor agree on the
+     * rectangle.
+     */
+    fun normalized(): TerminalSelectionRange {
+        val s = start
+        val e = end
+        return if (s.row < e.row || (s.row == e.row && s.col <= e.col)) {
+            this
+        } else {
+            TerminalSelectionRange(start = e, end = s)
+        }
+    }
+
+    /**
+     * Walk a (rows × cols) grid between the normalized anchors and
+     * return the substring. Empty / whitespace cells render as a
+     * single space, mirroring the iOS [TerminalSelectionRange]
+     * helper.
+     *
+     * `cells` is laid out outer-row, inner-cell — same shape the iOS
+     * `TerminalSnapshotShim.cells` uses. Each inner element is a
+     * grapheme string (typically one character, possibly empty for
+     * unwritten cells).
+     */
+    fun selectedText(cells: List<List<String>>): String {
+        if (cells.isEmpty()) return ""
+        val rows = cells.size
+        val cols = cells.firstOrNull()?.size ?: 0
+        if (cols == 0) return ""
+
+        val n = normalized()
+        val r0 = n.start.row.coerceIn(0, rows - 1)
+        val r1 = n.end.row.coerceIn(0, rows - 1)
+        val c0 = n.start.col.coerceIn(0, cols - 1)
+        val c1 = n.end.col.coerceIn(0, cols - 1)
+
+        if (r0 == r1) {
+            return cellsToString(cells[r0], c0, c1)
+        }
+        val sb = StringBuilder()
+        // First row: c0..lastCol.
+        sb.append(cellsToString(cells[r0], c0, cols - 1))
+        sb.append('\n')
+        // Middle rows: full width.
+        if (r1 - r0 > 1) {
+            for (r in (r0 + 1) until r1) {
+                sb.append(cellsToString(cells[r], 0, cols - 1))
+                sb.append('\n')
+            }
+        }
+        // Last row: 0..c1.
+        sb.append(cellsToString(cells[r1], 0, c1))
+        return sb.toString()
+    }
+
+    private fun cellsToString(row: List<String>, start: Int, end: Int): String {
+        if (row.isEmpty()) return ""
+        val s = start.coerceIn(0, row.size - 1)
+        val e = end.coerceIn(0, row.size - 1)
+        if (s > e) return ""
+        val sb = StringBuilder()
+        for (i in s..e) {
+            val cell = row[i]
+            sb.append(if (cell.isEmpty()) " " else cell)
+        }
+        return sb.toString()
     }
 }

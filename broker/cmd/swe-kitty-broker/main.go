@@ -29,6 +29,7 @@ import (
 	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
 	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
 	"github.com/nikhilsh/swe-kitty/broker/internal/discovery"
+	"github.com/nikhilsh/swe-kitty/broker/internal/replay"
 	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 	"github.com/nikhilsh/swe-kitty/broker/internal/ws"
 )
@@ -69,6 +70,7 @@ func runUp(args []string) int {
 	local := fs.Bool("local", false, "advertise on LAN via mDNS")
 	publicURL := fs.String("public-url", "", "public-facing URL (for QR/UX hints)")
 	agentsDir := fs.String("agents-dir", "", "directory of agent adapter TOMLs (defaults: $XDG_CONFIG_HOME/swe-kitty/agents → ~/.swe-kitty/agents → ./agents → embedded)")
+	replayBase := fs.String("replay-base", defaultReplayBase(), "directory for per-session replay recordings; empty disables recording")
 	_ = fs.Parse(args)
 
 	store := auth.NewStore()
@@ -87,10 +89,25 @@ func runUp(args []string) int {
 	}
 	log.Printf("adapters: source=%s names=%v", regSource, registry.Names())
 	mgr := session.NewManager(registry)
+	// Enable replay recording before Recover() — recovered sessions
+	// thus pick up the recorder on their drain loop too, so a
+	// post-restart session continues writing to the same replay.json.
+	if base := strings.TrimSpace(*replayBase); base != "" {
+		if abs, err := expandHome(base); err == nil {
+			mgr.SetReplayBaseDir(abs)
+			log.Printf("replay: recording sessions to %s", abs)
+		} else {
+			log.Printf("replay: ignoring --replay-base %q: %v", base, err)
+		}
+	}
 	if recovered, err := mgr.Recover(); err == nil && len(recovered) > 0 {
 		log.Printf("recovered sessions: %v", recovered)
 	}
 	srv := ws.New(store, mgr)
+	// Replay HTTP surface lives on the same mux as the WS server.
+	// Secret = bearer token: anyone who can already attach to the WS
+	// can mint a replay URL, but external observers cannot enumerate.
+	replaySrv := replay.NewServer(mgr.ReplayBaseDir(), []byte(token))
 
 	hostURL := resolveHostURL(*addr, *local, *publicURL)
 
@@ -98,8 +115,15 @@ func runUp(args []string) int {
 	// Format: swekitty://<host>[:port]?token=<bearer>
 	pairing := pairingURL(replaceScheme(hostURL), token)
 
-	fmt.Printf("swe-kitty-broker up\n  addr:    %s\n  url:     %s\n  token:   %s\n  pairing: %s\n\n",
+	fmt.Printf("swe-kitty-broker up\n  addr:    %s\n  url:     %s\n  token:   %s\n  pairing: %s\n",
 		*addr, hostURL, token, pairing)
+	if mgr.ReplayBaseDir() != "" {
+		// Print a templated replay URL so the operator can plug in
+		// any active session id without recomputing the HMAC.
+		sampleToken := replaySrv.Token("SESSION_ID")
+		fmt.Printf("  replay:  %s/replay/<session-id>?t=<hmac>  (sample hmac for SESSION_ID: %s)\n", hostURL, sampleToken)
+	}
+	fmt.Println()
 	qrterminal.GenerateHalfBlock(pairing, qrterminal.L, os.Stdout)
 	fmt.Printf("\nScan the QR above with the SweKitty app, or:\n  wscat -c \"%s/ws/$(uuidgen)?assistant=claude&token=%s\"\n",
 		replaceScheme(hostURL), token)
@@ -120,9 +144,19 @@ func runUp(args []string) int {
 		}
 	}
 
+	// Combine the WS server's mux with the replay surface. The replay
+	// handler owns the `/replay/` prefix; everything else falls
+	// through to the existing WS handler. Done this way (rather than
+	// passing the mux into ws.New) so the existing public surface
+	// stays untouched.
+	rootMux := http.NewServeMux()
+	rootMux.Handle("/replay/", replaySrv.Handler())
+	wsHandler := srv.Handler()
+	rootMux.Handle("/", wsHandler)
+
 	httpSrv := &http.Server{
 		Addr:              *addr,
-		Handler:           srv.Handler(),
+		Handler:           rootMux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -317,6 +351,35 @@ func joinPath(parts ...string) string {
 		}
 	}
 	return out
+}
+
+// defaultReplayBase returns the documented default replay directory
+// (`~/.swe-kitty/sessions/`). Returns an empty string when the home
+// directory can't be resolved — recording then defaults to disabled
+// rather than dumping into the cwd.
+func defaultReplayBase() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return home + string(os.PathSeparator) + ".swe-kitty" + string(os.PathSeparator) + "sessions"
+}
+
+// expandHome resolves a leading `~` in a path against the user's home
+// directory. Returns the input unchanged when it doesn't start with
+// `~/` so absolute paths pass through.
+func expandHome(p string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if p == "~" {
+			return home, nil
+		}
+		return home + p[1:], nil
+	}
+	return p, nil
 }
 
 // replaceScheme returns hostURL with http(s) swapped for ws(s) for the

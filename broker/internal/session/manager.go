@@ -24,6 +24,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
+	"github.com/nikhilsh/swe-kitty/broker/internal/replay"
 	"github.com/nikhilsh/swe-kitty/broker/internal/termgrid"
 )
 
@@ -98,6 +99,14 @@ type Session struct {
 	// JSON frames. Lives for the life of the session; capturing
 	// state is gated on the user actually sending a chat message.
 	scraper *chatScraper
+
+	// recorder writes PTY bytes + view_events to a per-session
+	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
+	// later browser visit to `GET /replay/<id>` can re-render the
+	// session. nil when recording is disabled at manager
+	// construction; methods on Recorder tolerate the nil receiver
+	// so the drain / publish paths don't have to branch.
+	recorder *replay.Recorder
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
@@ -154,6 +163,18 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	s.applyPaths()
 	if err := s.prepareFilesystem(); err != nil {
 		return nil, err
+	}
+	// Start the replay recorder before drain so we capture from the
+	// first PTY byte. Failure is non-fatal: log and keep the session
+	// alive without recording — the live WS path is the user-visible
+	// surface, the recorder is the audit/debug side channel.
+	if opts.replayBaseDir != "" {
+		rec, err := replay.NewRecorder(s.ID, opts.replayBaseDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "session %s: replay recorder disabled: %v\n", s.ID, err)
+		} else {
+			s.recorder = rec
+		}
 	}
 	s.workspaceDir = s.commandDir(adapter)
 	cmd.Dir = s.workspaceDir
@@ -353,6 +374,24 @@ func (s *Session) WorkspaceDir() string {
 // text subscriber. Same drop-oldest backpressure policy as fanout —
 // the scraper must never block the PTY drain.
 func (s *Session) PublishText(payload []byte) {
+	// Record the view_event (if it is one) before fan-out. Re-parsing
+	// the JSON here is cheap relative to the JSON.Marshal that
+	// produced it, and keeps the recorder schema-stable (we record
+	// `event` not the WS envelope, so the replay player can render
+	// without re-decoding swe-kitty's WS shape).
+	if s.recorder != nil {
+		var frame struct {
+			Type  string          `json:"type"`
+			View  string          `json:"view"`
+			Event json.RawMessage `json:"event"`
+		}
+		if err := json.Unmarshal(payload, &frame); err == nil && frame.Type == "view_event" {
+			var evt any
+			if uerr := json.Unmarshal(frame.Event, &evt); uerr == nil {
+				s.recorder.RecordEvent(frame.View, evt, time.Now())
+			}
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ch := range s.textSubs {
@@ -427,6 +466,12 @@ func (s *Session) Close() {
 			if err := tg.Delete(s.ID); err != nil {
 				fmt.Fprintf(os.Stderr, "session %s: termgrid.Delete: %v\n", s.ID, err)
 			}
+		}
+		if s.recorder != nil {
+			if err := s.recorder.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: replay.Close: %v\n", s.ID, err)
+			}
+			s.recorder = nil
 		}
 		close(s.closed)
 	})
@@ -505,6 +550,11 @@ func (s *Session) drain(f *os.File) {
 			copy(chunk, buf[:n])
 			s.append(chunk)
 			s.fanout(chunk)
+			if s.recorder != nil {
+				// Best-effort: nil-safe inside the recorder, errors
+				// only logged. Drain must never block on disk I/O.
+				s.recorder.RecordBytes(chunk, time.Now())
+			}
 			if s.scraper != nil {
 				s.scraper.feed(chunk)
 			}
@@ -599,9 +649,34 @@ type Manager struct {
 	// isn't installed at startup. Shared by all sessions.
 	termgrid *termgrid.Manager
 
+	// replayBaseDir, when non-empty, is propagated to every session's
+	// recorder so PTY bytes + view_events are persisted under
+	// `<replayBaseDir>/<id>/replay.json`. Set via SetReplayBaseDir
+	// from cmd/swe-kitty-broker — empty in unit tests by default.
+	replayBaseDir string
+
 	// stopGC closes when Manager.Close is called; the background GC
 	// goroutine watches it to exit cleanly.
 	stopGC chan struct{}
+}
+
+// SetReplayBaseDir enables replay recording for sessions created
+// after the call. Existing sessions keep whatever recorder state they
+// had at construction. Pass an empty string to disable for any
+// future creates.
+func (m *Manager) SetReplayBaseDir(dir string) {
+	m.mu.Lock()
+	m.replayBaseDir = strings.TrimSpace(dir)
+	m.mu.Unlock()
+}
+
+// ReplayBaseDir returns the currently configured replay base
+// directory ("" when disabled). Mostly used by the broker entry
+// point to log the resolved path at startup.
+func (m *Manager) ReplayBaseDir() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.replayBaseDir
 }
 
 type CreateOptions struct {
@@ -712,10 +787,11 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		}
 	}
 	s, err := newSession(id, adapter, sessionOptions{
-		repoRoot:     m.repoRoot,
-		kittyRoot:    m.kittyRoot,
-		requestedCWD: requestedCWD,
-		termgrid:     m.termgrid,
+		repoRoot:      m.repoRoot,
+		kittyRoot:     m.kittyRoot,
+		requestedCWD:  requestedCWD,
+		termgrid:      m.termgrid,
+		replayBaseDir: m.replayBaseDir,
 	})
 	if err != nil {
 		return nil, false, err
@@ -807,6 +883,11 @@ type sessionOptions struct {
 	handoffHTML    string
 	requestedCWD   string
 	termgrid       *termgrid.Manager
+	// replayBaseDir, when non-empty, enables per-session replay
+	// recording under `<replayBaseDir>/<sessionID>/replay.json`.
+	// Manager fills this in from its own field; tests can leave it
+	// empty to keep recording off.
+	replayBaseDir string
 }
 
 type sessionMetadata struct {

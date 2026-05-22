@@ -49,16 +49,29 @@ let package = Package(
         // `#if canImport(GhosttyVt)`-gated so a stale-checksum
         // resolve failure degrades to the Stage 0 placeholder
         // instead of breaking the iOS build outright.
-        // Stage 2 re-enable: PR #88 hit "Multiple commands produce
-        // include/module.modulemap" because SweKittyCore.xcframework
-        // was a `-library + -headers`-style xcframework writing its
-        // module map to the shared `$BUILT_PRODUCTS_DIR/include/`
-        // path — same path ghostty-vt.xcframework wanted. The fix
-        // landed in this PR: apps/ios/build-rust.sh now produces a
-        // `.framework`-flavored xcframework with its module map
-        // inside the per-arch framework's `Modules/` dir, so the
-        // two xcframeworks no longer collide. See
-        // docs/PLAN-TERMINAL-REWRITE.md Stage 2 status.
+        //
+        // PR #88 history: this binaryTarget was disabled because
+        // xcodebuild emitted
+        //   "Multiple commands produce
+        //    Debug-iphonesimulator/include/module.modulemap"
+        // BOTH ghostty-vt.xcframework AND SweKittyCore.xcframework
+        // were "-library + -headers"-style xcframeworks (see the old
+        // `apps/ios/build-rust.sh`). For that flavor Xcode's
+        // ProcessXCFramework extracts the bundled `module.modulemap`
+        // to a SHARED, target-agnostic path
+        // `$BUILT_PRODUCTS_DIR/include/module.modulemap` — when two
+        // such xcframeworks land in the same build their outputs
+        // collide and the build system halts. PR #89 documented this
+        // diagnosis but left the fix to a follow-up.
+        //
+        // This PR (swekittycore-framework-rewrap) ships the fix:
+        // `apps/ios/build-rust.sh` now packages SweKittyCore as a
+        // `.framework`-flavored xcframework — each arch slice contains
+        // a per-arch `swe_kitty_coreFFI.framework/` with its module
+        // map under `Modules/module.modulemap` (scoped to the
+        // framework, no shared path collision). The Ghostty
+        // binaryTarget is therefore re-enabled and libghostty actually
+        // loads at runtime.
         .binaryTarget(
             name: "GhosttyVtKit",
             url: "https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip",
