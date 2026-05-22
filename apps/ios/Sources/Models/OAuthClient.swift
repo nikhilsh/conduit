@@ -155,7 +155,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// Generates a high-entropy PKCE code_verifier per RFC 7636 §4.1.
     /// 64 random bytes → base64url(no-padding) ≈ 86 chars, well inside
     /// the [43, 128] character bound the spec allows.
-    static func generateCodeVerifier() -> String {
+    nonisolated static func generateCodeVerifier() -> String {
         generateRandomURLSafe(byteCount: 64)
     }
 
@@ -163,7 +163,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// `verifier` is required to be ASCII; we deliberately don't
     /// validate that here (the generator only emits ASCII) so the
     /// function stays pure for testing.
-    static func codeChallenge(from verifier: String) -> String {
+    nonisolated static func codeChallenge(from verifier: String) -> String {
         let data = Data(verifier.utf8)
         let digest = SHA256.hash(data: data)
         return base64URLEncode(Data(digest))
@@ -171,7 +171,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
 
     /// RFC 4648 §5 base64url, no padding. Hoisted for the test layer +
     /// reuse in `extractAuthorizationCode`.
-    static func base64URLEncode(_ data: Data) -> String {
+    nonisolated static func base64URLEncode(_ data: Data) -> String {
         var s = data.base64EncodedString()
         s = s.replacingOccurrences(of: "+", with: "-")
         s = s.replacingOccurrences(of: "/", with: "_")
@@ -183,7 +183,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// stripping padding). Backed by `SecRandomCopyBytes` — no
     /// `arc4random` fallback because we'd rather crash than emit weak
     /// entropy for a PKCE verifier.
-    static func generateRandomURLSafe(byteCount: Int) -> String {
+    nonisolated static func generateRandomURLSafe(byteCount: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: byteCount)
         let status = SecRandomCopyBytes(kSecRandomDefault, byteCount, &bytes)
         precondition(status == errSecSuccess, "SecRandomCopyBytes failed (\(status))")
@@ -213,7 +213,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         return url
     }
 
-    static func extractAuthorizationCode(from callback: URL) throws -> String {
+    nonisolated static func extractAuthorizationCode(from callback: URL) throws -> String {
         let comps = URLComponents(url: callback, resolvingAgainstBaseURL: false)
         if let err = comps?.queryItems?.first(where: { $0.name == "error" })?.value {
             throw OAuthClientError.underlying("authorize-redirect error: \(err)")
@@ -323,7 +323,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// shape (`{ access_token, refresh_token, id_token, ... }`). We map
     /// it onto the codex CLI's `AuthDotJson` so downstream stages
     /// (broker materialization) get the file shape they expect.
-    static func decodeTokenResponse(_ data: Data) throws -> OAuthCredential {
+    nonisolated static func decodeTokenResponse(_ data: Data) throws -> OAuthCredential {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw OAuthClientError.malformedTokenResponse
         }
