@@ -109,12 +109,15 @@ type Session struct {
 	// so the drain / publish paths don't have to branch.
 	recorder *replay.Recorder
 
-	// agentHomeDir is the per-session ephemeral $HOME the broker
-	// materialized provider OAuth credentials into (Stage 1 of
-	// docs/PLAN-AGENT-OAUTH.md). Empty when no credential was
-	// available — the agent inherits the broker's $HOME exactly as
-	// the legacy host-mirror behavior. Populated by newSession when
-	// the credential store has a blob for the session's provider.
+	// agentHomeDir is the per-session ephemeral $HOME. ALWAYS populated
+	// for every session (except in the rare case the mkdir fails, in
+	// which case the agent falls back to inheriting the broker $HOME).
+	// Sources: credStore Materialize (per-user OAuth, see
+	// docs/PLAN-AGENT-OAUTH.md §G.2) OR a copy of the broker's real
+	// $HOME credentials. The per-session HOME is what breaks the
+	// concurrent-refresh race on `.claude/.credentials.json` —
+	// each agent rotates its own copy of the OAuth refresh token,
+	// not a shared file. Removed on Close.
 	agentHomeDir string
 }
 
@@ -187,22 +190,43 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	}
 	s.workspaceDir = s.commandDir(adapter)
 	cmd.Dir = s.workspaceDir
-	// Per docs/PLAN-AGENT-OAUTH.md §G.2: if the credential store has an
-	// OAuth blob for this assistant's provider, materialize it into a
-	// per-session ephemeral HOME and point the agent process at it.
-	// Failure to materialize (e.g. disk full, key mismatch) is logged
-	// and falls back to the legacy host-mirror behaviour — the broker
-	// must never refuse to start a session because credential
-	// materialization broke.
-	if opts.credStore != nil {
-		if provider := providerForAssistant(adapter.Name); provider != "" && opts.credStore.Has(provider) {
-			ephemeral := filepath.Join(s.workspaceDir, ".swe-kitty", "agent-home", s.ID)
-			if err := os.MkdirAll(ephemeral, 0o700); err != nil {
-				fmt.Fprintf(os.Stderr, "session %s: agent-home mkdir: %v (falling back to host mirror)\n", s.ID, err)
-			} else if err := opts.credStore.Materialize(provider, ephemeral); err != nil {
-				fmt.Fprintf(os.Stderr, "session %s: credentials.Materialize(%s): %v (falling back to host mirror)\n", s.ID, provider, err)
+	// ALWAYS isolate $HOME per session. Multiple concurrent claude/codex
+	// agents sharing the broker's real $HOME race on the OAuth refresh
+	// token rotation in `.claude/.credentials.json` (or `.codex/auth.json`)
+	// — whichever process refreshes last wins, all others get rejected
+	// and prompt "Please run /login". A per-session HOME breaks the race
+	// by giving each agent its own private copy of the credentials file
+	// to refresh in isolation.
+	//
+	// Two population sources, in priority order:
+	//   1. credStore (per-user OAuth blob, set via OAuth Stage 2) —
+	//      docs/PLAN-AGENT-OAUTH.md §G.2.
+	//   2. Otherwise: copy the broker's real $HOME credential files
+	//      (`~/.claude/.credentials.json` + `~/.claude.json` for claude,
+	//      `~/.codex/auth.json` + `~/.codex/config.toml` for codex).
+	//
+	// If the credentials don't exist on the broker host either, we log
+	// and let the agent prompt for login on its own — that's a clean
+	// "please /login" UX, far better than the silent refresh-token race.
+	provider := providerForAssistant(adapter.Name)
+	ephemeral := filepath.Join(s.workspaceDir, ".swe-kitty", "agent-home", s.ID)
+	if err := os.MkdirAll(ephemeral, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: agent-home mkdir: %v (agent will inherit broker $HOME)\n", s.ID, err)
+	} else {
+		s.agentHomeDir = ephemeral
+		populated := false
+		if opts.credStore != nil && provider != "" && opts.credStore.Has(provider) {
+			if err := opts.credStore.Materialize(provider, ephemeral); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: credentials.Materialize(%s): %v (falling back to host-creds copy)\n", s.ID, provider, err)
 			} else {
-				s.agentHomeDir = ephemeral
+				populated = true
+			}
+		}
+		if !populated && provider != "" {
+			if err := mirrorHostCredentials(provider, ephemeral); err != nil {
+				// Non-fatal: agent will see an empty HOME and prompt
+				// for login. Clean error path; no race with peers.
+				fmt.Fprintf(os.Stderr, "session %s: mirrorHostCredentials(%s): %v (agent will prompt for login)\n", s.ID, provider, err)
 			}
 		}
 	}
@@ -500,6 +524,15 @@ func (s *Session) Close() {
 				fmt.Fprintf(os.Stderr, "session %s: replay.Close: %v\n", s.ID, err)
 			}
 			s.recorder = nil
+		}
+		// Best-effort cleanup of the per-session ephemeral $HOME so
+		// rotated OAuth refresh tokens don't linger on disk after the
+		// agent exits. Failure is logged and ignored — the worktree GC
+		// will sweep it eventually.
+		if s.agentHomeDir != "" {
+			if err := os.RemoveAll(s.agentHomeDir); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: remove agent-home: %v\n", s.ID, err)
+			}
 		}
 		close(s.closed)
 	})

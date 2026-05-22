@@ -113,6 +113,128 @@ func providerForAssistant(assistant string) string {
 	}
 }
 
+// hostHomeDir returns the broker's real $HOME — the place where claude
+// / codex stash their per-user credentials when the operator runs them
+// interactively for the first login. Honours $SWE_KITTY_HOST_HOME for
+// tests; otherwise mirrors `os.UserHomeDir()`. Returns "" when the home
+// can't be resolved; callers must treat that as "no host creds, skip
+// the mirror and let the agent prompt for /login".
+func hostHomeDir() string {
+	if v := strings.TrimSpace(os.Getenv("SWE_KITTY_HOST_HOME")); v != "" {
+		return v
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+// mirrorHostCredentials copies the broker's own per-user agent
+// credential files into the per-session ephemeral HOME so each spawned
+// agent gets its own private copy. This is the fallback used when the
+// in-app credStore doesn't have a stored OAuth blob yet (i.e. before
+// OAuth Stage 2 is wired up on the iOS/Android client). Without it,
+// every concurrent claude/codex would share the broker's real
+// `.credentials.json` and race each other on refresh-token rotation —
+// only the last writer keeps a valid token, and all peers get bounced
+// to "Please run /login".
+//
+// Per provider, the mirror copies:
+//
+//   - anthropic → ~/.claude/.credentials.json + ~/.claude.json
+//   - openai    → ~/.codex/auth.json + ~/.codex/config.toml
+//
+// Missing source files are silently skipped (the agent will prompt for
+// /login on first use — a clean error rather than a race). Returns the
+// first hard error (mkdir / read / atomic-write); callers should log
+// and continue so a broken mirror doesn't refuse the session.
+func mirrorHostCredentials(provider, ephemeralHome string) error {
+	host := hostHomeDir()
+	if host == "" {
+		return errors.New("host home unresolved")
+	}
+	var sources []hostCredSource
+	switch provider {
+	case "anthropic":
+		sources = []hostCredSource{
+			{src: filepath.Join(host, ".claude", ".credentials.json"), dst: filepath.Join(ephemeralHome, ".claude", ".credentials.json"), mode: 0o600},
+			{src: filepath.Join(host, ".claude.json"), dst: filepath.Join(ephemeralHome, ".claude.json"), mode: 0o600},
+		}
+	case "openai":
+		sources = []hostCredSource{
+			{src: filepath.Join(host, ".codex", "auth.json"), dst: filepath.Join(ephemeralHome, ".codex", "auth.json"), mode: 0o600},
+			{src: filepath.Join(host, ".codex", "config.toml"), dst: filepath.Join(ephemeralHome, ".codex", "config.toml"), mode: 0o644},
+		}
+	default:
+		return fmt.Errorf("unknown provider %q", provider)
+	}
+	anyCopied := false
+	for _, s := range sources {
+		data, err := os.ReadFile(s.src)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// Missing source — skip; agent will prompt for /login.
+				continue
+			}
+			return fmt.Errorf("read %s: %w", s.src, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(s.dst), 0o700); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(s.dst), err)
+		}
+		if err := atomicWriteFileMode(s.dst, data, s.mode); err != nil {
+			return fmt.Errorf("write %s: %w", s.dst, err)
+		}
+		anyCopied = true
+	}
+	if !anyCopied {
+		return errors.New("no host credential files found")
+	}
+	return nil
+}
+
+type hostCredSource struct {
+	src  string
+	dst  string
+	mode os.FileMode
+}
+
+// atomicWriteFileMode is atomicWriteFile but lets the caller pin the
+// final file mode (credentials want 0o600, not the default 0o644).
+// Race-safe: concurrent spawns each write to a unique temp file and
+// rename into place, so no reader ever sees a torn credential file.
+func atomicWriteFileMode(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".swk-home-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}
+
 func (s *Session) startBackgroundLoops() {
 	go s.checkpointLoop()
 	go s.watchdogLoop()
