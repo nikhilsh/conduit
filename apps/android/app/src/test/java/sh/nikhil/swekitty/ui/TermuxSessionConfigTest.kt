@@ -31,6 +31,7 @@ class TermuxSessionConfigTest {
             cwd = null,
             startedAt = null,
             lastActivityAt = null,
+            displayName = null,
         )
 
     @Test
