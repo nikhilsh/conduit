@@ -47,7 +47,12 @@ type Session struct {
 	ringFull bool
 	subs     map[chan []byte]struct{}
 	textSubs map[chan []byte]struct{}
-	switchFn func(string) error
+	// dropped bytes accumulator (per-session, all subscribers) and
+	// last-log time. Logged at most once per second so a chronically
+	// slow viewer doesn't flood the operator's stderr.
+	droppedBytes  int
+	lastDroppedAt time.Time
+	switchFn      func(string) error
 
 	repoRoot          string
 	kittyRoot         string
@@ -217,6 +222,11 @@ func (s *Session) Resize(rows, cols uint16) error {
 // Subscribe returns a channel that receives every subsequent PTY chunk
 // until Unsubscribe is called or the session closes. The channel is
 // closed when the session ends.
+//
+// Multi-viewer fan-out: every PTY byte is delivered to every live
+// subscriber. The send is non-blocking with a drop-oldest backpressure
+// policy (see fanout), so one slow viewer cannot stall the PTY reader
+// or any of its peers.
 func (s *Session) Subscribe() chan []byte {
 	ch := make(chan []byte, 64)
 	s.mu.Lock()
@@ -232,6 +242,25 @@ func (s *Session) Unsubscribe(ch chan []byte) {
 		close(ch)
 	}
 	s.mu.Unlock()
+}
+
+// SubscriberCount returns the number of live binary PTY subscribers.
+// Mirrors the `viewer_count` field of the `view: "status"` view_event
+// and the top-level `status.viewers` envelope value.
+func (s *Session) SubscriberCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.subs)
+}
+
+// Dimensions returns the current PTY rows and cols. Used by the
+// `view: "status"` view_event mirror so late-joining viewers can
+// render scrollback at the correct geometry without waiting for the
+// next top-level status envelope.
+func (s *Session) Dimensions() (rows, cols uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rows, s.cols
 }
 
 func (s *Session) SubscribeText() chan []byte {
@@ -471,21 +500,41 @@ func (s *Session) append(p []byte) {
 
 func (s *Session) fanout(p []byte) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	droppedThisCall := 0
 	for ch := range s.subs {
 		select {
 		case ch <- p:
 		default:
-			// slow subscriber; drop oldest by draining once
+			// slow subscriber; drop oldest by draining once, then
+			// retry the send. If the retry still fails the chunk is
+			// dropped — that's the contract: PTY reader never blocks.
 			select {
 			case <-ch:
+				droppedThisCall += len(p)
 			default:
 			}
 			select {
 			case ch <- p:
 			default:
+				droppedThisCall += len(p)
 			}
 		}
+	}
+	logNow := false
+	logCount := 0
+	if droppedThisCall > 0 {
+		s.droppedBytes += droppedThisCall
+		now := time.Now()
+		if now.Sub(s.lastDroppedAt) >= time.Second {
+			logNow = true
+			logCount = s.droppedBytes
+			s.droppedBytes = 0
+			s.lastDroppedAt = now
+		}
+	}
+	s.mu.Unlock()
+	if logNow {
+		fmt.Fprintf(os.Stderr, "session %s: dropped %d bytes for slow subscriber(s)\n", s.ID, logCount)
 	}
 }
 
