@@ -41,6 +41,26 @@ struct TerminalTabXterm: View {
         // keyboard, so the bottom rows of PTY output were hidden under
         // the keyboard while typing. Available since iOS 14.
         .ignoresSafeArea(.container, edges: .bottom)
+        // SwiftUI ancestor touch-pass guard. The LitterUI shell hosts
+        // this view inside a `NavigationStack { … VStack { header;
+        // tabStrip; content } }` push. While none of the visible
+        // ancestors install a `.gesture` / `TabView` / `ScrollView`,
+        // the `NavigationStack`'s implicit interactive-pop pan
+        // recognizer can race the WKWebView's UIKit touch handlers
+        // for the first 150ms after touchDown — long enough that
+        // xterm.js's `touchstart` JS handler never fires for short
+        // vertical drags and the user perceives the terminal as
+        // un-scrollable in LitterUI even though PR #109's WKWebView
+        // scrollView fix (delaysContentTouches=false,
+        // panGestureRecognizer.cancelsTouchesInView=false) is
+        // intact below. Installing a zero-distance simultaneous
+        // DragGesture here forces SwiftUI to treat the underlying
+        // WKWebView as a gesture participant from touchDown rather
+        // than waiting on ancestor arbitration — touches reach
+        // xterm.js immediately and the scrollback gesture works.
+        // The `onChanged` is intentionally a no-op: we're not
+        // interpreting the drag, just claiming it for the subtree.
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in })
     }
 }
 
