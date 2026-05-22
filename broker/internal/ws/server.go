@@ -315,6 +315,14 @@ func (c *client) sendStatus(assistant string, created bool) error {
 	} else {
 		payload["reasoning_effort"] = "medium"
 	}
+	// Human-readable label set by `rename_session` (protocol §3.3).
+	// Emitted as both `session_name` (top-level mirror) and
+	// `display_name` — older clients ignore unknown keys, newer ones
+	// can switch their title binding without a flag day.
+	if name := c.sess.DisplayName(); name != "" {
+		payload["session_name"] = name
+		payload["display_name"] = name
+	}
 	return c.writeJSON(payload)
 }
 
@@ -520,7 +528,17 @@ func (c *client) handleText(payload []byte) {
 			// tab and press Return manually.
 			_, _ = c.sess.Write([]byte(env.Msg + "\r"))
 		}
-	case "rename_session", "toggle_yolo":
+	case "rename_session":
+		// Protocol §3.3: validate against `^[A-Za-z0-9 _-]{1,32}$`,
+		// last-writer-wins, no ack. Invalid renames are silently
+		// dropped (the socket stays open). On success, broadcast a
+		// fresh status envelope + view_event status mirror to every
+		// subscriber so multi-viewer UIs converge instantly.
+		if !c.sess.SetDisplayName(env.Name) {
+			return
+		}
+		c.broadcastRenameStatus()
+	case "toggle_yolo":
 		// Acknowledged in v1 protocol but still no-op here.
 	default:
 		// Per protocol §3.3: unknown types are logged and ignored.
@@ -570,6 +588,69 @@ func (c *client) writeLoop(sub chan []byte, textSub chan []byte, done <-chan str
 
 func isReservedTag(b byte) bool {
 	return b == tagResize || b == tagUpload || b == tagSnapshot || b == tagEscape
+}
+
+// broadcastRenameStatus serializes a fresh `status` envelope plus the
+// typed `view_event { view: "status" }` mirror (per protocol §3.2 +
+// §3.3) and fans both out to every viewer attached to the session.
+// Used right after a successful `rename_session` so the new label
+// reaches everyone — including the originating client — without
+// waiting for the next periodic status refresh.
+func (c *client) broadcastRenameStatus() {
+	st := c.sess.Status()
+	reason := st.ReasonCode
+	if reason == "" {
+		reason = "ok"
+	}
+	displayName := c.sess.DisplayName()
+
+	statusPayload := map[string]any{
+		"type":        "status",
+		"session":     c.sess.ID,
+		"viewers":     1,
+		"rows":        40,
+		"cols":        120,
+		"assistant":   c.sess.Assistant,
+		"yolo":        false,
+		"health":      st.Health,
+		"phase":       st.Phase,
+		"reason_code": reason,
+		"ts":          time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if cwd := c.sess.WorkspaceDir(); cwd != "" {
+		statusPayload["cwd"] = cwd
+	}
+	if !st.StartedAt.IsZero() {
+		statusPayload["started_at"] = st.StartedAt.Format(time.RFC3339Nano)
+	}
+	if !st.LastOutput.IsZero() {
+		statusPayload["last_activity_at"] = st.LastOutput.Format(time.RFC3339Nano)
+	}
+	if effort := c.sess.ReasoningEffort(); effort != "" {
+		statusPayload["reasoning_effort"] = effort
+	} else {
+		statusPayload["reasoning_effort"] = "medium"
+	}
+	if displayName != "" {
+		statusPayload["session_name"] = displayName
+		statusPayload["display_name"] = displayName
+	}
+	if b, err := json.Marshal(statusPayload); err == nil {
+		c.sess.PublishText(b)
+	}
+
+	mirror := map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "status",
+		"event": map[string]any{
+			"display_name": displayName,
+		},
+		"ts": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if b, err := json.Marshal(mirror); err == nil {
+		c.sess.PublishText(b)
+	}
 }
 
 // emitUploadToolEvent broadcasts a `view_event { view: "chat" }` with

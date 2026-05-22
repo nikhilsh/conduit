@@ -350,6 +350,7 @@ impl Inner {
                 cwd: None,
                 started_at: None,
                 last_activity_at: None,
+                display_name: None,
             }),
         );
 

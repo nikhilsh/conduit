@@ -92,6 +92,29 @@ struct ProjectViewHeaderTests {
         #expect(model.pathLabel == "fallback-name")
     }
 
+    /// `display_name` (broker `rename_session`, protocol §3.3) wins
+    /// over both cwd and name in the header label. Mirror of the
+    /// Android `ProjectHeaderModel.from` precedence test so the two
+    /// shells render the same renamed label.
+    @Test func pathRowPrefersDisplayNameOverCwdAndName() {
+        let session = ProjectSession(
+            id: "uuid-1234",
+            name: "fallback-name",
+            assistant: "claude",
+            branch: "main",
+            preview: nil,
+            reasoningEffort: nil,
+            cwd: "/srv/work/repo",
+            startedAt: nil,
+            lastActivityAt: nil,
+            displayName: "rename-from-server"
+        )
+        let model = ProjectHeaderModel.from(session: session,
+                                            status: nil,
+                                            lifecycleLabel: nil)
+        #expect(model.pathLabel == "rename-from-server")
+    }
+
     @Test func pathSubtitleJoinsBranchPhaseAndLifecycle() {
         let session = makeSession(assistant: "claude", branch: "feature/x")
         let status = makeStatus(assistant: "claude", phase: "running", health: "green")
@@ -168,7 +191,8 @@ struct ProjectViewHeaderTests {
             reasoningEffort: reasoning,
             cwd: cwd,
             startedAt: nil,
-            lastActivityAt: nil
+            lastActivityAt: nil,
+            displayName: nil
         )
     }
 
@@ -193,7 +217,8 @@ struct ProjectViewHeaderTests {
             reasoningEffort: nil,
             cwd: nil,
             startedAt: nil,
-            lastActivityAt: nil
+            lastActivityAt: nil,
+            displayName: nil
         )
     }
 }

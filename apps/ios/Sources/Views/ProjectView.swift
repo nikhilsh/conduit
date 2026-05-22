@@ -125,14 +125,24 @@ struct ProjectView: View {
 
     private var status: SessionStatus? { store.statusBySession[session.id] }
 
-    /// Friendly first-line title. Prefer the session's display name;
-    /// fall back to the agent name (rather than the raw UUID) so the
-    /// header reads like a project label, not internal plumbing.
+    /// Friendly first-line title. Prefer the user-supplied
+    /// `displayName` (set via `rename_session`, protocol §3.3, or by
+    /// the local rename map for un-synced labels); fall back to
+    /// `session.name` (typically the workspace folder); fall back
+    /// further to the agent label so a fresh UUID-named session still
+    /// reads like a project, not internal plumbing.
     private var navTitle: String {
+        let candidates: [String?] = [
+            session.displayName,
+            store.displayNames[session.id],
+        ]
+        for raw in candidates {
+            if let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !trimmed.isEmpty {
+                return trimmed
+            }
+        }
         let trimmed = session.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Sessions created from a fresh dial typically use the UUID as
-        // their name — when that's the case, prefer the assistant
-        // label so the header carries meaning at a glance.
         if trimmed.isEmpty || trimmed == session.id {
             return "swe-kitty"
         }
@@ -384,6 +394,15 @@ struct ProjectHeaderModel: Equatable {
                      status: SessionStatus?,
                      lifecycleLabel: String?) -> ProjectHeaderModel {
         let pathLabel: String = {
+            // Path label still tracks the real cwd when present, but a
+            // user-supplied display name (rename_session, protocol §3.3)
+            // wins over both — keeps the renamed label visible in the
+            // header even when the cwd is set. Mirrors Android's
+            // ProjectHeaderModel.from precedence.
+            if let raw = session.displayName?.trimmingCharacters(in: .whitespaces),
+               !raw.isEmpty {
+                return raw
+            }
             if let cwd = session.cwd?.trimmingCharacters(in: .whitespaces), !cwd.isEmpty {
                 return cwd
             }

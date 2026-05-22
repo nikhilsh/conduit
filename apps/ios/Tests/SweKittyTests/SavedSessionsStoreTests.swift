@@ -70,7 +70,8 @@ struct SavedSessionsStoreTests {
             reasoningEffort: nil,
             cwd: "/repo",
             startedAt: "2026-05-20T00:00:00Z",
-            lastActivityAt: "2026-05-20T00:00:00Z"
+            lastActivityAt: "2026-05-20T00:00:00Z",
+            displayName: nil
         )
         store.upsert(
             session: session,
@@ -178,7 +179,8 @@ struct SavedSessionsStoreTests {
             reasoningEffort: nil,
             cwd: nil,
             startedAt: "2026-05-20T00:00:00Z",
-            lastActivityAt: "2026-05-20T00:00:00Z"
+            lastActivityAt: "2026-05-20T00:00:00Z",
+            displayName: nil
         )
     }
 }

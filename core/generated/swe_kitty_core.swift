@@ -1576,10 +1576,11 @@ public struct ProjectSession {
     public var cwd: String?
     public var startedAt: String?
     public var lastActivityAt: String?
+    public var displayName: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?) {
+    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?) {
         self.id = id
         self.name = name
         self.assistant = assistant
@@ -1589,6 +1590,7 @@ public struct ProjectSession {
         self.cwd = cwd
         self.startedAt = startedAt
         self.lastActivityAt = lastActivityAt
+        self.displayName = displayName
     }
 }
 
@@ -1623,6 +1625,9 @@ extension ProjectSession: Equatable, Hashable {
         if lhs.lastActivityAt != rhs.lastActivityAt {
             return false
         }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
         return true
     }
 
@@ -1636,6 +1641,7 @@ extension ProjectSession: Equatable, Hashable {
         hasher.combine(cwd)
         hasher.combine(startedAt)
         hasher.combine(lastActivityAt)
+        hasher.combine(displayName)
     }
 }
 
@@ -1655,7 +1661,8 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
                 cwd: FfiConverterOptionString.read(from: &buf), 
                 startedAt: FfiConverterOptionString.read(from: &buf), 
-                lastActivityAt: FfiConverterOptionString.read(from: &buf)
+                lastActivityAt: FfiConverterOptionString.read(from: &buf), 
+                displayName: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1669,6 +1676,7 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.cwd, into: &buf)
         FfiConverterOptionString.write(value.startedAt, into: &buf)
         FfiConverterOptionString.write(value.lastActivityAt, into: &buf)
+        FfiConverterOptionString.write(value.displayName, into: &buf)
     }
 }
 
@@ -1809,10 +1817,11 @@ public struct SessionStatus {
     public var cwd: String?
     public var startedAt: String?
     public var lastActivityAt: String?
+    public var displayName: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?) {
+    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?) {
         self.session = session
         self.assistant = assistant
         self.phase = phase
@@ -1827,6 +1836,7 @@ public struct SessionStatus {
         self.cwd = cwd
         self.startedAt = startedAt
         self.lastActivityAt = lastActivityAt
+        self.displayName = displayName
     }
 }
 
@@ -1876,6 +1886,9 @@ extension SessionStatus: Equatable, Hashable {
         if lhs.lastActivityAt != rhs.lastActivityAt {
             return false
         }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
         return true
     }
 
@@ -1894,6 +1907,7 @@ extension SessionStatus: Equatable, Hashable {
         hasher.combine(cwd)
         hasher.combine(startedAt)
         hasher.combine(lastActivityAt)
+        hasher.combine(displayName)
     }
 }
 
@@ -1918,7 +1932,8 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
                 cwd: FfiConverterOptionString.read(from: &buf), 
                 startedAt: FfiConverterOptionString.read(from: &buf), 
-                lastActivityAt: FfiConverterOptionString.read(from: &buf)
+                lastActivityAt: FfiConverterOptionString.read(from: &buf), 
+                displayName: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1937,6 +1952,7 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.cwd, into: &buf)
         FfiConverterOptionString.write(value.startedAt, into: &buf)
         FfiConverterOptionString.write(value.lastActivityAt, into: &buf)
+        FfiConverterOptionString.write(value.displayName, into: &buf)
     }
 }
 

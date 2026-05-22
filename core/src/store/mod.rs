@@ -155,6 +155,10 @@ impl SessionStoreCore {
                 cwd: status.cwd.clone(),
                 started_at: status.started_at.clone(),
                 last_activity_at: status.last_activity_at.clone(),
+                display_name: status
+                    .display_name
+                    .clone()
+                    .or_else(|| status.session_name.clone()),
             })
         });
         state.apply_status(status);
@@ -327,6 +331,7 @@ mod tests {
             cwd: None,
             started_at: None,
             last_activity_at: None,
+            display_name: None,
         }
     }
 
@@ -355,6 +360,7 @@ mod tests {
             cwd: None,
             started_at: None,
             last_activity_at: None,
+            display_name: None,
         }
     }
 

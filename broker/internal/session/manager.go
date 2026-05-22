@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -81,6 +82,13 @@ type Session struct {
 	checkpointMu      sync.Mutex
 	lastMemoryModTime time.Time
 	swapping          bool
+	// displayName is the human-readable session label set by a
+	// successful `rename_session` JSON control. Mirrors the docs in
+	// `WEBSOCKET-PROTOCOL.md` §3.3: last-writer-wins, no ack, broadcast
+	// back through the next `status` envelope as `session_name` plus
+	// the typed `view_event` mirror's `display_name`. Empty until a
+	// rename lands; persists for the lifetime of the in-memory session.
+	displayName string
 
 	// termgrid is the optional headless xterm.js sidecar handle. nil
 	// when node isn't installed; callers must treat it as best-effort.
@@ -435,6 +443,46 @@ func (s *Session) ReasoningEffort() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.adapter.ReasoningEffort
+}
+
+// DisplayName returns the human-readable session label set by the most
+// recent `rename_session` JSON control. Empty string when no rename has
+// been applied — clients should fall back to the session id or
+// workspace dir for the title.
+func (s *Session) DisplayName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.displayName
+}
+
+// displayNameRegex is the validation rule documented in
+// `WEBSOCKET-PROTOCOL.md` §3.3 — 1..32 chars from the ASCII safe set
+// (letters, digits, space, underscore, hyphen). Whitespace-only and
+// empty strings fail to match because the range is `{1,32}` and `^$`
+// is excluded by the character class.
+var displayNameRegex = regexp.MustCompile(`^[A-Za-z0-9 _-]{1,32}$`)
+
+// SetDisplayName validates `name` against the §3.3 regex and stores it
+// last-writer-wins. Returns true when the rename was accepted; false
+// when the name failed validation (the broker silently ignores invalid
+// renames per the protocol — the socket stays open).
+//
+// The regex permits ASCII space inside the character class so a name
+// like "rust core" passes. The protocol notes further reject
+// "whitespace-only strings" — the regex alone would accept "   " — so
+// we trim and check non-empty separately. Empty / too-long / illegal
+// chars are caught by the regex; whitespace-only is caught by the trim.
+func (s *Session) SetDisplayName(name string) bool {
+	if !displayNameRegex.MatchString(name) {
+		return false
+	}
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	s.mu.Lock()
+	s.displayName = name
+	s.mu.Unlock()
+	return true
 }
 
 func (s *Session) SwitchAdapter(assistant string) error {

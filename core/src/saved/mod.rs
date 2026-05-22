@@ -278,6 +278,7 @@ mod tests {
             cwd: cwd.map(|s| s.to_string()),
             started_at: Some("2026-05-20T00:00:00Z".to_string()),
             last_activity_at: Some("2026-05-20T01:00:00Z".to_string()),
+            display_name: None,
         };
         ProjectSessionState::new(session)
     }

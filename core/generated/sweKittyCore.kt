@@ -2794,7 +2794,8 @@ data class ProjectSession (
     var `reasoningEffort`: kotlin.String?, 
     var `cwd`: kotlin.String?, 
     var `startedAt`: kotlin.String?, 
-    var `lastActivityAt`: kotlin.String?
+    var `lastActivityAt`: kotlin.String?, 
+    var `displayName`: kotlin.String?
 ) {
     
     companion object
@@ -2815,6 +2816,7 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -2827,7 +2829,8 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalString.allocationSize(value.`reasoningEffort`) +
             FfiConverterOptionalString.allocationSize(value.`cwd`) +
             FfiConverterOptionalString.allocationSize(value.`startedAt`) +
-            FfiConverterOptionalString.allocationSize(value.`lastActivityAt`)
+            FfiConverterOptionalString.allocationSize(value.`lastActivityAt`) +
+            FfiConverterOptionalString.allocationSize(value.`displayName`)
     )
 
     override fun write(value: ProjectSession, buf: ByteBuffer) {
@@ -2840,6 +2843,7 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalString.write(value.`cwd`, buf)
             FfiConverterOptionalString.write(value.`startedAt`, buf)
             FfiConverterOptionalString.write(value.`lastActivityAt`, buf)
+            FfiConverterOptionalString.write(value.`displayName`, buf)
     }
 }
 
@@ -2911,7 +2915,8 @@ data class SessionStatus (
     var `reasoningEffort`: kotlin.String?, 
     var `cwd`: kotlin.String?, 
     var `startedAt`: kotlin.String?, 
-    var `lastActivityAt`: kotlin.String?
+    var `lastActivityAt`: kotlin.String?, 
+    var `displayName`: kotlin.String?
 ) {
     
     companion object
@@ -2937,6 +2942,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -2954,7 +2960,8 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.allocationSize(value.`reasoningEffort`) +
             FfiConverterOptionalString.allocationSize(value.`cwd`) +
             FfiConverterOptionalString.allocationSize(value.`startedAt`) +
-            FfiConverterOptionalString.allocationSize(value.`lastActivityAt`)
+            FfiConverterOptionalString.allocationSize(value.`lastActivityAt`) +
+            FfiConverterOptionalString.allocationSize(value.`displayName`)
     )
 
     override fun write(value: SessionStatus, buf: ByteBuffer) {
@@ -2972,6 +2979,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.write(value.`cwd`, buf)
             FfiConverterOptionalString.write(value.`startedAt`, buf)
             FfiConverterOptionalString.write(value.`lastActivityAt`, buf)
+            FfiConverterOptionalString.write(value.`displayName`, buf)
     }
 }
 

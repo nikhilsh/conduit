@@ -91,7 +91,8 @@ struct SessionStoreTests {
             reasoningEffort: "high",
             cwd: "/tmp/work",
             startedAt: "2026-05-21T08:00:00Z",
-            lastActivityAt: "2026-05-21T08:01:00Z"
+            lastActivityAt: "2026-05-21T08:01:00Z",
+            displayName: nil
         )
         store.ingestStatus(status)
 

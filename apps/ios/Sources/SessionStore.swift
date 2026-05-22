@@ -896,6 +896,18 @@ final class SessionStore {
             sessionLifecycle[status.session] == .creating {
             sessionLifecycle[status.session] = .live
         }
+        // Mirror a broker-supplied rename label (protocol §3.3) into
+        // the local displayNames map so every existing title surface
+        // (ThreadSwitcher, HomeScreen, SessionInfo) picks it up without
+        // each having to re-read the status bag. Prefer `displayName`;
+        // fall back to legacy `sessionName` for older brokers.
+        let serverLabel = (status.displayName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (status.sessionName?
+                .trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+        if let label = serverLabel, displayNames[status.session] != label {
+            displayNames[status.session] = label
+        }
         harness = .live
         refreshSessions()
         if useRustStore {
@@ -951,7 +963,8 @@ final class SessionStore {
                 reasoningEffort: status.reasoningEffort,
                 cwd: status.cwd,
                 startedAt: status.startedAt,
-                lastActivityAt: status.lastActivityAt
+                lastActivityAt: status.lastActivityAt,
+                displayName: status.displayName
             )
             statusBySession[sessionID] = status
         }
@@ -1301,7 +1314,8 @@ final class SessionStore {
                 reasoningEffort: statusBySession[sessionID]?.reasoningEffort,
                 cwd: statusBySession[sessionID]?.cwd,
                 startedAt: statusBySession[sessionID]?.startedAt,
-                lastActivityAt: statusBySession[sessionID]?.lastActivityAt
+                lastActivityAt: statusBySession[sessionID]?.lastActivityAt,
+                displayName: statusBySession[sessionID]?.displayName
             )
         )
     }

@@ -67,7 +67,8 @@ struct SessionStoreRustParityTests {
             reasoningEffort: "high",
             cwd: "/tmp/work",
             startedAt: "2026-05-21T08:00:00Z",
-            lastActivityAt: "2026-05-21T08:01:00Z"
+            lastActivityAt: "2026-05-21T08:01:00Z",
+            displayName: nil
         )
         store.ingestStatus(status)
 
@@ -100,7 +101,8 @@ struct SessionStoreRustParityTests {
             reasoningEffort: nil,
             cwd: nil,
             startedAt: nil,
-            lastActivityAt: nil
+            lastActivityAt: nil,
+            displayName: nil
         )
         store.ingestStatus(status)
         store.ingestExit(sessionID, 137)

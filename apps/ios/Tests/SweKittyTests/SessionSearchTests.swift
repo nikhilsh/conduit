@@ -269,7 +269,8 @@ struct SessionSearchTests {
             reasoningEffort: nil,
             cwd: nil,
             startedAt: nil,
-            lastActivityAt: lastActivity
+            lastActivityAt: lastActivity,
+            displayName: nil
         )
     }
 }

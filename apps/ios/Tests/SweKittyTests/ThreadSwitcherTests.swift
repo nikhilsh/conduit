@@ -133,7 +133,8 @@ struct ThreadSwitcherTests {
             reasoningEffort: nil,
             cwd: nil,
             startedAt: nil,
-            lastActivityAt: nil
+            lastActivityAt: nil,
+            displayName: nil
         )
     }
 }

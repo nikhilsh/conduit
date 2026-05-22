@@ -51,6 +51,13 @@ pub struct SessionStatus {
     /// agent. Useful for "last seen N min ago" in the info sheet.
     #[serde(default)]
     pub last_activity_at: Option<String>,
+    /// Human-readable session label set by `rename_session` (protocol
+    /// §3.3). Mirrors `session_name` over the wire; carried as a
+    /// separate field so UIs can prefer the user-supplied label while
+    /// keeping the original `session.name` (typically the workspace
+    /// folder) intact for path display.
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

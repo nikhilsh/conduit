@@ -30,6 +30,12 @@ pub struct ProjectSession {
     /// from the agent process. Used for "last activity N min ago".
     #[serde(default)]
     pub last_activity_at: Option<String>,
+    /// Human-readable label set by `rename_session` (protocol §3.3).
+    /// Surfaced to mobile shells as a preferred title — when present,
+    /// iOS/Android prefer it over `name` (which usually carries the
+    /// workspace folder). `None` until the user runs a rename.
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -85,6 +91,18 @@ impl ProjectSessionState {
         self.session.assistant = status.assistant.clone();
         if let Some(name) = status.session_name.clone() {
             self.session.name = name;
+        }
+        // `display_name` (protocol §3.3) is the user-supplied label set
+        // via `rename_session`. Surface it on `ProjectSession` as a
+        // distinct field so mobile titles can prefer the rename while
+        // keeping `name` (workspace folder) intact for path display.
+        // The wire mirrors it via `display_name` and also re-emits the
+        // legacy `session_name` for older clients — read `display_name`
+        // first, fall back to the legacy mirror for resilience.
+        if status.display_name.is_some() {
+            self.session.display_name = status.display_name.clone();
+        } else if status.session_name.is_some() {
+            self.session.display_name = status.session_name.clone();
         }
         if let Some(preview) = status.preview.clone() {
             self.session.preview = Some(preview.clone());
@@ -158,6 +176,7 @@ mod tests {
             cwd: None,
             started_at: None,
             last_activity_at: None,
+            display_name: None,
         };
         let mut state = ProjectSessionState::new(session);
         state.push_chat_event(ChatEvent {

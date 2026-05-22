@@ -445,7 +445,15 @@ data class ProjectHeaderModel(
             status: SessionStatus?,
             lifecycleLabel: String?,
         ): ProjectHeaderModel {
-            val pathLabel = session.cwd?.trim()?.takeIf { it.isNotEmpty() } ?: session.name
+            // Path label still tracks the real cwd when present, but a
+            // user-supplied display name (rename_session, protocol §3.3)
+            // wins over both — matches iOS `navTitle` precedence so the
+            // two shells render the same friendly label for a renamed
+            // session. Fallback chain: displayName → cwd → name.
+            val displayLabel = session.displayName?.trim()?.takeIf { it.isNotEmpty() }
+            val pathLabel = displayLabel
+                ?: session.cwd?.trim()?.takeIf { it.isNotEmpty() }
+                ?: session.name
 
             val reasoning = session.reasoningEffort?.trim()?.takeIf { it.isNotEmpty() } ?: "medium"
 

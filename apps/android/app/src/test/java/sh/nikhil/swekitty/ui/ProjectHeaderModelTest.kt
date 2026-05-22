@@ -106,6 +106,30 @@ class ProjectHeaderModelTest {
         assertEquals("fallback-name", model.pathLabel)
     }
 
+    /**
+     * `displayName` (broker `rename_session`, protocol §3.3) wins over
+     * both cwd and name in the header label. Mirror of the iOS
+     * `pathRowPrefersDisplayNameOverCwdAndName` test so the two shells
+     * render the same renamed label.
+     */
+    @Test
+    fun pathRowPrefersDisplayNameOverCwdAndName() {
+        val session = ProjectSession(
+            id = "uuid-1234",
+            name = "fallback-name",
+            assistant = "claude",
+            branch = "main",
+            preview = null,
+            reasoningEffort = null,
+            cwd = "/srv/work/repo",
+            startedAt = null,
+            lastActivityAt = null,
+            displayName = "rename-from-server",
+        )
+        val model = ProjectHeaderModel.from(session, status = null, lifecycleLabel = null)
+        assertEquals("rename-from-server", model.pathLabel)
+    }
+
     // ---------- caption ----------
 
     @Test
@@ -159,6 +183,7 @@ class ProjectHeaderModelTest {
         cwd = cwd,
         startedAt = null,
         lastActivityAt = null,
+        displayName = null,
     )
 
     private fun makeStatus(
@@ -180,5 +205,6 @@ class ProjectHeaderModelTest {
         cwd = null,
         startedAt = null,
         lastActivityAt = null,
+        displayName = null,
     )
 }

@@ -658,6 +658,8 @@ async fn handle_text(
         #[serde(default)]
         last_activity_at: Option<String>,
         #[serde(default)]
+        display_name: Option<String>,
+        #[serde(default)]
         code: Option<i32>,
         #[serde(default)]
         view: Option<String>,
@@ -691,6 +693,7 @@ async fn handle_text(
                 cwd: env.cwd,
                 started_at: env.started_at,
                 last_activity_at: env.last_activity_at,
+                display_name: env.display_name,
             };
             delegate.on_status(status);
             if let Some(p) = env.preview {

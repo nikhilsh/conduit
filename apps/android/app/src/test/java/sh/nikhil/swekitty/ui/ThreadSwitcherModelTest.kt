@@ -165,5 +165,6 @@ class ThreadSwitcherModelTest {
             cwd = null,
             startedAt = null,
             lastActivityAt = null,
+            displayName = null,
         )
 }

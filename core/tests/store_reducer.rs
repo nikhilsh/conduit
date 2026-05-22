@@ -22,6 +22,7 @@ fn project(id: &str, assistant: &str) -> ProjectSession {
         cwd: None,
         started_at: None,
         last_activity_at: None,
+        display_name: None,
     }
 }
 
@@ -56,6 +57,7 @@ fn status(
         cwd: None,
         started_at: None,
         last_activity_at: None,
+        display_name: None,
     }
 }
 

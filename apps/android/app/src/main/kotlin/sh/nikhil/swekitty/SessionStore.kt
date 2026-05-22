@@ -982,6 +982,20 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             _sessionLifecycle.value[status.session] is SessionLifecycle.Creating) {
             updateLifecycle { it + (status.session to SessionLifecycle.Live) }
         }
+        // Fold a broker-supplied display label (`rename_session` per
+        // protocol §3.3) into the local displayNames map so every
+        // existing surface — title, ThreadSwitcher, HomeScreen — sees
+        // the renamed label without each having to read the status
+        // bag separately. Prefer the new `displayName` field; fall
+        // back to the legacy `sessionName` mirror for older brokers.
+        val serverLabel = status.displayName?.trim()?.takeIf { it.isNotEmpty() }
+            ?: status.sessionName?.trim()?.takeIf { it.isNotEmpty() }
+        if (serverLabel != null && _displayNames.value[status.session] != serverLabel) {
+            val next = _displayNames.value.toMutableMap()
+            next[status.session] = serverLabel
+            _displayNames.value = next
+            prefs?.edit()?.putString(KEY_DISPLAY_NAMES, encodeDisplayNames(next))?.apply()
+        }
         _harness.value = HarnessState.Live
         refreshSessions()
     }
