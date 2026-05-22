@@ -81,6 +81,8 @@ Field notes (post-#16 additions; all optional, older clients ignore unknown keys
 - `started_at` — RFC3339Nano timestamp of session construction (broker stamps once at `newSession`).
 - `last_activity_at` — RFC3339Nano timestamp of the most recent PTY byte from the agent process.
 
+The same four-field bundle is also re-emitted on the typed `view_event` channel as `view: "status"` (see below) — sweswe-parity multi-viewer surface. Two channels, one source of truth; clients pick whichever stream they already subscribe to.
+
 ```json
 { "type": "view_event",
   "session": "<uuid>",
@@ -95,6 +97,25 @@ Field notes (post-#16 additions; all optional, older clients ignore unknown keys
 ```
 
 The `view: "chat"` shape is emitted by the broker's Tier 1 PTY scraper (`broker/internal/session/chatscraper.go`, added in #13) after every chat turn — `markUserSent` arms it, idle gap >700ms after the last assistant-side byte flushes one event. ANSI is stripped and border-only lines are dropped before emit. Tunables: `KITTY_CHAT_IDLE_MS` (default 700), `KITTY_CHAT_TURN_MAX_MS` (default 30000).
+
+```json
+{ "type": "view_event",
+  "session": "<uuid>",
+  "view": "status",
+  "event": {
+    "viewer_count": 2,
+    "terminal_cols": 120,
+    "terminal_rows": 40,
+    "display_name": "002-rust-core"
+  }
+}
+```
+
+The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror of the fields broadcast in the top-level `status` envelope (see §3.2), shipped through the same `view_event` channel so multi-viewer clients can subscribe without parsing the heterogeneous `status` frame. All four event fields are **optional**; older clients (and brokers) that don't emit them stay wire-compatible because unknown keys are ignored (§3.3). Field semantics:
+
+- `viewer_count` — integer count of live WebSocket subscribers attached to the session right now. Mirrors `status.viewers`. Clients are expected to render a badge only when `viewer_count > 1` (one viewer is the local user; no point announcing yourself to yourself).
+- `terminal_cols` / `terminal_rows` — current PTY dimensions in character cells. Mirrors `status.cols` / `status.rows`. Emitted whenever the broker resizes the PTY (after a `0x00` binary resize frame) so a late-joining viewer can immediately render scrollback at the right geometry without waiting for the next `status` envelope.
+- `display_name` — human-readable session label. Mirrors `status.session_name`. Set by `rename_session` (§3.3) and persisted by the broker until the session exits.
 
 ```json
 { "type": "exit", "session": "<uuid>", "code": 0 }
@@ -115,6 +136,11 @@ The `view: "chat"` shape is emitted by the broker's Tier 1 PTY scraper (`broker/
 { "type": "exit" }                             // request session shutdown
 { "type": "chat", "from": "username", "msg": "..." }
 ```
+
+`rename_session` notes (sweswe parity):
+- `name` is validated server-side against `^[A-Za-z0-9 _-]{1,32}$`. Whitespace-only strings, empty strings, and strings >32 chars are rejected silently (the broker logs and ignores; the socket stays open — see §3.3 forward-extensibility rule).
+- On a successful rename the broker persists the label, then broadcasts an updated `status` envelope (`session_name` + the `view: "status"` mirror's `display_name`) to **all** viewers of that session. The rename is durable across reconnects: the next `status` frame the client receives after a fresh WS attach will carry the new label.
+- Renames are last-writer-wins. The broker does not stamp authorship and does not return an ack — clients should treat the broadcast `status` as the source of truth and avoid optimistic local mutation.
 
 `chat` notes:
 - The broker writes `msg + "\r"` (CR, not LF) into the agent's PTY stdin. Fixed in #12 — TUI agents (Claude, Codex) submit on CR; LF left text in the prompt without entering it.
