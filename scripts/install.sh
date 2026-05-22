@@ -217,7 +217,13 @@ chown "\$SVC_USER:\$SVC_USER" "\$SVC_HOME/.claude" "\$SVC_HOME/.codex"
 sync_one() {
     src=\$1; dst=\$2; mode=\$3
     [ -f "\$src" ] || return 0
-    if [ ! -f "\$dst" ] || [ "\$src" -nt "\$dst" ]; then
+    # Content-hash compare instead of mtime: agents like \`claude\`
+    # rewrite their own .credentials.json on OAuth refresh, which
+    # bumps the dst mtime to "now". The previous \`-nt\` check then
+    # thought dst was newer than src and skipped — leaving stale
+    # creds even when root re-logged-in. Hash compare avoids the
+    # race: copy iff content actually differs.
+    if [ ! -f "\$dst" ] || ! cmp -s "\$src" "\$dst"; then
         install -m "\$mode" -o "\$SVC_USER" -g "\$SVC_USER" "\$src" "\$dst"
     fi
 }
