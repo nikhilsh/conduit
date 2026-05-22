@@ -33,10 +33,17 @@ extension LitterUI {
         @FocusState private var composerFocused: Bool
 
         var body: some View {
-            VStack(spacing: 0) {
-                messagesList
-                composer
-            }
+            // Composer is hosted via `.safeAreaInset(edge: .bottom)` so
+            // SwiftUI lifts it above the soft keyboard (and the home
+            // indicator at rest) while the messages scroll view shrinks
+            // accordingly — the last message stays visible above both
+            // the composer and the keyboard. Previously the composer
+            // was a sibling VStack child, which on this navigation
+            // stack let the keyboard cover it.
+            messagesList
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    composer
+                }
         }
 
         // MARK: Messages
@@ -59,6 +66,7 @@ extension LitterUI {
                     }
                     .padding(.vertical, 14)
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: events.last?.id) { _, newID in
                     if let newID {
                         withAnimation(.easeOut(duration: 0.22)) {
