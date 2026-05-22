@@ -116,6 +116,7 @@ The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror 
 - `viewer_count` — integer count of live WebSocket subscribers attached to the session right now. Mirrors `status.viewers`. Clients are expected to render a badge only when `viewer_count > 1` (one viewer is the local user; no point announcing yourself to yourself).
 - `terminal_cols` / `terminal_rows` — current PTY dimensions in character cells. Mirrors `status.cols` / `status.rows`. Emitted whenever the broker resizes the PTY (after a `0x00` binary resize frame) so a late-joining viewer can immediately render scrollback at the right geometry without waiting for the next `status` envelope.
 - `display_name` — human-readable session label. Mirrors `status.session_name`. Set by `rename_session` (§3.3) and persisted by the broker until the session exits.
+- `agent_credentials_refreshed` — `{ "provider": "anthropic" | "openai" }`. Emitted exactly once per successful `set_agent_credentials` (§3.3) so the phone can confirm the credential blob landed in the broker's per-identity store. Optional; older clients ignore it. See [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md) §D for the broader refresh-broadcast contract — Stage 1 only ships the post-`set_agent_credentials` ack; the agent-driven refresh broadcast (inotify on the CLI's on-disk credential file) lands in a later stage.
 
 ```json
 { "type": "exit", "session": "<uuid>", "code": 0 }
@@ -135,6 +136,10 @@ The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror 
 { "type": "switch_agent", "assistant": "codex" } // atomic agent swap; see SESSION-LIFECYCLE.md
 { "type": "exit" }                             // request session shutdown
 { "type": "chat", "from": "username", "msg": "..." }
+{ "type": "set_agent_credentials",
+  "provider": "anthropic" | "openai",
+  "kind": "oauth",
+  "credential": { /* provider-native JSON; see PLAN-AGENT-OAUTH.md §D */ } }
 ```
 
 `rename_session` notes (sweswe parity):
@@ -145,6 +150,14 @@ The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror 
 `chat` notes:
 - The broker writes `msg + "\r"` (CR, not LF) into the agent's PTY stdin. Fixed in #12 — TUI agents (Claude, Codex) submit on CR; LF left text in the prompt without entering it.
 - Each `chat` send primes the broker's PTY scraper to capture the assistant's reply and emit it back as `view_event { view: "chat" }`. Echo-suppression on the scraper means an agent that redraws the user's input bar verbatim is not re-shipped as an "assistant" reply.
+
+`set_agent_credentials` notes (Stage 1 of [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md)):
+- `provider` must be `"anthropic"` or `"openai"`. Anything else is rejected with a `view_event { view: "chat", role: "tool", tool_name: "set_agent_credentials" }` carrying a human-readable reason; the socket stays open.
+- `kind` is `"oauth"` for now. The field is required so a future protocol rev that adds `"api_key"` / `"signed_jwt"` etc. doesn't have to thread an explicit version bump.
+- `credential` is the **provider-native** OAuth blob — for `anthropic` the `claudeAiOauth` object the `claude` CLI writes to `~/.claude/.credentials.json`; for `openai` the `AuthDotJson` shape the `codex` CLI writes to `~/.codex/auth.json`. The broker stores it verbatim (no normalization) so additive vendor changes survive round-trip without code changes.
+- The WS upgrade is already bearer-gated, so the handler doesn't recheck auth — but a broker started **without** a configured credentials store (no `--credentials-dir`) replies with a chat-tool error rather than silently dropping the blob, so the phone learns the per-user OAuth path isn't enabled on this server.
+- On success, the broker emits a typed `view_event { view: "status", event: { agent_credentials_refreshed: { provider } } }` so the phone learns the credential landed without needing a separate ack channel. This piggybacks on the existing `view: "status"` mirror so multi-viewer surfaces stay consistent.
+- The encrypted credential is keyed by **a hash of the broker's bearer token**, not per-session — subsequent sessions started by the same phone reuse the stored credential. The broker materializes it into a per-session ephemeral `$HOME` (with `CODEX_HOME` set for codex) at session spawn time; missing-credential sessions fall back to the legacy host-mirror behaviour exactly as before.
 
 Unknown `type` values are logged and ignored — never close the socket for them. This keeps the protocol forward-extensible.
 

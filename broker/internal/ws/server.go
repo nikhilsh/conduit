@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
+	"github.com/nikhilsh/swe-kitty/broker/internal/credentials"
 	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 )
 
@@ -39,10 +40,28 @@ var upgrader = websocket.Upgrader{
 type Server struct {
 	Auth     *auth.Store
 	Sessions *session.Manager
+	// Credentials is the per-identity OAuth credential store wired in
+	// at broker startup. Nil-safe: when nil, set_agent_credentials
+	// control messages are rejected with a chat error and the session
+	// spawn path falls back to the legacy global host-mirror.
+	Credentials *credentials.Store
 }
 
 func New(a *auth.Store, m *session.Manager) *Server {
-	return &Server{Auth: a, Sessions: m}
+	s := &Server{Auth: a, Sessions: m}
+	currentServer = s
+	return s
+}
+
+// WithCredentials wires the per-identity credential store into the
+// server. Called from cmd/swe-kitty-broker/main.go after the store is
+// constructed. Returning the same *Server keeps the call site fluent.
+func (s *Server) WithCredentials(store *credentials.Store) *Server {
+	s.Credentials = store
+	if s.Sessions != nil {
+		s.Sessions.SetCredentialStore(store)
+	}
+	return s
 }
 
 // Handler returns the registered HTTP handler.
@@ -437,6 +456,13 @@ func (c *client) handleText(payload []byte) {
 		Assistant string `json:"assistant"`
 		Name      string `json:"name"`
 		Msg       string `json:"msg"`
+		// set_agent_credentials (docs/PLAN-AGENT-OAUTH.md §D.1). Body
+		// fields are decoded into the same envelope to keep the
+		// switch-on-type contract simple; unrelated control messages
+		// just ignore them.
+		Provider   string          `json:"provider"`
+		Kind       string          `json:"kind"`
+		Credential json.RawMessage `json:"credential"`
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
@@ -540,9 +566,120 @@ func (c *client) handleText(payload []byte) {
 		c.broadcastRenameStatus()
 	case "toggle_yolo":
 		// Acknowledged in v1 protocol but still no-op here.
+	case "set_agent_credentials":
+		// Per-user OAuth landing path (docs/PLAN-AGENT-OAUTH.md §D.1).
+		// The WS upgrade already required a valid bearer (serveWS
+		// requireAuth), so by the time we're here the connection is
+		// authenticated; we don't recheck. But we DO guard against a
+		// broker that was started without --credentials-dir wiring —
+		// in that mode the control message is structurally valid but
+		// the broker has nowhere to put the blob, so we surface a
+		// chat error instead of silently dropping it.
+		c.handleSetAgentCredentials(env.Provider, env.Kind, env.Credential)
 	default:
 		// Per protocol §3.3: unknown types are logged and ignored.
 	}
+}
+
+// handleSetAgentCredentials validates a set_agent_credentials control
+// frame and either stores the blob (success) or surfaces a chat-tool
+// error frame (failure). On success, broadcasts a typed view_event
+// carrying `agent_credentials_refreshed: { provider }` so the phone
+// learns that the credential landed without needing a separate ack.
+//
+// Failure cases are emitted as `view_event { view: "chat", role: "tool" }`
+// (matching the file-upload rejection idiom) so they show up in the
+// chat tab and don't crash the socket — the protocol's forward-extensibility
+// rule (§3.3) treats unknown / invalid control payloads as soft errors.
+func (c *client) handleSetAgentCredentials(provider, kind string, credential json.RawMessage) {
+	server := c.serverRef()
+	if server == nil || server.Credentials == nil {
+		c.emitCredentialsToolEvent("set_agent_credentials rejected: broker has no credentials store configured")
+		return
+	}
+	if !credentials.ValidProvider(provider) {
+		c.emitCredentialsToolEvent("set_agent_credentials rejected: unknown provider " + provider)
+		return
+	}
+	// Stage 1 only ships the oauth kind. Future kinds (api_key,
+	// signed_jwt, etc.) will key off this field; reject anything else
+	// up front so the wire schema fails loudly when the protocol
+	// extends.
+	if kind != "oauth" {
+		c.emitCredentialsToolEvent("set_agent_credentials rejected: unsupported kind " + kind)
+		return
+	}
+	if len(credential) == 0 {
+		c.emitCredentialsToolEvent("set_agent_credentials rejected: empty credential payload")
+		return
+	}
+	if err := server.Credentials.Set(provider, credential); err != nil {
+		c.emitCredentialsToolEvent("set_agent_credentials failed: " + err.Error())
+		return
+	}
+	// Success path: broadcast a status mirror so every viewer learns
+	// the credential landed. Routed through the session's text
+	// fan-out so multi-viewer surfaces stay consistent.
+	c.broadcastCredentialsRefreshed(provider)
+}
+
+// serverRef walks back to the parent Server. Right now the client
+// struct doesn't hold a server pointer, so we stash it on the session
+// manager via a package-level accessor — simpler than rewiring every
+// client constructor for one field. The set_agent_credentials path is
+// the only consumer.
+func (c *client) serverRef() *Server { return currentServer }
+
+// currentServer is the package-level handle to the active Server.
+// Updated by New() so handleSetAgentCredentials can find the credentials
+// store without threading a *Server pointer through every client. The
+// broker today runs exactly one Server per process; if that ever
+// changes we'll need to push this onto the client.
+var currentServer *Server
+
+// emitCredentialsToolEvent surfaces a credentials-rejection message
+// through the chat-tool view_event channel, matching the file-upload
+// rejection idiom in handleBinary.
+func (c *client) emitCredentialsToolEvent(message string) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "chat",
+		"event": map[string]any{
+			"role":      "tool",
+			"content":   message,
+			"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+			"files":     []any{},
+			"tool_name": "set_agent_credentials",
+		},
+	})
+	if err != nil {
+		return
+	}
+	c.sess.PublishText(payload)
+}
+
+// broadcastCredentialsRefreshed emits the success-side view_event the
+// client uses to confirm the blob landed. The shape mirrors the §D.1
+// `agent_credentials_refreshed` server → client message but is routed
+// through the typed view_event channel for consistency with other
+// fan-out frames (see protocol §3.2).
+func (c *client) broadcastCredentialsRefreshed(provider string) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "status",
+		"event": map[string]any{
+			"agent_credentials_refreshed": map[string]any{
+				"provider": provider,
+			},
+		},
+		"ts": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	c.sess.PublishText(payload)
 }
 
 // writeLoop forwards PTY output to the WebSocket and emits periodic pings.

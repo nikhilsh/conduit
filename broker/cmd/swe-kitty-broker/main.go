@@ -28,6 +28,7 @@ import (
 
 	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
 	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
+	"github.com/nikhilsh/swe-kitty/broker/internal/credentials"
 	"github.com/nikhilsh/swe-kitty/broker/internal/discovery"
 	"github.com/nikhilsh/swe-kitty/broker/internal/replay"
 	"github.com/nikhilsh/swe-kitty/broker/internal/session"
@@ -71,6 +72,7 @@ func runUp(args []string) int {
 	publicURL := fs.String("public-url", "", "public-facing URL (for QR/UX hints)")
 	agentsDir := fs.String("agents-dir", "", "directory of agent adapter TOMLs (defaults: $XDG_CONFIG_HOME/swe-kitty/agents → ~/.swe-kitty/agents → ./agents → embedded)")
 	replayBase := fs.String("replay-base", defaultReplayBase(), "directory for per-session replay recordings; empty disables recording")
+	credentialsDir := fs.String("credentials-dir", defaultCredentialsDir(), "directory for per-identity OAuth credential blobs (docs/PLAN-AGENT-OAUTH.md); empty disables per-user OAuth materialization")
 	_ = fs.Parse(args)
 
 	store := auth.NewStore()
@@ -104,6 +106,19 @@ func runUp(args []string) int {
 		log.Printf("recovered sessions: %v", recovered)
 	}
 	srv := ws.New(store, mgr)
+	// Wire the per-identity OAuth credential store (Stage 1 of
+	// docs/PLAN-AGENT-OAUTH.md). Empty --credentials-dir disables the
+	// per-user OAuth materialization path; agents then fall back to
+	// the legacy host-mirror $HOME exactly as before this PR.
+	if credDir := strings.TrimSpace(*credentialsDir); credDir != "" {
+		if abs, err := expandHome(credDir); err == nil {
+			credStore := credentials.NewStore(abs, []byte(token))
+			srv.WithCredentials(credStore)
+			log.Printf("credentials: per-user OAuth store at %s", abs)
+		} else {
+			log.Printf("credentials: ignoring --credentials-dir %q: %v", credDir, err)
+		}
+	}
 	// Replay HTTP surface lives on the same mux as the WS server.
 	// Secret = bearer token: anyone who can already attach to the WS
 	// can mint a replay URL, but external observers cannot enumerate.
@@ -363,6 +378,19 @@ func defaultReplayBase() string {
 		return ""
 	}
 	return home + string(os.PathSeparator) + ".swe-kitty" + string(os.PathSeparator) + "sessions"
+}
+
+// defaultCredentialsDir returns the documented default per-identity
+// OAuth credential store root (`~/.swe-kitty/credentials/`, see
+// docs/PLAN-AGENT-OAUTH.md §D.2). Returns an empty string when the
+// home directory can't be resolved so the broker boots without the
+// per-user OAuth path rather than dumping `.enc` files into the cwd.
+func defaultCredentialsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return home + string(os.PathSeparator) + ".swe-kitty" + string(os.PathSeparator) + "credentials"
 }
 
 // expandHome resolves a leading `~` in a path against the user's home

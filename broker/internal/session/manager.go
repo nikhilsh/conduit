@@ -24,6 +24,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/nikhilsh/swe-kitty/broker/internal/agents"
+	"github.com/nikhilsh/swe-kitty/broker/internal/credentials"
 	"github.com/nikhilsh/swe-kitty/broker/internal/replay"
 	"github.com/nikhilsh/swe-kitty/broker/internal/termgrid"
 )
@@ -107,6 +108,14 @@ type Session struct {
 	// construction; methods on Recorder tolerate the nil receiver
 	// so the drain / publish paths don't have to branch.
 	recorder *replay.Recorder
+
+	// agentHomeDir is the per-session ephemeral $HOME the broker
+	// materialized provider OAuth credentials into (Stage 1 of
+	// docs/PLAN-AGENT-OAUTH.md). Empty when no credential was
+	// available — the agent inherits the broker's $HOME exactly as
+	// the legacy host-mirror behavior. Populated by newSession when
+	// the credential store has a blob for the session's provider.
+	agentHomeDir string
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
@@ -178,6 +187,25 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	}
 	s.workspaceDir = s.commandDir(adapter)
 	cmd.Dir = s.workspaceDir
+	// Per docs/PLAN-AGENT-OAUTH.md §G.2: if the credential store has an
+	// OAuth blob for this assistant's provider, materialize it into a
+	// per-session ephemeral HOME and point the agent process at it.
+	// Failure to materialize (e.g. disk full, key mismatch) is logged
+	// and falls back to the legacy host-mirror behaviour — the broker
+	// must never refuse to start a session because credential
+	// materialization broke.
+	if opts.credStore != nil {
+		if provider := providerForAssistant(adapter.Name); provider != "" && opts.credStore.Has(provider) {
+			ephemeral := filepath.Join(s.workspaceDir, ".swe-kitty", "agent-home", s.ID)
+			if err := os.MkdirAll(ephemeral, 0o700); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: agent-home mkdir: %v (falling back to host mirror)\n", s.ID, err)
+			} else if err := opts.credStore.Materialize(provider, ephemeral); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: credentials.Materialize(%s): %v (falling back to host mirror)\n", s.ID, provider, err)
+			} else {
+				s.agentHomeDir = ephemeral
+			}
+		}
+	}
 	cmd.Env = s.commandEnv(nil)
 	if len(opts.snapshot) > 0 {
 		s.restoreSnapshot(opts.snapshot)
@@ -658,6 +686,23 @@ type Manager struct {
 	// stopGC closes when Manager.Close is called; the background GC
 	// goroutine watches it to exit cleanly.
 	stopGC chan struct{}
+
+	// credStore is the per-identity OAuth credential store wired in
+	// from cmd/swe-kitty-broker (see docs/PLAN-AGENT-OAUTH.md §G).
+	// nil-safe: when nil, every session spawn falls back to the
+	// legacy global host-mirror behaviour and no agent-home dir is
+	// created. Manager owns the pointer because the WS layer wires
+	// it in at startup; sessions read it through commandEnv.
+	credStore *credentials.Store
+}
+
+// SetCredentialStore wires the per-identity OAuth credential store into
+// the manager. Called from cmd/swe-kitty-broker once the store is
+// constructed. nil clears it (mostly useful for tests).
+func (m *Manager) SetCredentialStore(s *credentials.Store) {
+	m.mu.Lock()
+	m.credStore = s
+	m.mu.Unlock()
 }
 
 // SetReplayBaseDir enables replay recording for sessions created
@@ -792,6 +837,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		requestedCWD:  requestedCWD,
 		termgrid:      m.termgrid,
 		replayBaseDir: m.replayBaseDir,
+		credStore:     m.credStore,
 	})
 	if err != nil {
 		return nil, false, err
@@ -888,6 +934,11 @@ type sessionOptions struct {
 	// Manager fills this in from its own field; tests can leave it
 	// empty to keep recording off.
 	replayBaseDir string
+	// credStore, when non-nil, drives per-session OAuth credential
+	// materialization (docs/PLAN-AGENT-OAUTH.md §G). nil → the
+	// legacy host-mirror $HOME behaviour. Manager fills this in
+	// from its own field; tests typically leave it empty.
+	credStore *credentials.Store
 }
 
 type sessionMetadata struct {

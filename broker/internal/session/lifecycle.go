@@ -75,6 +75,19 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 		"KITTY_HANDOFF_PATH":     s.handoffPath,
 		"KITTY_HANDOFF_OUT_PATH": s.handoffOutPath,
 	}
+	// docs/PLAN-AGENT-OAUTH.md §G.2: when a per-session ephemeral
+	// agent home was materialized, point the agent process at it via
+	// HOME. Codex additionally honours $CODEX_HOME for its auth.json
+	// path, so we set both to make the lookup explicit and
+	// host-cwd-independent. When agentHomeDir is empty, we leave HOME
+	// alone — the agent inherits the broker process's HOME, exactly
+	// the legacy host-mirror behaviour.
+	if s.agentHomeDir != "" {
+		pairs["HOME"] = s.agentHomeDir
+		if s.Assistant == "codex" {
+			pairs["CODEX_HOME"] = filepath.Join(s.agentHomeDir, ".codex")
+		}
+	}
 	for k, v := range extra {
 		pairs[k] = v
 	}
@@ -82,6 +95,22 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// providerForAssistant maps the broker's adapter name to the OAuth
+// provider key used by the credential store. Adapters that don't have
+// a per-user OAuth flow return "" so the spawn path skips
+// materialization (and falls back to the host-mirror behaviour).
+// Keep this in lockstep with credentials.ValidProvider.
+func providerForAssistant(assistant string) string {
+	switch assistant {
+	case "claude":
+		return "anthropic"
+	case "codex":
+		return "openai"
+	default:
+		return ""
+	}
 }
 
 func (s *Session) startBackgroundLoops() {
