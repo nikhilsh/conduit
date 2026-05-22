@@ -234,6 +234,9 @@ interface SweKittyClient {
     void send_input(string session_id, bytes data);
 
     [Async, Throws=SweKittyError]
+    void send_file(string session_id, string filename, string mime, bytes payload);
+
+    [Async, Throws=SweKittyError]
     void send_chat(string session_id, string msg);
 
     [Async, Throws=SweKittyError]

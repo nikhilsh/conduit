@@ -294,10 +294,11 @@ struct ChatTab: View {
         .accessibilityLabel("Expand composer")
     }
 
-    /// Folds the draft text + any pending attachments + any pinned
-    /// contexts into a single outgoing chat message. Inlined here
-    /// rather than on SessionStore because it's purely a presentation
-    /// concern — the store accepts a single string.
+    /// Folds the draft text + any pinned contexts into a single
+    /// outgoing chat message. Attachments are NO LONGER inlined here
+    /// — they ship through the 0x01 binary upload frame
+    /// (sweswe-parity #file-upload) and surface in chat as a `tool`
+    /// view_event from the broker.
     private func composeOutgoingMessage(_ draft: String) -> String {
         var pieces: [String] = []
         let chips = pinnedContexts
@@ -311,24 +312,42 @@ struct ChatTab: View {
         if !trimmed.isEmpty {
             pieces.append(trimmed)
         }
-        for att in pendingAttachments {
-            pieces.append(att.inlineBlock)
-        }
         return pieces.joined(separator: "\n\n")
     }
 
     /// Shared send path used by both the trailing send button and
     /// the expanded composer's "Send" toolbar item.
     private func dispatchSend() {
+        // Fire each pending attachment as its own 0x01 binary upload.
+        // Order: uploads first so the broker has the files on disk
+        // before the chat message that references them lands in the
+        // agent's PTY. Dispatch goes through AttachmentDispatcher so
+        // the wiring stays unit-testable.
+        let attachments = pendingAttachments
+        AttachmentDispatcher.dispatchUploads(
+            attachments,
+            sessionID: session.id
+        ) { sessionID, filename, mime, bytes in
+            store.sendFile(
+                sessionID: sessionID,
+                filename: filename,
+                mime: mime,
+                payload: bytes
+            )
+        }
         let outgoing = composeOutgoingMessage(draft)
         let trimmed = outgoing.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        assistantCountAtSend = events.filter { $0.role.lowercased() == "assistant" }.count
-        store.sendChat(sessionID: session.id, message: trimmed)
+        // Allow sending attachments without any text — the uploads
+        // alone produce visible tool view_events.
+        if !trimmed.isEmpty {
+            assistantCountAtSend = events.filter { $0.role.lowercased() == "assistant" }.count
+            store.sendChat(sessionID: session.id, message: trimmed)
+            awaitingReply = true
+        }
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         draft = ""
         pendingAttachments.removeAll()
         autoFollow = true
-        awaitingReply = true
     }
 
     /// Trailing slot — mic when there's no draft, send (or stop while

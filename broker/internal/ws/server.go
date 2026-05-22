@@ -336,7 +336,31 @@ func (c *client) handleBinary(payload []byte) {
 			_ = c.sendSnapshot(snap)
 		}
 	case tagUpload:
-		// File upload — out of v1 scope for task 001; just ignore.
+		// 0x01 file-upload frame (sweswe-parity #file-upload). Decode,
+		// validate the embedded session id against the socket's bound
+		// session, sanitize the filename, then land the bytes under
+		// <workspace>/uploads/<session>/<filename>.
+		//
+		// Errors here never close the socket — chat-driven uploads
+		// are user-visible; surfacing the failure as a tool view_event
+		// is enough. The protocol's "forbidden first byte" rules only
+		// fire on shape violations of the tag itself (truncated frames
+		// fall through to a no-op).
+		frame, err := parseUploadFrame(payload[1:])
+		if err != nil {
+			c.emitUploadToolEvent("upload rejected: " + err.Error())
+			return
+		}
+		if frame.SessionID != c.sess.ID {
+			c.emitUploadToolEvent("upload rejected: session id mismatch")
+			return
+		}
+		dst, err := writeUpload(c.sess.WorkspaceDir(), frame.SessionID, frame.Filename, frame.Body)
+		if err != nil {
+			c.emitUploadToolEvent("upload rejected: " + err.Error())
+			return
+		}
+		c.emitUploadToolEvent("uploaded " + dst + " (" + frame.MIME + ", " + strconv.Itoa(len(frame.Body)) + " bytes)")
 	case tagEscape:
 		// Escape byte for raw PTY that would otherwise collide with a tag.
 		_, _ = c.sess.Write(payload[1:])
@@ -493,4 +517,28 @@ func (c *client) writeLoop(sub chan []byte, textSub chan []byte, done <-chan str
 
 func isReservedTag(b byte) bool {
 	return b == tagResize || b == tagUpload || b == tagSnapshot || b == tagEscape
+}
+
+// emitUploadToolEvent broadcasts a `view_event { view: "chat" }` with
+// role=tool noting the result of a file upload (success or rejection).
+// Routed through the session's text fan-out so every viewer of the
+// session sees the same tool turn — matches the chat scraper's own
+// publish path.
+func (c *client) emitUploadToolEvent(message string) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "chat",
+		"event": map[string]any{
+			"role":      "tool",
+			"content":   message,
+			"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+			"files":     []any{},
+			"tool_name": "file_upload",
+		},
+	})
+	if err != nil {
+		return
+	}
+	c.sess.PublishText(payload)
 }

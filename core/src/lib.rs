@@ -212,6 +212,26 @@ impl SweKittyClient {
         run_on_core(async move { handle.send_input(data).await }).await
     }
 
+    /// Upload a file to the session's `<workspace>/uploads/<session>/<filename>`
+    /// by encoding a 0x01 binary frame. See `transport::SessionHandle::send_file`
+    /// for the wire layout. The broker sanitizes the filename server-side
+    /// and emits a tool view_event when the file lands.
+    pub async fn send_file(
+        &self,
+        session_id: String,
+        filename: String,
+        mime: String,
+        payload: Vec<u8>,
+    ) -> Result<(), SweKittyError> {
+        let handle = self.inner.lookup_handle(&session_id)?;
+        run_on_core(async move {
+            handle
+                .send_file(&session_id, &filename, &mime, &payload)
+                .await
+        })
+        .await
+    }
+
     pub async fn send_chat(&self, session_id: String, msg: String) -> Result<(), SweKittyError> {
         let handle = self.inner.lookup_handle(&session_id)?;
         run_on_core(async move {

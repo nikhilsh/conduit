@@ -117,6 +117,39 @@ impl SessionHandle {
             .map_err(|e| SweKittyError::Connection(e.to_string()))
     }
 
+    /// Encode and send a 0x01 file-upload frame on this session.
+    ///
+    /// Wire layout (see docs/WEBSOCKET-PROTOCOL.md §2.1, sweswe-parity):
+    ///
+    /// ```text
+    /// 0x01
+    /// u32 LE session_id_length
+    /// session_id_bytes
+    /// u32 LE filename_length
+    /// filename_bytes
+    /// u32 LE mime_length
+    /// mime_bytes
+    /// file_bytes…
+    /// ```
+    ///
+    /// The broker validates that `session_id` matches the WS path's
+    /// bound session and sanitizes `filename` (no '..', no absolute
+    /// paths, no path separators) before landing the bytes under
+    /// `<workspace>/uploads/<session_id>/<filename>`.
+    pub async fn send_file(
+        &self,
+        session_id: &str,
+        filename: &str,
+        mime: &str,
+        bytes: &[u8],
+    ) -> Result<(), SweKittyError> {
+        let frame = encode_upload_frame(session_id, filename, mime, bytes);
+        self.tx
+            .send(Message::Binary(frame))
+            .await
+            .map_err(|e| SweKittyError::Connection(e.to_string()))
+    }
+
     pub async fn send_json(&self, v: &serde_json::Value) -> Result<(), SweKittyError> {
         let s = serde_json::to_string(v)?;
         self.send_message(Message::Text(s)).await
@@ -748,6 +781,27 @@ fn is_reserved_tag(b: u8) -> bool {
     matches!(b, TAG_RESIZE | TAG_UPLOAD | TAG_SNAPSHOT | TAG_ESCAPE)
 }
 
+/// Encode a 0x01 file-upload frame. Pure function so unit tests can
+/// pin the byte layout without spinning up a websocket. Length fields
+/// are u32 little-endian (matches the broker's parseUploadFrame).
+fn encode_upload_frame(session_id: &str, filename: &str, mime: &str, bytes: &[u8]) -> Vec<u8> {
+    let sid = session_id.as_bytes();
+    let name = filename.as_bytes();
+    let mime_b = mime.as_bytes();
+    let total = 1 + 4 + sid.len() + 4 + name.len() + 4 + mime_b.len() + bytes.len();
+    let mut out = Vec::with_capacity(total);
+    out.push(TAG_UPLOAD);
+    let append_lp = |out: &mut Vec<u8>, s: &[u8]| {
+        out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        out.extend_from_slice(s);
+    };
+    append_lp(&mut out, sid);
+    append_lp(&mut out, name);
+    append_lp(&mut out, mime_b);
+    out.extend_from_slice(bytes);
+    out
+}
+
 fn urlencode(s: &str) -> String {
     // tiny URL encoder — only what's needed for the query string values
     // we send (bearer tokens are URL-safe base64; assistant names are
@@ -863,6 +917,49 @@ mod tests {
         )
         .unwrap();
         assert!(next.as_str().contains("token=secret"));
+    }
+
+    #[test]
+    fn encode_upload_frame_layout() {
+        // Pin the byte layout: 0x01 tag, then three u32-LE length-prefixed
+        // strings, then the raw body bytes. The broker's parseUploadFrame
+        // is the symmetric reader; if either side drifts the round-trip
+        // test on the broker side fails first, but pinning the encoder
+        // here surfaces the regression at the boundary it actually owns.
+        let sid = "abc";
+        let name = "hi.txt";
+        let mime = "text/plain";
+        let body = b"hello";
+        let frame = encode_upload_frame(sid, name, mime, body);
+
+        // Tag byte.
+        assert_eq!(frame[0], TAG_UPLOAD);
+
+        // session_id LP block.
+        let mut off = 1;
+        let sid_len = u32::from_le_bytes(frame[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        assert_eq!(sid_len, sid.len());
+        assert_eq!(&frame[off..off + sid_len], sid.as_bytes());
+        off += sid_len;
+
+        // filename LP block.
+        let name_len = u32::from_le_bytes(frame[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        assert_eq!(name_len, name.len());
+        assert_eq!(&frame[off..off + name_len], name.as_bytes());
+        off += name_len;
+
+        // mime LP block.
+        let mime_len = u32::from_le_bytes(frame[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        assert_eq!(mime_len, mime.len());
+        assert_eq!(&frame[off..off + mime_len], mime.as_bytes());
+        off += mime_len;
+
+        // body bytes — everything remaining.
+        assert_eq!(&frame[off..], body);
+        assert_eq!(frame.len(), off + body.len());
     }
 
     #[test]

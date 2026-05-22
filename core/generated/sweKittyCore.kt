@@ -842,6 +842,40 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -863,6 +897,40 @@ internal interface UniffiLib : Library {
         }
     }
 
+    fun uniffi_swe_kitty_core_fn_clone_sessionstorecore(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_swe_kitty_core_fn_free_sessionstorecore(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_swe_kitty_core_fn_constructor_sessionstorecore_new(uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_chat(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_exit(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`code`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_lifecycle(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`lifecycle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_preview(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`preview`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_pty_data(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_snapshot(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`gunzipped`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_status(`ptr`: Pointer,`status`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_contains(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_conversation(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_forget_session(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_get(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_lifecycle(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_register_session(`ptr`: Pointer,`session`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_swe_kitty_core_fn_method_sessionstorecore_sessions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_swe_kitty_core_fn_clone_swekittyclient(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
     fun uniffi_swe_kitty_core_fn_free_swekittyclient(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -890,6 +958,8 @@ internal interface UniffiLib : Library {
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_resize(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`rows`: Short,`cols`: Short,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_send_chat(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`msg`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_send_file(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,`mime`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_send_input(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,
     ): Long
@@ -1015,6 +1085,34 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_swe_kitty_core_checksum_func_ssh_bootstrap(
     ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_chat(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_exit(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_lifecycle(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_preview(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_pty_data(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_snapshot(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_status(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_contains(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_conversation(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_forget_session(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_get(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_lifecycle(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_register_session(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_sessions(
+    ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_connect(
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session(
@@ -1037,9 +1135,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_send_chat(
     ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittyclient_send_file(
+    ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_send_input(
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_switch_agent(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_constructor_sessionstorecore_new(
     ): Short
     fun uniffi_swe_kitty_core_checksum_constructor_swekittyclient_new(
     ): Short
@@ -1081,6 +1183,48 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_swe_kitty_core_checksum_func_ssh_bootstrap() != 48558.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_chat() != 29883.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_exit() != 9217.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_lifecycle() != 7472.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_preview() != 42811.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_pty_data() != 7509.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_snapshot() != 4787.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_status() != 16189.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_contains() != 6085.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_conversation() != 30178.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_forget_session() != 1093.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_get() != 10131.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_lifecycle() != 33662.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_register_session() != 64048.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_sessions() != 42007.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1114,10 +1258,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_send_chat() != 16214.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_send_file() != 19338.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_send_input() != 63479.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_switch_agent() != 23090.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_constructor_sessionstorecore_new() != 14689.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_constructor_swekittyclient_new() != 52948.toShort()) {
@@ -1590,6 +1740,427 @@ private class JavaLangRefCleanable(
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
 }
+public interface SessionStoreCoreInterface {
+    
+    fun `applyChat`(`sessionId`: kotlin.String, `event`: ChatEvent): ProjectSessionState?
+    
+    fun `applyExit`(`sessionId`: kotlin.String, `code`: kotlin.Int): ProjectSessionState?
+    
+    fun `applyLifecycle`(`sessionId`: kotlin.String, `lifecycle`: SessionLifecycleCore)
+    
+    fun `applyPreview`(`sessionId`: kotlin.String, `preview`: PreviewInfo): ProjectSessionState?
+    
+    fun `applyPtyData`(`sessionId`: kotlin.String, `data`: kotlin.ByteArray): ProjectSessionState?
+    
+    fun `applySnapshot`(`sessionId`: kotlin.String, `gunzipped`: kotlin.ByteArray): ProjectSessionState?
+    
+    fun `applyStatus`(`status`: SessionStatus): ProjectSessionState
+    
+    fun `contains`(`sessionId`: kotlin.String): kotlin.Boolean
+    
+    fun `conversation`(`sessionId`: kotlin.String): List<ConversationItem>
+    
+    fun `forgetSession`(`sessionId`: kotlin.String)
+    
+    fun `get`(`sessionId`: kotlin.String): ProjectSessionState?
+    
+    fun `lifecycle`(`sessionId`: kotlin.String): SessionLifecycleCore?
+    
+    fun `registerSession`(`session`: ProjectSession)
+    
+    fun `sessions`(): List<ProjectSession>
+    
+    companion object
+}
+
+open class SessionStoreCore: Disposable, AutoCloseable, SessionStoreCoreInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    constructor() :
+        this(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_constructor_sessionstorecore_new(
+        _status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_free_sessionstorecore(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_clone_sessionstorecore(pointer!!, status)
+        }
+    }
+
+    override fun `applyChat`(`sessionId`: kotlin.String, `event`: ChatEvent): ProjectSessionState? {
+            return FfiConverterOptionalTypeProjectSessionState.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_chat(
+        it, FfiConverterString.lower(`sessionId`),FfiConverterTypeChatEvent.lower(`event`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `applyExit`(`sessionId`: kotlin.String, `code`: kotlin.Int): ProjectSessionState? {
+            return FfiConverterOptionalTypeProjectSessionState.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_exit(
+        it, FfiConverterString.lower(`sessionId`),FfiConverterInt.lower(`code`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `applyLifecycle`(`sessionId`: kotlin.String, `lifecycle`: SessionLifecycleCore)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_lifecycle(
+        it, FfiConverterString.lower(`sessionId`),FfiConverterTypeSessionLifecycleCore.lower(`lifecycle`),_status)
+}
+    }
+    
+    
+
+    override fun `applyPreview`(`sessionId`: kotlin.String, `preview`: PreviewInfo): ProjectSessionState? {
+            return FfiConverterOptionalTypeProjectSessionState.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_preview(
+        it, FfiConverterString.lower(`sessionId`),FfiConverterTypePreviewInfo.lower(`preview`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `applyPtyData`(`sessionId`: kotlin.String, `data`: kotlin.ByteArray): ProjectSessionState? {
+            return FfiConverterOptionalTypeProjectSessionState.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_pty_data(
+        it, FfiConverterString.lower(`sessionId`),FfiConverterByteArray.lower(`data`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `applySnapshot`(`sessionId`: kotlin.String, `gunzipped`: kotlin.ByteArray): ProjectSessionState? {
+            return FfiConverterOptionalTypeProjectSessionState.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_snapshot(
+        it, FfiConverterString.lower(`sessionId`),FfiConverterByteArray.lower(`gunzipped`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `applyStatus`(`status`: SessionStatus): ProjectSessionState {
+            return FfiConverterTypeProjectSessionState.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_status(
+        it, FfiConverterTypeSessionStatus.lower(`status`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `contains`(`sessionId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_contains(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `conversation`(`sessionId`: kotlin.String): List<ConversationItem> {
+            return FfiConverterSequenceTypeConversationItem.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_conversation(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `forgetSession`(`sessionId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_forget_session(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    
+    
+
+    override fun `get`(`sessionId`: kotlin.String): ProjectSessionState? {
+            return FfiConverterOptionalTypeProjectSessionState.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_get(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `lifecycle`(`sessionId`: kotlin.String): SessionLifecycleCore? {
+            return FfiConverterOptionalTypeSessionLifecycleCore.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_lifecycle(
+        it, FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `registerSession`(`session`: ProjectSession)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_register_session(
+        it, FfiConverterTypeProjectSession.lower(`session`),_status)
+}
+    }
+    
+    
+
+    override fun `sessions`(): List<ProjectSession> {
+            return FfiConverterSequenceTypeProjectSession.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_sessionstorecore_sessions(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSessionStoreCore: FfiConverter<SessionStoreCore, Pointer> {
+
+    override fun lower(value: SessionStoreCore): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): SessionStoreCore {
+        return SessionStoreCore(value)
+    }
+
+    override fun read(buf: ByteBuffer): SessionStoreCore {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: SessionStoreCore) = 8UL
+
+    override fun write(value: SessionStoreCore, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
 public interface SweKittyClientInterface {
     
     suspend fun `connect`(`delegate`: SweKittyDelegate)
@@ -1613,6 +2184,8 @@ public interface SweKittyClientInterface {
     suspend fun `resize`(`sessionId`: kotlin.String, `rows`: kotlin.UShort, `cols`: kotlin.UShort)
     
     suspend fun `sendChat`(`sessionId`: kotlin.String, `msg`: kotlin.String)
+    
+    suspend fun `sendFile`(`sessionId`: kotlin.String, `filename`: kotlin.String, `mime`: kotlin.String, `payload`: kotlin.ByteArray)
     
     suspend fun `sendInput`(`sessionId`: kotlin.String, `data`: kotlin.ByteArray)
     
@@ -1903,6 +2476,28 @@ open class SweKittyClient: Disposable, AutoCloseable, SweKittyClientInterface {
     
     @Throws(SweKittyException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendFile`(`sessionId`: kotlin.String, `filename`: kotlin.String, `mime`: kotlin.String, `payload`: kotlin.ByteArray) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_send_file(
+                thisPtr,
+                FfiConverterString.lower(`sessionId`),FfiConverterString.lower(`filename`),FfiConverterString.lower(`mime`),FfiConverterByteArray.lower(`payload`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        SweKittyException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(SweKittyException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
     override suspend fun `sendInput`(`sessionId`: kotlin.String, `data`: kotlin.ByteArray) {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
@@ -1982,6 +2577,34 @@ public object FfiConverterTypeSweKittyClient: FfiConverter<SweKittyClient, Point
 
 
 
+data class BrowserViewState (
+    var `preview`: PreviewInfo?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBrowserViewState: FfiConverterRustBuffer<BrowserViewState> {
+    override fun read(buf: ByteBuffer): BrowserViewState {
+        return BrowserViewState(
+            FfiConverterOptionalTypePreviewInfo.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BrowserViewState) = (
+            FfiConverterOptionalTypePreviewInfo.allocationSize(value.`preview`)
+    )
+
+    override fun write(value: BrowserViewState, buf: ByteBuffer) {
+            FfiConverterOptionalTypePreviewInfo.write(value.`preview`, buf)
+    }
+}
+
+
+
 data class ChatEvent (
     var `role`: kotlin.String, 
     var `content`: kotlin.String, 
@@ -2017,6 +2640,38 @@ public object FfiConverterTypeChatEvent: FfiConverterRustBuffer<ChatEvent> {
             FfiConverterString.write(value.`content`, buf)
             FfiConverterString.write(value.`ts`, buf)
             FfiConverterSequenceTypeViewEventFile.write(value.`files`, buf)
+    }
+}
+
+
+
+data class ChatViewState (
+    var `events`: List<ChatEvent>, 
+    var `conversation`: List<ConversationItem>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChatViewState: FfiConverterRustBuffer<ChatViewState> {
+    override fun read(buf: ByteBuffer): ChatViewState {
+        return ChatViewState(
+            FfiConverterSequenceTypeChatEvent.read(buf),
+            FfiConverterSequenceTypeConversationItem.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChatViewState) = (
+            FfiConverterSequenceTypeChatEvent.allocationSize(value.`events`) +
+            FfiConverterSequenceTypeConversationItem.allocationSize(value.`conversation`)
+    )
+
+    override fun write(value: ChatViewState, buf: ByteBuffer) {
+            FfiConverterSequenceTypeChatEvent.write(value.`events`, buf)
+            FfiConverterSequenceTypeConversationItem.write(value.`conversation`, buf)
     }
 }
 
@@ -2135,7 +2790,11 @@ data class ProjectSession (
     var `name`: kotlin.String, 
     var `assistant`: kotlin.String, 
     var `branch`: kotlin.String?, 
-    var `preview`: PreviewInfo?
+    var `preview`: PreviewInfo?, 
+    var `reasoningEffort`: kotlin.String?, 
+    var `cwd`: kotlin.String?, 
+    var `startedAt`: kotlin.String?, 
+    var `lastActivityAt`: kotlin.String?
 ) {
     
     companion object
@@ -2152,6 +2811,10 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalTypePreviewInfo.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -2160,7 +2823,11 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterString.allocationSize(value.`name`) +
             FfiConverterString.allocationSize(value.`assistant`) +
             FfiConverterOptionalString.allocationSize(value.`branch`) +
-            FfiConverterOptionalTypePreviewInfo.allocationSize(value.`preview`)
+            FfiConverterOptionalTypePreviewInfo.allocationSize(value.`preview`) +
+            FfiConverterOptionalString.allocationSize(value.`reasoningEffort`) +
+            FfiConverterOptionalString.allocationSize(value.`cwd`) +
+            FfiConverterOptionalString.allocationSize(value.`startedAt`) +
+            FfiConverterOptionalString.allocationSize(value.`lastActivityAt`)
     )
 
     override fun write(value: ProjectSession, buf: ByteBuffer) {
@@ -2169,6 +2836,62 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterString.write(value.`assistant`, buf)
             FfiConverterOptionalString.write(value.`branch`, buf)
             FfiConverterOptionalTypePreviewInfo.write(value.`preview`, buf)
+            FfiConverterOptionalString.write(value.`reasoningEffort`, buf)
+            FfiConverterOptionalString.write(value.`cwd`, buf)
+            FfiConverterOptionalString.write(value.`startedAt`, buf)
+            FfiConverterOptionalString.write(value.`lastActivityAt`, buf)
+    }
+}
+
+
+
+data class ProjectSessionState (
+    var `session`: ProjectSession, 
+    var `status`: SessionStatus?, 
+    var `terminal`: TerminalViewState, 
+    var `chat`: ChatViewState, 
+    var `browser`: BrowserViewState, 
+    var `exited`: kotlin.Boolean, 
+    var `exitCode`: kotlin.Int?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProjectSessionState: FfiConverterRustBuffer<ProjectSessionState> {
+    override fun read(buf: ByteBuffer): ProjectSessionState {
+        return ProjectSessionState(
+            FfiConverterTypeProjectSession.read(buf),
+            FfiConverterOptionalTypeSessionStatus.read(buf),
+            FfiConverterTypeTerminalViewState.read(buf),
+            FfiConverterTypeChatViewState.read(buf),
+            FfiConverterTypeBrowserViewState.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProjectSessionState) = (
+            FfiConverterTypeProjectSession.allocationSize(value.`session`) +
+            FfiConverterOptionalTypeSessionStatus.allocationSize(value.`status`) +
+            FfiConverterTypeTerminalViewState.allocationSize(value.`terminal`) +
+            FfiConverterTypeChatViewState.allocationSize(value.`chat`) +
+            FfiConverterTypeBrowserViewState.allocationSize(value.`browser`) +
+            FfiConverterBoolean.allocationSize(value.`exited`) +
+            FfiConverterOptionalInt.allocationSize(value.`exitCode`)
+    )
+
+    override fun write(value: ProjectSessionState, buf: ByteBuffer) {
+            FfiConverterTypeProjectSession.write(value.`session`, buf)
+            FfiConverterOptionalTypeSessionStatus.write(value.`status`, buf)
+            FfiConverterTypeTerminalViewState.write(value.`terminal`, buf)
+            FfiConverterTypeChatViewState.write(value.`chat`, buf)
+            FfiConverterTypeBrowserViewState.write(value.`browser`, buf)
+            FfiConverterBoolean.write(value.`exited`, buf)
+            FfiConverterOptionalInt.write(value.`exitCode`, buf)
     }
 }
 
@@ -2184,7 +2907,11 @@ data class SessionStatus (
     var `yolo`: kotlin.Boolean, 
     var `preview`: PreviewInfo?, 
     var `sessionName`: kotlin.String?, 
-    var `viewers`: kotlin.UInt?
+    var `viewers`: kotlin.UInt?, 
+    var `reasoningEffort`: kotlin.String?, 
+    var `cwd`: kotlin.String?, 
+    var `startedAt`: kotlin.String?, 
+    var `lastActivityAt`: kotlin.String?
 ) {
     
     companion object
@@ -2206,6 +2933,10 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalTypePreviewInfo.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -2219,7 +2950,11 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterBoolean.allocationSize(value.`yolo`) +
             FfiConverterOptionalTypePreviewInfo.allocationSize(value.`preview`) +
             FfiConverterOptionalString.allocationSize(value.`sessionName`) +
-            FfiConverterOptionalUInt.allocationSize(value.`viewers`)
+            FfiConverterOptionalUInt.allocationSize(value.`viewers`) +
+            FfiConverterOptionalString.allocationSize(value.`reasoningEffort`) +
+            FfiConverterOptionalString.allocationSize(value.`cwd`) +
+            FfiConverterOptionalString.allocationSize(value.`startedAt`) +
+            FfiConverterOptionalString.allocationSize(value.`lastActivityAt`)
     )
 
     override fun write(value: SessionStatus, buf: ByteBuffer) {
@@ -2233,6 +2968,10 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalTypePreviewInfo.write(value.`preview`, buf)
             FfiConverterOptionalString.write(value.`sessionName`, buf)
             FfiConverterOptionalUInt.write(value.`viewers`, buf)
+            FfiConverterOptionalString.write(value.`reasoningEffort`, buf)
+            FfiConverterOptionalString.write(value.`cwd`, buf)
+            FfiConverterOptionalString.write(value.`startedAt`, buf)
+            FfiConverterOptionalString.write(value.`lastActivityAt`, buf)
     }
 }
 
@@ -2317,6 +3056,46 @@ public object FfiConverterTypeSshCredentials: FfiConverterRustBuffer<SshCredenti
             FfiConverterUShort.write(value.`port`, buf)
             FfiConverterString.write(value.`username`, buf)
             FfiConverterTypeSshAuth.write(value.`auth`, buf)
+    }
+}
+
+
+
+data class TerminalViewState (
+    var `rows`: kotlin.UShort, 
+    var `cols`: kotlin.UShort, 
+    var `scrollback`: kotlin.ByteArray, 
+    var `hasSnapshot`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTerminalViewState: FfiConverterRustBuffer<TerminalViewState> {
+    override fun read(buf: ByteBuffer): TerminalViewState {
+        return TerminalViewState(
+            FfiConverterUShort.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TerminalViewState) = (
+            FfiConverterUShort.allocationSize(value.`rows`) +
+            FfiConverterUShort.allocationSize(value.`cols`) +
+            FfiConverterByteArray.allocationSize(value.`scrollback`) +
+            FfiConverterBoolean.allocationSize(value.`hasSnapshot`)
+    )
+
+    override fun write(value: TerminalViewState, buf: ByteBuffer) {
+            FfiConverterUShort.write(value.`rows`, buf)
+            FfiConverterUShort.write(value.`cols`, buf)
+            FfiConverterByteArray.write(value.`scrollback`, buf)
+            FfiConverterBoolean.write(value.`hasSnapshot`, buf)
     }
 }
 
@@ -2436,6 +3215,104 @@ public object FfiConverterTypeConnectionHealth : FfiConverterRustBuffer<Connecti
                 buf.putInt(3)
                 FfiConverterString.write(value.`reason`, buf)
                 FfiConverterBoolean.write(value.`auth`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+sealed class SessionLifecycleCore {
+    
+    object Creating : SessionLifecycleCore()
+    
+    
+    object Live : SessionLifecycleCore()
+    
+    
+    data class Exited(
+        val `code`: kotlin.Int) : SessionLifecycleCore() {
+        companion object
+    }
+    
+    data class FailedToStart(
+        val `reason`: kotlin.String) : SessionLifecycleCore() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSessionLifecycleCore : FfiConverterRustBuffer<SessionLifecycleCore>{
+    override fun read(buf: ByteBuffer): SessionLifecycleCore {
+        return when(buf.getInt()) {
+            1 -> SessionLifecycleCore.Creating
+            2 -> SessionLifecycleCore.Live
+            3 -> SessionLifecycleCore.Exited(
+                FfiConverterInt.read(buf),
+                )
+            4 -> SessionLifecycleCore.FailedToStart(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: SessionLifecycleCore) = when(value) {
+        is SessionLifecycleCore.Creating -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SessionLifecycleCore.Live -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is SessionLifecycleCore.Exited -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterInt.allocationSize(value.`code`)
+            )
+        }
+        is SessionLifecycleCore.FailedToStart -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: SessionLifecycleCore, buf: ByteBuffer) {
+        when(value) {
+            is SessionLifecycleCore.Creating -> {
+                buf.putInt(1)
+                Unit
+            }
+            is SessionLifecycleCore.Live -> {
+                buf.putInt(2)
+                Unit
+            }
+            is SessionLifecycleCore.Exited -> {
+                buf.putInt(3)
+                FfiConverterInt.write(value.`code`, buf)
+                Unit
+            }
+            is SessionLifecycleCore.FailedToStart -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3128,6 +4005,102 @@ public object FfiConverterOptionalTypePreviewInfo: FfiConverterRustBuffer<Previe
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeProjectSessionState: FfiConverterRustBuffer<ProjectSessionState?> {
+    override fun read(buf: ByteBuffer): ProjectSessionState? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeProjectSessionState.read(buf)
+    }
+
+    override fun allocationSize(value: ProjectSessionState?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeProjectSessionState.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ProjectSessionState?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeProjectSessionState.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeSessionStatus: FfiConverterRustBuffer<SessionStatus?> {
+    override fun read(buf: ByteBuffer): SessionStatus? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSessionStatus.read(buf)
+    }
+
+    override fun allocationSize(value: SessionStatus?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSessionStatus.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SessionStatus?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSessionStatus.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeSessionLifecycleCore: FfiConverterRustBuffer<SessionLifecycleCore?> {
+    override fun read(buf: ByteBuffer): SessionLifecycleCore? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSessionLifecycleCore.read(buf)
+    }
+
+    override fun allocationSize(value: SessionLifecycleCore?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSessionLifecycleCore.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SessionLifecycleCore?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSessionLifecycleCore.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -3146,6 +4119,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChatEvent: FfiConverterRustBuffer<List<ChatEvent>> {
+    override fun read(buf: ByteBuffer): List<ChatEvent> {
+        val len = buf.getInt()
+        return List<ChatEvent>(len) {
+            FfiConverterTypeChatEvent.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChatEvent>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChatEvent.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChatEvent>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChatEvent.write(it, buf)
         }
     }
 }
