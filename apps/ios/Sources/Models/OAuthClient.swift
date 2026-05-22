@@ -94,6 +94,23 @@ struct OAuthCredential: Codable, Sendable, Equatable {
         case lastRefresh = "last_refresh"
         case agentIdentity = "agent_identity"
     }
+
+    // Custom encode: codex CLI's auth.json always emits OPENAI_API_KEY
+    // (even on the ChatGPT path where it's null). Default JSONEncoder
+    // omits nil optionals — emit explicit null for that one key so the
+    // byte-for-byte parity with codex-rs/login/src/auth/storage.rs holds.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(authMode, forKey: .authMode)
+        if let openaiAPIKey {
+            try c.encode(openaiAPIKey, forKey: .openaiAPIKey)
+        } else {
+            try c.encodeNil(forKey: .openaiAPIKey)
+        }
+        try c.encodeIfPresent(tokens, forKey: .tokens)
+        try c.encodeIfPresent(lastRefresh, forKey: .lastRefresh)
+        try c.encodeIfPresent(agentIdentity, forKey: .agentIdentity)
+    }
 }
 
 /// Errors surfaced from `OAuthClient.startLogin()`. The UI maps them to
