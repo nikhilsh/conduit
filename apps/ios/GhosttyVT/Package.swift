@@ -33,20 +33,20 @@ let package = Package(
         .library(name: "GhosttyVT", targets: ["GhosttyVT"]),
     ],
     targets: [
-        // Prebuilt static library + headers from the Ghostty `tip`
-        // release. Module name baked into the modulemap is
-        // `GhosttyVt` (lowercase t) — that's what `canImport` checks
-        // against in Sources/GhosttyVT/Terminal.swift.
-        .binaryTarget(
-            name: "GhosttyVtKit",
-            url: "https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip",
-            checksum: "679ef4c585d4d9bfd27fd2f1c93494e783cf756678976bf2ab5995f6521c3544"
-        ),
+        // Stage 1 binaryTarget removed — ghostty-org/ghostty does
+        // not yet publish a stable `tip` release asset whose sha256
+        // we can pin. The `Sources/GhosttyVT/Terminal.swift` wrapper
+        // is gated by `#if canImport(GhosttyVt)`, so the iOS app
+        // continues to build against the placeholder
+        // `GhosttyTerminalView` until upstream cuts a release we can
+        // pin. Re-add the `.binaryTarget(name: "GhosttyVtKit", …)`
+        // entry along with the matching update to
+        // `scripts/fetch-ghostty-vt-xcframework.sh` when that lands.
         // Thin Swift wrapper. Re-exports the C symbols through a
         // typed Swift API (Terminal class + TerminalSnapshot struct).
         .target(
             name: "GhosttyVT",
-            dependencies: ["GhosttyVtKit"],
+            dependencies: [],
             path: "Sources/GhosttyVT"
         ),
         .testTarget(

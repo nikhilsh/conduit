@@ -298,6 +298,23 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
         }
     }
 
+    // Hoisted out of the Column scope so the showExpandedComposer
+    // dialog (which lives at the ChatPage function scope, outside
+    // Column) can also reach it. Single dispatch path, two call sites.
+    val dispatchSend: () -> Unit = {
+        val msg = composeOutgoingMessage(
+            draft = draft,
+            pinnedContexts = pinnedContexts,
+            pendingAttachments = pendingAttachments,
+        )
+        if (msg.isNotEmpty()) {
+            store.sendChat(session.id, msg)
+            draft = ""
+            pendingAttachments = emptyList()
+            autoFollow = true
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
@@ -337,19 +354,6 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
         }
 
         HorizontalDivider()
-        val dispatchSend: () -> Unit = {
-            val msg = composeOutgoingMessage(
-                draft = draft,
-                pinnedContexts = pinnedContexts,
-                pendingAttachments = pendingAttachments,
-            )
-            if (msg.isNotEmpty()) {
-                store.sendChat(session.id, msg)
-                draft = ""
-                pendingAttachments = emptyList()
-                autoFollow = true
-            }
-        }
         ConversationComposer(
             draft = draft,
             quickReplies = remember(events) { QuickReplyDetector.suggestions(events) },
