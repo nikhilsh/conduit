@@ -592,10 +592,22 @@ final class SessionStore {
             savedServers[i].isDefault = savedServers[i].id == serverID
         }
         Self.persistSavedServers(savedServers)
+        // Bug #1: tapping the active server pill used to call
+        // `disconnect()`+`connect()` unconditionally. That tore down
+        // the live `SweKittyClient` and the subsequent `refreshSessions`
+        // observed an empty `list_sessions()` (the fresh Rust client
+        // has no `SessionStatus` deltas yet), wiping the visible
+        // session list until status frames trickled back in. If the
+        // endpoint hasn't actually changed AND we're already linked
+        // we just persist the default flag and bail — no need to
+        // bounce the socket.
+        let endpointChanged = endpoint != server.endpoint
         endpoint = server.endpoint
         if autoConnect {
-            disconnect()
-            connect()
+            if endpointChanged || !harness.isReachable {
+                disconnect()
+                connect()
+            }
         }
     }
 
@@ -735,7 +747,14 @@ final class SessionStore {
     }
 
     func sendChat(sessionID: String, message: String) {
-        guard let client else { return }
+        // Bug #2: previously this method returned early when `client`
+        // was nil — that swallowed the optimistic local echo *and* the
+        // outbound WS write, so typing into the composer simply
+        // disappeared if the user happened to send during a reconnect
+        // window. Always materialize the local echo first so the user
+        // sees their own message, and only skip the outbound WS write
+        // when we genuinely have no transport.
+        //
         // Optimistic local echo so the user sees their message immediately.
         // The harness doesn't loop user messages back as `on_chat_event`, so
         // without this the chat tab stays empty until the assistant replies.
@@ -764,6 +783,7 @@ final class SessionStore {
             ensureRustSessionPresent(sessionID)
             _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
         }
+        guard let client else { return }
         Task { try? await client.sendChat(sessionId: sessionID, msg: message) }
     }
 
@@ -910,7 +930,16 @@ final class SessionStore {
 
     fileprivate func refreshSessions() {
         guard let client else { return }
-        self.sessions = client.listSessions()
+        let listed = client.listSessions()
+        // Bug #1 follow-up: a fresh client returns `[]` until the
+        // first `SessionStatus` delta lands, so blindly assigning
+        // `self.sessions = listed` would briefly hide the existing
+        // rows on every reconnect. Replace only when we have at
+        // least one entry; otherwise keep the prior list visible
+        // and let subsequent status frames refresh it incrementally.
+        if !listed.isEmpty {
+            self.sessions = listed
+        }
         for s in self.sessions where sessionLifecycle[s.id] == nil {
             sessionLifecycle[s.id] = .live
         }
@@ -975,12 +1004,19 @@ final class SessionStore {
             // Preserve locally-echoed `local-*` items not yet reflected by
             // the server (matched by role+content). Once the harness mirrors
             // the same text back under a server id, the local copy drops.
+            //
+            // Bug #3 nuance: the broker doesn't loop user messages back as
+            // `on_chat_event`, so the user's `local-*` echo lives forever
+            // in `stillPending`. Appending it *after* `items` would render
+            // the assistant's reply above the user's prompt — confusing.
+            // Splice by timestamp so order stays chronological.
             let existing = conversationLog[sessionID] ?? []
             let serverFingerprints = Set(items.map { "\($0.role)|\($0.content)" })
             let stillPending = existing.filter {
                 $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
             }
-            conversationLog[sessionID] = items + stillPending
+            let merged = items + stillPending
+            conversationLog[sessionID] = merged.sorted { $0.ts < $1.ts }
         }
     }
 
