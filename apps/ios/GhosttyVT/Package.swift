@@ -49,13 +49,43 @@ let package = Package(
         // `#if canImport(GhosttyVt)`-gated so a stale-checksum
         // resolve failure degrades to the Stage 0 placeholder
         // instead of breaking the iOS build outright.
-        // Stage 2 binaryTarget commented out — link-time conflict
-        // with the SweKittyWidgets extension added in #77 (xcodebuild
-        // emits "Multiple commands produce include/module.modulemap"
-        // when the GhosttyKit xcframework's module map is processed
-        // twice, once per target). Re-enable when upstream cuts a
-        // stable tagged release we can pin AND we figure out how to
-        // exclude the package from the widget target's link step.
+        // Stage 2 binaryTarget commented out — xcodebuild emits
+        //   "Multiple commands produce
+        //    Debug-iphonesimulator/include/module.modulemap"
+        // because BOTH ghostty-vt.xcframework AND SweKittyCore.xcframework
+        // are "-library + -headers" style xcframeworks (see
+        // `apps/ios/build-rust.sh`'s `xcodebuild -create-xcframework
+        // -library ... -headers ...` invocation). For that flavor Xcode's
+        // ProcessXCFramework task extracts the bundled `module.modulemap`
+        // to a SHARED, target-agnostic path
+        // `$BUILT_PRODUCTS_DIR/include/module.modulemap` — when two
+        // such xcframeworks land in the same build their outputs collide
+        // and the build system halts. PR #88's diagnostic blamed the
+        // SweKittyWidgets extension target; that was wrong. The widget
+        // target has no `dependencies:` block at all (project.yml ~L135),
+        // so xcodegen never adds GhosttyVT to it. The collision is
+        // SweKittyCore <-> ghostty-vt, not host <-> widget. Re-enabling
+        // the binaryTarget requires fixing the xcframework packaging,
+        // not the project-level link graph. Two options for the next
+        // agent:
+        //   1. Repackage SweKittyCore.xcframework as a `.framework`-flavored
+        //      xcframework (xcodebuild -create-xcframework -framework ...
+        //      with a modulemap inside a `Modules/` subdir per arch slice)
+        //      so its module map no longer lands at the shared
+        //      `include/module.modulemap` path. Touches `build-rust.sh`
+        //      and requires the framework bundle to embed
+        //      `swe_kitty_coreFFI.h` + a per-framework Info.plist.
+        //   2. Wait for upstream Ghostty to ship a framework-flavored
+        //      xcframework asset (currently they only publish the
+        //      static-lib flavor) and ride option 1 once it lands.
+        // Until then leave the binaryTarget commented out; the
+        // `#if canImport(GhosttyVt)`-gated wrapper paints the Stage 0
+        // placeholder and keeps the iOS build green. sha256 below stays
+        // pinned (re-verified against the live `tip` asset on
+        // 2026-05-22 — still
+        // `0c29329a2e1012d8a6ebf05f164c589aeeaba5d417dd93e075c073ad3fa44ba7`)
+        // so option 1 can re-enable with no checksum bump if it lands
+        // before the next upstream nightly rotation.
         // .binaryTarget(
         //     name: "GhosttyVtKit",
         //     url: "https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip",
