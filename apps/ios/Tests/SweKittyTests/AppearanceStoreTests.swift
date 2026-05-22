@@ -41,16 +41,17 @@ struct AppearanceStoreTests {
 
     @Test func persistsExperimentalLitterUI() {
         // Trash-rebuild feature flag for the parallel `LitterUI/` view
-        // tree. Default OFF; flipping it on at runtime persists across
-        // relaunches so the user only has to opt in once. See
-        // apps/ios/Sources/LitterUI/.
+        // tree. PR #119 cutover flipped the default to ON — LitterUI
+        // is now the only UI; the flag is kept for one cycle as an
+        // emergency revert. This test pins persistence: flipping it
+        // OFF survives a relaunch.
         let defaults = freshDefaults()
         let first = AppearanceStore(defaults: defaults)
-        #expect(first.experimentalLitterUI == false)
-        first.experimentalLitterUI = true
+        #expect(first.experimentalLitterUI == true)
+        first.experimentalLitterUI = false
 
         let second = AppearanceStore(defaults: defaults)
-        #expect(second.experimentalLitterUI == true)
+        #expect(second.experimentalLitterUI == false)
     }
 
     @Test func persistsExperimentalNativeTerminal() {
