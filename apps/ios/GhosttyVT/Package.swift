@@ -1,6 +1,6 @@
 // swift-tools-version:5.10
 //
-// Stage 1 wrapper package for the prebuilt `ghostty-vt.xcframework`
+// Stage 1+2 wrapper package for the prebuilt `ghostty-vt.xcframework`
 // release asset published by ghostty-org/ghostty (see
 // `scripts/fetch-ghostty-vt-xcframework.sh` and
 // `docs/PLAN-TERMINAL-REWRITE.md`).
@@ -19,8 +19,12 @@
 // against the placeholder path even when the framework is missing.
 //
 // URL + checksum MUST match `scripts/fetch-ghostty-vt-xcframework.sh`
-// exactly. When upstream rotates the `tip` asset, re-pin both files
-// together.
+// exactly. Upstream rotates the `tip` asset on every nightly cut, so
+// when SPM resolve starts failing with a checksum mismatch, re-pin
+// both files together. There is no stable tagged release as of
+// 2026-05-22 — only `tip` — so this pin will go stale on the next
+// upstream nightly. See `docs/PLAN-TERMINAL-REWRITE.md` Stage 2
+// status for the periodic-refresh discipline.
 import PackageDescription
 
 let package = Package(
@@ -33,20 +37,28 @@ let package = Package(
         .library(name: "GhosttyVT", targets: ["GhosttyVT"]),
     ],
     targets: [
-        // Stage 1 binaryTarget removed — ghostty-org/ghostty does
-        // not yet publish a stable `tip` release asset whose sha256
-        // we can pin. The `Sources/GhosttyVT/Terminal.swift` wrapper
-        // is gated by `#if canImport(GhosttyVt)`, so the iOS app
-        // continues to build against the placeholder
-        // `GhosttyTerminalView` until upstream cuts a release we can
-        // pin. Re-add the `.binaryTarget(name: "GhosttyVtKit", …)`
-        // entry along with the matching update to
-        // `scripts/fetch-ghostty-vt-xcframework.sh` when that lands.
+        // Stage 2: re-pin the prebuilt `ghostty-vt.xcframework`
+        // release asset. The sha256 was captured against the live
+        // `tip` asset on 2026-05-22. When the nightly rotates and
+        // SPM starts failing with a checksum mismatch, fetch the
+        // new asset, recompute its sha256, and bump both this entry
+        // and `scripts/fetch-ghostty-vt-xcframework.sh` together.
+        //
+        // The wrapper code in `Sources/GhosttyVT/Terminal.swift` and
+        // the iOS app's `GhosttyTerminalView.swift` both stay
+        // `#if canImport(GhosttyVt)`-gated so a stale-checksum
+        // resolve failure degrades to the Stage 0 placeholder
+        // instead of breaking the iOS build outright.
+        .binaryTarget(
+            name: "GhosttyVtKit",
+            url: "https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip",
+            checksum: "0c29329a2e1012d8a6ebf05f164c589aeeaba5d417dd93e075c073ad3fa44ba7"
+        ),
         // Thin Swift wrapper. Re-exports the C symbols through a
         // typed Swift API (Terminal class + TerminalSnapshot struct).
         .target(
             name: "GhosttyVT",
-            dependencies: [],
+            dependencies: ["GhosttyVtKit"],
             path: "Sources/GhosttyVT"
         ),
         .testTarget(

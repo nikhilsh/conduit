@@ -253,6 +253,86 @@ so flipping the flag at runtime stays a one-toggle revert.
 - xterm.js path still compiles and reachable when the flag is off
   (§E "xterm.js path — Stays compiled and reachable").
 
+## Stage 2 status — 2026-05-22
+
+**What shipped**
+
+- `apps/ios/GhosttyVT/Package.swift` re-adds the `.binaryTarget`
+  entry (PR #73 had removed it because the sha256 didn't resolve).
+  Pinned URL is `https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip`;
+  sha256 captured against the live `tip` asset on 2026-05-22:
+  `0c29329a2e1012d8a6ebf05f164c589aeeaba5d417dd93e075c073ad3fa44ba7`.
+  `scripts/fetch-ghostty-vt-xcframework.sh` mirrors the same pair.
+- `apps/ios/Sources/Views/GhosttyTerminalView.swift` replaces the
+  Stage 1 placeholder body with `GhosttyRenderView`: a `UIView`
+  subclass that conforms to `UIKeyInput`, hosts `TerminalAccessoryBar`
+  via `inputAccessoryView`, and renders the grid through CoreText
+  into the view's own `draw(_:)` rect. The flag-on branch in
+  `ProjectView.tabContent` now wires `SessionStore.terminalBuffer`
+  → `Terminal.write(_:)` and routes keystrokes back through
+  `SessionStore.sendInput(...)`. xterm.js is **not** loaded on this
+  code path — `WKWebView` only spins up on the flag-off branch.
+- `apps/ios/GhosttyVT/Tests/GhosttyVTTests/TerminalRenderTests.swift`
+  exercises the render-path snapshot contract: multi-row write +
+  cursor advance, resize survives existing content, ANSI CUP escape
+  positions the cursor at the addressed cell. Same
+  `#if canImport(GhosttyVt)` guard as `TerminalTests` so a
+  stale-checksum bundle stays green.
+- The flag default stays `false`. Both code paths reachable —
+  toggling the experimental flag is the one-line revert.
+
+**Architectural pivot: renderer is CoreText, not Metal**
+
+The §E decision table called for `CAMetalLayer` driven by a Swift
+rendering shim. The risk log already flagged that
+`ghostty-vt.xcframework` ships only the parser/state half of
+libghostty — `vt/render.h` exposes incremental dirty-state
+metadata but no Metal/GL/CALayer surface. Building a Metal glyph
+pipeline from scratch for the Stage 2 acceptance criterion ("renders
+agent output end-to-end through Terminal.write(_:), no xterm.js
+loaded") is out of scope for this PR. Stage 2 therefore lands a
+CoreText-into-CALayer renderer driven by per-frame
+`terminal.snapshot()` reads; Stage 3 can swap the inner renderer to
+Metal (with a `vt/render.h` iterator and dirty-row tracking) without
+changing the call-site shape.
+
+**Deferred to Stage 3+**
+
+- **Selection / copy / paste.** `vt/selection.h` is in the
+  xcframework but the Swift wrapper does not bridge it yet; tap-and-
+  hold falls back to the system default (i.e. nothing). Stage 2
+  acceptance for "selection works without a JS bridge" is **not
+  met** by this PR; tracked as the first Stage 3 task.
+- **SGR colors / styles in the renderer.** The VT half parses
+  styles correctly (and the C ABI exposes them via the cell API),
+  but the renderer paints every cell with the default foreground.
+  Wide / combining / emoji clusters draw per-cell — double-width
+  cells aren't sized at 2× width.
+- **TalkBack / a11y.** The native view has no `UIAccessibility`
+  rotor support yet; xterm.js had no per-row a11y either, so this
+  is parity-with-xterm-js, not a regression, but it's still a
+  Stage 3 task.
+- **Render-state dirty tracking.** Current path re-snapshots every
+  frame the buffer grows. Acceptable for chat-shaped TUIs; needs
+  the `vt/render.h` iterator + per-row dirty flags to hit the
+  "60 fps on `cat large.log`" performance bar.
+- **Font / palette config from `AppearanceStore`.** Hardcoded
+  monospace at 13pt + black/white. Stage 3 reads the user's
+  appearance prefs.
+
+**Risk mitigation actually used**
+
+- The `tip` asset rotates on every upstream nightly cut, so the
+  sha256 pinned here will go stale. When SPM resolve fails with a
+  checksum mismatch, the iOS app keeps building because
+  `Terminal.swift`, `GhosttyTerminalView.swift`, and the test
+  bundle all stay `#if canImport(GhosttyVt)`-gated. The flag-off
+  xterm.js path is unaffected.
+- The `draw(_:)` path has a fallback status line that surfaces when
+  `cachedSnapshot` is nil (framework unavailable or first-frame
+  race), so a degraded build shows a readable message instead of
+  a black void.
+
 ## Android pick — Termux `terminal-view`
 
 iOS commits to libghostty. Android needs its own pick — the same

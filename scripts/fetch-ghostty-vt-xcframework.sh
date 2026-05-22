@@ -21,12 +21,16 @@ OUT_DIR="$REPO_ROOT/apps/ios/GhosttyVT"
 ZIP_PATH="$OUT_DIR/ghostty-vt.xcframework.zip"
 XCFW_PATH="$OUT_DIR/ghostty-vt.xcframework"
 
-# Pinned against the Ghostty "tip" release as of 2026-05-20. If
-# upstream cuts a new nightly, both URL host and checksum stay valid
-# until the asset is re-uploaded; verify with `shasum -a 256` if a
-# checksum-mismatch error surfaces.
+# Pinned against the Ghostty "tip" release as of 2026-05-22 (Stage 2
+# re-pin). Upstream rotates the `tip` asset on every nightly cut, so
+# this checksum will go stale; whenever SPM resolve fails with a
+# checksum mismatch, recompute via:
+#   curl -fsSL "$ASSET_URL" | shasum -a 256
+# and update BOTH this script and apps/ios/GhosttyVT/Package.swift
+# in lockstep. No stable tagged release exists upstream yet — only
+# the rotating `tip` tag — so this pin needs periodic refresh.
 ASSET_URL="https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip"
-EXPECTED_SHA256="679ef4c585d4d9bfd27fd2f1c93494e783cf756678976bf2ab5995f6521c3544"
+EXPECTED_SHA256="0c29329a2e1012d8a6ebf05f164c589aeeaba5d417dd93e075c073ad3fa44ba7"
 
 MODE="${1:-fetch}"
 
