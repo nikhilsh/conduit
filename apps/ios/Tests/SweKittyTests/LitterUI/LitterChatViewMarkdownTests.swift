@@ -55,7 +55,7 @@ struct LitterChatViewMarkdownTests {
         #expect(plain == "Hello world")
     }
 
-    @Test func messageRenderCacheKeysOnItemRevisionPair() {
+    @Test @MainActor func messageRenderCacheKeysOnItemRevisionPair() {
         // Set a value for (msg-cutover-1, 100), confirm we get it back
         // at the same key; a different (item, rev) is a miss. Lighter
         // assertion than the broader cache eviction coverage already
