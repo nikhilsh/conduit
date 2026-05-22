@@ -700,3 +700,114 @@ shape to iOS.
   back to `TermuxPlaceholderView` and the app keeps working —
   identical user-visible behavior to Stage 0, just with a different
   status string.
+
+## Android Stage 2 status — 2026-05-22
+
+**What worked**
+
+- `TermuxTerminalView.kt` now routes the broker's live PTY byte
+  stream into Termux's `TerminalEmulator`. The Compose
+  `AndroidView.update` lambda diffs
+  `SessionStore.terminalBuffer[session.id]` against
+  `TermuxMount.lastFedByteCount` (mirroring `WebTerminal.kt`'s
+  `lastFedByteCount` discipline) and either appends the tail bytes
+  via `session.emulator.append(bytes, len)` or — when the buffer
+  shrank, signalling a snapshot replay — calls `session.reset()`
+  then replays the entire snapshot. A backup `LaunchedEffect` keyed
+  on `(sessionId, buffer, emulatorReadyTick)` re-runs the same
+  diff once the emulator finishes its first-layout init, so broker
+  bytes that arrived **before** the emulator was ready aren't lost.
+- User input round-trip:
+  - Soft-keyboard / printable code points → `BrokerTerminalViewClient.onCodePoint`
+    returns `true` (consuming the event before TerminalView calls
+    `mTermSession.writeCodePoint`), folds Ctrl-X into the
+    corresponding C0 byte (lifted from `TerminalView.inputCodePoint`),
+    UTF-8 encodes, and forwards to `SessionStore.sendInput(sessionId, bytes)`.
+  - Hardware special keys (arrows / Enter / Tab / Esc / F-keys /
+    Ctrl-X) → `BrokerTerminalViewClient.onKeyDown` runs the same
+    `KeyHandler.getCode(keyCode, mod, cursorApp, keypadApp)`
+    Termux's TerminalView would have used, and forwards the
+    resulting ANSI sequence to the broker. Returning `true`
+    consumes the event so TerminalView's internal
+    `mTermSession.write(code)` path never runs.
+- Resize → `SessionStore.resize`: a `View.OnLayoutChangeListener`
+  on the `TerminalView` reads `emulator.mColumns` / `emulator.mRows`
+  after each layout pass and forwards to
+  `store.resize(sessionId, rows, cols)` whenever they change.
+  Termux's own `onSizeChanged → mTermSession.updateSize` runs
+  first; we piggyback on the resulting emulator state instead of
+  re-deriving it.
+- One pure-data JUnit test (`TermuxSessionConfigTest` —
+  `computeFeed` cases for grow / equal / shrink / empty-initial)
+  locks the Stage 2 reducer. We skip Robolectric for the actual
+  mount because `TerminalEmulator.append` is fine on the JVM but
+  `TerminalSession`'s `updateSize` calls `JNI.createSubprocess`,
+  which needs an on-device runtime.
+
+**Risk mitigation actually used**
+
+- `com.termux.terminal.TerminalSession` is declared `final`, so we
+  can't subclass to elide its `JNI.createSubprocess` call. The
+  Stage 2 workaround: spawn `/system/bin/sleep 2147483647`
+  (`SLEEP_FOREVER`, ~68 years) instead of `/system/bin/sh`. The
+  local PTY still exists (it has to — `TerminalView` needs a
+  non-null `mEmulator`, which only `TerminalSession.initializeEmulator`
+  creates), but it produces no output that could race the broker
+  bytes. The user-input side never reaches the local PTY because
+  the client hooks consume every keystroke before `mTermSession.write`
+  is called.
+- Mount failure still falls back to `TermuxPlaceholderView`. The
+  factory body wraps in `try { ... } catch (t: Throwable) { ... }`;
+  a `NoClassDefFoundError` or a hardened-device JNI failure logs to
+  `Log.w("TermuxTerminalView", ...)` and the user sees the Stage 0
+  placeholder, not a crash.
+- Toggling `experimentalNativeTerminal` off still restores the
+  xterm.js path inside one Compose recomposition. The factory is
+  bypassed entirely when the flag is off — no Termux classes load.
+
+**Gaps relative to the full Stage 2 acceptance criteria**
+
+The §"Stage 2 acceptance criteria" list in this doc is the iOS
+Stage 2 (libghostty + Metal renderer) bar. The **Android** Stage 2
+shape (per the §"Android staging" section) is "input + selection
+parity"; what landed in this PR covers the byte-stream + input
+half. Still queued for a follow-up Android Stage 2.1 / 2.2:
+
+- Local PTY responses (emulator-generated CSI replies, mouse
+  reporting, OSC clipboard writes, device-status responses) still
+  go to the local `/system/bin/sleep` PTY where they're dropped.
+  Most TUIs don't depend on these, but `vim`'s mouse mode and
+  `tmux`'s focus-tracking will under-react. Fix path: read the
+  emulator's `mSession` output queue via reflection (the field is
+  package-private), drain it on a side thread, and forward to the
+  broker — or wait for Termux to publish a "headless TerminalSession"
+  shape upstream.
+- `IME composing` text isn't intercepted yet — Compose users with
+  Japanese / Chinese / Korean keyboards will see partial-commit
+  artifacts. The path through `onCreateInputConnection` →
+  `BaseInputConnection.commitText` lands `setComposingText` calls
+  on `TerminalView` directly; we'd need to override the
+  `InputConnection` to mirror that into broker writes.
+- Selection / copy / link-tap / TalkBack still use Termux's
+  built-in handlers. Those write to `ClipboardManager` correctly
+  (Stage 3 acceptance), but selection mode currently competes with
+  the broker's own bracketed-paste semantics on some devices —
+  hasn't bitten yet in dev testing, flagged for the soak.
+- The Compose accessory bar (sticky Ctrl, arrow nipple, mic)
+  hasn't been wired through `BrokerTerminalViewClient.readControlKey`
+  / `readAltKey` / `readShiftKey` yet — those still return `false`.
+  Stage 2 only covers direct hardware/soft keyboard input.
+- NOTICE attribution for the Termux modules is still queued
+  (carried over from Stage 1 deferred list).
+
+**Rollback shape**
+
+- Flag-off path is unchanged: `ProjectScreen` reads
+  `experimentalNativeTerminal` and routes to `TerminalPage` (the
+  xterm.js `WebTerminal`). The Termux classes never get loaded
+  when the flag is off, so a Stage 2 regression is a one-toggle
+  revert.
+- Within the flag-on path, a runtime mount failure still
+  short-circuits to `TermuxPlaceholderView` via the factory's
+  `try/catch`. The user sees a placeholder instead of a crash;
+  `adb logcat -s TermuxTerminalView` shows the underlying error.
