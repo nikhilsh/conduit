@@ -836,7 +836,7 @@ final class SessionStore {
     /// care about. Same encoding shape as `AgentLoginSheet`'s
     /// `logCredentialToConsole` (PR #100) so the spike-time
     /// console-eyeball output is exactly what travels the wire.
-    static func encodeCredentialAsJSONString(_ credential: OAuthCredential) throws -> String {
+    nonisolated static func encodeCredentialAsJSONString(_ credential: OAuthCredential) throws -> String {
         let encoder = JSONEncoder()
         let data: Data
         switch credential {
