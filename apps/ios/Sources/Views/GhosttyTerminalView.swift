@@ -270,9 +270,13 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         case .monospaced: design = .monospaced
         }
         let base = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        if let descriptor = base.fontDescriptor.withDesign(design),
-           let designed = UIFont(descriptor: descriptor, size: fontSize) {
-            font = designed
+        if let descriptor = base.fontDescriptor.withDesign(design) {
+            // `UIFont(descriptor:size:)` is non-optional in current SDKs —
+            // the prior `if let` form here failed compilation under
+            // Swift 6 with "initializer for conditional binding must
+            // have Optional type, not 'UIFont'". Unwrap only the
+            // descriptor and use the plain init for the font.
+            font = UIFont(descriptor: descriptor, size: fontSize)
         } else {
             font = base
         }
