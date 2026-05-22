@@ -156,6 +156,21 @@ final class SavedSessionsStore {
         persist()
     }
 
+    /// Remove every saved-session row whose session-id equals `id`.
+    /// Idempotent — no-op when the id is unknown. Used by the Sessions
+    /// history screen's swipe-to-delete: the user already deleted the
+    /// live row via `store.exit(...)`, this clears the persistent
+    /// `Resume` entry so the row doesn't reappear on next launch.
+    /// Matches across servers because the harness mints UUIDs unique
+    /// per session and the user expects "delete" to be terminal.
+    func remove(id: String) {
+        let before = sessions.count
+        sessions.removeAll { $0.id == id }
+        if sessions.count != before {
+            persist()
+        }
+    }
+
     // MARK: - Persistence
 
     private func persist() {

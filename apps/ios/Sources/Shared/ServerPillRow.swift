@@ -82,7 +82,7 @@ struct ServerPillRow: View {
 
     private func forgetSaved(_ model: ServerPillModel) {
         let savedID = String(model.id.dropFirst("saved:".count))
-        store.removeSavedServer(savedID)
+        store.forgetServer(savedID)
     }
 
     private func renameSaved(_ model: ServerPillModel) {

@@ -30,6 +30,10 @@ extension LitterUI {
         @State private var showAgentPicker = false
         @State private var showSessionsHistory = false
         @State private var selectedSessionID: String?
+        /// Confirmation alert state for the session-row swipe-to-delete.
+        /// `.alert(item:)` needs an Identifiable, so we wrap the target
+        /// session id (`Identifiable` via the inner struct).
+        @State private var pendingDelete: PendingSessionDelete?
 
         var body: some View {
             @Bindable var store = store
@@ -74,6 +78,24 @@ extension LitterUI {
                 .sheet(isPresented: $showSearch) {
                     // Search is a legacy view for now.
                     SessionSearchView().environment(store)
+                }
+                .alert(
+                    "Delete session?",
+                    isPresented: Binding(
+                        get: { pendingDelete != nil },
+                        set: { if !$0 { pendingDelete = nil } }
+                    ),
+                    presenting: pendingDelete
+                ) { target in
+                    Button("Delete", role: .destructive) {
+                        store.exit(sessionID: target.id)
+                        pendingDelete = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        pendingDelete = nil
+                    }
+                } message: { target in
+                    Text("This ends \(target.title) on the harness. The conversation history stays available under Sessions.")
                 }
                 .onChange(of: store.selectedSessionID) { _, new in
                     selectedSessionID = new
@@ -226,21 +248,46 @@ extension LitterUI {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    VStack(spacing: 4) {
-                        ForEach(rows) { row in
-                            HomeRowView(row: row)
-                                .onTapGesture {
-                                    if case .session(let id) = row.kind {
-                                        store.selectedSessionID = id
-                                        selectedSessionID = id
+                // Promoted from ScrollView+VStack to a `List` so each row
+                // can carry `.swipeActions` for the delete affordance —
+                // SwiftUI only honours swipe gestures on List/Form rows.
+                // `listStyle(.plain)` + clear backgrounds preserve the
+                // litter-faithful flat look from the prior layout.
+                List {
+                    ForEach(rows) { row in
+                        HomeRowView(row: row)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if case .session(let id) = row.kind {
+                                    store.selectedSessionID = id
+                                    selectedSessionID = id
+                                }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if case .session(let id) = row.kind {
+                                    Button(role: .destructive) {
+                                        pendingDelete = PendingSessionDelete(id: id, title: row.title)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
                                     }
                                 }
-                        }
+                            }
+                            .contextMenu {
+                                if case .session(let id) = row.kind {
+                                    Button(role: .destructive) {
+                                        pendingDelete = PendingSessionDelete(id: id, title: row.title)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 100)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
 
@@ -272,6 +319,15 @@ extension LitterUI {
             .padding(.bottom, 4)
         }
     }
+}
+
+/// Carrier for the alert-driven delete confirmation on the home
+/// sessions list. `Identifiable` so the `.alert(presenting:)` overload
+/// can key the presentation off the pending target, ensuring a stale
+/// id from a previous swipe doesn't survive into the next prompt.
+private struct PendingSessionDelete: Identifiable, Equatable {
+    let id: String
+    let title: String
 }
 
 private struct HomeRowView: View {

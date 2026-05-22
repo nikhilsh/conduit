@@ -96,6 +96,10 @@ struct SessionsScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var query: String = ""
+    /// Saved-session row pending deletion (drives the confirmation
+    /// alert for the swipe-to-delete affordance). Identifiable so the
+    /// alert can key its presentation off the pending row.
+    @State private var pendingDelete: PendingSavedSessionDelete?
 
     private var savedStore: SavedSessionsStore { SavedSessionsStore.shared }
 
@@ -127,6 +131,29 @@ struct SessionsScreen: View {
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
         .tint(SweKittyTheme.accentStrong)
+        .alert(
+            "Delete session?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { target in
+            Button("Delete", role: .destructive) {
+                // Exit on the harness if the session is still live;
+                // SavedSessionsStore.remove sweeps the historical
+                // index regardless. The exit() call is a no-op when
+                // the row is already terminal so this stays idempotent.
+                store.exit(sessionID: target.id)
+                SavedSessionsStore.shared.remove(id: target.id)
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: { target in
+            Text("Removes the saved entry and ends the session on the harness if it's still running.\n\n\(target.title)")
+        }
     }
 
     private var searchField: some View {
@@ -161,7 +188,15 @@ struct SessionsScreen: View {
                     ForEach(section.sessions, id: \.compoundID) { row in
                         sessionRow(row)
                             .listRowBackground(Color.clear)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    pendingDelete = PendingSavedSessionDelete(
+                                        id: row.id,
+                                        title: rowTitle(row)
+                                    )
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
                                 Button {
                                     resume(row)
                                 } label: {
@@ -322,4 +357,13 @@ struct SessionsScreen: View {
         f.timeStyle = .none
         return f.string(from: date)
     }
+}
+
+/// Carrier for the SessionsScreen swipe-to-delete confirmation alert.
+/// Identifiable so `.alert(presenting:)` keys correctly off the
+/// pending row and doesn't pick up a stale id between successive
+/// swipes.
+private struct PendingSavedSessionDelete: Identifiable, Equatable {
+    let id: String
+    let title: String
 }

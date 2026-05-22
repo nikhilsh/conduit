@@ -21,6 +21,9 @@ extension LitterUI {
 
         @State private var showAddServer = false
         @State private var showAgentLogin = false
+        /// Saved-server pending deletion (drives the confirmation alert
+        /// for the Settings → Servers swipe-to-delete affordance).
+        @State private var pendingServerDelete: PendingServerDelete?
 
         var body: some View {
             @Bindable var appearance = appearance
@@ -58,6 +61,24 @@ extension LitterUI {
                 }
                 .sheet(isPresented: $showAgentLogin) {
                     LitterUI.AgentLoginSheet()
+                }
+                .alert(
+                    "Forget server?",
+                    isPresented: Binding(
+                        get: { pendingServerDelete != nil },
+                        set: { if !$0 { pendingServerDelete = nil } }
+                    ),
+                    presenting: pendingServerDelete
+                ) { target in
+                    Button("Forget", role: .destructive) {
+                        store.forgetServer(target.id)
+                        pendingServerDelete = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        pendingServerDelete = nil
+                    }
+                } message: { target in
+                    Text("Drops the saved pairing for \(target.name). Sessions already running on this server keep running until you delete them.")
                 }
             }
         }
@@ -185,22 +206,44 @@ extension LitterUI {
         private var serversSection: some View {
             sectionCard(title: "Servers") {
                 VStack(spacing: 0) {
-                    ForEach(store.savedServers) { server in
-                        LitterUI.ListRow(
-                            icon: "server.rack",
-                            title: server.name,
-                            subtitle: server.endpoint.displayHost,
-                            iconTint: LitterUI.Palette.brand.color
-                        ) {
-                            if server.isDefault {
-                                Text("Default")
-                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .litterGlassCapsule(tint: LitterUI.Palette.brand.color.opacity(0.22), config: .pill)
+                    // Saved-server rows live inside an embedded `List` so
+                    // each carries `.swipeActions` for the Forget gesture —
+                    // SwiftUI only honours trailing-swipe on List rows. The
+                    // list takes a fixed height (row count × estimated row
+                    // height) so the surrounding scroll view continues to
+                    // own vertical layout; the inner list itself never
+                    // scrolls. `listStyle(.plain)` + clear backgrounds keep
+                    // the litter glass-card look from the prior VStack.
+                    if !store.savedServers.isEmpty {
+                        List {
+                            ForEach(store.savedServers) { server in
+                                savedServerRow(server)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                                    .listRowInsets(EdgeInsets())
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        Button(role: .destructive) {
+                                            pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
+                                        } label: {
+                                            Label("Forget", systemImage: "trash")
+                                        }
+                                    }
+                                    .contextMenu {
+                                        Button(role: .destructive) {
+                                            pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
+                                        } label: {
+                                            Label("Forget", systemImage: "trash")
+                                        }
+                                    }
                             }
                         }
-                        rowDivider(after: server, in: store.savedServers)
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .scrollDisabled(true)
+                        .frame(height: CGFloat(store.savedServers.count) * 56)
+                        Divider()
+                            .background(LitterUI.Palette.separator.color)
+                            .padding(.leading, 46)
                     }
                     Button {
                         showAddServer = true
@@ -217,6 +260,24 @@ extension LitterUI {
                         }
                     }
                     .buttonStyle(.plain)
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func savedServerRow(_ server: SavedServer) -> some View {
+            LitterUI.ListRow(
+                icon: "server.rack",
+                title: server.name,
+                subtitle: server.endpoint.displayHost,
+                iconTint: LitterUI.Palette.brand.color
+            ) {
+                if server.isDefault {
+                    Text("Default")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .litterGlassCapsule(tint: LitterUI.Palette.brand.color.opacity(0.22), config: .pill)
                 }
             }
         }
@@ -273,4 +334,13 @@ extension LitterUI {
             }
         }
     }
+}
+
+/// Carrier for the Settings → Servers Forget confirmation alert. Same
+/// `Identifiable` pattern as `PendingSessionDelete` in `LitterHomeView`
+/// — keys the alert presentation off the pending target and prevents a
+/// stale id from leaking into the next prompt.
+private struct PendingServerDelete: Identifiable, Equatable {
+    let id: String
+    let name: String
 }

@@ -637,6 +637,24 @@ final class SessionStore {
         Self.persistSavedServers(savedServers)
     }
 
+    /// Drop a saved server entirely — removes the row from `savedServers`,
+    /// clears any locally-stored display-name override keyed by that id,
+    /// and persists both to disk (Keychain + UserDefaults). Idempotent;
+    /// safe to call with an unknown id.
+    ///
+    /// This is the entry point UI affordances (swipe-to-delete in
+    /// Settings, "Forget" context-menu on the server pill) call. It
+    /// builds on `removeSavedServer` for the savedServers + endpoint
+    /// bookkeeping but additionally sweeps the display-name override —
+    /// without that step a stale rename for a `SavedServer.id` we just
+    /// dropped would linger in UserDefaults forever.
+    func forgetServer(_ id: String) {
+        removeSavedServer(id)
+        if displayNames[id] != nil {
+            displayNames[id] = nil
+        }
+    }
+
     // MARK: - Session lifecycle
 
     func createSession(
