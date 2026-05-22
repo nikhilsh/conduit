@@ -4,6 +4,19 @@ import SwiftUI
 struct SweKittyApp: App {
     @State private var store = SessionStore()
     @State private var appearance = AppearanceStore()
+
+    // Streaming render plumbing (litter audit A.5):
+    //   - `StreamingRendererCoordinator.shared` is `@Observable`, so it's
+    //     injected through `.environment(...)` below — that's what
+    //     subscribes the SwiftUI view tree to per-id state changes.
+    //   - `MessageRenderCache.shared` is *not* `@Observable` on purpose
+    //     (the cache mutates on every render — making it Observable
+    //     would invalidate the view tree on every cache hit). The view
+    //     reads it directly as a singleton.
+    // `SessionStore.streamingCoordinator` is wired on `onAppear` below
+    // so `ingestChat` can drive render-state transitions on the same
+    // instance the view tree observes.
+
     /// App-lifetime owner for `NWPathMonitor`. Posts
     /// `.networkBecameReachable` / `.networkInterfaceChanged` on
     /// transitions; SessionStore subscribes and asks the Rust core
@@ -29,12 +42,19 @@ struct SweKittyApp: App {
                 RootView()
                     .environment(store)
                     .environment(appearance)
+                    .environment(StreamingRendererCoordinator.shared)
                     .preferredColorScheme(appearance.themeMode.colorScheme)
                     .onAppear {
                         // Windows usually aren't connected when
                         // AppearanceStore.init runs, so reapply the
                         // persisted choice once SwiftUI has mounted.
                         appearance.applyToWindows()
+                        // Hand the streaming coordinator to the store so
+                        // its `ingestChat` path can drive render state
+                        // transitions. Module-scope singleton so the
+                        // coordinator's identity matches the one
+                        // injected into the view tree above.
+                        store.streamingCoordinator = StreamingRendererCoordinator.shared
                         // Drive an initial liveActivity ingest so any
                         // session already in-flight at launch gets a
                         // chance to surface on the lock screen.

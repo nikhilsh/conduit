@@ -288,6 +288,16 @@ final class SessionStore {
     private let useRustStore = true
     let rustStore = SessionStoreCore()
 
+    /// View-layer coordinator wired in by `SweKittyApp` so `ingestChat`
+    /// can hand each terminal-shaped chat event to the streaming
+    /// renderer. Optional because tests instantiate `SessionStore`
+    /// without a SwiftUI host — the coordinator is then `nil` and the
+    /// ingest path stays a no-op for the renderer side. ChatEvent has
+    /// no id field; we synthesize a deterministic per-event key from
+    /// (role, ts, content-hash) so the same event re-fed yields the
+    /// same key (idempotent with the coordinator's update semantics).
+    var streamingCoordinator: StreamingRendererCoordinator?
+
     init() {
         self.endpoint = Self.loadPersisted()
         self.savedServers = Self.loadSavedServers()
@@ -842,6 +852,21 @@ final class SessionStore {
             #if DEBUG
             assertRustChatLogParity(sessionID)
             #endif
+        }
+        // Notify the streaming renderer that an assistant turn landed.
+        // The harness delivers `ChatEvent`s whole (no per-token deltas
+        // yet — see broker/transport), so every ingest is the terminal
+        // chunk for that fingerprint. The coordinator is keyed by
+        // `ConversationItem.id`; we mirror the same id resolution the
+        // view will use by matching role+content against the freshly
+        // refreshed conversation log. When the broker grows real
+        // streaming this is where the partial deltas will land.
+        if let coordinator = streamingCoordinator, event.role == "assistant" {
+            let fingerprint = "\(event.role)|\(event.content)"
+            let id = conversationLog[sessionID]?
+                .last(where: { "\($0.role)|\($0.content)" == fingerprint })?
+                .id ?? "chat-\(sessionID)-\(event.ts)"
+            coordinator.update(itemID: id, content: event.content, isComplete: true)
         }
     }
 

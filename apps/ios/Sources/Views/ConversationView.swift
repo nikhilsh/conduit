@@ -495,7 +495,17 @@ private struct ConversationEventRow: View {
                 }
             case .assistant:
                 ConversationBubbleContainer(role: role, timestamp: event.ts, alignTrailing: false) {
-                    ConversationBlockStack(blocks: ConversationRenderer.blocks(for: event.content), role: role)
+                    // Pass the item id down so the markdown block can
+                    // observe `StreamingRendererCoordinator` state and
+                    // key the render cache. User / tool / system rows
+                    // intentionally skip this hook — only assistant
+                    // turns stream, and tool cards already manage
+                    // their own progressive-reveal affordances.
+                    ConversationBlockStack(
+                        blocks: ConversationRenderer.blocks(for: event.content),
+                        role: role,
+                        itemID: event.id
+                    )
                 }
             case .tool:
                 ConversationToolCard(event: event)
@@ -731,13 +741,32 @@ private struct UserMessageBackground: ViewModifier {
 private struct ConversationBlockStack: View {
     let blocks: [ConversationBlock]
     let role: ConversationRole
+    /// Owning `ConversationItem.id`, when this stack is rendering a
+    /// single chat message (assistant/user). The id is forwarded to
+    /// markdown sub-blocks so the streaming coordinator can drive
+    /// per-row state transitions and the LRU cache can key entries.
+    /// `nil` for callers that render decomposed content not tied to
+    /// one item id (e.g. nested tool sections inside a tool card).
+    var itemID: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { idx, block in
                 switch block {
                 case .markdown(let text):
-                    ConversationMarkdownBlock(text: text, role: role)
+                    ConversationMarkdownBlock(
+                        text: text,
+                        role: role,
+                        // Only the first markdown block in a stack
+                        // represents the *whole* message body for
+                        // streaming purposes. Subsequent markdown
+                        // blocks (after a code fence, after a tool
+                        // run collapse, etc.) are slices and don't
+                        // map cleanly onto a single coordinator id —
+                        // skip the hook for those so the cache key
+                        // space stays per-item, not per-(item, idx).
+                        itemID: idx == 0 ? itemID : nil
+                    )
                 case .code(let language, let content):
                     ConversationCodeBlock(language: language, content: content)
                 case .toolSummary(let label, let detail):
@@ -786,27 +815,90 @@ private struct ConversationToolSummaryBlock: View {
 private struct ConversationMarkdownBlock: View {
     let text: String
     let role: ConversationRole
+    /// `ConversationItem.id` for the event this block belongs to.
+    /// Optional because non-message render paths (tool sections, etc.)
+    /// don't carry an item id and don't need streaming-state hooks.
+    /// When `nil`, the block renders `text` exactly as before — same
+    /// `AttributedString(markdown:)` parse, same fallbacks.
+    var itemID: String? = nil
+
     @Environment(AppearanceStore.self) private var appearance
+    /// Injected `@Observable` so changes to per-id state actually
+    /// trigger a re-render in this view. Reaching `.shared` directly
+    /// would skip SwiftUI's auto-subscription and the streaming
+    /// buffer wouldn't update on the fly.
+    @Environment(StreamingRendererCoordinator.self) private var coordinator
+
+    /// Cache key revision: identical `(itemID, hashValue)` pairs
+    /// guarantee an identical render, so we use the buffer's
+    /// `hashValue` as the revision. `hashValue` is well-distributed
+    /// for `String`, and the cache only needs it for equality of the
+    /// composite key.
+    private func revision(for content: String) -> Int { content.hashValue }
+
+    /// Render `content` through the LRU cache. Falls through to the
+    /// raw `text` on parse failure so the caller still sees something.
+    private func attributed(for content: String) -> AttributedString {
+        if let id = itemID {
+            let rev = revision(for: content)
+            if let hit = MessageRenderCache.shared.get(itemID: id, revision: rev) {
+                return hit
+            }
+            let parsed = (try? AttributedString(
+                markdown: content,
+                options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+            )) ?? AttributedString(content)
+            MessageRenderCache.shared.set(itemID: id, revision: rev, value: parsed)
+            return parsed
+        }
+        return (try? AttributedString(
+            markdown: content,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+        )) ?? AttributedString(content)
+    }
+
+    /// Resolve the text the view should render. When the coordinator
+    /// has an in-flight streaming buffer for this item, the buffer is
+    /// the source of truth (a partial deliveries-only path); otherwise
+    /// the persisted `text` is. Reading `coordinator.renderState(...)`
+    /// here is what subscribes this view to coordinator changes — the
+    /// `@Observable` shape on the coordinator means SwiftUI re-runs
+    /// `body` when the per-id entry mutates.
+    private var displayedText: String {
+        guard let id = itemID else { return text }
+        switch coordinator.renderState(for: id) {
+        case .streaming(let buffer):
+            return buffer
+        case .idle, .complete:
+            return text
+        }
+    }
+
+    /// True iff we're currently rendering a live streaming buffer.
+    /// Drives the fade-in `transition` + per-buffer animation so token
+    /// appends don't pop in. `.complete` rows skip the animation —
+    /// they're rendered once from the persisted item.
+    private var isStreaming: Bool {
+        guard let id = itemID else { return false }
+        if case .streaming = coordinator.renderState(for: id) {
+            return true
+        }
+        return false
+    }
 
     var body: some View {
-        Group {
-            if let attributed = try? AttributedString(
-                markdown: text,
-                options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
-            ) {
-                Text(attributed)
-            } else {
-                Text(text)
-            }
-        }
-        // Body font picked from AppearanceStore — defaults to monospaced
-        // (litter / codex aesthetic) but the user can flip to system in
-        // Settings → Font.
-        .font(appearance.bodyFont())
-        .foregroundStyle(foregroundForRole)
-        .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: role == .user ? nil : .infinity, alignment: .leading)
+        let content = displayedText
+        return Text(attributed(for: content))
+            // Body font picked from AppearanceStore — defaults to monospaced
+            // (litter / codex aesthetic) but the user can flip to system in
+            // Settings → Font.
+            .font(appearance.bodyFont())
+            .foregroundStyle(foregroundForRole)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: role == .user ? nil : .infinity, alignment: .leading)
+            .transition(isStreaming ? .opacity : .identity)
+            .animation(isStreaming ? .easeOut(duration: 0.05) : nil, value: content)
     }
 
     private var foregroundForRole: Color {

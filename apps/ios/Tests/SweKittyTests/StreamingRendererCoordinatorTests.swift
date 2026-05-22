@@ -91,6 +91,18 @@ struct StreamingRendererCoordinatorTests {
         #expect(coord.renderState(for: "a") == .streaming(buffer: "new"))
     }
 
+    @Test func observingCompleteShapedEventYieldsCompleteImmediately() {
+        // Wire-up regression guard for the `ios-streaming-wire` PR:
+        // when `SessionStore.ingestChat` lands a fully-formed assistant
+        // turn (no streaming deltas, just `isComplete: true`), a view
+        // observing `renderState(for:)` must see `.complete` on its
+        // very first read — i.e. the coordinator must not park the
+        // entry in `.streaming` first and then transition.
+        let coord = StreamingRendererCoordinator()
+        coord.update(itemID: "wire", content: "full message", isComplete: true)
+        #expect(coord.renderState(for: "wire") == .complete)
+    }
+
     @Test func emptyContentChunkIsStillStreaming() {
         // Brokers occasionally emit a zero-length opener delta to
         // signal "assistant has started typing". Treat it as

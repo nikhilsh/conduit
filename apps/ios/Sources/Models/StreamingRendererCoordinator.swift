@@ -36,6 +36,16 @@ enum RenderState: Equatable, Sendable {
 @MainActor
 final class StreamingRendererCoordinator {
 
+    /// Process-wide singleton. The view layer reaches for `.shared`
+    /// directly rather than receiving an injected coordinator so that
+    /// `SessionStore.ingestChat` (off in the model layer) and
+    /// `ConversationMarkdownBlock` (deep in the view tree) reference
+    /// the same state machine without threading the dependency through
+    /// every intervening type. Tests still construct fresh instances
+    /// via `init()` — the singleton is convenience, not a hard
+    /// requirement.
+    static let shared = StreamingRendererCoordinator()
+
     /// Per-id state. Items not present here are `.idle` by definition;
     /// we don't materialise an entry until `update` is called so the
     /// dictionary stays bounded by *in-flight* turns, not total history.

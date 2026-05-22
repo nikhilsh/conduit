@@ -46,6 +46,14 @@ final class MessageRenderCache {
     private var storage: [Key: AttributedString] = [:]
     private var order: [Key] = []
 
+    /// Process-wide cache. Same rationale as
+    /// `StreamingRendererCoordinator.shared`: the consumer is the
+    /// `ConversationMarkdownBlock` SwiftUI view, which can't easily
+    /// receive non-`@Observable` dependencies through `.environment`,
+    /// so the cache is reached via singleton instead. Tests can still
+    /// construct independent instances with `init(capacity:)`.
+    static let shared = MessageRenderCache()
+
     init(capacity: Int = 200) {
         precondition(capacity > 0, "MessageRenderCache capacity must be positive")
         self.capacity = capacity
