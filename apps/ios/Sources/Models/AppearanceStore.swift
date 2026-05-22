@@ -58,6 +58,12 @@ final class AppearanceStore {
         /// terminal path. See docs/PLAN-TERMINAL-REWRITE.md. Defaults
         /// off; xterm.js stays the production renderer until Stage 2.
         static let experimentalNativeTerminal = "swekitty.experimental.nativeTerminal"
+        /// Trash-rebuild feature flag for the parallel `LitterUI/` view
+        /// tree. When on, `SweKittyApp` renders `LitterUI.RootView`
+        /// instead of the current `RootView`. Off by default for this
+        /// PR — follow-up PRs flip the default and delete the old
+        /// views. See `docs/PLAN-LITTER-UI.md`.
+        static let experimentalLitterUI = "swekitty.experimental.litterUI"
     }
 
     var fontFamily: FontFamily {
@@ -84,6 +90,15 @@ final class AppearanceStore {
         didSet { defaults.set(experimentalNativeTerminal, forKey: Keys.experimentalNativeTerminal) }
     }
 
+    /// Trash-rebuild flag — when true, the app boots into the parallel
+    /// `LitterUI` view tree rather than the legacy `RootView`. Default
+    /// `false`; users opt in via Settings → Experimental → "Litter UI
+    /// (preview)". See `apps/ios/Sources/LitterUI/` and
+    /// `docs/PLAN-LITTER-UI.md`.
+    var experimentalLitterUI: Bool {
+        didSet { defaults.set(experimentalLitterUI, forKey: Keys.experimentalLitterUI) }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -98,6 +113,8 @@ final class AppearanceStore {
         self.collapseTurns = defaults.object(forKey: Keys.collapseTurns) as? Bool ?? false
         self.experimentalNativeTerminal =
             defaults.object(forKey: Keys.experimentalNativeTerminal) as? Bool ?? false
+        self.experimentalLitterUI =
+            defaults.object(forKey: Keys.experimentalLitterUI) as? Bool ?? false
     }
 
     /// SwiftUI `.font` value to use for chat body text.

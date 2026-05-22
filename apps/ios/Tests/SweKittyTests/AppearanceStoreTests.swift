@@ -39,6 +39,20 @@ struct AppearanceStoreTests {
         #expect(second.collapseTurns == true)
     }
 
+    @Test func persistsExperimentalLitterUI() {
+        // Trash-rebuild feature flag for the parallel `LitterUI/` view
+        // tree. Default OFF; flipping it on at runtime persists across
+        // relaunches so the user only has to opt in once. See
+        // apps/ios/Sources/LitterUI/.
+        let defaults = freshDefaults()
+        let first = AppearanceStore(defaults: defaults)
+        #expect(first.experimentalLitterUI == false)
+        first.experimentalLitterUI = true
+
+        let second = AppearanceStore(defaults: defaults)
+        #expect(second.experimentalLitterUI == true)
+    }
+
     @Test func persistsExperimentalNativeTerminal() {
         // Stage 0 feature flag for the Ghostty-libghostty rewrite.
         // Persistence is the only behavior we can lock down at this

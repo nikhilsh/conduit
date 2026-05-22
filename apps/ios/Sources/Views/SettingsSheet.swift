@@ -750,6 +750,7 @@ private struct ExperimentalFeaturesSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         terminalSection
+                        litterUISection
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
@@ -777,6 +778,32 @@ private struct ExperimentalFeaturesSheet: View {
                     title: "Native Terminal (Ghostty)",
                     subtitle: "Spike — placeholder view, not wired to PTY",
                     isOn: $bindable.experimentalNativeTerminal
+                )
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
+        }
+    }
+
+    /// LitterUI preview toggle — flips `experimentalLitterUI` which
+    /// the App scene reads to decide whether to render the legacy
+    /// `RootView` (off, default) or the new parallel `LitterUI.RootView`
+    /// tree (on). When ON, the whole UI swaps; the user can return
+    /// here at any time via the legacy Settings → Experimental path
+    /// because the LitterUI surface also exposes the same toggle in
+    /// its Settings.
+    private var litterUISection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Interface")
+            VStack(alignment: .leading, spacing: 10) {
+                @Bindable var bindable = appearance
+                SettingsToggleRow(
+                    icon: "flask.fill",
+                    title: "Litter UI (preview)",
+                    subtitle: "Trash-rebuild parallel view tree. Reboots the UI when toggled.",
+                    isOn: $bindable.experimentalLitterUI
                 )
             }
             .padding(.horizontal, 14)
