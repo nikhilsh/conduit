@@ -22,8 +22,8 @@ enum AttachKind: String, CaseIterable, Identifiable, Equatable {
     /// One-line caption under the title.
     var subtitle: String {
         switch self {
-        case .image: return "Pick from your photo library — encoded inline as base64."
-        case .file:  return "Pick from Files — encoded inline as base64."
+        case .image: return "Pick from your photo library — uploaded via 0x01 binary frame."
+        case .file:  return "Pick from Files — uploaded via 0x01 binary frame."
         }
     }
 
@@ -37,38 +37,47 @@ enum AttachKind: String, CaseIterable, Identifiable, Equatable {
 }
 
 /// Pure-data outcome of the picker step. Stash this so ChatTab can
-/// observe and fold the encoded payload into the next outgoing chat
-/// message. Kept Equatable so tests can assert state transitions.
+/// observe and ship the raw bytes via the broker's 0x01 binary frame
+/// (sweswe-parity #file-upload). Kept Equatable so tests can assert
+/// state transitions without spinning up SwiftUI.
 struct ComposerAttachment: Equatable, Identifiable {
     let id: UUID
     let kind: AttachKind
     /// Short user-readable label, e.g. "IMG_0123.HEIC" or "spec.pdf".
     let filename: String
-    /// MIME-ish hint used when formatting the wrapping payload.
+    /// MIME-ish hint sent verbatim in the upload frame.
     let mimeType: String
-    /// Raw base64 bytes — what gets folded into the outgoing message.
-    let base64: String
+    /// Raw bytes — what the Rust core encodes into the 0x01 binary
+    /// frame and the broker lands under `<workspace>/uploads/<session>/`.
+    let bytes: Data
 
-    init(id: UUID = UUID(), kind: AttachKind, filename: String, mimeType: String, base64: String) {
+    init(id: UUID = UUID(), kind: AttachKind, filename: String, mimeType: String, bytes: Data) {
         self.id = id
         self.kind = kind
         self.filename = filename
         self.mimeType = mimeType
-        self.base64 = base64
+        self.bytes = bytes
     }
+}
 
-    /// Renders the attachment as a self-describing inline block that
-    /// the broker passes verbatim to the agent. Keeping the format
-    /// pure-data + deterministic so tests don't need to compare
-    /// against a SwiftUI view. Format mirrors what litter's web
-    /// composer emits so brokers can reuse the same regex.
-    var inlineBlock: String {
-        let header: String
-        switch kind {
-        case .image: header = "[attached image: \(filename); mime=\(mimeType); base64]"
-        case .file:  header = "[attached file: \(filename); mime=\(mimeType); base64]"
+/// Pure-data hook the composer's send action uses to fan an array of
+/// `ComposerAttachment` out to whatever back-end uploads bytes. Lifted
+/// out of `ChatTab.dispatchSend` so the wiring can be smoke-tested
+/// without spinning up SwiftUI or the Rust core. The real
+/// implementation in `ChatTab` passes `store.sendFile`; tests pass a
+/// recorder.
+enum AttachmentDispatcher {
+    /// Invoke `upload` once per attachment in order. The `sessionID`
+    /// is the broker's bound WS session; the broker rejects frames
+    /// whose embedded id doesn't match.
+    static func dispatchUploads(
+        _ attachments: [ComposerAttachment],
+        sessionID: String,
+        upload: (_ sessionID: String, _ filename: String, _ mime: String, _ bytes: Data) -> Void
+    ) {
+        for att in attachments {
+            upload(sessionID, att.filename, att.mimeType, att.bytes)
         }
-        return "\(header)\n\(base64)"
     }
 }
 
@@ -162,6 +171,11 @@ struct ComposerAttachSheet: View {
     // MARK: - Encoding
 
     private func handlePicked(image: UIImage, filename: String) {
+        // Re-encode the selected image as JPEG @ 0.85 quality so file
+        // sizes stay sane (HEIC originals can be 5-10MB straight off
+        // the camera) and the broker doesn't have to know about every
+        // platform's container format. The mime hint pins the
+        // re-encoded format.
         guard let data = image.jpegData(compressionQuality: 0.85) else {
             encodingError = "Couldn't encode the selected image."
             return
@@ -170,7 +184,7 @@ struct ComposerAttachSheet: View {
             kind: .image,
             filename: filename,
             mimeType: "image/jpeg",
-            base64: data.base64EncodedString()
+            bytes: data
         )
         onAttach(attachment)
         dismiss()
@@ -180,13 +194,16 @@ struct ComposerAttachSheet: View {
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
         do {
+            // Raw bytes — the broker stores them verbatim under
+            // <workspace>/uploads/<session>/<filename>. No base64
+            // wrapper, no inline message body.
             let data = try Data(contentsOf: fileURL)
             let mime = Self.mimeType(for: fileURL)
             let attachment = ComposerAttachment(
                 kind: .file,
                 filename: fileURL.lastPathComponent,
                 mimeType: mime,
-                base64: data.base64EncodedString()
+                bytes: data
             )
             onAttach(attachment)
             dismiss()

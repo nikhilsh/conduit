@@ -31,13 +31,13 @@ Binary frames are length-prefixed by the WebSocket layer itself; the first byte 
 | Tag | Direction | Meaning | Payload after tag |
 |---|---|---|---|
 | `0x00` | client → server | Terminal resize | 2 bytes BE `rows` + 2 bytes BE `cols` |
-| `0x01` | client → server | File upload | 2 bytes BE `name_len`, `name_len` UTF-8 bytes of filename, then file bytes |
+| `0x01` | client → server | File upload (sweswe-parity #file-upload) | `u32 LE session_id_len` + session_id bytes + `u32 LE filename_len` + filename bytes + `u32 LE mime_len` + mime bytes + file bytes |
 | `0x02` | server → client | Gzip-compressed snapshot chunk | 2 bytes BE `chunk_idx` + 2 bytes BE `chunk_total` + gzip bytes |
 | any other first byte | server ↔ client | Raw PTY I/O | the entire payload is PTY bytes |
 
 Notes:
 - Snapshots are chunked because iOS Safari (and some WKWebView builds) cap individual WebSocket message size aggressively. Reassembly: concatenate by `chunk_idx`, gunzip the result.
-- Filenames are sanitized server-side (no `..`, no absolute paths) and stored under `.swe-kitty/sessions/<uuid>/uploads/`.
+- Filenames are sanitized server-side (no `..`, no absolute paths, no path separators) and stored under `<workspace>/uploads/<session_id>/<filename>`. The embedded `session_id` MUST match the WS path's bound session — mismatches are rejected with a `view_event { view: "chat", role: "tool" }` notification and dropped without closing the socket.
 - Raw PTY I/O has no tag because matching against tag bytes that happen to appear at byte 0 of a PTY chunk is acceptable: the broker reserves `0x00`, `0x01`, `0x02` as forbidden first bytes for PTY frames — if a PTY chunk would start with one, the broker prefixes a single `0xFF` escape byte; the client strips a leading `0xFF` from raw frames. (Implementations: in practice this only matters at the boundary of NUL/SOH/STX bytes which are rare in interactive shells. Test fixture covers it.)
 
 ### 2.2 Text frames

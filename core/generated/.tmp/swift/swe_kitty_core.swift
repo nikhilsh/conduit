@@ -546,6 +546,266 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 
+public protocol SessionStoreCoreProtocol : AnyObject {
+    
+    func applyChat(sessionId: String, event: ChatEvent)  -> ProjectSessionState?
+    
+    func applyExit(sessionId: String, code: Int32)  -> ProjectSessionState?
+    
+    func applyLifecycle(sessionId: String, lifecycle: SessionLifecycleCore) 
+    
+    func applyPreview(sessionId: String, preview: PreviewInfo)  -> ProjectSessionState?
+    
+    func applyPtyData(sessionId: String, data: Data)  -> ProjectSessionState?
+    
+    func applySnapshot(sessionId: String, gunzipped: Data)  -> ProjectSessionState?
+    
+    func applyStatus(status: SessionStatus)  -> ProjectSessionState
+    
+    func contains(sessionId: String)  -> Bool
+    
+    func conversation(sessionId: String)  -> [ConversationItem]
+    
+    func forgetSession(sessionId: String) 
+    
+    func get(sessionId: String)  -> ProjectSessionState?
+    
+    func lifecycle(sessionId: String)  -> SessionLifecycleCore?
+    
+    func registerSession(session: ProjectSession) 
+    
+    func sessions()  -> [ProjectSession]
+    
+}
+
+open class SessionStoreCore:
+    SessionStoreCoreProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_swe_kitty_core_fn_clone_sessionstorecore(self.pointer, $0) }
+    }
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_swe_kitty_core_fn_constructor_sessionstorecore_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_swe_kitty_core_fn_free_sessionstorecore(pointer, $0) }
+    }
+
+    
+
+    
+open func applyChat(sessionId: String, event: ChatEvent) -> ProjectSessionState? {
+    return try!  FfiConverterOptionTypeProjectSessionState.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_chat(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),
+        FfiConverterTypeChatEvent.lower(event),$0
+    )
+})
+}
+    
+open func applyExit(sessionId: String, code: Int32) -> ProjectSessionState? {
+    return try!  FfiConverterOptionTypeProjectSessionState.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_exit(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),
+        FfiConverterInt32.lower(code),$0
+    )
+})
+}
+    
+open func applyLifecycle(sessionId: String, lifecycle: SessionLifecycleCore) {try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_lifecycle(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),
+        FfiConverterTypeSessionLifecycleCore.lower(lifecycle),$0
+    )
+}
+}
+    
+open func applyPreview(sessionId: String, preview: PreviewInfo) -> ProjectSessionState? {
+    return try!  FfiConverterOptionTypeProjectSessionState.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_preview(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),
+        FfiConverterTypePreviewInfo.lower(preview),$0
+    )
+})
+}
+    
+open func applyPtyData(sessionId: String, data: Data) -> ProjectSessionState? {
+    return try!  FfiConverterOptionTypeProjectSessionState.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_pty_data(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),
+        FfiConverterData.lower(data),$0
+    )
+})
+}
+    
+open func applySnapshot(sessionId: String, gunzipped: Data) -> ProjectSessionState? {
+    return try!  FfiConverterOptionTypeProjectSessionState.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_snapshot(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),
+        FfiConverterData.lower(gunzipped),$0
+    )
+})
+}
+    
+open func applyStatus(status: SessionStatus) -> ProjectSessionState {
+    return try!  FfiConverterTypeProjectSessionState.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_apply_status(self.uniffiClonePointer(),
+        FfiConverterTypeSessionStatus.lower(status),$0
+    )
+})
+}
+    
+open func contains(sessionId: String) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_contains(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+})
+}
+    
+open func conversation(sessionId: String) -> [ConversationItem] {
+    return try!  FfiConverterSequenceTypeConversationItem.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_conversation(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+})
+}
+    
+open func forgetSession(sessionId: String) {try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_forget_session(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+}
+}
+    
+open func get(sessionId: String) -> ProjectSessionState? {
+    return try!  FfiConverterOptionTypeProjectSessionState.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_get(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+})
+}
+    
+open func lifecycle(sessionId: String) -> SessionLifecycleCore? {
+    return try!  FfiConverterOptionTypeSessionLifecycleCore.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_lifecycle(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
+    )
+})
+}
+    
+open func registerSession(session: ProjectSession) {try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_register_session(self.uniffiClonePointer(),
+        FfiConverterTypeProjectSession.lower(session),$0
+    )
+}
+}
+    
+open func sessions() -> [ProjectSession] {
+    return try!  FfiConverterSequenceTypeProjectSession.lift(try! rustCall() {
+    uniffi_swe_kitty_core_fn_method_sessionstorecore_sessions(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionStoreCore: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = SessionStoreCore
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> SessionStoreCore {
+        return SessionStoreCore(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: SessionStoreCore) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionStoreCore {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: SessionStoreCore, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionStoreCore_lift(_ pointer: UnsafeMutableRawPointer) throws -> SessionStoreCore {
+    return try FfiConverterTypeSessionStoreCore.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionStoreCore_lower(_ value: SessionStoreCore) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeSessionStoreCore.lower(value)
+}
+
+
+
+
 public protocol SweKittyClientProtocol : AnyObject {
     
     func connect(delegate: SweKittyDelegate) async throws 
@@ -569,6 +829,8 @@ public protocol SweKittyClientProtocol : AnyObject {
     func resize(sessionId: String, rows: UInt16, cols: UInt16) async throws 
     
     func sendChat(sessionId: String, msg: String) async throws 
+    
+    func sendFile(sessionId: String, filename: String, mime: String, payload: Data) async throws 
     
     func sendInput(sessionId: String, data: Data) async throws 
     
@@ -772,6 +1034,23 @@ open func sendChat(sessionId: String, msg: String)async throws  {
         )
 }
     
+open func sendFile(sessionId: String, filename: String, mime: String, payload: Data)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_swe_kitty_core_fn_method_swekittyclient_send_file(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(sessionId),FfiConverterString.lower(filename),FfiConverterString.lower(mime),FfiConverterData.lower(payload)
+                )
+            },
+            pollFunc: ffi_swe_kitty_core_rust_future_poll_void,
+            completeFunc: ffi_swe_kitty_core_rust_future_complete_void,
+            freeFunc: ffi_swe_kitty_core_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeSweKittyError.lift
+        )
+}
+    
 open func sendInput(sessionId: String, data: Data)async throws  {
     return
         try  await uniffiRustCallAsync(
@@ -861,6 +1140,64 @@ public func FfiConverterTypeSweKittyClient_lower(_ value: SweKittyClient) -> Uns
 }
 
 
+public struct BrowserViewState {
+    public var preview: PreviewInfo?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(preview: PreviewInfo?) {
+        self.preview = preview
+    }
+}
+
+
+
+extension BrowserViewState: Equatable, Hashable {
+    public static func ==(lhs: BrowserViewState, rhs: BrowserViewState) -> Bool {
+        if lhs.preview != rhs.preview {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(preview)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBrowserViewState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BrowserViewState {
+        return
+            try BrowserViewState(
+                preview: FfiConverterOptionTypePreviewInfo.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BrowserViewState, into buf: inout [UInt8]) {
+        FfiConverterOptionTypePreviewInfo.write(value.preview, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBrowserViewState_lift(_ buf: RustBuffer) throws -> BrowserViewState {
+    return try FfiConverterTypeBrowserViewState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBrowserViewState_lower(_ value: BrowserViewState) -> RustBuffer {
+    return FfiConverterTypeBrowserViewState.lower(value)
+}
+
+
 public struct ChatEvent {
     public var role: String
     public var content: String
@@ -940,6 +1277,72 @@ public func FfiConverterTypeChatEvent_lift(_ buf: RustBuffer) throws -> ChatEven
 #endif
 public func FfiConverterTypeChatEvent_lower(_ value: ChatEvent) -> RustBuffer {
     return FfiConverterTypeChatEvent.lower(value)
+}
+
+
+public struct ChatViewState {
+    public var events: [ChatEvent]
+    public var conversation: [ConversationItem]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(events: [ChatEvent], conversation: [ConversationItem]) {
+        self.events = events
+        self.conversation = conversation
+    }
+}
+
+
+
+extension ChatViewState: Equatable, Hashable {
+    public static func ==(lhs: ChatViewState, rhs: ChatViewState) -> Bool {
+        if lhs.events != rhs.events {
+            return false
+        }
+        if lhs.conversation != rhs.conversation {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(events)
+        hasher.combine(conversation)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeChatViewState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChatViewState {
+        return
+            try ChatViewState(
+                events: FfiConverterSequenceTypeChatEvent.read(from: &buf), 
+                conversation: FfiConverterSequenceTypeConversationItem.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ChatViewState, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeChatEvent.write(value.events, into: &buf)
+        FfiConverterSequenceTypeConversationItem.write(value.conversation, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChatViewState_lift(_ buf: RustBuffer) throws -> ChatViewState {
+    return try FfiConverterTypeChatViewState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChatViewState_lower(_ value: ChatViewState) -> RustBuffer {
+    return FfiConverterTypeChatViewState.lower(value)
 }
 
 
@@ -1169,15 +1572,23 @@ public struct ProjectSession {
     public var assistant: String
     public var branch: String?
     public var preview: PreviewInfo?
+    public var reasoningEffort: String?
+    public var cwd: String?
+    public var startedAt: String?
+    public var lastActivityAt: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?) {
+    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?) {
         self.id = id
         self.name = name
         self.assistant = assistant
         self.branch = branch
         self.preview = preview
+        self.reasoningEffort = reasoningEffort
+        self.cwd = cwd
+        self.startedAt = startedAt
+        self.lastActivityAt = lastActivityAt
     }
 }
 
@@ -1200,6 +1611,18 @@ extension ProjectSession: Equatable, Hashable {
         if lhs.preview != rhs.preview {
             return false
         }
+        if lhs.reasoningEffort != rhs.reasoningEffort {
+            return false
+        }
+        if lhs.cwd != rhs.cwd {
+            return false
+        }
+        if lhs.startedAt != rhs.startedAt {
+            return false
+        }
+        if lhs.lastActivityAt != rhs.lastActivityAt {
+            return false
+        }
         return true
     }
 
@@ -1209,6 +1632,10 @@ extension ProjectSession: Equatable, Hashable {
         hasher.combine(assistant)
         hasher.combine(branch)
         hasher.combine(preview)
+        hasher.combine(reasoningEffort)
+        hasher.combine(cwd)
+        hasher.combine(startedAt)
+        hasher.combine(lastActivityAt)
     }
 }
 
@@ -1224,7 +1651,11 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf), 
                 assistant: FfiConverterString.read(from: &buf), 
                 branch: FfiConverterOptionString.read(from: &buf), 
-                preview: FfiConverterOptionTypePreviewInfo.read(from: &buf)
+                preview: FfiConverterOptionTypePreviewInfo.read(from: &buf), 
+                reasoningEffort: FfiConverterOptionString.read(from: &buf), 
+                cwd: FfiConverterOptionString.read(from: &buf), 
+                startedAt: FfiConverterOptionString.read(from: &buf), 
+                lastActivityAt: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1234,6 +1665,10 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
         FfiConverterString.write(value.assistant, into: &buf)
         FfiConverterOptionString.write(value.branch, into: &buf)
         FfiConverterOptionTypePreviewInfo.write(value.preview, into: &buf)
+        FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
+        FfiConverterOptionString.write(value.cwd, into: &buf)
+        FfiConverterOptionString.write(value.startedAt, into: &buf)
+        FfiConverterOptionString.write(value.lastActivityAt, into: &buf)
     }
 }
 
@@ -1253,6 +1688,112 @@ public func FfiConverterTypeProjectSession_lower(_ value: ProjectSession) -> Rus
 }
 
 
+public struct ProjectSessionState {
+    public var session: ProjectSession
+    public var status: SessionStatus?
+    public var terminal: TerminalViewState
+    public var chat: ChatViewState
+    public var browser: BrowserViewState
+    public var exited: Bool
+    public var exitCode: Int32?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(session: ProjectSession, status: SessionStatus?, terminal: TerminalViewState, chat: ChatViewState, browser: BrowserViewState, exited: Bool, exitCode: Int32?) {
+        self.session = session
+        self.status = status
+        self.terminal = terminal
+        self.chat = chat
+        self.browser = browser
+        self.exited = exited
+        self.exitCode = exitCode
+    }
+}
+
+
+
+extension ProjectSessionState: Equatable, Hashable {
+    public static func ==(lhs: ProjectSessionState, rhs: ProjectSessionState) -> Bool {
+        if lhs.session != rhs.session {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.terminal != rhs.terminal {
+            return false
+        }
+        if lhs.chat != rhs.chat {
+            return false
+        }
+        if lhs.browser != rhs.browser {
+            return false
+        }
+        if lhs.exited != rhs.exited {
+            return false
+        }
+        if lhs.exitCode != rhs.exitCode {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(session)
+        hasher.combine(status)
+        hasher.combine(terminal)
+        hasher.combine(chat)
+        hasher.combine(browser)
+        hasher.combine(exited)
+        hasher.combine(exitCode)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProjectSessionState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProjectSessionState {
+        return
+            try ProjectSessionState(
+                session: FfiConverterTypeProjectSession.read(from: &buf), 
+                status: FfiConverterOptionTypeSessionStatus.read(from: &buf), 
+                terminal: FfiConverterTypeTerminalViewState.read(from: &buf), 
+                chat: FfiConverterTypeChatViewState.read(from: &buf), 
+                browser: FfiConverterTypeBrowserViewState.read(from: &buf), 
+                exited: FfiConverterBool.read(from: &buf), 
+                exitCode: FfiConverterOptionInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProjectSessionState, into buf: inout [UInt8]) {
+        FfiConverterTypeProjectSession.write(value.session, into: &buf)
+        FfiConverterOptionTypeSessionStatus.write(value.status, into: &buf)
+        FfiConverterTypeTerminalViewState.write(value.terminal, into: &buf)
+        FfiConverterTypeChatViewState.write(value.chat, into: &buf)
+        FfiConverterTypeBrowserViewState.write(value.browser, into: &buf)
+        FfiConverterBool.write(value.exited, into: &buf)
+        FfiConverterOptionInt32.write(value.exitCode, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProjectSessionState_lift(_ buf: RustBuffer) throws -> ProjectSessionState {
+    return try FfiConverterTypeProjectSessionState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProjectSessionState_lower(_ value: ProjectSessionState) -> RustBuffer {
+    return FfiConverterTypeProjectSessionState.lower(value)
+}
+
+
 public struct SessionStatus {
     public var session: String
     public var assistant: String
@@ -1264,10 +1805,14 @@ public struct SessionStatus {
     public var preview: PreviewInfo?
     public var sessionName: String?
     public var viewers: UInt32?
+    public var reasoningEffort: String?
+    public var cwd: String?
+    public var startedAt: String?
+    public var lastActivityAt: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?) {
+    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?) {
         self.session = session
         self.assistant = assistant
         self.phase = phase
@@ -1278,6 +1823,10 @@ public struct SessionStatus {
         self.preview = preview
         self.sessionName = sessionName
         self.viewers = viewers
+        self.reasoningEffort = reasoningEffort
+        self.cwd = cwd
+        self.startedAt = startedAt
+        self.lastActivityAt = lastActivityAt
     }
 }
 
@@ -1315,6 +1864,18 @@ extension SessionStatus: Equatable, Hashable {
         if lhs.viewers != rhs.viewers {
             return false
         }
+        if lhs.reasoningEffort != rhs.reasoningEffort {
+            return false
+        }
+        if lhs.cwd != rhs.cwd {
+            return false
+        }
+        if lhs.startedAt != rhs.startedAt {
+            return false
+        }
+        if lhs.lastActivityAt != rhs.lastActivityAt {
+            return false
+        }
         return true
     }
 
@@ -1329,6 +1890,10 @@ extension SessionStatus: Equatable, Hashable {
         hasher.combine(preview)
         hasher.combine(sessionName)
         hasher.combine(viewers)
+        hasher.combine(reasoningEffort)
+        hasher.combine(cwd)
+        hasher.combine(startedAt)
+        hasher.combine(lastActivityAt)
     }
 }
 
@@ -1349,7 +1914,11 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
                 yolo: FfiConverterBool.read(from: &buf), 
                 preview: FfiConverterOptionTypePreviewInfo.read(from: &buf), 
                 sessionName: FfiConverterOptionString.read(from: &buf), 
-                viewers: FfiConverterOptionUInt32.read(from: &buf)
+                viewers: FfiConverterOptionUInt32.read(from: &buf), 
+                reasoningEffort: FfiConverterOptionString.read(from: &buf), 
+                cwd: FfiConverterOptionString.read(from: &buf), 
+                startedAt: FfiConverterOptionString.read(from: &buf), 
+                lastActivityAt: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1364,6 +1933,10 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
         FfiConverterOptionTypePreviewInfo.write(value.preview, into: &buf)
         FfiConverterOptionString.write(value.sessionName, into: &buf)
         FfiConverterOptionUInt32.write(value.viewers, into: &buf)
+        FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
+        FfiConverterOptionString.write(value.cwd, into: &buf)
+        FfiConverterOptionString.write(value.startedAt, into: &buf)
+        FfiConverterOptionString.write(value.lastActivityAt, into: &buf)
     }
 }
 
@@ -1555,6 +2128,88 @@ public func FfiConverterTypeSshCredentials_lower(_ value: SshCredentials) -> Rus
 }
 
 
+public struct TerminalViewState {
+    public var rows: UInt16
+    public var cols: UInt16
+    public var scrollback: Data
+    public var hasSnapshot: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(rows: UInt16, cols: UInt16, scrollback: Data, hasSnapshot: Bool) {
+        self.rows = rows
+        self.cols = cols
+        self.scrollback = scrollback
+        self.hasSnapshot = hasSnapshot
+    }
+}
+
+
+
+extension TerminalViewState: Equatable, Hashable {
+    public static func ==(lhs: TerminalViewState, rhs: TerminalViewState) -> Bool {
+        if lhs.rows != rhs.rows {
+            return false
+        }
+        if lhs.cols != rhs.cols {
+            return false
+        }
+        if lhs.scrollback != rhs.scrollback {
+            return false
+        }
+        if lhs.hasSnapshot != rhs.hasSnapshot {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(rows)
+        hasher.combine(cols)
+        hasher.combine(scrollback)
+        hasher.combine(hasSnapshot)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTerminalViewState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TerminalViewState {
+        return
+            try TerminalViewState(
+                rows: FfiConverterUInt16.read(from: &buf), 
+                cols: FfiConverterUInt16.read(from: &buf), 
+                scrollback: FfiConverterData.read(from: &buf), 
+                hasSnapshot: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TerminalViewState, into buf: inout [UInt8]) {
+        FfiConverterUInt16.write(value.rows, into: &buf)
+        FfiConverterUInt16.write(value.cols, into: &buf)
+        FfiConverterData.write(value.scrollback, into: &buf)
+        FfiConverterBool.write(value.hasSnapshot, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTerminalViewState_lift(_ buf: RustBuffer) throws -> TerminalViewState {
+    return try FfiConverterTypeTerminalViewState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTerminalViewState_lower(_ value: TerminalViewState) -> RustBuffer {
+    return FfiConverterTypeTerminalViewState.lower(value)
+}
+
+
 public struct ViewEventFile {
     public var path: String
     public var rev: String
@@ -1696,6 +2351,90 @@ public func FfiConverterTypeConnectionHealth_lower(_ value: ConnectionHealth) ->
 
 
 extension ConnectionHealth: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum SessionLifecycleCore {
+    
+    case creating
+    case live
+    case exited(code: Int32
+    )
+    case failedToStart(reason: String
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionLifecycleCore: FfiConverterRustBuffer {
+    typealias SwiftType = SessionLifecycleCore
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionLifecycleCore {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .creating
+        
+        case 2: return .live
+        
+        case 3: return .exited(code: try FfiConverterInt32.read(from: &buf)
+        )
+        
+        case 4: return .failedToStart(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SessionLifecycleCore, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .creating:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .live:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .exited(code):
+            writeInt(&buf, Int32(3))
+            FfiConverterInt32.write(code, into: &buf)
+            
+        
+        case let .failedToStart(reason):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionLifecycleCore_lift(_ buf: RustBuffer) throws -> SessionLifecycleCore {
+    return try FfiConverterTypeSessionLifecycleCore.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionLifecycleCore_lower(_ value: SessionLifecycleCore) -> RustBuffer {
+    return FfiConverterTypeSessionLifecycleCore.lower(value)
+}
+
+
+
+extension SessionLifecycleCore: Equatable, Hashable {}
 
 
 
@@ -2529,6 +3268,78 @@ fileprivate struct FfiConverterOptionTypePreviewInfo: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeProjectSessionState: FfiConverterRustBuffer {
+    typealias SwiftType = ProjectSessionState?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeProjectSessionState.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeProjectSessionState.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSessionStatus: FfiConverterRustBuffer {
+    typealias SwiftType = SessionStatus?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSessionStatus.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSessionStatus.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSessionLifecycleCore: FfiConverterRustBuffer {
+    typealias SwiftType = SessionLifecycleCore?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSessionLifecycleCore.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSessionLifecycleCore.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2546,6 +3357,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeChatEvent: FfiConverterRustBuffer {
+    typealias SwiftType = [ChatEvent]
+
+    public static func write(_ value: [ChatEvent], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeChatEvent.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ChatEvent] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ChatEvent]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeChatEvent.read(from: &buf))
         }
         return seq
     }
@@ -2704,6 +3540,48 @@ private var initializationResult: InitializationResult = {
     if (uniffi_swe_kitty_core_checksum_func_ssh_bootstrap() != 48558) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_chat() != 29883) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_exit() != 9217) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_lifecycle() != 7472) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_preview() != 42811) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_pty_data() != 7509) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_snapshot() != 4787) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_apply_status() != 16189) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_contains() != 6085) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_conversation() != 30178) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_forget_session() != 1093) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_get() != 10131) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_lifecycle() != 33662) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_register_session() != 64048) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_sessions() != 42007) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2737,10 +3615,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_send_chat() != 16214) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_send_file() != 19338) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_send_input() != 63479) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_switch_agent() != 23090) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_constructor_sessionstorecore_new() != 14689) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_constructor_swekittyclient_new() != 52948) {

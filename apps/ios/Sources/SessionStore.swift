@@ -755,6 +755,23 @@ final class SessionStore {
         Task { try? await client.resize(sessionId: sessionID, rows: rows, cols: cols) }
     }
 
+    /// Upload a file to the session via the 0x01 binary WS frame
+    /// (sweswe-parity #file-upload). The broker lands the bytes under
+    /// `<workspace>/uploads/<sessionID>/<filename>` and emits a tool
+    /// view_event when it's done — that's what surfaces back as a
+    /// chat-tab notification, no inline message needed.
+    func sendFile(sessionID: String, filename: String, mime: String, payload: Data) {
+        guard let client else { return }
+        Task {
+            try? await client.sendFile(
+                sessionId: sessionID,
+                filename: filename,
+                mime: mime,
+                payload: payload
+            )
+        }
+    }
+
     // MARK: - Pinned context
 
     /// Pin a context chip onto `sessionID`. No-op if an identical
