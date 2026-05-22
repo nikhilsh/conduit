@@ -104,6 +104,42 @@ jobs:
           path.write_text(text.replace(marker, replacement, 1))
           PY
 
+      # Stamp the IPA with the commit + release tag so users in
+      # Settings → About can read "Build 3f1a9c2 · manual-2026-…"
+      # and we don't have to guess which IPA they're on. We rewrite
+      # the two `static let` literals in BuildInfo.swift in place
+      # (rather than threading a build setting through Info.plist)
+      # — see apps/ios/Sources/Models/BuildInfo.swift for the rationale.
+      - name: Stamp BuildInfo.swift with git SHA + release tag
+        working-directory: apps/ios
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          GIT_SHA=$(git rev-parse --short=7 HEAD)
+          echo "Stamping BuildInfo.swift: gitSHA=$GIT_SHA releaseTag=$RELEASE_TAG"
+          python3 - <<PY
+          from pathlib import Path
+          import re
+
+          path = Path("Sources/Models/BuildInfo.swift")
+          text = path.read_text()
+          text, n1 = re.subn(
+              r'static let gitSHA: String = "dev"',
+              f'static let gitSHA: String = "${GIT_SHA}"',
+              text,
+              count=1,
+          )
+          text, n2 = re.subn(
+              r'static let releaseTag: String = "dev"',
+              f'static let releaseTag: String = "${RELEASE_TAG}"',
+              text,
+              count=1,
+          )
+          if n1 != 1 or n2 != 1:
+              raise SystemExit(f"BuildInfo.swift stamp failed — gitSHA replacements={n1} releaseTag replacements={n2}")
+          path.write_text(text)
+          PY
+
       - name: Generate Xcode project
         working-directory: apps/ios
         run: xcodegen generate
