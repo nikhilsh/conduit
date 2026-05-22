@@ -103,7 +103,20 @@ let package = Package(
         .target(
             name: "GhosttyVT",
             dependencies: ["libghostty"],
-            path: "Sources/GhosttyVT"
+            path: "Sources/GhosttyVT",
+            linkerSettings: [
+                // libghostty's CoreText/Metal renderer pulls in
+                // CoreGraphics + CoreText + Metal + AppKit (macOS)
+                // / UIKit (iOS) symbols. Match Lakr233's GhosttyKit
+                // target's c++ STL link + add the iOS-side frameworks
+                // that libghostty's compiled .o files reference.
+                .linkedLibrary("c++"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreText"),
+                .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("Carbon", .when(platforms: [.macOS])),
+            ]
         ),
         .testTarget(
             name: "GhosttyVTTests",
