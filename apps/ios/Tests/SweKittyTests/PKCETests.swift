@@ -140,13 +140,34 @@ struct PKCETests {
         #expect(cfg.tokenURL == URL(string: "https://auth.openai.com/oauth/token")!)
     }
 
-    // MARK: - Token-response decode
+    /// Pins the Claude Code CLI public OAuth constants reverse-engineered
+    /// from the `claude` CLI binary (see PR
+    /// `oauth-stage1-claude-button` for the source link). If Anthropic
+    /// rotates the public client_id or moves an endpoint, this test
+    /// flips red and the fix is again a single-line edit.
+    ///
+    /// Note Anthropic uses **two hosts**: authorize on `claude.ai`,
+    /// token on `platform.claude.com`. We pin both URLs verbatim so a
+    /// silent typo here doesn't leak past CI.
+    @Test func anthropicProviderConfigMatchesClaudeCLI() {
+        let cfg = OAuthProvider.anthropic.config
+        #expect(cfg.clientID == "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
+        #expect(cfg.issuer == URL(string: "https://claude.ai")!)
+        #expect(cfg.scopeString == "user:profile user:inference user:file_upload user:mcp_servers user:sessions:claude_code")
+        #expect(cfg.redirectURI == URL(string: "swekitty://oauth/anthropic/callback")!)
+        #expect(cfg.callbackURLScheme == "swekitty")
+        #expect(cfg.authorizeURL == URL(string: "https://claude.ai/oauth/authorize")!)
+        #expect(cfg.tokenURL == URL(string: "https://platform.claude.com/v1/oauth/token")!)
+    }
+
+    // MARK: - OpenAI token-response decode
 
     /// The codex CLI persists the token blob under specific JSON keys
     /// — `id_token`, `access_token`, `refresh_token`, `account_id`
-    /// (PLAN §C.1). `decodeTokenResponse` builds the in-memory shape
-    /// that Stage 2 will serialize back out under the *same* keys.
-    @Test func decodeTokenResponseMapsOAuthFieldsOntoAuthDotJsonShape() throws {
+    /// (PLAN §C.1). `decodeOpenAITokenResponse` builds the in-memory
+    /// shape that Stage 2 will serialize back out under the *same*
+    /// keys.
+    @Test func decodeOpenAITokenResponseMapsOAuthFieldsOntoAuthDotJsonShape() throws {
         let json = """
         {
           "access_token": "atk-aaa",
@@ -157,7 +178,7 @@ struct PKCETests {
           "expires_in": 3600
         }
         """.data(using: .utf8)!
-        let cred = try OAuthClient.decodeTokenResponse(json)
+        let cred = try OAuthClient.decodeOpenAITokenResponse(json)
         #expect(cred.authMode == "ChatGPT")
         #expect(cred.openaiAPIKey == nil)
         #expect(cred.agentIdentity == nil)
@@ -170,7 +191,7 @@ struct PKCETests {
 
     /// `account_id` is allowed to be absent — the codex CLI extracts
     /// it from the id_token JWT downstream when this field is missing.
-    @Test func decodeTokenResponseAllowsMissingAccountID() throws {
+    @Test func decodeOpenAITokenResponseAllowsMissingAccountID() throws {
         let json = """
         {
           "access_token": "a",
@@ -178,11 +199,11 @@ struct PKCETests {
           "id_token": "i"
         }
         """.data(using: .utf8)!
-        let cred = try OAuthClient.decodeTokenResponse(json)
+        let cred = try OAuthClient.decodeOpenAITokenResponse(json)
         #expect(cred.tokens?.accountID == nil)
     }
 
-    @Test func decodeTokenResponseFailsOnMissingRefreshToken() {
+    @Test func decodeOpenAITokenResponseFailsOnMissingRefreshToken() {
         // The `offline_access` scope means OpenAI always returns a
         // refresh_token. If it's missing, we fail loudly rather than
         // persist a half-credential that'll break on next inference.
@@ -193,7 +214,7 @@ struct PKCETests {
         }
         """.data(using: .utf8)!
         do {
-            _ = try OAuthClient.decodeTokenResponse(json)
+            _ = try OAuthClient.decodeOpenAITokenResponse(json)
             Issue.record("expected malformedTokenResponse")
         } catch let err as OAuthClientError {
             #expect(err == .malformedTokenResponse)
@@ -202,10 +223,96 @@ struct PKCETests {
         }
     }
 
-    @Test func decodeTokenResponseFailsOnGarbageBody() {
+    @Test func decodeOpenAITokenResponseFailsOnGarbageBody() {
         let garbage = Data("not json".utf8)
         do {
-            _ = try OAuthClient.decodeTokenResponse(garbage)
+            _ = try OAuthClient.decodeOpenAITokenResponse(garbage)
+            Issue.record("expected malformedTokenResponse")
+        } catch let err as OAuthClientError {
+            #expect(err == .malformedTokenResponse)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - Anthropic token-response decode
+
+    /// Anthropic's `/v1/oauth/token` returns the standard OAuth-ish
+    /// blob: `access_token`, `refresh_token`, `expires_in` (seconds),
+    /// `scope` (space-separated). We map it onto the
+    /// `.credentials.json` shape (PLAN §B.1) — nested
+    /// `claudeAiOauth.accessToken` / `refreshToken` / `expiresAt`
+    /// (ms-since-epoch) / `scopes` (array).
+    @Test func decodeAnthropicTokenResponseMapsOntoClaudeCredentialsJson() throws {
+        let json = """
+        {
+          "access_token": "sk-ant-oat01-aaa",
+          "refresh_token": "sk-ant-ort01-bbb",
+          "expires_in": 3600,
+          "scope": "user:profile user:inference user:file_upload user:mcp_servers user:sessions:claude_code",
+          "subscription_type": "max",
+          "token_type": "Bearer"
+        }
+        """.data(using: .utf8)!
+
+        // Pin a known "now" by sampling immediately before + after; the
+        // implementation reads `Date()` once internally so the produced
+        // `expiresAt` must land in `[before + 3600s, after + 3600s]`.
+        let before = Int64(Date().timeIntervalSince1970 * 1000) + Int64(3600 * 1000)
+        let cred = try OAuthClient.decodeAnthropicTokenResponse(json)
+        let after = Int64(Date().timeIntervalSince1970 * 1000) + Int64(3600 * 1000)
+
+        #expect(cred.claudeAiOauth.accessToken == "sk-ant-oat01-aaa")
+        #expect(cred.claudeAiOauth.refreshToken == "sk-ant-ort01-bbb")
+        #expect(cred.claudeAiOauth.subscriptionType == "max")
+        #expect(cred.claudeAiOauth.scopes == [
+            "user:profile", "user:inference", "user:file_upload",
+            "user:mcp_servers", "user:sessions:claude_code",
+        ])
+        #expect(cred.claudeAiOauth.expiresAt >= before)
+        #expect(cred.claudeAiOauth.expiresAt <= after)
+    }
+
+    /// `subscription_type` is allowed to be absent — Anthropic's docs
+    /// don't pin whether the OAuth response carries it, and the
+    /// claude CLI writes `null` to disk in that case. We mirror that
+    /// rather than synthesizing a fake plan name.
+    @Test func decodeAnthropicTokenResponseAllowsMissingSubscriptionType() throws {
+        let json = """
+        {
+          "access_token": "a",
+          "refresh_token": "r",
+          "expires_in": 3600,
+          "scope": ""
+        }
+        """.data(using: .utf8)!
+        let cred = try OAuthClient.decodeAnthropicTokenResponse(json)
+        #expect(cred.claudeAiOauth.subscriptionType == nil)
+        // Empty scope string → empty array, not [""].
+        #expect(cred.claudeAiOauth.scopes == [])
+    }
+
+    @Test func decodeAnthropicTokenResponseFailsOnMissingRefreshToken() {
+        let json = """
+        {
+          "access_token": "a",
+          "expires_in": 3600
+        }
+        """.data(using: .utf8)!
+        do {
+            _ = try OAuthClient.decodeAnthropicTokenResponse(json)
+            Issue.record("expected malformedTokenResponse")
+        } catch let err as OAuthClientError {
+            #expect(err == .malformedTokenResponse)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func decodeAnthropicTokenResponseFailsOnGarbageBody() {
+        let garbage = Data("not json".utf8)
+        do {
+            _ = try OAuthClient.decodeAnthropicTokenResponse(garbage)
             Issue.record("expected malformedTokenResponse")
         } catch let err as OAuthClientError {
             #expect(err == .malformedTokenResponse)
@@ -216,13 +323,13 @@ struct PKCETests {
 
     // MARK: - OAuthCredential JSON shape
 
-    /// Round-trips a credential through JSON and asserts the keys
+    /// Round-trips an `AuthDotJson` through JSON and asserts the keys
     /// match what the codex CLI writes to `auth.json` (PLAN §C.1):
     /// snake_case `auth_mode`, screaming `OPENAI_API_KEY`, nested
     /// `tokens.id_token` / `access_token` / `refresh_token` /
     /// `account_id`. Stage 1's broker reads these keys verbatim.
-    @Test func credentialJSONKeysMatchAuthDotJsonSchema() throws {
-        let cred = OAuthCredential(
+    @Test func authDotJsonKeysMatchCodexSchema() throws {
+        let cred = AuthDotJson(
             authMode: "ChatGPT",
             openaiAPIKey: nil,
             tokens: .init(
@@ -244,5 +351,57 @@ struct PKCETests {
         #expect(json.contains("\"access_token\":\"a\""))
         #expect(json.contains("\"refresh_token\":\"r\""))
         #expect(json.contains("\"account_id\":\"acct\""))
+    }
+
+    /// Round-trips a `ClaudeCredentialsJson` through JSON and asserts
+    /// the keys match what the `claude` CLI writes to
+    /// `~/.claude/.credentials.json` (PLAN §B.1): camelCase
+    /// `claudeAiOauth`, `accessToken`, `refreshToken`, `expiresAt`
+    /// (number, ms), `scopes`, `subscriptionType`. The broker reads
+    /// these keys verbatim.
+    @Test func claudeCredentialsJSONKeysMatchClaudeSchema() throws {
+        let cred = ClaudeCredentialsJson(
+            claudeAiOauth: .init(
+                accessToken: "sk-ant-oat01-aaa",
+                refreshToken: "sk-ant-ort01-bbb",
+                expiresAt: 1_700_000_000_000,
+                scopes: ["user:inference", "user:profile"],
+                subscriptionType: "max"
+            )
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(cred)
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\"claudeAiOauth\""))
+        #expect(json.contains("\"accessToken\":\"sk-ant-oat01-aaa\""))
+        #expect(json.contains("\"refreshToken\":\"sk-ant-ort01-bbb\""))
+        #expect(json.contains("\"expiresAt\":1700000000000"))
+        #expect(json.contains("\"scopes\":[\"user:inference\",\"user:profile\"]"))
+        #expect(json.contains("\"subscriptionType\":\"max\""))
+    }
+
+    /// Decodes a fixture in the exact shape Anthropic writes to disk
+    /// (PLAN §B.1) — pins that our Codable layer reads back-out the
+    /// same shape the broker will see when it lifts the JSON off
+    /// `.credentials.json`.
+    @Test func claudeCredentialsJSONDecodesDiskFixture() throws {
+        let fixture = """
+        {
+          "claudeAiOauth": {
+            "accessToken": "sk-ant-oat01-aaa",
+            "refreshToken": "sk-ant-ort01-bbb",
+            "expiresAt": 1700000000000,
+            "scopes": ["user:inference", "user:profile"],
+            "subscriptionType": "max"
+          }
+        }
+        """.data(using: .utf8)!
+        let cred = try JSONDecoder().decode(ClaudeCredentialsJson.self, from: fixture)
+        #expect(cred.claudeAiOauth.accessToken == "sk-ant-oat01-aaa")
+        #expect(cred.claudeAiOauth.refreshToken == "sk-ant-ort01-bbb")
+        #expect(cred.claudeAiOauth.expiresAt == 1_700_000_000_000)
+        #expect(cred.claudeAiOauth.scopes == ["user:inference", "user:profile"])
+        #expect(cred.claudeAiOauth.subscriptionType == "max")
     }
 }

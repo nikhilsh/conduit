@@ -1,17 +1,21 @@
 import SwiftUI
 
-/// Stage 0 spike sheet for per-user agent OAuth. Two rows:
+/// Stage 0/1 spike sheet for per-user agent OAuth. Two rows:
 ///
 /// - "Login with ChatGPT" — kicks off the OpenAI / Codex OAuth flow via
 ///   `OAuthClient(provider: .openai).startLogin()`, persists the
-///   resulting blob in Keychain (service `"sh.nikhil.swekitty.oauth"`),
-///   and `print()`s the credential JSON to the console so a human can
-///   eyeball it during the spike demo (see PLAN-AGENT-OAUTH §I "Stage 0
-///   acceptance").
-/// - "Login with Claude" — visible but disabled. Stage 1+ wires it.
+///   resulting `AuthDotJson` blob in Keychain (service
+///   `"sh.nikhil.swekitty.oauth"`), and `print()`s the credential JSON
+///   to the console so a human can eyeball it during the spike demo
+///   (see PLAN-AGENT-OAUTH §I "Stage 0 acceptance").
+/// - "Login with Claude" — same flow, provider `.anthropic`, persists a
+///   `ClaudeCredentialsJson` blob. The OAuth params for Claude were
+///   reverse-engineered from the `claude` CLI binary (see PR #for
+///   `oauth-stage1-claude-button`) — Anthropic doesn't publish them,
+///   so on-device verification is the gating step.
 ///
 /// No broker traffic, no `set_agent_credentials` WS message, no token
-/// refresh. Stages 2 and 3 add those.
+/// refresh. Stage 2 adds the broker wiring.
 struct AgentLoginSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -82,9 +86,9 @@ struct AgentLoginSheet: View {
                 icon: "ant.circle",
                 tint: SweKittyTheme.claudeAccent,
                 title: "Login with Claude",
-                subtitle: "Stage 1+ — not wired yet",
-                enabled: false,
-                action: {}
+                subtitle: "Claude OAuth · claude.ai",
+                enabled: !isWorking,
+                action: { Task { await startClaudeLogin() } }
             )
         }
         .padding(.horizontal, 14)
@@ -153,15 +157,25 @@ struct AgentLoginSheet: View {
 
     @MainActor
     private func startChatGPTLogin() async {
+        await startLogin(provider: .openai)
+    }
+
+    @MainActor
+    private func startClaudeLogin() async {
+        await startLogin(provider: .anthropic)
+    }
+
+    @MainActor
+    private func startLogin(provider: OAuthProvider) async {
         isWorking = true
         statusMessage = "Opening sign-in browser…"
         errorMessage = nil
         defer { isWorking = false }
 
-        let client = OAuthClient(provider: .openai)
+        let client = OAuthClient(provider: provider)
         do {
             let credential = try await client.startLogin()
-            try OAuthCredentialStore.save(credential, provider: .openai)
+            try OAuthCredentialStore.save(credential)
             statusMessage = "Signed in — credential saved to Keychain."
             logCredentialToConsole(credential)
         } catch OAuthClientError.userCancelled {
@@ -173,16 +187,25 @@ struct AgentLoginSheet: View {
         }
     }
 
-    /// Prints the credential JSON to stdout so the Stage 0 demo can
-    /// eyeball `access_token` / `refresh_token`. Stage 1 deletes this
+    /// Prints the credential JSON to stdout so the spike demo can
+    /// eyeball `access_token` / `refresh_token`. Stage 2 deletes this
     /// — broker materialization will be the only consumer.
+    ///
+    /// Encodes the **inner native blob**, not the discriminated enum,
+    /// because that's the exact shape the broker will write to disk —
+    /// printing it now lets us diff against `~/.codex/auth.json` and
+    /// `~/.claude/.credentials.json` from a real CLI install.
     private func logCredentialToConsole(_ credential: OAuthCredential) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(credential),
-           let json = String(data: data, encoding: .utf8) {
-            print("[AgentLoginSheet] credential blob:\n\(json)")
+        let data: Data?
+        switch credential {
+        case .openai(let blob):    data = try? encoder.encode(blob)
+        case .anthropic(let blob): data = try? encoder.encode(blob)
+        }
+        if let data, let json = String(data: data, encoding: .utf8) {
+            print("[AgentLoginSheet] credential blob (\(credential.provider.rawValue)):\n\(json)")
         } else {
             print("[AgentLoginSheet] credential blob: <encode failed>")
         }
