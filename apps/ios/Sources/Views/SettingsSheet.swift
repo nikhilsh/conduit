@@ -22,6 +22,7 @@ struct SettingsSheet: View {
     @State private var showAddServer = false
     @State private var showAppearance = false
     @State private var showExperimental = false
+    @State private var showAgentLogin = false
 
     private let sponsorURL = URL(string: "https://github.com/sponsors/nikhilsh")!
 
@@ -38,6 +39,7 @@ struct SettingsSheet: View {
                         fontSection
                         conversationSection
                         experimentalSection
+                        agentAccountsSection
                         serversSection
                         harnessSection
                         aboutSection
@@ -82,6 +84,10 @@ struct SettingsSheet: View {
             .sheet(isPresented: $showExperimental) {
                 ExperimentalFeaturesSheet()
                     .environment(appearance)
+                    .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showAgentLogin) {
+                AgentLoginSheet()
                     .presentationDetents([.medium, .large])
             }
         }
@@ -163,6 +169,29 @@ struct SettingsSheet: View {
                     subtitle: "Collapse previous turns into cards",
                     isOn: $bindable.collapseTurns
                 )
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassRoundedRect()
+        }
+    }
+
+    /// Stage 0 of `docs/PLAN-AGENT-OAUTH.md` — a single entry that
+    /// presents `AgentLoginSheet` for the ChatGPT (Codex) OAuth spike.
+    /// The sheet stashes the resulting blob in Keychain and logs it to
+    /// the console; no broker wiring yet (Stage 2+).
+    private var agentAccountsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("Agent accounts")
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsRow(
+                    icon: "person.crop.circle.badge.checkmark",
+                    title: "Sign in to agents",
+                    subtitle: "Login with ChatGPT (Claude soon)"
+                ) {
+                    showAgentLogin = true
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
