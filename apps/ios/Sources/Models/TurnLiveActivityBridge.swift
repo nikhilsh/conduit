@@ -189,7 +189,13 @@ public final class TurnLiveActivityBridge {
     /// frame on devices where the user isn't actively in a session.
     public static let defaultIdleTickInterval: TimeInterval = 1
 
-    public init(
+    // Class is public so tests can @testable-import it; the init
+    // takes an internal `TurnLiveActivityController`, so it must be
+    // internal too (Swift rejects a public init whose parameter
+    // types are internal). Constructors at the SweKittyApp call site
+    // live in the same module, so the access drop is invisible
+    // outside tests.
+    init(
         store: SessionStore,
         controller: TurnLiveActivityController = .shared,
         idleTimeout: TimeInterval = TurnLiveActivityBridgeCore.defaultIdleTimeout
