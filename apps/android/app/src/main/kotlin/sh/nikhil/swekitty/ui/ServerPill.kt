@@ -64,7 +64,7 @@ fun ServerPill(
         StatusDot(model.status)
         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
-                text = model.name,
+                text = model.displayName,
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.SemiBold,
@@ -72,13 +72,15 @@ fun ServerPill(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = model.caption,
-                style = MaterialTheme.typography.labelSmall,
-                color = SweKittyTheme.textMuted(),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            model.subtitle?.let { subtitle ->
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SweKittyTheme.textMuted(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -148,6 +150,31 @@ data class ServerPillModel(
                 Kind.Saved      -> hostPort
                 Kind.Discovered -> "discovered · $hostPort"
             }
+        }
+
+    /**
+     * User-facing headline for line 1 of the pill. When the saved
+     * server has no user-chosen label, `name` is seeded from
+     * `endpoint.displayHost` ("host:port") in `SessionStore` — which,
+     * combined with [caption] underneath, made the pill render the
+     * same string twice (PR #47 polish bug). Collapse to host-only
+     * here so line 1 reads `10.0.0.4` and [subtitle] falls away.
+     */
+    val displayName: String
+        get() {
+            val hostPort = "$host:$port"
+            return if (name.isEmpty() || name == hostPort || name == caption) host else name
+        }
+
+    /**
+     * Optional second line. `null` when the pill should collapse to a
+     * single row because the user never picked a custom name — the
+     * view drops the second `Text` when this is `null`. Mirrors iOS.
+     */
+    val subtitle: String?
+        get() {
+            val hostPort = "$host:$port"
+            return if (name.isEmpty() || name == hostPort || name == caption) null else caption
         }
 
     /**

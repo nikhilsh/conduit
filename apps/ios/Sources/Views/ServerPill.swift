@@ -28,14 +28,16 @@ struct ServerPill: View {
                     .fill(model.statusColor)
                     .frame(width: 7, height: 7)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(model.name)
+                    Text(model.displayName)
                         .font(.system(.subheadline, design: .monospaced).weight(.semibold))
                         .foregroundStyle(model.isActive ? SweKittyTheme.textPrimary : SweKittyTheme.textSecondary)
                         .lineLimit(1)
-                    Text(model.caption)
-                        .font(.caption2)
-                        .foregroundStyle(SweKittyTheme.textMuted)
-                        .lineLimit(1)
+                    if let subtitle = model.subtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(SweKittyTheme.textMuted)
+                            .lineLimit(1)
+                    }
                 }
             }
             .padding(.horizontal, 12)
@@ -116,6 +118,32 @@ struct ServerPillModel: Equatable, Identifiable {
         case .saved:      return hostPort
         case .discovered: return "discovered · \(hostPort)"
         }
+    }
+
+    /// User-facing headline for line 1 of the pill. When the saved
+    /// server has no user-chosen label, `name` is seeded from
+    /// `endpoint.displayHost` ("host:port") in `SessionStore` — which,
+    /// combined with the `caption` underneath, made the pill render the
+    /// same string twice. Collapse to host-only here so line 1 reads
+    /// `10.0.0.4` and `subtitle` falls away below.
+    var displayName: String {
+        let hostPort = "\(host):\(port)"
+        if name.isEmpty || name == hostPort || name == caption {
+            return host
+        }
+        return name
+    }
+
+    /// Optional second line. `nil` when the pill should collapse to a
+    /// single row because the user never picked a custom name — that's
+    /// the polish bug PR #47 introduced (host:port duplicated on both
+    /// lines). The view drops the second `Text` when this is `nil`.
+    var subtitle: String? {
+        let hostPort = "\(host):\(port)"
+        if name.isEmpty || name == hostPort || name == caption {
+            return nil
+        }
+        return caption
     }
 
     /// SwiftUI colour for the status dot. Computed off `status` only;

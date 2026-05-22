@@ -60,6 +60,50 @@ class ServerPillModelTest {
         assertEquals("discovered · 10.0.0.5:9000", model.caption)
     }
 
+    // ---------- duplicate-host collapse (fix-server-pill-duplicate-host) ----------
+
+    @Test
+    fun pillCollapsesToSingleLineWhenNameMatchesCaption() {
+        // PR #47 polish bug: when the user saves a server without a
+        // custom label, SessionStore seeds `name` with displayHost
+        // ("host:port") — which made the pill render the same string
+        // on both lines. Collapse to host-only on line 1 + null
+        // subtitle so the view drops the second Text.
+        val m = ServerPillModel.fromSaved(
+            savedServer(name = "192.168.1.20:8080", url = "ws://192.168.1.20:8080"),
+            Endpoint("ws://192.168.1.20:8080", "t1"),
+            HarnessState.Live,
+        )
+        assertNull(m.subtitle)
+        assertEquals("192.168.1.20", m.displayName)
+    }
+
+    @Test
+    fun pillCollapsesWhenNameIsEmpty() {
+        // Defensive: an empty stored name shouldn't render an empty
+        // bold line + host:port below. Fall back to host on line 1.
+        val m = ServerPillModel.fromSaved(
+            savedServer(name = "", url = "ws://192.168.1.20:8080"),
+            Endpoint("ws://192.168.1.20:8080", "t1"),
+            HarnessState.Live,
+        )
+        assertNull(m.subtitle)
+        assertEquals("192.168.1.20", m.displayName)
+    }
+
+    @Test
+    fun pillShowsBothLinesWhenUserSetCustomName() {
+        // Happy path — the user picked "Studio" so line 1 stays
+        // "Studio" and subtitle surfaces the host:port underneath.
+        val m = ServerPillModel.fromSaved(
+            savedServer(name = "Studio", url = "ws://192.168.1.20:8080"),
+            Endpoint("ws://192.168.1.20:8080", "t1"),
+            HarnessState.Live,
+        )
+        assertEquals("Studio", m.displayName)
+        assertEquals("192.168.1.20:8080", m.subtitle)
+    }
+
     // ---------- status mapping (saved → harness) ----------
 
     @Test

@@ -40,6 +40,51 @@ struct ServerPillModelTests {
         #expect(model.caption == "discovered · 192.168.1.10:1977")
     }
 
+    // MARK: - Duplicate-host collapse (fix-server-pill-duplicate-host)
+
+    @Test func pillCollapsesToSingleLineWhenNameMatchesCaption() {
+        // PR #47 polish bug: when the user saves a server without
+        // picking a custom label, SessionStore seeds `name` with
+        // `endpoint.displayHost` ("host:port") — and the pill rendered
+        // that same string on both lines. Collapse to host-only on
+        // line 1 + drop the subtitle entirely.
+        let server = mkSaved(name: "10.0.0.4:1977", url: "ws://10.0.0.4:1977")
+        let model = ServerPillModel.fromSaved(
+            server,
+            currentEndpoint: StoredEndpoint(url: "ws://10.0.0.4:1977", token: "t"),
+            harness: .live
+        )
+        #expect(model.subtitle == nil)
+        #expect(model.displayName == "10.0.0.4")
+    }
+
+    @Test func pillCollapsesWhenNameIsEmpty() {
+        // Defensive: a stored SavedServer with an empty name (legacy
+        // rows, migration edge cases) shouldn't render an empty bold
+        // line + the host:port caption below. Fall back to host.
+        let server = mkSaved(name: "", url: "ws://10.0.0.4:1977")
+        let model = ServerPillModel.fromSaved(
+            server,
+            currentEndpoint: StoredEndpoint.empty,
+            harness: .disconnected
+        )
+        #expect(model.subtitle == nil)
+        #expect(model.displayName == "10.0.0.4")
+    }
+
+    @Test func pillShowsBothLinesWhenUserSetCustomName() {
+        // Happy path — the user picked "Studio" so line 1 stays
+        // "Studio" and the subtitle surfaces the host:port below.
+        let server = mkSaved(name: "Studio", url: "ws://10.0.0.4:1977")
+        let model = ServerPillModel.fromSaved(
+            server,
+            currentEndpoint: StoredEndpoint(url: "ws://10.0.0.4:1977", token: "t"),
+            harness: .live
+        )
+        #expect(model.displayName == "Studio")
+        #expect(model.subtitle == "10.0.0.4:1977")
+    }
+
     // MARK: - Status mapping (saved entries)
 
     @Test func savedActiveLiveIsLive() {
