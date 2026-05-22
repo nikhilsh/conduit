@@ -34,18 +34,95 @@ import Foundation
 import GhosttyVt
 #endif
 
+/// VT-100/ECMA-48 SGR color, in the shape the renderer needs to look it
+/// up in a `TerminalPalette`. Pure data — the actual `UIColor`
+/// resolution happens in the iOS app layer so this module stays
+/// UIKit-free (it links into both the app and the test bundle).
+///
+/// Four flavors, matching what the SGR escape sequences can produce:
+///  - `.default` — "use the terminal's default foreground / background"
+///    (renderer-dependent; defaults are tracked separately from a
+///    palette index because reset SGR doesn't pick palette slot 0/7).
+///  - `.ansi(index:bright:)` — the 16-color base + bright table.
+///    `index` is 0..7 (black, red, green, yellow, blue, magenta, cyan,
+///    white) and `bright` flips the bright variant on. This is the
+///    shape SGR 30–37, 40–47, 90–97, 100–107 emits.
+///  - `.palette(index:)` — the xterm 256-color palette (SGR 38;5;n /
+///    48;5;n). Index 0..15 alias the 16-color base; 16..231 are the
+///    6×6×6 RGB cube; 232..255 are the 24-step grayscale ramp.
+///  - `.rgb(r:g:b:)` — 24-bit truecolor (SGR 38;2;r;g;b / 48;2;r;g;b).
+public enum SGRColor: Equatable, Sendable, Hashable {
+    case `default`
+    case ansi(index: UInt8, bright: Bool)
+    case palette(index: UInt8)
+    case rgb(r: UInt8, g: UInt8, b: UInt8)
+}
+
+/// VT-100/ECMA-48 SGR attributes that aren't colors. Matches the bit
+/// flags Ghostty's `vt/cell.h` exposes — bold + dim are independent so
+/// both can be set (and a renderer that doesn't support dim can fall
+/// back to "normal weight"); reverse is honored by the renderer
+/// swapping `fg`/`bg` before resolving each cell.
+public struct SGRAttributes: OptionSet, Equatable, Sendable, Hashable {
+    public let rawValue: UInt16
+    public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+    public static let bold          = SGRAttributes(rawValue: 1 << 0)
+    public static let dim           = SGRAttributes(rawValue: 1 << 1)
+    public static let italic        = SGRAttributes(rawValue: 1 << 2)
+    public static let underline     = SGRAttributes(rawValue: 1 << 3)
+    public static let blink         = SGRAttributes(rawValue: 1 << 4)
+    public static let reverse       = SGRAttributes(rawValue: 1 << 5)
+    public static let strikethrough = SGRAttributes(rawValue: 1 << 6)
+}
+
 /// Pure-Swift mirror of a single cell in the terminal grid. Lives
 /// outside the `#if canImport` block so call sites (and tests) can
 /// reference `TerminalSnapshot` regardless of whether the binary
-/// framework is wired up. Stage 1 only fills `character`; Stage 2
-/// will grow style, color, and wide-char fields.
+/// framework is wired up. Stage 1 only filled `character`; Stage 3
+/// adds `fg`/`bg`/`attrs`/`width` so the CoreText renderer can paint
+/// colored / wide / styled glyphs. The libghostty bridge in
+/// `readCell` still leaves these at their defaults because the
+/// current pin's C ABI is unreachable (see `Terminal.isAvailable`);
+/// the renderer is exercised via unit tests until that wrapper is
+/// rebuilt against the App/Surface API.
 public struct TerminalCell: Equatable, Sendable {
     /// The grapheme rendered into this cell. Empty string for cells
     /// that have no text (background-color-only or unwritten cells).
     public var character: String
 
-    public init(character: String) {
+    /// Foreground SGR color. `.default` for cells the VT side has
+    /// reset (the renderer paints the terminal's default foreground).
+    public var fg: SGRColor
+
+    /// Background SGR color. `.default` for cells the VT side has
+    /// reset (the renderer paints the terminal's default background).
+    public var bg: SGRColor
+
+    /// Non-color SGR attributes (bold, italic, underline, …). Empty
+    /// option-set when nothing is active.
+    public var attrs: SGRAttributes
+
+    /// Visual cell width — 1 for normal characters and 2 for wide
+    /// (East Asian / emoji) graphemes. The continuation cell of a
+    /// wide pair carries `width == 0` and an empty `character`; the
+    /// renderer skips it because the parent already drew the glyph
+    /// across the pair. Defaults to 1 so the legacy `init` (which
+    /// only set `character`) continues to behave as a single cell.
+    public var width: Int
+
+    public init(
+        character: String,
+        fg: SGRColor = .default,
+        bg: SGRColor = .default,
+        attrs: SGRAttributes = [],
+        width: Int = 1
+    ) {
         self.character = character
+        self.fg = fg
+        self.bg = bg
+        self.attrs = attrs
+        self.width = width
     }
 }
 

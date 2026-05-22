@@ -189,6 +189,12 @@ targets:
       - target: SweKitty
       - package: SnapshotTesting
         product: SnapshotTesting
+      # Stage 3 SGR tests need to construct `TerminalCell` /
+      # `SGRColor` / `SGRAttributes` values directly to exercise the
+      # `renderColor` / `terminalCellWidth` helpers without standing up
+      # libghostty. The app already links `GhosttyVT`; the test bundle
+      # gets its own dep so `@testable import GhosttyVT` resolves.
+      - package: GhosttyVT
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: sh.nikhil.swekitty.tests

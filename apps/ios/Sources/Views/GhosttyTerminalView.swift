@@ -534,18 +534,31 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         }
         let snap = terminal.snapshot()
         var rowsOut: [[String]] = []
+        var styledOut: [[TerminalSnapshotShim.StyledCell]] = []
         rowsOut.reserveCapacity(Int(snap.rows))
+        styledOut.reserveCapacity(Int(snap.rows))
         for r in 0..<Int(snap.rows) {
             let start = r * Int(snap.cols)
             let end = start + Int(snap.cols)
-            rowsOut.append(snap.cells[start..<end].map { $0.character })
+            let slice = snap.cells[start..<end]
+            rowsOut.append(slice.map { $0.character })
+            styledOut.append(slice.map { cell in
+                TerminalSnapshotShim.StyledCell(
+                    character: cell.character,
+                    fg: SGRColorShim(cell.fg),
+                    bg: SGRColorShim(cell.bg),
+                    attrs: SGRAttributesShim(cell.attrs),
+                    width: cell.width
+                )
+            })
         }
         cachedSnapshot = TerminalSnapshotShim(
             cols: Int(snap.cols),
             rows: Int(snap.rows),
             cells: rowsOut,
             cursorRow: Int(snap.cursorRow),
-            cursorCol: Int(snap.cursorCol)
+            cursorCol: Int(snap.cursorCol),
+            styledCells: styledOut
         )
         #else
         cachedSnapshot = nil
@@ -557,7 +570,8 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
-        ctx.setFillColor(UIColor.black.cgColor)
+        let palette = TerminalPalette.default
+        ctx.setFillColor(palette.defaultBackground.cgColor)
         ctx.fill(bounds)
 
         guard let snap = cachedSnapshot, snap.cols > 0, snap.rows > 0 else {
@@ -568,12 +582,42 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             return
         }
 
-        // Stage 3 selection highlight — paint *before* the glyphs so
-        // the text remains readable on top. SweKittyTheme.warning at
-        // 0.25 opacity matches the rest of the app's "this is
-        // selected / tentative" tint. Walks the same cell rectangle
-        // that `TerminalSelectionRange.selectedText` reads, so what
-        // the user sees highlighted is exactly what `copy()` ships.
+        // Stage 3 per-cell background fill. Loop the styled grid and
+        // paint each non-default background as a single cell rect.
+        // Wide cells (width == 2) extend the fill across two cell
+        // widths; the continuation cell (width == 0) is skipped. The
+        // reverse attribute swaps fg/bg before the fill so a reversed
+        // `.default` row paints the default foreground as background.
+        if let styled = snap.styledCells {
+            for (r, row) in styled.enumerated() {
+                var c = 0
+                while c < row.count {
+                    let cell = row[c]
+                    if cell.width == 0 {
+                        c += 1
+                        continue
+                    }
+                    let spanWidth = max(1, cell.width)
+                    let effectiveBg = cell.attrs.contains(.reverse) ? cell.fg : cell.bg
+                    if effectiveBg != .default {
+                        let bgColor = renderColor(effectiveBg, fg: false, palette: palette)
+                        let rect = CGRect(
+                            x: CGFloat(c) * cellWidth,
+                            y: CGFloat(r) * cellHeight,
+                            width: CGFloat(spanWidth) * cellWidth,
+                            height: cellHeight
+                        )
+                        ctx.setFillColor(bgColor.cgColor)
+                        ctx.fill(rect)
+                    }
+                    c += spanWidth
+                }
+            }
+        }
+
+        // Selection highlight — paint *after* per-cell background but
+        // *before* glyphs so text stays readable. Walks the same
+        // normalized rectangle the text extractor reads.
         if let selection = selectionRange {
             let (s, e) = selection.normalized
             let r0 = max(0, min(snap.rows - 1, s.row))
@@ -619,11 +663,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             }
         }
 
-        let textAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: UIColor.white,
-        ]
-
         // CoreText draws with the y-axis flipped (CG default); flip the
         // context once so we can iterate rows top-down with familiar
         // coordinates.
@@ -631,16 +670,66 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         ctx.translateBy(x: 0, y: bounds.height)
         ctx.scaleBy(x: 1, y: -1)
 
+        let regularFont = font
+        let boldFont = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+        let italicDescriptor = regularFont.fontDescriptor.withSymbolicTraits(.traitItalic)
+        let italicFont = italicDescriptor.flatMap { UIFont(descriptor: $0, size: fontSize) } ?? regularFont
+        let boldItalicDescriptor = boldFont.fontDescriptor.withSymbolicTraits(.traitItalic)
+        let boldItalicFont = boldItalicDescriptor.flatMap { UIFont(descriptor: $0, size: fontSize) } ?? boldFont
+
+        // Per-cell glyph paint. We could batch contiguous same-style
+        // runs into one `CFAttributedString`, but the snapshot is
+        // small (cols * rows ≤ 200 * 100 in practice) and the
+        // per-cell path keeps the code inspectable. Stage 3+ moves
+        // to run-coalescing when render-state's dirty iterator lands.
         for r in 0..<snap.rows {
-            let line = snap.cells[r].map { $0.isEmpty ? " " : $0 }.joined()
-            let attr = NSAttributedString(string: line, attributes: textAttrs)
             let yFromBottom = bounds.height - CGFloat(r + 1) * cellHeight
-            // CoreText baselines from the bottom of the line; offset
-            // by the font descender so glyphs sit on the cell row.
             let baseline = yFromBottom + abs(font.descender)
-            ctx.textPosition = CGPoint(x: 0, y: baseline)
-            let line2 = CTLineCreateWithAttributedString(attr)
-            CTLineDraw(line2, ctx)
+            if let styled = snap.styledCells, r < styled.count {
+                let row = styled[r]
+                var c = 0
+                while c < row.count {
+                    let cell = row[c]
+                    if cell.width == 0 {
+                        c += 1
+                        continue
+                    }
+                    let spanWidth = max(1, cell.width)
+                    let glyph = cell.character.isEmpty ? " " : cell.character
+                    let effectiveFg = cell.attrs.contains(.reverse) ? cell.bg : cell.fg
+                    let fgColor = renderColor(effectiveFg, fg: true, palette: palette)
+                    let pickFont: UIFont
+                    switch (cell.attrs.contains(.bold), cell.attrs.contains(.italic)) {
+                    case (true, true):   pickFont = boldItalicFont
+                    case (true, false):  pickFont = boldFont
+                    case (false, true):  pickFont = italicFont
+                    case (false, false): pickFont = regularFont
+                    }
+                    var attrs: [NSAttributedString.Key: Any] = [
+                        .font: pickFont,
+                        .foregroundColor: fgColor,
+                    ]
+                    if cell.attrs.contains(.underline) {
+                        attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                    }
+                    if cell.attrs.contains(.strikethrough) {
+                        attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                    }
+                    let attr = NSAttributedString(string: glyph, attributes: attrs)
+                    ctx.textPosition = CGPoint(x: CGFloat(c) * cellWidth, y: baseline)
+                    CTLineDraw(CTLineCreateWithAttributedString(attr), ctx)
+                    c += spanWidth
+                }
+            } else {
+                // Fallback: legacy grapheme-only row (no styled data).
+                let line = snap.cells[r].map { $0.isEmpty ? " " : $0 }.joined()
+                let attr = NSAttributedString(string: line, attributes: [
+                    .font: regularFont,
+                    .foregroundColor: palette.defaultForeground,
+                ])
+                ctx.textPosition = CGPoint(x: 0, y: baseline)
+                CTLineDraw(CTLineCreateWithAttributedString(attr), ctx)
+            }
         }
         ctx.restoreGState()
 
@@ -655,7 +744,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             width: cellWidth,
             height: cellHeight
         )
-        ctx.setStrokeColor(UIColor.white.cgColor)
+        ctx.setStrokeColor(palette.defaultForeground.cgColor)
         ctx.setLineWidth(1.0)
         ctx.stroke(cursorRect)
     }
@@ -671,7 +760,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         #endif
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: UIColor.white,
+            .foregroundColor: TerminalPalette.default.defaultForeground,
         ]
         let attr = NSAttributedString(string: text, attributes: attrs)
         let size = attr.size()
@@ -690,6 +779,11 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 /// compiles regardless of whether the framework linked. Internal (not
 /// private) so `TerminalSelectionRange.selectedText(from:)` can take it
 /// as a parameter and the test target can build snapshots directly.
+///
+/// Stage 3 adds the parallel `styledCells` table — same outer/inner
+/// indexing as `cells`, but each entry carries SGR fg/bg/attrs/width.
+/// The legacy `cells` array stays so the selection / copy path (which
+/// only reads graphemes) doesn't need to learn the richer shape.
 struct TerminalSnapshotShim: Equatable {
     var cols: Int
     var rows: Int
@@ -697,6 +791,88 @@ struct TerminalSnapshotShim: Equatable {
     var cells: [[String]]
     var cursorRow: Int
     var cursorCol: Int
+    /// Same shape as `cells` but each entry is a `TerminalCell`
+    /// carrying SGR data. Optional in the data model so legacy test
+    /// builders (which only fill the grapheme grid) keep compiling.
+    /// The renderer falls back to `.default` everywhere when this is
+    /// nil — same visual as Stage 2.
+    var styledCells: [[StyledCell]]? = nil
+
+    /// Pure-data SGR-bearing cell used by the renderer. Mirrors
+    /// `GhosttyVT.TerminalCell` but keeps the renderer compiling
+    /// when `GhosttyVT` is not importable (the placeholder build).
+    struct StyledCell: Equatable {
+        var character: String
+        var fg: SGRColorShim
+        var bg: SGRColorShim
+        var attrs: SGRAttributesShim
+        var width: Int
+    }
+}
+
+/// File-level shadow of `GhosttyVT.SGRColor` so the renderer compiles
+/// when the binary framework isn't linked. The conversion to / from
+/// the GhosttyVT type lives behind `#if canImport(GhosttyVT)`.
+enum SGRColorShim: Equatable {
+    case `default`
+    case ansi(index: UInt8, bright: Bool)
+    case palette(index: UInt8)
+    case rgb(r: UInt8, g: UInt8, b: UInt8)
+}
+
+struct SGRAttributesShim: OptionSet, Equatable {
+    let rawValue: UInt16
+    init(rawValue: UInt16) { self.rawValue = rawValue }
+    static let bold          = SGRAttributesShim(rawValue: 1 << 0)
+    static let dim           = SGRAttributesShim(rawValue: 1 << 1)
+    static let italic        = SGRAttributesShim(rawValue: 1 << 2)
+    static let underline     = SGRAttributesShim(rawValue: 1 << 3)
+    static let blink         = SGRAttributesShim(rawValue: 1 << 4)
+    static let reverse       = SGRAttributesShim(rawValue: 1 << 5)
+    static let strikethrough = SGRAttributesShim(rawValue: 1 << 6)
+}
+
+#if canImport(GhosttyVT)
+extension SGRColorShim {
+    init(_ source: GhosttyVT.SGRColor) {
+        switch source {
+        case .default: self = .default
+        case .ansi(let index, let bright): self = .ansi(index: index, bright: bright)
+        case .palette(let index): self = .palette(index: index)
+        case .rgb(let r, let g, let b): self = .rgb(r: r, g: g, b: b)
+        }
+    }
+}
+
+extension SGRAttributesShim {
+    init(_ source: GhosttyVT.SGRAttributes) {
+        self = SGRAttributesShim(rawValue: source.rawValue)
+    }
+}
+#endif
+
+/// Map a `SGRColorShim` to a `UIColor` via the renderer's palette.
+/// Factored out so the renderer and the test target use the same
+/// lookup. `fg` flips the meaning of `.default` (foreground vs
+/// background) for the reverse-video swap.
+func renderColor(_ color: SGRColorShim, fg: Bool, palette: TerminalPalette) -> UIColor {
+    switch color {
+    case .default:
+        return fg ? palette.defaultForeground : palette.defaultBackground
+    case .ansi(let index, let bright):
+        let slot = Int(index) + (bright ? 8 : 0)
+        let safe = max(0, min(palette.ansi.count - 1, slot))
+        return palette.ansi[safe]
+    case .palette(let index):
+        return TerminalPalette.xterm256Color(at: index, palette: palette)
+    case .rgb(let r, let g, let b):
+        return UIColor(
+            red: CGFloat(r) / 255.0,
+            green: CGFloat(g) / 255.0,
+            blue: CGFloat(b) / 255.0,
+            alpha: 1.0
+        )
+    }
 }
 
 /// Pure-data Stage 3 selection rectangle. Two (row, col) anchors plus a
