@@ -789,10 +789,13 @@ half. Still queued for a follow-up Android Stage 2.1 / 2.2:
   on `TerminalView` directly; we'd need to override the
   `InputConnection` to mirror that into broker writes.
 - Selection / copy / link-tap / TalkBack still use Termux's
-  built-in handlers. Those write to `ClipboardManager` correctly
-  (Stage 3 acceptance), but selection mode currently competes with
-  the broker's own bracketed-paste semantics on some devices —
-  hasn't bitten yet in dev testing, flagged for the soak.
+  built-in handlers. Stage 3 wires the Termux
+  `TerminalSessionClient.onCopyTextToClipboard` /
+  `onPasteTextFromClipboard` callbacks into `ClipboardManager` so
+  the floating action mode's Copy / Paste buttons round-trip through
+  the system clipboard and the broker. Selection mode still
+  competes with the broker's own bracketed-paste semantics on some
+  devices — hasn't bitten yet in dev testing, flagged for the soak.
 - The Compose accessory bar (sticky Ctrl, arrow nipple, mic)
   hasn't been wired through `BrokerTerminalViewClient.readControlKey`
   / `readAltKey` / `readShiftKey` yet — those still return `false`.
@@ -811,3 +814,87 @@ half. Still queued for a follow-up Android Stage 2.1 / 2.2:
   short-circuits to `TermuxPlaceholderView` via the factory's
   `try/catch`. The user sees a placeholder instead of a crash;
   `adb logcat -s TermuxTerminalView` shows the underlying error.
+
+## Stage 3 status — 2026-05-22 (selection + copy + paste)
+
+Closes the Stage 2 deferred item ("Selection / copy / paste —
+`vt/selection.h` is in the xcframework but the Swift wrapper does not
+bridge it yet"). Ships both platforms in one PR
+(`terminal-stage3-selection`).
+
+**iOS — `apps/ios/Sources/Views/GhosttyTerminalView.swift`**
+
+- `GhosttyRenderView` is now a first-responder on tap (single-tap
+  hides any selection + summons the soft keyboard); long-press
+  anchors a `TerminalSelectionRange` at the tap point's `(row, col)`
+  computed from `cellWidth` / `cellHeight`; pan after long-press
+  extends `end`; double-tap selects the ASCII-word at the tap cell;
+  triple-tap selects the full row.
+- `draw(_:)` paints a translucent `SweKittyTheme.warning` (yellow at
+  0.25 opacity) rectangle under the selected cells **before** the
+  glyphs so the text remains readable. The highlight walks the same
+  normalized rectangle the text extractor reads — what you see is
+  what `copy()` ships.
+- `canPerformAction(_:withSender:)` surfaces `.copy(_:)` whenever a
+  selection exists and `.paste(_:)` whenever the system clipboard
+  has a string. `target(forAction:withSender:)` routes both to the
+  view itself so the iOS edit menu (`UIMenuController.shared`) calls
+  our overrides. `UIMenuController.showMenu(from:rect:)` is invoked
+  on long-press / drag-end so the floating Copy / Paste appears at
+  the selection.
+- `copy(_:)` derives the substring from `cachedSnapshot` via
+  `TerminalSelectionRange.selectedText(from:)` and writes
+  `UIPasteboard.general.string`. `paste(_:)` reads the same
+  clipboard slot, normalizes `LF` → `CR` (matches
+  `insertText`), and forwards UTF-8 bytes through `onInput` →
+  `SessionStore.sendInput(...)` — same input path the soft keyboard
+  takes, so bracketed-paste semantics are the harness's
+  responsibility.
+
+**Android — `apps/android/.../ui/TermuxTerminalView.kt`**
+
+- Termux's `TerminalView` already ships the live selection drag-
+  handles + floating action mode (`TextSelectionCursorController`).
+  We leave that on; Stage 3 only wires Termux's
+  `TerminalSessionClient` clipboard hooks into the OS:
+  - `onCopyTextToClipboard(session, text)` → `ClipboardManager.setPrimaryClip`
+    with a `ClipData.newPlainText("swe-kitty terminal", text)`
+    payload. Fires when the user taps Copy in Termux's action mode.
+  - `onPasteTextFromClipboard(session)` → read
+    `ClipboardManager.primaryClip` → forward bytes through `onInput`
+    (= `SessionStore.sendInput`), so the broker — not the silent
+    `/system/bin/sleep` local PTY — receives the paste.
+- Both callbacks wrap in `try/catch` and log to
+  `TermuxTerminalView` so a hardened-device clipboard service
+  failure logs but doesn't crash.
+
+**Both platforms — pure-data extraction**
+
+`TerminalSelectionRange` is the same shape on both platforms:
+`(start: (row, col), end: (row, col))` anchors + `normalized()` to
+swap drag-backwards anchors + `selectedText(...)` to walk the cell
+grid. Inclusive on both ends. Out-of-bounds anchors clamp to the
+snapshot bounds. Empty cells render as a single space so the
+substring matches the on-screen width.
+
+Tests pin both implementations against the same scenario set:
+
+- `apps/ios/Tests/SweKittyTests/TerminalSelectionRangeTests.swift`
+  — Swift Testing, 11 cases.
+- `apps/android/app/src/test/java/sh/nikhil/swekitty/ui/TerminalSelectionRangeTest.kt`
+  — JUnit 4, 11 cases mirroring the Swift suite.
+
+**What's deferred**
+
+- The Android `TerminalSelectionRange` is **not** wired into the
+  live mount today — Termux's own `TextSelectionCursorController`
+  owns the on-screen drag handles. The shape is parked here so a
+  future "Send selection to chat" intent or a Compose-side
+  selection overlay can reuse it. Today's Android selection UX is
+  Termux's default, plus the new clipboard round-trip.
+- The iOS edit-menu animation defaults to the legacy
+  `UIMenuController` shape rather than `UIEditMenuInteraction` (iOS
+  16+). Mechanical swap in a follow-up; the deprecated API still
+  works in iOS 26 and matches the test target.
+- TalkBack / VoiceOver on selected cells is unchanged from Stage 2
+  on both platforms.

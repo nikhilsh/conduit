@@ -139,8 +139,18 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     private var rows: Int = 24
 
     /// Last grid snapshot read from libghostty. `nil` until the first
-    /// `feed(_:)` call lands. Rendered by `draw(_:)`.
-    private var cachedSnapshot: TerminalSnapshotShim?
+    /// `feed(_:)` call lands. Rendered by `draw(_:)`. Internal so unit
+    /// tests can verify the snapshot↔selection coupling without
+    /// re-implementing it.
+    var cachedSnapshot: TerminalSnapshotShim?
+
+    /// Stage 3 selection state. `nil` when nothing is selected; set by
+    /// the long-press / double-tap / triple-tap recognisers and
+    /// extended by the pan recogniser. Cleared by a single tap or by
+    /// `copy(_:)` after the text has been copied. Internal so unit
+    /// tests can assert on the state machine without exercising
+    /// UIGestureRecognizer.
+    var selectionRange: TerminalSelectionRange?
 
     #if canImport(GhosttyVT)
     private var terminal: Terminal?
@@ -234,8 +244,33 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         contentMode = .redraw
         layer.contentsScale = UIScreen.main.scale
 
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        // Stage 3 gesture stack. Order matters for `require(toFail:)`
+        // — a single tap mustn't fire while a double / triple tap is
+        // still in flight, and the long-press anchor mustn't race the
+        // selection pan that extends it.
+
+        let triple = UITapGestureRecognizer(target: self, action: #selector(handleTripleTap(_:)))
+        triple.numberOfTapsRequired = 3
+        addGestureRecognizer(triple)
+
+        let double = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        double.numberOfTapsRequired = 2
+        double.require(toFail: triple)
+        addGestureRecognizer(double)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.numberOfTapsRequired = 1
+        tap.require(toFail: double)
         addGestureRecognizer(tap)
+
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        addGestureRecognizer(longPress)
+
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleSelectionPan(_:)))
+        pan.maximumNumberOfTouches = 1
+        // Only extend selection after long-press has anchored it.
+        pan.require(toFail: longPress)
+        addGestureRecognizer(pan)
 
         #if canImport(GhosttyVT)
         if Terminal.isAvailable {
@@ -244,8 +279,206 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         #endif
     }
 
-    @objc private func handleTap() {
+    // MARK: - Selection gestures
+
+    /// Convert a tap point in view coordinates to a (row, col) grid
+    /// cell. Clamps to the snapshot bounds so a tap on the
+    /// inputAccessoryView edge can't write past the grid.
+    private func gridCell(at point: CGPoint) -> (row: Int, col: Int) {
+        let col = max(0, min(cols - 1, Int(floor(point.x / cellWidth))))
+        let row = max(0, min(rows - 1, Int(floor(point.y / cellHeight))))
+        return (row, col)
+    }
+
+    @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        // Single tap: become first responder (summons soft keyboard
+        // via UIKeyInput) AND clear any open selection. Hides the
+        // edit menu, matching iOS-system behaviour.
         _ = becomeFirstResponder()
+        if selectionRange != nil {
+            selectionRange = nil
+            hideEditMenu()
+            setNeedsDisplay()
+        }
+    }
+
+    @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        // Long press anchors the selection at the tap point, then a
+        // follow-up pan extends `end`. We accept the `.began` state
+        // as the anchor — the `.changed` updates flow through the
+        // pan handler below.
+        let point = recognizer.location(in: self)
+        let cell = gridCell(at: point)
+        switch recognizer.state {
+        case .began:
+            _ = becomeFirstResponder()
+            selectionRange = TerminalSelectionRange(start: cell, end: cell)
+            setNeedsDisplay()
+            showEditMenu(at: point)
+        case .changed:
+            // Long-press-drag (without releasing) also extends. Treat
+            // the same as pan.
+            guard var range = selectionRange else { return }
+            range.end = cell
+            selectionRange = range
+            setNeedsDisplay()
+        case .ended, .cancelled, .failed:
+            // Leave the selection in place so the floating Copy menu
+            // stays reachable. A single tap clears it.
+            if selectionRange != nil {
+                showEditMenu(at: point)
+            }
+        default:
+            break
+        }
+    }
+
+    @objc private func handleSelectionPan(_ recognizer: UIPanGestureRecognizer) {
+        guard selectionRange != nil else { return }
+        let point = recognizer.location(in: self)
+        let cell = gridCell(at: point)
+        switch recognizer.state {
+        case .began, .changed:
+            guard var range = selectionRange else { return }
+            range.end = cell
+            selectionRange = range
+            setNeedsDisplay()
+        case .ended:
+            if selectionRange != nil {
+                showEditMenu(at: point)
+            }
+        default:
+            break
+        }
+    }
+
+    @objc private func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+        // Word-select. Walk the cell row from the tap point outward
+        // until we hit a whitespace boundary. Uses the cached
+        // snapshot; if there isn't one, falls through to a single
+        // cell.
+        let point = recognizer.location(in: self)
+        let cell = gridCell(at: point)
+        _ = becomeFirstResponder()
+        guard let snap = cachedSnapshot,
+              snap.rows > 0,
+              snap.cols > 0,
+              cell.row < snap.cells.count else {
+            selectionRange = TerminalSelectionRange(start: cell, end: cell)
+            setNeedsDisplay()
+            return
+        }
+        let row = snap.cells[cell.row]
+        let isWordChar: (String) -> Bool = { s in
+            guard let scalar = s.unicodeScalars.first else { return false }
+            // ASCII alphanumeric + underscore = "word". Same heuristic
+            // most terminal emulators use for double-click select.
+            return CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
+        guard cell.col < row.count, isWordChar(row[cell.col]) else {
+            selectionRange = TerminalSelectionRange(start: cell, end: cell)
+            setNeedsDisplay()
+            return
+        }
+        var lo = cell.col
+        var hi = cell.col
+        while lo > 0, isWordChar(row[lo - 1]) { lo -= 1 }
+        while hi < row.count - 1, isWordChar(row[hi + 1]) { hi += 1 }
+        selectionRange = TerminalSelectionRange(start: (cell.row, lo), end: (cell.row, hi))
+        setNeedsDisplay()
+        showEditMenu(at: point)
+    }
+
+    @objc private func handleTripleTap(_ recognizer: UITapGestureRecognizer) {
+        // Line-select: full row at the tap point.
+        let point = recognizer.location(in: self)
+        let cell = gridCell(at: point)
+        _ = becomeFirstResponder()
+        let lastCol = max(0, (cachedSnapshot?.cols ?? cols) - 1)
+        selectionRange = TerminalSelectionRange(
+            start: (cell.row, 0),
+            end: (cell.row, lastCol)
+        )
+        setNeedsDisplay()
+        showEditMenu(at: point)
+    }
+
+    private func showEditMenu(at point: CGPoint) {
+        // UIEditMenuInteraction is the iOS 16+ shape, but the simpler
+        // UIMenuController API still works and matches what we'd want
+        // pre-iOS-26 if we ever back-ported. The menu's `targetRect`
+        // anchors at the tap point's row so it doesn't cover the
+        // selection itself.
+        let menu = UIMenuController.shared
+        guard !menu.isMenuVisible else { return }
+        let row = max(0, Int(floor(point.y / cellHeight)))
+        let anchor = CGRect(
+            x: point.x,
+            y: CGFloat(row) * cellHeight,
+            width: 1,
+            height: cellHeight
+        )
+        menu.showMenu(from: self, rect: anchor)
+    }
+
+    private func hideEditMenu() {
+        UIMenuController.shared.hideMenu()
+    }
+
+    // MARK: - Edit menu (copy / paste)
+
+    /// Surface Copy when there is a selection and Paste when the
+    /// pasteboard has a string. Everything else is dropped so the
+    /// menu stays terminal-focused — no "Look Up" / "Translate"
+    /// noise on a code cell.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(copy(_:)) {
+            return selectionRange != nil
+        }
+        if action == #selector(paste(_:)) {
+            return UIPasteboard.general.hasStrings
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    /// Edit-menu integration on iOS 13+ requires the target to be the
+    /// view itself rather than a parent controller for the menu to
+    /// route copy/paste to our overrides below.
+    override func target(forAction action: Selector, withSender sender: Any?) -> Any? {
+        if action == #selector(copy(_:)) || action == #selector(paste(_:)) {
+            return self
+        }
+        return super.target(forAction: action, withSender: sender)
+    }
+
+    override func copy(_ sender: Any?) {
+        guard let range = selectionRange, let snap = cachedSnapshot else { return }
+        let text = range.selectedText(from: snap)
+        guard !text.isEmpty else { return }
+        UIPasteboard.general.string = text
+        // Leave the selection visible — iOS terminal apps (Ghostty
+        // macOS, iSH, Blink) all keep the highlight after copy so the
+        // user can verify what they got.
+        hideEditMenu()
+    }
+
+    override func paste(_ sender: Any?) {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
+        // Forward UTF-8 to the harness — same path as soft-keyboard
+        // input (`insertText`). Bracketed paste is the harness's
+        // responsibility; we just ship the bytes.
+        var data = Data()
+        for scalar in text.unicodeScalars {
+            // Normalize newlines to CR — TUIs expect line submit as
+            // CR, same as `insertText` does for Return.
+            if scalar.value == 0x0A {
+                data.append(0x0D)
+            } else {
+                data.append(contentsOf: String(scalar).utf8)
+            }
+        }
+        if !data.isEmpty { onInput(data) }
+        hideEditMenu()
     }
 
     // MARK: - Geometry
@@ -335,6 +568,57 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             return
         }
 
+        // Stage 3 selection highlight — paint *before* the glyphs so
+        // the text remains readable on top. SweKittyTheme.warning at
+        // 0.25 opacity matches the rest of the app's "this is
+        // selected / tentative" tint. Walks the same cell rectangle
+        // that `TerminalSelectionRange.selectedText` reads, so what
+        // the user sees highlighted is exactly what `copy()` ships.
+        if let selection = selectionRange {
+            let (s, e) = selection.normalized
+            let r0 = max(0, min(snap.rows - 1, s.row))
+            let r1 = max(0, min(snap.rows - 1, e.row))
+            let c0 = max(0, min(snap.cols - 1, s.col))
+            let c1 = max(0, min(snap.cols - 1, e.col))
+            let highlight = UIColor(SweKittyTheme.warning).withAlphaComponent(0.25).cgColor
+            ctx.setFillColor(highlight)
+            if r0 == r1 {
+                let rect = CGRect(
+                    x: CGFloat(c0) * cellWidth,
+                    y: CGFloat(r0) * cellHeight,
+                    width: CGFloat(c1 - c0 + 1) * cellWidth,
+                    height: cellHeight
+                )
+                ctx.fill(rect)
+            } else {
+                // First row: c0..lastCol
+                let first = CGRect(
+                    x: CGFloat(c0) * cellWidth,
+                    y: CGFloat(r0) * cellHeight,
+                    width: CGFloat(snap.cols - c0) * cellWidth,
+                    height: cellHeight
+                )
+                ctx.fill(first)
+                if r1 - r0 > 1 {
+                    let mid = CGRect(
+                        x: 0,
+                        y: CGFloat(r0 + 1) * cellHeight,
+                        width: CGFloat(snap.cols) * cellWidth,
+                        height: CGFloat(r1 - r0 - 1) * cellHeight
+                    )
+                    ctx.fill(mid)
+                }
+                // Last row: 0..c1
+                let last = CGRect(
+                    x: 0,
+                    y: CGFloat(r1) * cellHeight,
+                    width: CGFloat(c1 + 1) * cellWidth,
+                    height: cellHeight
+                )
+                ctx.fill(last)
+            }
+        }
+
         let textAttrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: UIColor.white,
@@ -403,12 +687,106 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 /// Pure-Swift mirror of `TerminalSnapshot` shaped for the renderer's
 /// draw path — rows pre-split into String arrays so `draw(_:)` doesn't
 /// re-index a flat array per cell. Lives at the file level so it
-/// compiles regardless of whether the framework linked.
-private struct TerminalSnapshotShim: Equatable {
+/// compiles regardless of whether the framework linked. Internal (not
+/// private) so `TerminalSelectionRange.selectedText(from:)` can take it
+/// as a parameter and the test target can build snapshots directly.
+struct TerminalSnapshotShim: Equatable {
     var cols: Int
     var rows: Int
     /// Outer = row index, inner = grapheme per cell.
     var cells: [[String]]
     var cursorRow: Int
     var cursorCol: Int
+}
+
+/// Pure-data Stage 3 selection rectangle. Two (row, col) anchors plus a
+/// `selectedText(from:)` helper that walks a `TerminalSnapshotShim` and
+/// returns the substring under the rectangle. Lifted out of the
+/// `GhosttyRenderView` UIView so the substring path is unit-testable
+/// without standing up a UIKit host — same shape as the Android
+/// `TerminalSelectionRange` data class. See
+/// `apps/ios/Tests/SweKittyTests/TerminalSelectionRangeTests.swift`.
+///
+/// The range is **inclusive on both ends** — `start` and `end` both
+/// point at cells whose graphemes belong to the selection. A
+/// single-cell selection is `start == end`. The view tracks anchors as
+/// the user drags them, which means `end` may be "before" `start` in
+/// reading order (the user dragged the long-press anchor backwards);
+/// the helper normalizes that before reading cells. The view holds the
+/// raw anchors so it can paint the same yellow highlight regardless of
+/// drag direction.
+struct TerminalSelectionRange: Equatable {
+    /// Anchor where the long-press / double-tap / triple-tap landed.
+    var start: (row: Int, col: Int)
+    /// Anchor where the pan / drag last extended to.
+    var end: (row: Int, col: Int)
+
+    static func == (lhs: TerminalSelectionRange, rhs: TerminalSelectionRange) -> Bool {
+        lhs.start == rhs.start && lhs.end == rhs.end
+    }
+
+    /// Returns `(start, end)` reordered so `start` is strictly the
+    /// upper-left anchor in reading order (row asc, then col asc).
+    /// Pure function so the view's draw path and the text extractor
+    /// agree on the rectangle without copy-paste drift.
+    var normalized: (start: (row: Int, col: Int), end: (row: Int, col: Int)) {
+        let a = start
+        let b = end
+        if (a.row < b.row) || (a.row == b.row && a.col <= b.col) {
+            return (a, b)
+        }
+        return (b, a)
+    }
+
+    /// Walk the snapshot's grid between the (normalized) anchors and
+    /// build the selected substring. For multi-row selections, rows
+    /// before the last carry a `"\n"` terminator and span from the
+    /// first column on row 0 (which is the start.col) through the end
+    /// of the row; intermediate rows span the full row width; the
+    /// last row spans from col 0 through `end.col`.
+    ///
+    /// Empty / whitespace-only cells render their literal content (a
+    /// single space for an empty grapheme), matching what a user sees
+    /// on screen — copying a partially blank line preserves the
+    /// visual width.
+    func selectedText(from snapshot: TerminalSnapshotShim) -> String {
+        guard snapshot.rows > 0, snapshot.cols > 0 else { return "" }
+        let (s, e) = normalized
+        // Clamp anchors to the snapshot's bounds so a stale selection
+        // from a pre-resize geometry never reads out-of-bounds.
+        let r0 = max(0, min(snapshot.rows - 1, s.row))
+        let r1 = max(0, min(snapshot.rows - 1, e.row))
+        let c0 = max(0, min(snapshot.cols - 1, s.col))
+        let c1 = max(0, min(snapshot.cols - 1, e.col))
+
+        // Single-row selection: pull cells [c0...c1] off row r0.
+        if r0 == r1 {
+            return cellsToString(snapshot.cells[r0], from: c0, through: c1)
+        }
+        var out = ""
+        // First row: [c0..lastCol]
+        out += cellsToString(snapshot.cells[r0], from: c0, through: snapshot.cols - 1)
+        out += "\n"
+        // Middle rows: [0..lastCol]
+        if r1 - r0 > 1 {
+            for r in (r0 + 1)..<r1 {
+                out += cellsToString(snapshot.cells[r], from: 0, through: snapshot.cols - 1)
+                out += "\n"
+            }
+        }
+        // Last row: [0..c1]
+        out += cellsToString(snapshot.cells[r1], from: 0, through: c1)
+        return out
+    }
+
+    private func cellsToString(_ row: [String], from start: Int, through end: Int) -> String {
+        guard !row.isEmpty else { return "" }
+        let s = max(0, min(row.count - 1, start))
+        let e = max(0, min(row.count - 1, end))
+        guard s <= e else { return "" }
+        // Empty cells render as a single space — same shape as the
+        // renderer's draw path (which substitutes " " for empty
+        // graphemes).
+        return row[s...e].map { $0.isEmpty ? " " : $0 }.joined()
+    }
 }
