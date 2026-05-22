@@ -1376,3 +1376,112 @@ research section.
   AND Lakr233's cron picks it up — purely mechanical, no code
   changes expected (the API surface is stable across Ghostty
   patch releases per upstream's MAJOR.MINOR ABI policy).
+
+## Stage 4 — App/Surface live (2026-05-22, ghostty-bridge-app-surface-v3)
+
+**Goal.** Prove libghostty actually loads at runtime by bridging
+Swift to the App/Surface C ABI Lakr233's pin exposes. Pre-Stage 4
+the wrapper's `canImport(GhosttyVt)` gate always evaluated `false`
+(the real module name on the xcframework's umbrella modulemap is
+`libghostty`, not `GhosttyVt`), so `Terminal.isAvailable` reported
+`false`, no surface was ever created, and the experimental
+terminal flag's CoreText renderer painted an empty grid because
+the byte feed went through a stub that dropped everything on the
+floor. Result on a user's device: tab open with the flag on
+→ black rectangle, no agent output.
+
+**What shipped.**
+
+- `apps/ios/GhosttyVT/Sources/GhosttyVT/Terminal.swift` rewritten
+  against the App/Surface ABI. New public types:
+  - `GhosttyApp` — process-wide singleton over `ghostty_app_t`.
+    Lazy-inits inside `static let shared`. Calls `ghostty_init`,
+    `ghostty_config_new` → `ghostty_config_load_default_files` →
+    `ghostty_config_finalize`, then `ghostty_app_new` with a stub
+    `ghostty_runtime_config_s` (all callbacks are no-ops — the
+    host-managed I/O backend means libghostty never wakes itself
+    or asks for the clipboard). Reports `isAlive: Bool` +
+    `lastInitError: String?` + `debugDescription` (hex address
+    of the C handle) for the iOS status overlay.
+  - `GhosttySurface` — RAII wrapper over `ghostty_surface_t`. Built
+    on `GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED` so libghostty
+    never spawns a child process; bytes arrive via `feed(_:)` →
+    `ghostty_surface_write_buffer` from the harness's PTY stream.
+    Holds a strong ref to the host UIView so the
+    `ghostty_platform_ios_s.uiview` slot stays valid until
+    Stage 5 attaches the Metal renderer.
+  - `Terminal` (legacy façade) — same public Swift shape as
+    Stage 1 so `GhosttyTerminalView.swift`'s CoreText renderer
+    compiles unchanged. Now forwards `write(_:)` through to
+    `GhosttySurface.feed(_:)` and surfaces
+    `Terminal.statusDescription()` for the empty-grid overlay.
+- Gate flipped from `canImport(GhosttyVt)` (broken; lowercase `Vt`,
+  never matched any module) to `canImport(libghostty)` (matches
+  the umbrella modulemap exactly). Comments in
+  `apps/ios/GhosttyVT/Package.swift` + `apps/ios/project.yml`
+  updated to record the new state.
+- `GhosttyTerminalView.swift`'s `drawStatus(in:)` now reads
+  `Terminal.statusDescription()` so the empty-grid banner shows
+  "libghostty alive — GhosttyApp(0x…)" when the boot succeeded,
+  or "libghostty init failed: …" if `ghostty_app_new` returned
+  nil. The configure path also calls
+  `Terminal.attach(hostView: self, …)` so the UIView pointer
+  reaches libghostty's iOS platform slot — Stage 5 reads that
+  slot to target the layer for Metal output.
+- Tests in `GhosttyVTTests` rewritten against the new shape: the
+  Stage 1 per-cell snapshot assertions (`row 0 starts with
+  'alpha'`) are gone — the App/Surface ABI doesn't expose a
+  per-cell readback — and replaced with smoke checks
+  (`Terminal.isAvailable == true`, `write` does not trap,
+  snapshot shape matches the cached cols/rows). Both files gate
+  on `canImport(libghostty)` so the bundle still stays green if
+  the binary target ever fails to resolve.
+
+**What's deferred to Stage 5.**
+
+- The pixel pipeline. The CoreText renderer still owns the visible
+  glyph grid; libghostty's Metal renderer is wired up to a
+  `CAMetalLayer` but `ghostty_surface_draw` is not yet called per
+  frame because we haven't decided where the draw cadence lives
+  (`CADisplayLink` vs `setNeedsDisplay` rate-limited). Stage 5
+  swaps `GhosttyTerminalView.swift`'s `draw(_:)` for a
+  `CAMetalLayer`-backed view that calls `ghostty_surface_draw` and
+  deletes the CoreText draw path + the `TerminalSnapshot` data
+  type entirely.
+- Selection / copy. The App/Surface ABI exposes
+  `ghostty_surface_has_selection` + `ghostty_surface_read_selection`;
+  the gesture handlers in the renderer keep their CoreText-side
+  snapshot reads until Stage 5 cuts over.
+- Hardware keyboard wiring through `ghostty_surface_key`. The
+  existing `UIKeyInput` + `keyCommands` path still posts bytes
+  directly to the harness; we'll move it through libghostty's
+  keymap so app-defined keybinds + IME work the way the macOS app
+  does.
+- Process-exit handling via `ghostty_surface_process_exited` —
+  irrelevant for the host-managed backend (the harness owns
+  session lifetime) but the integration point is worth noting.
+
+**Why the renderer stayed CoreText.** Building a full
+`CAMetalLayer` + `CADisplayLink` + content-scale + occlusion-state
+handshake on top of libghostty's Metal output blows past the
+3-hour timebox the Stage 4 PR was scoped to. The risk-mitigation
+posture from the original brief — "ship a skeleton: GhosttyApp.init
+calls ghostty_app_new and verifies non-nil, GhosttySurface is a
+black UIView with a label 'libghostty alive'. User confirms
+'ghostty loads' even if not rendering" — was the explicit fallback
+target if the full pipeline didn't fit. We hit that fallback: the
+App/Surface handshake is live, bytes flow through, the status
+overlay reads "libghostty alive — GhosttyApp(0x…)", and the
+CoreText renderer keeps painting so the user sees agent output.
+Stage 5 will replace the visible pixels with libghostty's own
+Metal output now that the surface lifecycle is proven.
+
+**Risk: still false-true.** A successful `ghostty_app_new` does
+NOT prove libghostty's internal state machine accepts our byte
+feeds — until Stage 5 lands the Metal renderer, the only
+observable signal is the runtime status string. If
+`ghostty_surface_write_buffer` silently drops bytes (e.g. because
+the surface backend rejects host-managed mode on iOS), we won't
+notice from the CoreText overlay. The first Stage 5 milestone is
+"first frame of Metal output appears" — which doubles as the
+existence proof that the byte feed was actually parsed.

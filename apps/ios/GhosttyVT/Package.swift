@@ -22,27 +22,30 @@
 // Ghostty semver tags. License: MIT (the SPM wrapper); Ghostty
 // itself is MIT.
 //
-// **API-surface gap (intentional).**
+// **API surface bridged (Stage 4, ghostty-bridge-app-surface-v3).**
 // The xcframework's module is named `libghostty` (per its umbrella
 // modulemap: `framework module libghostty { umbrella header
 // "ghostty.h" export * }`) and exposes the full Ghostty `App` /
 // `Surface` / `Inspector` C API surface (`ghostty_app_new`,
 // `ghostty_surface_new`, `ghostty_surface_write_buffer`, …) — NOT
-// the slim VT-only surface our existing `Terminal.swift` wrapper
-// drives (`ghostty_terminal_new`, `ghostty_terminal_vt_write`,
-// `ghostty_terminal_grid_ref`, …). Bridging Swift to the App/Surface
-// shape requires an event loop, a runtime config, and a host window;
-// it's a Stage 3 rewrite, not a pin PR.
+// the slim VT-only surface the original `Terminal.swift` wrapper
+// drove (`ghostty_terminal_new`, `ghostty_terminal_vt_write`,
+// `ghostty_terminal_grid_ref`, …; those symbols do NOT exist in
+// Lakr233's build). The Stage 4 rewrite at
+// `Sources/GhosttyVT/Terminal.swift` now bridges the App/Surface
+// shape: `GhosttyApp` singleton over `ghostty_app_t`,
+// `GhosttySurface` host-managed viewport over `ghostty_surface_t`
+// fed via `ghostty_surface_write_buffer`. The `Terminal` façade
+// keeps the public Swift API stable so the iOS CoreText renderer
+// in `GhosttyTerminalView.swift` compiles + paints unchanged.
 //
-// To keep the iOS app compiling today without dropping the link, the
-// `GhosttyVT` Swift target declares `libghostty` as a dependency so
-// SPM resolves + fetches the xcframework, but `Terminal.swift` and
-// `GhosttyTerminalView.swift` keep their `#if canImport(GhosttyVt)`
-// guard. That guard evaluates `false` against this pin (the module
-// is `libghostty`, not `GhosttyVt`), so the placeholder path takes
-// over and the build stays green. The full bridge to the App/Surface
-// API is queued for the next PR; this one only swaps the pin to a
-// resolvable multi-arch source.
+// The wrapper gates every `libghostty` symbol behind
+// `#if canImport(libghostty)` — the correct module name per the
+// umbrella modulemap above. Pre-Stage 4 the guard read
+// `canImport(GhosttyVt)` (lowercase `Vt`) and was permanently
+// false, which is why `Terminal.isAvailable` reported `false` and
+// the experimental terminal flag rendered an empty grid. That
+// regression is fixed in this PR.
 //
 // **Pin source** (matches `scripts/fetch-ghostty-kit-xcframework.sh`):
 //   URL:      https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.1.5/GhosttyKit.xcframework.zip
@@ -86,18 +89,17 @@ let package = Package(
             url: "https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.1.5/GhosttyKit.xcframework.zip",
             checksum: "a7045bef1f3149989d79e413b07f2f17847d68348da9f55eb56578093a5af405"
         ),
-        // Thin Swift wrapper. Re-exports the C symbols through a
-        // typed Swift API (Terminal class + TerminalSnapshot struct).
-        //
-        // The `#if canImport(GhosttyVt)` guard in Terminal.swift +
-        // GhosttyTerminalView.swift evaluates `false` against this
-        // pin (Lakr233's xcframework exposes the `libghostty` module,
-        // not `GhosttyVt`), so the placeholder path stays live until
-        // a follow-up PR rewrites the wrapper to the App/Surface API.
-        // That's deliberate — see the file header for the API-surface
-        // gap rationale. The dependency keeps SPM resolution exercising
-        // the link path so a stale checksum surfaces immediately on
-        // build, not at runtime.
+        // Thin Swift wrapper. Re-exports the libghostty App/Surface
+        // C symbols through a typed Swift API
+        // (`GhosttyApp` singleton, `GhosttySurface` host-managed
+        // viewport, `Terminal` legacy façade for the iOS CoreText
+        // renderer). The Stage 4 PR (ghostty-bridge-app-surface-v3)
+        // flipped the wrapper's gate from `canImport(GhosttyVt)`
+        // (never true; wrong module name) to `canImport(libghostty)`
+        // (matches the xcframework's umbrella modulemap) so
+        // `Terminal.isAvailable` finally reports `true` at runtime
+        // and the experimental terminal flag actually exercises
+        // libghostty's parser instead of rendering an empty grid.
         .target(
             name: "GhosttyVT",
             dependencies: ["libghostty"],

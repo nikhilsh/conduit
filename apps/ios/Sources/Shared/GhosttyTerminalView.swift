@@ -419,8 +419,24 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         addGestureRecognizer(pan)
 
         #if canImport(GhosttyVT)
+        // Stage 4: with the wrapper rewired to the libghostty
+        // App/Surface API, `Terminal.isAvailable` now reads `true`
+        // once `GhosttyApp.shared` boots — so we instantiate
+        // a real host-managed surface and attach this UIView so
+        // libghostty's iOS platform slot (`ghostty_platform_ios_s.uiview`)
+        // can target our layer when the Metal renderer lands.
         if Terminal.isAvailable {
-            terminal = Terminal(cols: UInt(cols), rows: UInt(rows))
+            let term = Terminal(cols: UInt(cols), rows: UInt(rows))
+            // The host-view attach uses zero pixel dims here; the
+            // first `layoutSubviews` pass will call `attach(...)`
+            // again with the real bounds once UIKit has measured us.
+            term.attach(
+                hostView: self,
+                pixelWidth: 0,
+                pixelHeight: 0,
+                scaleFactor: Double(UIScreen.main.scale)
+            )
+            terminal = term
         }
         #endif
     }
@@ -899,13 +915,24 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     }
 
     private func drawStatus(in ctx: CGContext) {
+        // Stage 4 (ghostty-bridge-app-surface-v3): the status banner
+        // surfaces whether libghostty's App/Surface pipeline came up.
+        // Before this PR the message was always "module unavailable"
+        // because `Terminal.isAvailable` returned `false` (the
+        // wrapper's `canImport(GhosttyVt)` gate evaluated false
+        // against Lakr233's `libghostty` module name). Now the gate
+        // is `canImport(libghostty)` inside the wrapper, so a
+        // successful boot reads
+        // "libghostty alive — GhosttyApp(0x…)" right on the empty
+        // grid — proves libghostty actually loaded at runtime.
+        // The CoreText renderer is still the fallback (the Metal
+        // renderer lands in Stage 5); the user sees this banner as
+        // an empty-grid status until then.
         let text: String
         #if canImport(GhosttyVT)
-        text = Terminal.isAvailable
-            ? "GhosttyVT initializing — see PLAN-TERMINAL-REWRITE Stage 2"
-            : "GhosttyVT module unavailable — flip off the experimental flag"
+        text = Terminal.statusDescription()
         #else
-        text = "GhosttyVT not linked — see PLAN-TERMINAL-REWRITE Stage 2"
+        text = "GhosttyVT not linked — see PLAN-TERMINAL-REWRITE Stage 4"
         #endif
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,

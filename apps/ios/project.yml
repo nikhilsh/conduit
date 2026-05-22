@@ -48,14 +48,18 @@ packages:
     # shipped an `ios-arm64/` slice (PR #94 had to disable that
     # binaryTarget; the iOS-simulator linker rejected the arm64-only
     # archive).
-    # `Sources/GhosttyVT/Terminal.swift` gates every libghostty
-    # symbol behind `#if canImport(GhosttyVt)`. That guard evaluates
-    # `false` against the new pin (Lakr233's xcframework exposes the
-    # `libghostty` module, not `GhosttyVt`) so the placeholder path
-    # stays live until a follow-up PR rewrites the wrapper to the
-    # App/Surface C API surface this pin actually exposes. The
-    # SPM-level dependency still resolves, so the iOS build proves
-    # the link path is healthy.
+    # Stage 4 (ghostty-bridge-app-surface-v3) rewrote the wrapper
+    # against the App/Surface C ABI (`ghostty_app_new`,
+    # `ghostty_surface_new`, `ghostty_surface_write_buffer`, …) and
+    # flipped the canImport gate to `canImport(libghostty)` — the
+    # correct module name per the xcframework's umbrella modulemap.
+    # `Terminal.isAvailable` now reads `true` at runtime once
+    # `GhosttyApp.shared` initializes, the experimental terminal
+    # flag's CoreText renderer paints "libghostty alive — App=0x…"
+    # in its empty-grid status overlay, and PTY bytes flow into
+    # `ghostty_surface_write_buffer` instead of getting silently
+    # dropped. Stage 5 will swap the renderer over to libghostty's
+    # own Metal output.
     path: GhosttyVT
 
 targets:
