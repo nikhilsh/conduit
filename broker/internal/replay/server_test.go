@@ -124,7 +124,12 @@ func TestServerRejectsPathTraversal(t *testing.T) {
 
 func TestServerTokenDeterministic(t *testing.T) {
 	srv := NewServer("", []byte("s"))
-	if srv.Token("a") != srv.Token("a") {
+	// Bind both calls to vars so staticcheck SA4000 doesn't flag the
+	// idempotency check as "identical expressions". We genuinely
+	// want to confirm two calls return the same token.
+	a1 := srv.Token("a")
+	a2 := srv.Token("a")
+	if a1 != a2 {
 		t.Fatal("token not deterministic")
 	}
 	if srv.Token("a") == srv.Token("b") {
