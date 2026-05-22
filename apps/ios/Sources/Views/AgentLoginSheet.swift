@@ -19,6 +19,7 @@ import SwiftUI
 struct AgentLoginSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(SessionStore.self) private var store
 
     @State private var isWorking = false
     @State private var statusMessage: String?
@@ -178,12 +179,43 @@ struct AgentLoginSheet: View {
             try OAuthCredentialStore.save(credential)
             statusMessage = "Signed in — credential saved to Keychain."
             logCredentialToConsole(credential)
+            // Stage 2: ship the blob over the WS so the broker can
+            // materialize it into a per-session agent home. We treat
+            // the Keychain copy as canonical — if the WS send fails
+            // (no active session yet, broker rejected, …) we surface
+            // a status hint but the user's login is still considered
+            // successful. The "Sync to broker" row in Settings can
+            // retry the send later, and `replayStoredAgentCredentials`
+            // fires the same envelope on the next `createSession`.
+            await shipCredentialToBroker(provider: provider, credential: credential)
         } catch OAuthClientError.userCancelled {
             statusMessage = nil
             errorMessage = "Sign-in cancelled."
         } catch {
             statusMessage = nil
             errorMessage = "Sign-in failed: \(error)"
+        }
+    }
+
+    /// Best-effort send to the broker after a successful Keychain
+    /// save. Mutates the status / error pills so the user sees
+    /// "Credentials sent" on success and an actionable hint on
+    /// failure — without rolling back the Keychain copy.
+    @MainActor
+    private func shipCredentialToBroker(
+        provider: OAuthProvider,
+        credential: OAuthCredential
+    ) async {
+        statusMessage = "Sending credential to broker…"
+        do {
+            try await store.sendAgentCredentials(provider: provider, credential: credential)
+            statusMessage = "Credentials sent. Broker has them for future sessions."
+        } catch {
+            // The Keychain copy is still good — surface the failure as
+            // a soft error rather than discarding the login.
+            errorMessage = "Saved locally, but broker send failed: \(error). Try \"Sync to broker\" in Settings once a session is live."
+            statusMessage = nil
+            print("[AgentLoginSheet] broker send failed: \(error)")
         }
     }
 

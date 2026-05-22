@@ -119,6 +119,19 @@ dependencies {
     // Persists endpoint+token for v0.1; replaced by EncryptedSharedPreferences in task 009.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+    // Chrome Custom Tabs — system-blessed OAuth browser surface used by
+    // `auth/OAuthClient.kt`. Same role as iOS's
+    // `ASWebAuthenticationSession`: hands the authorize URL to a Chrome
+    // tab, gets called back via the `swekitty://oauth/...` intent
+    // filter. See `docs/PLAN-AGENT-OAUTH.md` §F.1.
+    implementation("androidx.browser:browser:1.8.0")
+
+    // OkHttp — token-exchange POST to provider `/oauth/token`. Picked
+    // over `HttpURLConnection` because we need explicit body buffering +
+    // status-code branching and OkHttp is already pulled in
+    // transitively by sentry-android.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // UniFFI Kotlin runtime.
     implementation("net.java.dev.jna:jna:5.13.0@aar")
     implementation("io.sentry:sentry-android:7.14.0")

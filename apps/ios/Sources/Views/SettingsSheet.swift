@@ -88,6 +88,7 @@ struct SettingsSheet: View {
             }
             .sheet(isPresented: $showAgentLogin) {
                 AgentLoginSheet()
+                    .environment(store)
                     .presentationDetents([.medium, .large])
             }
         }
@@ -177,10 +178,13 @@ struct SettingsSheet: View {
         }
     }
 
-    /// Stage 0 of `docs/PLAN-AGENT-OAUTH.md` — a single entry that
-    /// presents `AgentLoginSheet` for the ChatGPT (Codex) OAuth spike.
-    /// The sheet stashes the resulting blob in Keychain and logs it to
-    /// the console; no broker wiring yet (Stage 2+).
+    /// Stage 2 of `docs/PLAN-AGENT-OAUTH.md` — entry to
+    /// `AgentLoginSheet` plus an inline "Sync to broker" affordance for
+    /// each provider whose credential is already stashed in Keychain.
+    /// The sync row re-sends the cached blob over the active WS so the
+    /// user can recover from a missed `set_agent_credentials` (e.g.
+    /// they OAuth'd before pairing a broker, or `replayStoredAgentCredentials`
+    /// hasn't fired yet because no session is live).
     private var agentAccountsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             SettingsSectionHeader("Agent accounts")
@@ -188,9 +192,13 @@ struct SettingsSheet: View {
                 SettingsRow(
                     icon: "person.crop.circle.badge.checkmark",
                     title: "Sign in to agents",
-                    subtitle: "Login with ChatGPT (Claude soon)"
+                    subtitle: "Login with ChatGPT or Claude"
                 ) {
                     showAgentLogin = true
+                }
+                ForEach(loggedInProviders, id: \.self) { provider in
+                    Divider().background(SweKittyTheme.separator)
+                    AgentCredentialSyncRow(provider: provider, store: store)
                 }
             }
             .padding(.horizontal, 14)
@@ -198,6 +206,14 @@ struct SettingsSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .glassRoundedRect()
         }
+    }
+
+    /// Snapshot of which providers currently have a Keychain blob.
+    /// Recomputed on every body re-render — fast (two Keychain
+    /// existence checks) and avoids a separate cache that could go
+    /// stale when the user signs out / signs in mid-session.
+    private var loggedInProviders: [OAuthProvider] {
+        [.openai, .anthropic].filter { OAuthCredentialStore.load(provider: $0) != nil }
     }
 
     private var experimentalSection: some View {
@@ -399,6 +415,97 @@ struct SettingsSection<Content: View>: View {
 }
 
 /// Tap-to-perform row: copper icon · title (+ optional subtitle) · chevron.
+/// Inline row for the Agent accounts section that lets the user
+/// re-send the cached Keychain OAuth blob for `provider` over the
+/// active WS. Behaves as a manual fallback when the after-login send
+/// or the `replayStoredAgentCredentials` hook (on `createSession`)
+/// didn't reach the broker — e.g. the user OAuth'd before pairing a
+/// harness, or the broker side rejected the previous payload.
+///
+/// Local-only state: ephemeral progress + result string. Disabled
+/// while a send is in flight so a panicked tap-tap-tap can't pile up
+/// queued sends.
+struct AgentCredentialSyncRow: View {
+    let provider: OAuthProvider
+    let store: SessionStore
+
+    @State private var isSyncing = false
+    @State private var resultMessage: String?
+    @State private var didFail = false
+
+    private var displayName: String {
+        switch provider {
+        case .openai:    return "ChatGPT"
+        case .anthropic: return "Claude"
+        }
+    }
+
+    private var iconTint: Color {
+        switch provider {
+        case .openai:    return SweKittyTheme.codexAccent
+        case .anthropic: return SweKittyTheme.claudeAccent
+        }
+    }
+
+    var body: some View {
+        Button(action: sync) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.body)
+                    .frame(width: 22)
+                    .foregroundStyle(iconTint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sync \(displayName) to broker")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textPrimary)
+                    Text(resultMessage ?? "Resend the cached credential over the active WS.")
+                        .font(.caption)
+                        .foregroundStyle(didFail ? SweKittyTheme.danger : SweKittyTheme.textMuted)
+                        .lineLimit(2)
+                }
+                Spacer()
+                if isSyncing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(iconTint)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SweKittyTheme.textMuted)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSyncing)
+    }
+
+    private func sync() {
+        guard !isSyncing else { return }
+        guard let credential = OAuthCredentialStore.load(provider: provider) else {
+            // Keychain row vanished between render and tap. Surface a
+            // hint rather than silently doing nothing.
+            resultMessage = "No cached credential found."
+            didFail = true
+            return
+        }
+        isSyncing = true
+        resultMessage = "Sending…"
+        didFail = false
+        Task { @MainActor in
+            defer { isSyncing = false }
+            do {
+                try await store.sendAgentCredentials(provider: provider, credential: credential)
+                resultMessage = "Sent. Broker has the latest credential."
+                didFail = false
+            } catch {
+                resultMessage = "Send failed: \(error)"
+                didFail = true
+            }
+        }
+    }
+}
+
 struct SettingsRow: View {
     let icon: String
     let title: String

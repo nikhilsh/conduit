@@ -184,13 +184,14 @@ struct ProjectView: View {
     ///   wrapped in a subtle glass surface and heightened so it reads as
     ///   the primary affordance — this is "the main idea per chat window."
     private var header: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 4) {
             controlsRow
             pathRow
             tabPickerRow
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
+        .frame(maxHeight: ProjectHeaderModel.maxHeight)
         .glassRoundedRect()
     }
 
@@ -238,8 +239,8 @@ struct ProjectView: View {
     /// it reads as the dominant affordance in the header.
     private var tabPickerRow: some View {
         tabPicker
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
             .glassRoundedRect(cornerRadius: SweKittyTheme.smallCornerRadius)
     }
 
@@ -390,6 +391,13 @@ struct ProjectHeaderModel: Equatable {
     }
 
     static let rows: [Row] = Row.allCases
+
+    /// Cap on the header VStack's vertical footprint, in points. Each row
+    /// (compound agent pill, mono caption, segmented tab picker) has its
+    /// own intrinsic height; 120pt is enough for the three plus internal
+    /// padding without letting a long branch label or future row balloon
+    /// the chrome and push the tab content offscreen.
+    static let maxHeight: CGFloat = 120
 
     /// Centered compound-dropdown payload: status dot color key,
     /// agent name, reasoning-effort label, plus a chevron flag so the

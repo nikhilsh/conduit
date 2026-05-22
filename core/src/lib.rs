@@ -273,6 +273,48 @@ impl SweKittyClient {
         .await
     }
 
+    /// Ship a per-user agent OAuth credential to the broker over the
+    /// existing authenticated WS (docs/PLAN-AGENT-OAUTH.md §D.1, Stage 2).
+    ///
+    /// The broker's `set_agent_credentials` handler keys the stored
+    /// blob by the bearer token's identity, not per-session — but the
+    /// WS itself is session-scoped (`/ws/<session_id>`), so this method
+    /// picks any active session handle to carry the control frame. The
+    /// broker then routes it through the identity-scoped credentials
+    /// store regardless of which session WS delivered it.
+    ///
+    /// `credential_json` is the provider-native blob (verbatim
+    /// `~/.codex/auth.json` for openai, `~/.claude/.credentials.json`
+    /// for anthropic). We parse it here only to embed it inline in the
+    /// outbound envelope (so the wire `credential` field is a JSON
+    /// object, not a stringified blob).
+    ///
+    /// Returns `NotConnected` if no session is live yet — the caller
+    /// (iOS / Android) is responsible for retrying once a session
+    /// exists. The plan accepts this trade-off (PLAN §D.1: phone-driven
+    /// refresh is "the user re-runs the OAuth flow → sends a new
+    /// set_agent_credentials"), and the explicit "Sync to broker" UI
+    /// surfaces failures so the user can retry after pairing.
+    pub async fn set_agent_credentials(
+        &self,
+        provider: String,
+        credential_json: String,
+    ) -> Result<(), SweKittyError> {
+        let handle = self.inner.any_handle()?;
+        let credential: serde_json::Value = serde_json::from_str(&credential_json)?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "set_agent_credentials",
+                    "provider": provider,
+                    "kind": "oauth",
+                    "credential": credential,
+                }))
+                .await
+        })
+        .await
+    }
+
     pub async fn exit_session(&self, session_id: String) -> Result<(), SweKittyError> {
         let inner = Arc::clone(&self.inner);
         run_on_core(async move {
@@ -375,6 +417,19 @@ impl Inner {
             .get(session_id)
             .cloned()
             .ok_or_else(|| SweKittyError::UnknownSession(session_id.to_string()))
+    }
+
+    /// Pick any active session handle. Used for connection-scoped
+    /// control frames whose semantics aren't tied to a particular
+    /// session — today just `set_agent_credentials`, which the broker
+    /// keys by bearer-token identity (PLAN-AGENT-OAUTH §D.1).
+    fn any_handle(&self) -> Result<transport::SessionHandle, SweKittyError> {
+        self.handles
+            .lock()
+            .values()
+            .next()
+            .cloned()
+            .ok_or(SweKittyError::NotConnected)
     }
 }
 

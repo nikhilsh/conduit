@@ -667,6 +667,13 @@ final class SessionStore {
                 self.harness = .live
                 self.refreshSessions()
                 self.selectedSessionID = id
+                // PLAN-AGENT-OAUTH stage 2: now that we have an active
+                // session WS (and therefore an authenticated route to
+                // the broker), replay any Keychain-stored OAuth
+                // credentials. Idempotent on the broker side
+                // (last-writer-wins per PLAN §D.1); cheap no-op when
+                // the Keychain is empty.
+                self.replayStoredAgentCredentials()
             } catch {
                 let detail = Self.describe(error)
                 self.sessionLifecycle[pendingID] = .failed(detail)
@@ -783,6 +790,98 @@ final class SessionStore {
     func resize(sessionID: String, rows: UInt16, cols: UInt16) {
         guard let client else { return }
         Task { try? await client.resize(sessionId: sessionID, rows: rows, cols: cols) }
+    }
+
+    // MARK: - Agent credentials (PLAN-AGENT-OAUTH stage 2)
+
+    /// Ship the per-user agent OAuth credential to the broker over the
+    /// existing authenticated WS. The Rust transport picks any active
+    /// session handle (the broker's set_agent_credentials handler keys
+    /// the stored blob by bearer-token identity, not per-session — see
+    /// docs/PLAN-AGENT-OAUTH.md §D.1).
+    ///
+    /// Encodes the credential's **native on-disk shape** as JSON (the
+    /// inner `AuthDotJson` for OpenAI, the inner `ClaudeCredentialsJson`
+    /// for Anthropic). The broker's parser at
+    /// `broker/internal/ws/server.go:handleSetAgentCredentials` reads
+    /// `credential` as `json.RawMessage` and persists it verbatim, so
+    /// staying byte-for-byte aligned with what the agent CLI writes to
+    /// disk means the broker can pass it through without translation.
+    ///
+    /// Throws `SweKittyError.NotConnected` if no session is live; the
+    /// caller is expected to keep the Keychain copy and surface a
+    /// retry affordance (the Settings → Agent accounts "Sync to broker"
+    /// row, or wait for the next `createSession` to fire the resend).
+    func sendAgentCredentials(provider: OAuthProvider, credential: OAuthCredential) async throws {
+        guard let client else {
+            throw SweKittyError.NotConnected(message: "no active swe-kitty client")
+        }
+        let json = try Self.encodeCredentialAsJSONString(credential)
+        try await client.setAgentCredentials(
+            provider: provider.rawValue,
+            credentialJson: json
+        )
+    }
+
+    /// Encode the credential's native blob to a JSON string suitable
+    /// for the wire envelope's `credential` field. Hoisted as a
+    /// `static` so the envelope-shape test in
+    /// `AgentCredentialEnvelopeTests` can call it without spinning up a
+    /// `SessionStore`.
+    ///
+    /// Why the inner blob and not the enum: the broker writes the bytes
+    /// to disk byte-for-byte as `~/.codex/auth.json` /
+    /// `~/.claude/.credentials.json`; the discriminated-enum wrapping we
+    /// use locally would force the broker to peel a layer it doesn't
+    /// care about. Same encoding shape as `AgentLoginSheet`'s
+    /// `logCredentialToConsole` (PR #100) so the spike-time
+    /// console-eyeball output is exactly what travels the wire.
+    static func encodeCredentialAsJSONString(_ credential: OAuthCredential) throws -> String {
+        let encoder = JSONEncoder()
+        let data: Data
+        switch credential {
+        case .openai(let blob):    data = try encoder.encode(blob)
+        case .anthropic(let blob): data = try encoder.encode(blob)
+        }
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw NSError(
+                domain: "SessionStore.sendAgentCredentials",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "credential JSON utf8 encode failed"]
+            )
+        }
+        return string
+    }
+
+    /// Re-send any Keychain-stored agent credentials over the (now
+    /// live) WS. Called after `createSession` succeeds so a brand-new
+    /// pairing immediately gets the user's tokens — without waiting
+    /// for the user to navigate to Settings.
+    ///
+    /// Best-effort: errors are logged via Telemetry but never bubbled
+    /// up to the UI, because the Keychain copy is canonical (the broker
+    /// just mirrors it). Idempotent on the broker side
+    /// (last-writer-wins per PLAN §D.1).
+    fileprivate func replayStoredAgentCredentials() {
+        for provider in [OAuthProvider.openai, .anthropic] {
+            guard let credential = OAuthCredentialStore.load(provider: provider) else { continue }
+            Task { @MainActor in
+                do {
+                    try await self.sendAgentCredentials(provider: provider, credential: credential)
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "iOS agent credential replay failed",
+                        tags: [
+                            "surface": "ios",
+                            "phase": "agent_credentials_replay",
+                            "provider": provider.rawValue,
+                        ],
+                        extras: ["detail": String(describing: error)]
+                    )
+                }
+            }
+        }
     }
 
     /// Upload a file to the session via the 0x01 binary WS frame

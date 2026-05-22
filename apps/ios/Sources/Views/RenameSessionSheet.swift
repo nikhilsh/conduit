@@ -33,7 +33,7 @@ struct RenameSessionSheet: View {
                     .ignoresSafeArea()
 
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Choose a label for this session. The harness name stays the same — this rename is local to your device.")
+                    Text("Choose a label for this session. The broker name stays the same — this rename is local to your device.")
                         .font(.footnote)
                         .foregroundStyle(SweKittyTheme.textMuted)
 

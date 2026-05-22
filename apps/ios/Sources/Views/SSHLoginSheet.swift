@@ -173,7 +173,7 @@ struct SSHLoginSheet: View {
 
     private var apiKeysCard: some View {
         SSHCard(title: "Agent API Keys (optional)") {
-            Text("Forwarded into the harness container so first launch can sign in without you SSHing in.")
+            Text("Forwarded into the broker container so first launch can sign in without you SSHing in.")
                 .font(.caption)
                 .foregroundStyle(SweKittyTheme.textSecondary)
             SecureField("ANTHROPIC_API_KEY", text: $anthropicKey)

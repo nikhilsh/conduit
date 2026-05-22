@@ -247,6 +247,20 @@ interface SweKittyClient {
     [Async, Throws=SweKittyError]
     void switch_agent(string session_id, string assistant);
 
+    // Ship a per-user agent OAuth credential to the broker over the
+    // existing authenticated WS (docs/PLAN-AGENT-OAUTH.md §D.1, Stage 2).
+    // `credential_json` is the provider-native blob (verbatim
+    // `~/.codex/auth.json` for openai, `~/.claude/.credentials.json`
+    // for anthropic) — the broker stores it byte-for-byte and writes it
+    // into per-session agent homes when spawning the CLI.
+    //
+    // The broker's set_agent_credentials handler is keyed by the bearer
+    // token's identity, not per-session — but the WS itself is session-
+    // scoped, so this method picks any active session handle to carry
+    // the control frame. Returns `NotConnected` if no session is live.
+    [Async, Throws=SweKittyError]
+    void set_agent_credentials(string provider, string credential_json);
+
     [Async, Throws=SweKittyError]
     void exit_session(string session_id);
 

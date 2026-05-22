@@ -108,6 +108,11 @@
     // vertical drag distance into term.scrollLines.
     var termEl = document.getElementById("term");
     var lastTouchY = null;
+    // Accumulate sub-cell drag distance across touchmove events so a
+    // slow scroll still produces motion. Without this, small dy
+    // values floor to 0 and the terminal feels unresponsive until the
+    // finger has moved an entire row's worth of pixels in one frame.
+    var dragAccumPx = 0;
     function cellHeightPx() {
       // xterm.js doesn't expose cell height as a public API; estimate
       // from fontSize. Menlo 13pt at default lineHeight ≈ 17px. A small
@@ -115,22 +120,27 @@
       return Math.max(12, Math.round((term.options.fontSize || 13) * 1.3));
     }
     termEl.addEventListener("touchstart", function (e) {
-      if (e.touches.length === 1) lastTouchY = e.touches[0].clientY;
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY;
+        dragAccumPx = 0;
+      }
     }, { passive: true });
     termEl.addEventListener("touchmove", function (e) {
       if (e.touches.length !== 1 || lastTouchY === null) return;
       var y = e.touches[0].clientY;
-      var dy = lastTouchY - y;
+      dragAccumPx += (lastTouchY - y);
+      lastTouchY = y;
       var ch = cellHeightPx();
-      var lines = (dy >= 0 ? Math.floor(dy / ch) : Math.ceil(dy / ch));
+      var lines = (dragAccumPx >= 0 ? Math.floor(dragAccumPx / ch) : Math.ceil(dragAccumPx / ch));
       if (lines !== 0) {
         term.scrollLines(lines);
-        lastTouchY = y;
+        dragAccumPx -= lines * ch;
         e.preventDefault();
       }
     }, { passive: false });
     termEl.addEventListener("touchend", function () {
       lastTouchY = null;
+      dragAccumPx = 0;
     }, { passive: true });
 
     window.feedBytes = function (b64) {

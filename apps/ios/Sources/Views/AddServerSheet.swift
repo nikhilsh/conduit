@@ -30,21 +30,21 @@ struct AddServerSheet: View {
                             icon: "qrcode.viewfinder",
                             tint: SweKittyTheme.accentStrong,
                             title: "Scan pairing QR",
-                            subtitle: "Camera-scan the QR from the harness terminal.",
+                            subtitle: "Camera-scan the QR from the broker terminal.",
                             action: { showScanner = true }
                         )
                         entryCard(
                             icon: "wifi.circle",
                             tint: SweKittyTheme.codexAccent,
                             title: "Discover on LAN",
-                            subtitle: "Find a harness advertising via mDNS on the same Wi-Fi.",
+                            subtitle: "Find a broker advertising via mDNS on the same Wi-Fi.",
                             action: { showDiscover = true }
                         )
                         entryCard(
                             icon: "terminal",
                             tint: SweKittyTheme.claudeAccent,
                             title: "SSH bootstrap",
-                            subtitle: "Cold-start a harness on a remote box you can SSH to.",
+                            subtitle: "Cold-start a broker on a remote box you can SSH to.",
                             action: { showSshLogin = true }
                         )
                         entryCard(
@@ -100,7 +100,7 @@ struct AddServerSheet: View {
 
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Where is the harness?")
+            Text("Where is the broker?")
                 .font(.headline)
                 .foregroundStyle(SweKittyTheme.textPrimary)
             Text("Pick how this device should reach the swe-kitty server. You can change servers later.")

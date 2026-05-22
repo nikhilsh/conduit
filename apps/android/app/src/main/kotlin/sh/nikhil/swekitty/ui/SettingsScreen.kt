@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.TextFields
@@ -81,6 +82,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
 
     var showAddServer by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
+    var showAgentLogin by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -252,6 +254,19 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 }
             }
 
+            // Agent accounts — per-user OAuth for Claude / ChatGPT.
+            // Stage 0/1 spike per `docs/PLAN-AGENT-OAUTH.md` §F. Mirror
+            // of the iOS "Agent accounts" entry that opens
+            // `AgentLoginSheet`.
+            SettingsSection("Agent accounts") {
+                SettingsRow(
+                    icon = Icons.Filled.Person,
+                    title = "Manage logins",
+                    subtitle = "Sign in to ChatGPT / Claude",
+                    onClick = { showAgentLogin = true },
+                )
+            }
+
             // About
             SettingsSection("About") {
                 KeyValueRow(label = "App", value = "SweKitty")
@@ -277,6 +292,9 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     }
     if (showAppearance) {
         AppearanceSheet(appearance = appearance, onDismiss = { showAppearance = false })
+    }
+    if (showAgentLogin) {
+        AgentLoginSheet(store = store, onDismiss = { showAgentLogin = false })
     }
 }
 

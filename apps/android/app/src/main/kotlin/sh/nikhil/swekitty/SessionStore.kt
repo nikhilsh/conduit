@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import sh.nikhil.swekitty.auth.AgentCredentialEnvelope
+import sh.nikhil.swekitty.auth.OAuthCredential
+import sh.nikhil.swekitty.auth.OAuthRequest
 import sh.nikhil.swekitty.state.NetworkReachabilityObserver
 import sh.nikhil.swekitty.state.ReachabilityEvent
 import sh.nikhil.swekitty.state.ReachabilityStatus
@@ -148,6 +151,18 @@ data class Endpoint(val url: String = "", val token: String = "") {
 /** One-shot UI cue triggered after a successful pairing. AppRoot
  *  observes this and presents the agent-picker bottom sheet. */
 data class PendingAgentPick(val hostNote: String)
+
+/**
+ * Pairs the in-flight [OAuthRequest] (PKCE verifier + state, kept in
+ * memory only) with the redirect [android.net.Uri] delivered to
+ * MainActivity by the `swekitty://oauth/...` intent filter. The
+ * [AgentLoginSheet] observes [SessionStore.oauthCallback] and drives
+ * the token exchange when both halves are present.
+ */
+data class PendingOAuthCallback(
+    val request: OAuthRequest,
+    val uri: android.net.Uri,
+)
 
 data class SavedServer(
     val id: String,
@@ -296,6 +311,73 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     fun setPendingAgentPick(pick: PendingAgentPick?) {
         _pendingAgentPick.value = pick
+    }
+
+    /**
+     * In-flight [OAuthRequest], armed by [armOAuth] when the
+     * AgentLoginSheet launches Chrome Custom Tabs. Held in memory only
+     * — leaking the PKCE verifier to disk would defeat the purpose of
+     * PKCE. Cleared once [oauthCallback] is consumed.
+     */
+    @Volatile private var pendingOAuthRequest: OAuthRequest? = null
+
+    private val _oauthCallback = MutableStateFlow<PendingOAuthCallback?>(null)
+    val oauthCallback: StateFlow<PendingOAuthCallback?> = _oauthCallback.asStateFlow()
+
+    /** Called from AgentLoginSheet before launching Custom Tabs. */
+    fun armOAuth(request: OAuthRequest) {
+        pendingOAuthRequest = request
+    }
+
+    /**
+     * Routed in from MainActivity when an `swekitty://oauth/...`
+     * intent arrives. Pairs the URI with the in-memory request and
+     * publishes the pair so the sheet's LaunchedEffect picks it up
+     * and runs the token exchange.
+     *
+     * Returns `true` if the URI looks like an OAuth callback we
+     * have a pending request for (and was routed); `false` if it
+     * should fall through to the existing pairing-URL handling.
+     */
+    fun handleOAuthCallback(uri: android.net.Uri): Boolean {
+        val req = pendingOAuthRequest ?: return false
+        if (uri.host?.lowercase() != "oauth") return false
+        // Only consume the request once.
+        pendingOAuthRequest = null
+        _oauthCallback.value = PendingOAuthCallback(request = req, uri = uri)
+        return true
+    }
+
+    fun clearOAuthCallback() {
+        _oauthCallback.value = null
+    }
+
+    /**
+     * Build the `set_agent_credentials` envelope (PLAN §D.1) and ship
+     * it over the existing authenticated WS. Mirror of iOS
+     * `SweKittyClient.setAgentCredentials(_:blob:)`.
+     *
+     * Status note (Stage 0/1 spike): the Rust core hasn't yet
+     * exposed an arbitrary-control-message send path
+     * (`SweKittyClient.send_input` / `send_chat` are per-session
+     * only — there's no `send_json` on the public surface). Until
+     * that lands we log the envelope JSON to logcat so on-device
+     * QA can eyeball the wire format. The envelope-builder + the
+     * call site are both load-bearing for the eventual broker
+     * round-trip — they just don't transit a socket yet. Mirrors
+     * iOS, which currently `print()`s the credential and defers
+     * the WS send to Stage 2.
+     */
+    fun sendAgentCredentials(credential: OAuthCredential) {
+        val envelope = AgentCredentialEnvelope.build(credential)
+        android.util.Log.i(
+            "SessionStore",
+            "set_agent_credentials envelope (${credential.provider.raw}): $envelope",
+        )
+        // TODO(stage-2): wire to a raw `client?.sendJson(envelope)`
+        // once the UDL exposes one. The envelope is already the exact
+        // shape PLAN §D.1 specifies; flipping this to a real send is
+        // a one-line change.
     }
 
     /**
