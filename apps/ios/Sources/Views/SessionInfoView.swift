@@ -50,14 +50,13 @@ struct SessionInfoView: View {
                     .environment(appearance)
                     .presentationDetents([.medium, .large])
             }
-            .alert("Rename session", isPresented: $isRenaming) {
-                TextField("Display name", text: $renameDraft)
-                Button("Save") {
-                    store.renameSession(sessionID: session.id, to: renameDraft)
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Choose a label for this session. The harness name stays the same — this rename is local to your device.")
+            .sheet(isPresented: $isRenaming) {
+                RenameSessionSheet(
+                    sessionID: session.id,
+                    draft: renameDraft
+                )
+                .environment(store)
+                .presentationDetents([.medium])
             }
             .alert("Fork session", isPresented: $showForkConfirm) {
                 Button("Fork", role: .none) {
@@ -82,10 +81,23 @@ struct SessionInfoView: View {
             HStack(alignment: .center, spacing: 10) {
                 AgentAvatar(assistant: session.assistant, size: 32)
                 HealthDot(health: status?.health ?? "unknown", size: 10)
-                Text(store.displayName(for: session))
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(SweKittyTheme.textPrimary)
-                    .lineLimit(2)
+                Button {
+                    renameDraft = store.displayName(for: session)
+                    isRenaming = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(store.displayName(for: session))
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(SweKittyTheme.textPrimary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Image(systemName: "pencil")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(SweKittyTheme.textMuted)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Rename session")
                 Spacer(minLength: 0)
             }
 

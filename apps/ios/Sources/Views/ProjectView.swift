@@ -24,6 +24,11 @@ struct ProjectView: View {
     @State private var showAgentPicker: Bool = false
     @State private var showThreadSwitcher: Bool = false
     @State private var showVoice: Bool = false
+    /// Alt entry into the rename sheet: long-press the nav title in the
+    /// toolbar. Mirrors the pencil affordance on the Info sheet — same
+    /// `RenameSessionSheet` is presented either way.
+    @State private var showRename: Bool = false
+    @State private var renameDraft: String = ""
     /// Transient "Voice not wired here" capsule rendered above the
     /// in-session dock when the user taps the FAB on a tab whose route
     /// doesn't accept text (browser today). Cleared after a short
@@ -66,6 +71,12 @@ struct ProjectView: View {
                     .font(.headline)
                     .foregroundStyle(SweKittyTheme.textPrimary)
                     .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onLongPressGesture(minimumDuration: 0.4) {
+                        renameDraft = store.displayName(for: session)
+                        showRename = true
+                    }
+                    .accessibilityHint("Long-press to rename this session")
             }
         }
         .tint(SweKittyTheme.accentStrong)
@@ -84,6 +95,14 @@ struct ProjectView: View {
             VoiceDictationSheet { transcript in
                 routeVoice(transcript: transcript)
             }
+        }
+        .sheet(isPresented: $showRename) {
+            RenameSessionSheet(
+                sessionID: session.id,
+                draft: renameDraft
+            )
+            .environment(store)
+            .presentationDetents([.medium])
         }
     }
 
