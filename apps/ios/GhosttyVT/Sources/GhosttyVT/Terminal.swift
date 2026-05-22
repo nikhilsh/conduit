@@ -440,7 +440,7 @@ public final class GhosttySurface {
         guard let surface = _surface, !bytes.isEmpty else { return }
         bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            ghostty_surface_write_buffer(surface, base, bytes.count)
+            ghostty_surface_write_buffer(surface, base, UInt(bytes.count))
         }
         // Flush any deferred parser work; the host owns the event
         // loop so libghostty doesn't poll on its own.
