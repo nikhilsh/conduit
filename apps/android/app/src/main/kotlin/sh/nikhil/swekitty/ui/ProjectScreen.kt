@@ -109,6 +109,7 @@ fun ProjectScreen(
                 onShowInfo = { showInfo = true },
                 disableSwitchClaude = session.assistant == "claude",
                 disableSwitchCodex = session.assistant == "codex",
+                viewerCount = status?.viewers?.toInt(),
             )
 
             PathRow(model = headerModel)
@@ -234,6 +235,7 @@ private fun ControlsRow(
     onShowInfo: () -> Unit,
     disableSwitchClaude: Boolean,
     disableSwitchCodex: Boolean,
+    viewerCount: Int?,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -266,6 +268,12 @@ private fun ControlsRow(
                 )
             }
         }
+
+        // sweswe-parity multi-viewer hint. Slots between the centered
+        // agent pill and the trailing icon circles so a shared session
+        // is visible without crowding the action buttons. Renders to
+        // nothing when count is null / 0 / 1 — see ViewerCountBadge.
+        ViewerCountBadge(count = viewerCount)
 
         MemoryButton(
             currentMode = browserMode,
