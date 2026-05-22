@@ -220,24 +220,24 @@ public final class GhosttyApp {
         return appHandle != nil
     }
 
-    /// Opaque `ghostty_app_t` handle, exposed as `OpaquePointer`
+    /// Opaque `ghostty_app_t` handle, exposed as `UnsafeMutableRawPointer`
     /// so call sites in this module can pass it to
     /// `ghostty_surface_new`. External callers should not read
     /// this — pass `GhosttyApp.shared` and let `GhosttySurface`
     /// drive the wiring.
-    fileprivate var appHandle: OpaquePointer? {
+    fileprivate var appHandle: UnsafeMutableRawPointer? {
         return _app
     }
 
     /// Underlying handle. `nil` until the first successful init,
     /// or forever if init fails. Released in `deinit`.
-    private var _app: OpaquePointer?
+    private var _app: UnsafeMutableRawPointer?
 
     /// Owned config handle. libghostty's API takes ownership of the
     /// config inside `ghostty_app_new`, so we don't free it directly
     /// — but we keep a reference around in case a future
     /// `ghostty_app_update_config` path needs to clone it.
-    private var _config: OpaquePointer?
+    private var _config: UnsafeMutableRawPointer?
 
     /// Diagnostic string surfaced through `lastInitError`. Set once
     /// on the first failed init; stays nil on success.
@@ -296,7 +296,7 @@ public final class GhosttyApp {
         // otherwise falls back to baked-in defaults. On iOS the
         // file is virtually never present (sandboxed); the
         // baked-in defaults are fine for the skeleton.
-        guard let config: OpaquePointer = ghostty_config_new() else {
+        guard let config: UnsafeMutableRawPointer = ghostty_config_new() else {
             lastInitError = "ghostty_config_new returned nil"
             return
         }
@@ -304,7 +304,7 @@ public final class GhosttyApp {
         ghostty_config_finalize(config)
         self._config = config
 
-        guard let app: OpaquePointer = ghostty_app_new(&runtime, config) else {
+        guard let app: UnsafeMutableRawPointer = ghostty_app_new(&runtime, config) else {
             lastInitError = "ghostty_app_new returned nil — runtime callbacks rejected"
             ghostty_config_free(config)
             self._config = nil
@@ -344,7 +344,7 @@ public final class GhosttyApp {
 /// `feed(_:)` from the harness's `SessionStore.terminalBuffer`.
 public final class GhosttySurface {
     /// Underlying `ghostty_surface_t`. Released on deinit.
-    private var _surface: OpaquePointer?
+    private var _surface: UnsafeMutableRawPointer?
 
     /// Strong reference to the host UIView passed in via `attach`.
     /// `void*` on the C side; we hold a Swift reference here so the
@@ -415,7 +415,7 @@ public final class GhosttySurface {
         // `ghostty_surface_config_new`. Working directory + command +
         // env vars are irrelevant for host-managed surfaces.
 
-        guard let surface: OpaquePointer = ghostty_surface_new(appHandle, &config) else {
+        guard let surface: UnsafeMutableRawPointer = ghostty_surface_new(appHandle, &config) else {
             return
         }
         self._surface = surface
@@ -438,7 +438,7 @@ public final class GhosttySurface {
     /// init failed or `bytes` is empty.
     public func feed(_ bytes: Data) {
         guard let surface = _surface, !bytes.isEmpty else { return }
-        bytes.withUnsafeBytes { raw in
+        bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
             ghostty_surface_write_buffer(surface, base, bytes.count)
         }
