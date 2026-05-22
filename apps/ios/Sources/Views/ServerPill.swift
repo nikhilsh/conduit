@@ -152,7 +152,12 @@ struct ServerPillModel: Equatable, Identifiable {
         currentEndpoint: StoredEndpoint,
         harness: HarnessState
     ) -> ServerPillModel {
-        let isActive = currentEndpoint == server.endpoint
+        // Identity = endpoint URL only. The auth token is a per-device
+        // secret — two clients with different tokens against the same
+        // broker URL are still pointing at the same server. Comparing
+        // the full StoredEndpoint (including token) gives false negatives
+        // when the test harness or a re-pair handed out a fresh token.
+        let isActive = currentEndpoint.url == server.endpoint.url
         let status: Status = {
             guard isActive else { return .idle }
             switch harness {
