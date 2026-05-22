@@ -117,6 +117,9 @@ The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror 
 - `terminal_cols` / `terminal_rows` — current PTY dimensions in character cells. Mirrors `status.cols` / `status.rows`. Emitted whenever the broker resizes the PTY (after a `0x00` binary resize frame) so a late-joining viewer can immediately render scrollback at the right geometry without waiting for the next `status` envelope.
 - `display_name` — human-readable session label. Mirrors `status.session_name`. Set by `rename_session` (§3.3) and persisted by the broker until the session exits.
 - `agent_credentials_refreshed` — `{ "provider": "anthropic" | "openai" }`. Emitted exactly once per successful `set_agent_credentials` (§3.3) so the phone can confirm the credential blob landed in the broker's per-identity store. Optional; older clients ignore it. See [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md) §D for the broader refresh-broadcast contract — Stage 1 only ships the post-`set_agent_credentials` ack; the agent-driven refresh broadcast (inotify on the CLI's on-disk credential file) lands in a later stage.
+- `agent_login_url` — `{ "provider": "openai" | "anthropic", "url": "<authorize-url>", "loopback_port": 1455, "session_token": "<hex>" }`. Emitted in response to a successful `start_agent_login` (§3.3). The phone opens `url` in `ASWebAuthenticationSession` / `CustomTabsIntent`, binds a tiny HTTP listener on `127.0.0.1:<loopback_port>` to catch the provider's redirect, then ships the captured query string back via `agent_login_callback`. `session_token` must round-trip verbatim — see [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md) "Approach v2".
+- `agent_login_complete` — `{ "ok": true }`. Emitted after the broker successfully ferried the OAuth callback to the CLI and the CLI exited cleanly (token exchange complete + on-disk credential file written). The phone dismisses its login sheet.
+- `agent_login_failed` — `{ "provider": "...", "reason": "human-readable" }`. Emitted on any v2 login error: unknown provider, CLI not on PATH, URL parse timeout, unknown `session_token` on callback, CLI exited non-zero. The phone surfaces `reason` and re-presents the login button.
 
 ```json
 { "type": "exit", "session": "<uuid>", "code": 0 }
@@ -158,6 +161,34 @@ The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror 
 - The WS upgrade is already bearer-gated, so the handler doesn't recheck auth — but a broker started **without** a configured credentials store (no `--credentials-dir`) replies with a chat-tool error rather than silently dropping the blob, so the phone learns the per-user OAuth path isn't enabled on this server.
 - On success, the broker emits a typed `view_event { view: "status", event: { agent_credentials_refreshed: { provider } } }` so the phone learns the credential landed without needing a separate ack channel. This piggybacks on the existing `view: "status"` mirror so multi-viewer surfaces stay consistent.
 - The encrypted credential is keyed by **a hash of the broker's bearer token**, not per-session — subsequent sessions started by the same phone reuse the stored credential. The broker materializes it into a per-session ephemeral `$HOME` (with `CODEX_HOME` set for codex) at session spawn time; missing-credential sessions fall back to the legacy host-mirror behaviour exactly as before.
+
+`set_agent_credentials` is **deprecated** in favour of the v2 server-side login flow below. v1 PRs (#100, #104, #110, #112) shipped the wire but both providers reject the phone-generated `swekitty://` custom-scheme redirect URI at the authorize endpoint, so the existing path is dead code. Stage 4 of [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md) removes it.
+
+#### v2 agent-login control messages
+
+```json
+{ "type": "start_agent_login",
+  "provider": "openai" | "anthropic" }
+{ "type": "agent_login_callback",
+  "session_token": "<broker-issued>",
+  "query_string": "code=...&state=..." }
+{ "type": "cancel_agent_login",
+  "session_token": "<broker-issued>" }
+```
+
+`start_agent_login` notes (PLAN-AGENT-OAUTH.md "Approach v2"):
+- The broker spawns the CLI's own login subcommand on the broker host — `codex login` for `openai`, `claude auth login --claudeai` for `anthropic`. The CLI binds its own loopback HTTP listener (`http://127.0.0.1:1455/auth/callback` by default, fallback `1457`) and prints the authorize URL on stdout. The broker parses the URL out of stdout and emits a typed `view_event { view: "status", event: { agent_login_url: { provider, url, loopback_port, session_token } } }` so the phone can open `url` in `ASWebAuthenticationSession` (iOS) / `CustomTabsIntent` (Android).
+- The `session_token` is a broker-minted 32-byte hex string that scopes the subsequent `agent_login_callback`. The phone must echo it back verbatim; the broker rejects callbacks whose token doesn't match an active session. This is the confused-deputy mitigation for shared brokers where multiple paired identities could otherwise race callback delivery.
+- `loopback_port` is `0` when the provider's CLI doesn't use a loopback (Anthropic's code-paste flow may fall into this category — pending Stage 2 verification, see PLAN §K). In that case the phone presents a "paste your code" affordance after the browser closes, and ships the code back via a future `agent_login_code` message.
+- Failure cases (CLI not on PATH, URL parse timeout, unknown provider, broker not built with OAuth manager) emit `view_event { view: "status", event: { agent_login_failed: { provider, reason } } }` with a human-readable `reason`. The socket stays open.
+
+`agent_login_callback` notes:
+- Sent by the phone immediately after its local loopback HTTP server (bound to `127.0.0.1:<loopback_port>` on the device) captures the OAuth provider's redirect. The phone parses the query string out of the GET request and ships it back over WS.
+- The broker forwards `query_string` to the still-running CLI subprocess's loopback by `GET http://127.0.0.1:<loopback_port><callback_path>?<query_string>` on its own host. The CLI sees this exactly as it would a browser-side redirect on the same machine, completes the token exchange, and writes the on-disk credential file (`~/.codex/auth.json` or `~/.claude/.credentials.json`) before exiting.
+- On the CLI exiting successfully, the broker emits `view_event { view: "status", event: { agent_login_complete: { ok: true } } }`. On any error (CLI not listening, unknown token, network failure, CLI exited non-zero), emits `agent_login_failed` with `reason` instead.
+
+`cancel_agent_login` notes:
+- Used when the phone aborts (user dismissed the sheet, browser timed out). The broker kills the CLI subprocess so a stale loopback isn't left bound. Silent no-op when the token is unknown — the WS read loop doesn't error.
 
 Unknown `type` values are logged and ignored — never close the socket for them. This keeps the protocol forward-extensible.
 

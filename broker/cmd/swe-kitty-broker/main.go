@@ -30,6 +30,7 @@ import (
 	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
 	"github.com/nikhilsh/swe-kitty/broker/internal/credentials"
 	"github.com/nikhilsh/swe-kitty/broker/internal/discovery"
+	"github.com/nikhilsh/swe-kitty/broker/internal/oauth"
 	"github.com/nikhilsh/swe-kitty/broker/internal/replay"
 	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 	"github.com/nikhilsh/swe-kitty/broker/internal/ws"
@@ -119,6 +120,15 @@ func runUp(args []string) int {
 			log.Printf("credentials: ignoring --credentials-dir %q: %v", credDir, err)
 		}
 	}
+	// Wire the v2 server-side login manager (PLAN-AGENT-OAUTH.md
+	// "Approach v2"). Always-on for now — the WS handlers nil-check
+	// the field, but spawning a login subprocess is the broker's only
+	// path to recover from a missing on-disk credential, so we never
+	// want to ship without it. The manager itself is cheap: an empty
+	// map; CLI subprocess spawn happens lazily on start_agent_login.
+	oauthMgr := oauth.NewManager()
+	srv.WithOAuth(oauthMgr)
+	log.Printf("oauth: server-side login manager wired (providers: openai, anthropic)")
 	// Replay HTTP surface lives on the same mux as the WS server.
 	// Secret = bearer token: anyone who can already attach to the WS
 	// can mint a replay URL, but external observers cannot enumerate.
@@ -199,6 +209,10 @@ func runUp(args []string) int {
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
 	mgr.Close()
+	// Kill any orphan login subprocesses (PLAN-AGENT-OAUTH.md v2 risk
+	// register — never leave a CLI listening on a loopback port after
+	// broker shutdown). No-op when no logins were ever started.
+	oauthMgr.Close()
 	return 0
 }
 

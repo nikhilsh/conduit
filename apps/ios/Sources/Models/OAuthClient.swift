@@ -4,9 +4,33 @@ import Foundation
 import Security
 import UIKit
 
-/// Stages 0–1 of `docs/PLAN-AGENT-OAUTH.md` — iOS OAuth driver for the
-/// two agent providers we ship: ChatGPT (OpenAI / Codex) and Claude
-/// (Anthropic).
+// MARK: - DEPRECATED (v1 — superseded by v2 server-side login flow)
+//
+// This file implements the v1 PKCE-on-the-phone approach documented
+// in `docs/PLAN-AGENT-OAUTH.md` "v1 archive". It is **deprecated**:
+// both Anthropic and OpenAI reject the `swekitty://` custom-scheme
+// redirect URI at the authorize endpoint, so this code path doesn't
+// reach token exchange in practice. PRs #100/#104/#110/#112 shipped
+// it; the dead-code state was confirmed end-to-end against both
+// providers in May 2026.
+//
+// The replacement is `AgentLoginCoordinator` + `AgentLoginLoopbackServer`,
+// which mirrors litter's pattern: the broker spawns `codex login` /
+// `claude auth login` on the broker host, the phone hosts a tiny
+// HTTP listener on `127.0.0.1:<port>` to catch the provider's
+// redirect, and ships the captured query string back over WS. See
+// `docs/PLAN-AGENT-OAUTH.md` "Approach v2".
+//
+// This file is retained (rather than deleted) so existing Settings
+// surfaces and the `OAuthCredentialStore` Keychain reads continue to
+// compile during the v2 transition. Stage 4 of the v2 plan removes
+// it (and `set_agent_credentials` / `AgentCredentialEnvelope` /
+// `replayStoredAgentCredentials`). Do not extend the code below;
+// any new work should target `AgentLoginCoordinator`.
+
+/// Stages 0–1 of `docs/PLAN-AGENT-OAUTH.md` v1 (deprecated) — iOS
+/// OAuth driver for the two agent providers we ship: ChatGPT
+/// (OpenAI / Codex) and Claude (Anthropic).
 ///
 /// Drives PKCE S256 → `ASWebAuthenticationSession` → token exchange
 /// against the provider's token endpoint. Returns an `OAuthCredential`

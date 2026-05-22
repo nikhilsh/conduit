@@ -7,6 +7,7 @@ package ws
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
 	"github.com/nikhilsh/swe-kitty/broker/internal/credentials"
+	"github.com/nikhilsh/swe-kitty/broker/internal/oauth"
 	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 )
 
@@ -45,6 +47,14 @@ type Server struct {
 	// control messages are rejected with a chat error and the session
 	// spawn path falls back to the legacy global host-mirror.
 	Credentials *credentials.Store
+	// OAuth drives the v2 server-side login flow (PLAN-AGENT-OAUTH.md
+	// "Approach v2 — litter-faithful"). Spawns `codex login` or
+	// `claude auth login` on the broker host, ferries the phone's
+	// captured `?code=...` query string to the CLI's loopback. Nil-safe:
+	// when nil, start_agent_login / agent_login_callback /
+	// cancel_agent_login control messages are rejected with a chat-tool
+	// error and the wire stays open.
+	OAuth *oauth.Manager
 }
 
 func New(a *auth.Store, m *session.Manager) *Server {
@@ -61,6 +71,15 @@ func (s *Server) WithCredentials(store *credentials.Store) *Server {
 	if s.Sessions != nil {
 		s.Sessions.SetCredentialStore(store)
 	}
+	return s
+}
+
+// WithOAuth wires the v2 login-session manager into the server. Same
+// fluent style as WithCredentials. Nil-safe: a server constructed
+// without WithOAuth simply rejects start_agent_login control messages
+// with a chat-tool error.
+func (s *Server) WithOAuth(mgr *oauth.Manager) *Server {
+	s.OAuth = mgr
 	return s
 }
 
@@ -463,6 +482,15 @@ func (c *client) handleText(payload []byte) {
 		Provider   string          `json:"provider"`
 		Kind       string          `json:"kind"`
 		Credential json.RawMessage `json:"credential"`
+		// v2 agent-login fields (PLAN-AGENT-OAUTH.md "Approach v2"):
+		//   start_agent_login uses Provider.
+		//   agent_login_callback uses SessionToken + QueryString.
+		//   cancel_agent_login uses SessionToken.
+		// All three messages reuse Provider/SessionToken/QueryString
+		// rather than carrying a nested object; protocol §3.3 forward-
+		// extensibility lets us add fields without a flag day.
+		SessionToken string `json:"session_token"`
+		QueryString  string `json:"query_string"`
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
@@ -576,6 +604,25 @@ func (c *client) handleText(payload []byte) {
 		// the broker has nowhere to put the blob, so we surface a
 		// chat error instead of silently dropping it.
 		c.handleSetAgentCredentials(env.Provider, env.Kind, env.Credential)
+	case "start_agent_login":
+		// v2 agent-login entry point (PLAN-AGENT-OAUTH.md "Approach
+		// v2 — litter-faithful"). Spawns the CLI's own login
+		// subcommand on the broker host, captures the authorize URL,
+		// and emits an `agent_login_url` view_event so the phone can
+		// open the URL in ASWebAuthenticationSession / CustomTabs.
+		c.handleStartAgentLogin(env.Provider)
+	case "agent_login_callback":
+		// Phone finished the browser flow and captured the
+		// `?code=...&state=...` query string on its local 127.0.0.1
+		// loopback. The broker ferries that query string to the CLI's
+		// own loopback (running on the broker host) so the CLI sees a
+		// "normal" redirect and performs the token exchange itself.
+		c.handleAgentLoginCallback(env.SessionToken, env.QueryString)
+	case "cancel_agent_login":
+		// Phone aborted (user dismissed the sheet, browser failed,
+		// timeout). Kill the CLI subprocess so we don't leak a
+		// listening loopback. Silent no-op when the token is unknown.
+		c.handleCancelAgentLogin(env.SessionToken)
 	default:
 		// Per protocol §3.3: unknown types are logged and ignored.
 	}
@@ -788,6 +835,148 @@ func (c *client) broadcastRenameStatus() {
 	if b, err := json.Marshal(mirror); err == nil {
 		c.sess.PublishText(b)
 	}
+}
+
+// handleStartAgentLogin spawns the CLI login subprocess on the broker
+// and emits an `agent_login_url` view_event on success. On any failure
+// (no OAuth manager wired, unknown provider, CLI not on PATH, URL
+// parse timeout) it emits an `agent_login_failed` view_event with a
+// human-readable reason so the phone sheet can surface the issue.
+//
+// Started as a goroutine so the WS read loop isn't blocked while
+// `codex login` warms up (typically <500ms, but the parse timeout is
+// 15s in the worst case — see oauth.scanAuthorizeURL).
+func (c *client) handleStartAgentLogin(provider string) {
+	server := c.serverRef()
+	if server == nil || server.OAuth == nil {
+		c.emitAgentLoginFailed(provider, "broker has no oauth manager configured")
+		return
+	}
+	if oauth.ProviderFor(provider) == nil {
+		c.emitAgentLoginFailed(provider, "unknown provider: "+provider)
+		return
+	}
+	// Run the spawn off the WS read loop. The handler returns
+	// immediately; the view_event arrives whenever Start completes.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		sess, err := server.OAuth.StartSession(ctx, provider)
+		if err != nil {
+			c.emitAgentLoginFailed(provider, err.Error())
+			return
+		}
+		c.emitAgentLoginURL(sess)
+	}()
+}
+
+// handleAgentLoginCallback delivers the phone's captured query string
+// to the CLI's loopback via the OAuth manager. Bounded by the
+// manager's internal 30s wait on the CLI exit (see Session.Forward).
+// On success emits `agent_login_complete { ok: true }`; on any error
+// emits `agent_login_failed`.
+func (c *client) handleAgentLoginCallback(sessionToken, queryString string) {
+	server := c.serverRef()
+	if server == nil || server.OAuth == nil {
+		c.emitAgentLoginFailed("", "broker has no oauth manager configured")
+		return
+	}
+	if strings.TrimSpace(sessionToken) == "" {
+		c.emitAgentLoginFailed("", "agent_login_callback missing session_token")
+		return
+	}
+	go func() {
+		if err := server.OAuth.ForwardCallback(sessionToken, queryString); err != nil {
+			c.emitAgentLoginFailed("", "forward callback: "+err.Error())
+			return
+		}
+		c.emitAgentLoginComplete()
+	}()
+}
+
+// handleCancelAgentLogin kills the CLI subprocess for the named
+// session_token. No view_event reply — the phone already knows it
+// aborted. Silent no-op when the token is unknown.
+func (c *client) handleCancelAgentLogin(sessionToken string) {
+	server := c.serverRef()
+	if server == nil || server.OAuth == nil {
+		return
+	}
+	if strings.TrimSpace(sessionToken) == "" {
+		return
+	}
+	server.OAuth.CancelSession(sessionToken)
+}
+
+// emitAgentLoginURL fans out the `agent_login_url` view_event carrying
+// the broker-issued session_token + authorize URL + loopback port.
+// Shape pinned in PLAN-AGENT-OAUTH.md "Approach v2" wire section.
+func (c *client) emitAgentLoginURL(sess *oauth.Session) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "status",
+		"event": map[string]any{
+			"agent_login_url": map[string]any{
+				"provider":      sess.Provider,
+				"url":           sess.AuthorizeURL,
+				"loopback_port": sess.LoopbackPort,
+				"session_token": sess.SessionToken,
+			},
+		},
+		"ts": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	c.sess.PublishText(payload)
+}
+
+// emitAgentLoginComplete signals the phone that the CLI finished the
+// token exchange and wrote the on-disk credential file. The phone
+// can then dismiss its login sheet and trust that the next session
+// the broker spawns will inherit the new credentials (PR #106's
+// per-session HOME materialization).
+func (c *client) emitAgentLoginComplete() {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "status",
+		"event": map[string]any{
+			"agent_login_complete": map[string]any{
+				"ok": true,
+			},
+		},
+		"ts": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	c.sess.PublishText(payload)
+}
+
+// emitAgentLoginFailed reports an error to the phone via the typed
+// view_event channel. The `provider` field may be empty when the
+// failure happened before we even knew which provider (e.g. missing
+// oauth manager wiring); the phone falls back to a generic message
+// in that case.
+func (c *client) emitAgentLoginFailed(provider, reason string) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "status",
+		"event": map[string]any{
+			"agent_login_failed": map[string]any{
+				"provider": provider,
+				"reason":   reason,
+			},
+		},
+		"ts": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	c.sess.PublishText(payload)
 }
 
 // emitUploadToolEvent broadcasts a `view_event { view: "chat" }` with
