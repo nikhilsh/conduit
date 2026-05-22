@@ -37,6 +37,16 @@ packages:
     # the SPM resolve.
     url: https://github.com/appstefan/highlightswift
     from: 1.1.0
+  GhosttyVT:
+    # Stage 1 of docs/PLAN-TERMINAL-REWRITE.md. Local SPM package at
+    # apps/ios/GhosttyVT/ hosts a binaryTarget pointing at the
+    # ghostty-vt.xcframework release asset (URL + sha256 pinned in
+    # Package.swift, mirrored in scripts/fetch-ghostty-vt-xcframework.sh).
+    # `Sources/GhosttyVT/Terminal.swift` gates every libghostty
+    # symbol behind `#if canImport(GhosttyVt)` so the iOS app still
+    # builds if SPM fails to resolve the binary asset (e.g. upstream
+    # rotated the `tip` tag and the pinned checksum is stale).
+    path: GhosttyVT
 
 targets:
   SweKitty:
@@ -63,6 +73,7 @@ targets:
         codeSign: true
       - package: Sentry
       - package: HighlightSwift
+      - package: GhosttyVT
     info:
       path: Sources/Info.plist
       properties:

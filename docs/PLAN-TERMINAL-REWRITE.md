@@ -169,6 +169,90 @@ within a SwiftUI re-render.
   own CI job that runs `zig build -Demit-xcframework` against a
   pinned Ghostty commit, before tackling Stage 2 (native render).
 
+## Stage 1 status — 2026-05-22
+
+**What shipped**
+
+- `apps/ios/GhosttyVT/Package.swift` — local SPM wrapper package
+  hosting a `binaryTarget` against the pinned
+  `ghostty-vt.xcframework.zip` release asset (URL + sha256 mirror
+  `scripts/fetch-ghostty-vt-xcframework.sh`).
+- `apps/ios/GhosttyVT/Sources/GhosttyVT/Terminal.swift` — Swift
+  wrapper over the libghostty-vt C ABI: `Terminal` reference type
+  with `init(cols:rows:)` → `ghostty_terminal_new`, `deinit` →
+  `ghostty_terminal_free`, `write(_:)` → `ghostty_terminal_vt_write`,
+  `resize(cols:rows:…)` → `ghostty_terminal_resize`, and a pure-Swift
+  `TerminalSnapshot` materialized via `ghostty_terminal_grid_ref` +
+  `ghostty_grid_ref_graphemes`. The whole file is gated by
+  `#if canImport(GhosttyVt)` (the upstream module name baked into
+  the modulemap, lowercase `t`) so the iOS app keeps compiling when
+  SPM fails to resolve the binary asset.
+- `apps/ios/GhosttyVT/Tests/GhosttyVTTests/TerminalTests.swift` —
+  smoke test: init 80×24, write `"hello\n"`, snapshot contains
+  `"hello"`, cursor moved to row 1 col 0. Gated by `#if canImport`
+  so the bundle stays green if the framework didn't link.
+- `apps/ios/project.yml` — `GhosttyVT` registered under `packages:`
+  via `path: GhosttyVT` and consumed as a `package:` dep by the
+  `SweKitty` target. Existing packages (Sentry, HighlightSwift,
+  SnapshotTesting) untouched.
+- `apps/ios/Sources/Views/GhosttyTerminalView.swift` — when
+  `#if canImport(GhosttyVT)` is true, the placeholder view
+  instantiates `GhosttyVT.Terminal(cols: 80, rows: 24)` and feeds it
+  a single line of bytes so the SPM binary target is exercised at
+  runtime, not just at link time. The status label still reads
+  "GhosttyVT linked — see PLAN-TERMINAL-REWRITE Stage 1" and there
+  is no rendering or input wiring yet.
+
+**Risk mitigation actually used**
+
+The xcframework asset host (`tip` tag on ghostty-org/ghostty) is
+rotated on every nightly cut, so the pinned sha256 in Package.swift
+and `fetch-ghostty-vt-xcframework.sh` is a moving target. Every
+libghostty-touching site is wrapped in `#if canImport(GhosttyVt)`
+(and `#if canImport(GhosttyVT)` for the app-side import), so a
+stale-checksum SPM failure degrades to the Stage 0 placeholder
+without breaking the iOS build. Both code paths exercise this guard
+so flipping the flag at runtime stays a one-toggle revert.
+
+**Deferred to Stage 2**
+
+- Wire PTY bytes from `SessionStore.terminalBuffer[session.id]`
+  through `Terminal.write(_:)`. Stage 1 only proves the framework
+  loads; the byte path is still xterm.js end-to-end.
+- Replace the placeholder `UILabel` with a real grid renderer —
+  either `CAMetalLayer` (per the §E decision table) or, as a
+  Stage 1.5 interim, route `ghostty_formatter_terminal_to_*` ANSI
+  back into the existing xterm.js renderer so we can validate the
+  VT half independent of pixel work.
+- Hook keyboard input through `ghostty_key_encoder_*` and the
+  inputAccessoryView slot. Stage 1 still drops keystrokes on the
+  floor.
+- Swap the cell-by-cell `ghostty_terminal_grid_ref` snapshot path
+  for the render-state iterator API (`GhosttyRenderState`) once the
+  renderer needs framerate-grade reads. The header explicitly warns
+  the grid-ref path is not built for that, which is fine for Stage 1
+  tests but not Stage 2 rendering.
+- Decide between (a) waiting for upstream to ship a wider
+  `GhosttyKit.xcframework` (with `Surface` / renderer / input APIs)
+  as a release asset, or (b) standing up our own `zig build
+  -Demit-xcframework` CI job against a pinned Ghostty commit. Same
+  decision queued at the end of Stage 0 — Stage 2 must pick.
+
+### Stage 2 acceptance criteria
+
+- `experimentalNativeTerminal` flag on with a real session attached
+  renders agent output in the native view (no xterm.js loaded),
+  end-to-end through `Terminal.write(_:)`.
+- Hardware + soft keyboard reach the PTY via the native input path;
+  Ctrl / Esc / arrows all behave the same as the xterm.js view.
+- Selection, copy, link-tap, and TalkBack work without a JS bridge.
+- Reflow on rotate / IME show / split-screen survives — cursor and
+  scrollback intact.
+- Performance: `cat large.log`, `htop`, `tail -f` all hit 60 fps on
+  a current-iPhone Pro and stay above 30 fps on a 5-year-old device.
+- xterm.js path still compiles and reachable when the flag is off
+  (§E "xterm.js path — Stays compiled and reachable").
+
 ## Android pick — Termux `terminal-view`
 
 iOS commits to libghostty. Android needs its own pick — the same
