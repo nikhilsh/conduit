@@ -918,3 +918,344 @@ Tests pin both implementations against the same scenario set:
   works in iOS 26 and matches the test target.
 - TalkBack / VoiceOver on selected cells is unchanged from Stage 2
   on both platforms.
+
+## Stage 2 unblock — how others build the xcframework
+
+PRs #86, #89, #92, #93 each surfaced a deeper blocker on the way to
+linking libghostty into the iOS Stage 0 spike. PR #94 finally pinned
+the cause: upstream's `ghostty-vt.xcframework.zip` release asset (the
+one our `scripts/fetch-ghostty-vt-xcframework.sh` points at) ships
+**only** an `ios-arm64/` slice — there is no
+`ios-arm64_x86_64-simulator/`, so `xcodebuild` linking the iOS
+simulator target produces `building for 'iOS-simulator', but linking
+in object file built for 'iOS'` and CI is red.
+
+This section captures what the other Ghostty-on-iOS consumers do
+about it, picks the right path for swe-kitty, and writes down the
+exact command surface so the next agent has zero archaeology to do.
+
+### Survey
+
+#### `eriklangille/clauntty` — closest reference (iOS Ghostty app)
+
+- **No CI.** `https://api.github.com/repos/eriklangille/clauntty/contents/.github/workflows`
+  returns 404. There is no release pipeline; everything happens on
+  contributor laptops.
+- **`Frameworks/GhosttyKit.xcframework` is a git symlink** pointing at
+  `../../ghostty/macos/GhosttyKit.xcframework` — i.e. the build
+  expects a sibling checkout of the Ghostty fork next to the clauntty
+  repo on disk.
+- **Build command** (from `README.md` / `CLAUDE.md`):
+  ```bash
+  cd ghostty && zig build -Demit-xcframework -Doptimize=ReleaseFast
+  ln -s ../../ghostty/zig-out/GhosttyKit.xcframework \
+      clauntty/Frameworks/GhosttyKit.xcframework
+  ```
+- They depend on **`libxev` checked out as a sibling** of the
+  Ghostty checkout — `../libxev` — because their Ghostty fork
+  references it at build time for iOS kqueue fixes.
+- Toolchain: Zig 0.15.2+, Xcode 15+, iOS 17+ deployment target.
+- **Showstopper this solves:** none — it punts. Clauntty does not
+  ship via App Store TestFlight from CI; it's a build-on-your-Mac
+  project. That works for one maintainer; it does not work for us
+  (we already ship via GitHub Actions release builds — `RELEASE-IOS.md`).
+
+#### `ghostty-org/ghostty` itself — what the upstream build emits
+
+- **`src/build/GhosttyXCFramework.zig`** (verbatim, the slice list):
+  ```zig
+  // Universal macOS build
+  const macos_universal = try GhosttyLib.initMacOSUniversal(b, deps);
+  // Native macOS build
+  const macos_native = try GhosttyLib.initStatic(b, &try deps.retarget(
+      b, Config.genericMacOSTarget(b, null)));
+  // iOS
+  const ios = try GhosttyLib.initStatic(b, &try deps.retarget(
+      b, b.resolveTargetQuery(.{
+          .cpu_arch = .aarch64,
+          .os_tag = .ios,
+          .os_version_min = Config.osVersionMin(.ios),
+          .abi = null,
+      })));
+  // iOS Simulator
+  const ios_sim = try GhosttyLib.initStatic(b, &try deps.retarget(
+      b, b.resolveTargetQuery(.{
+          .cpu_arch = .aarch64,
+          .os_tag = .ios,
+          .os_version_min = Config.osVersionMin(.ios),
+          .abi = .simulator,
+          .cpu_model = .{ .explicit =
+              &std.Target.aarch64.cpu.apple_a17 },
+      })));
+  ```
+  Built into the xcframework only when `target == .universal`
+  (`src/build/xcframework.zig` defines `Target = enum { native,
+  universal }`).
+- **Default `xcframework_target` is `.native`** for fast local
+  iteration. To get the `ios-arm64-simulator` slice you must invoke:
+  ```bash
+  zig build -Demit-xcframework -Dxcframework-target=universal \
+      -Doptimize=ReleaseFast
+  ```
+  The "tip" workflow builds GhosttyKit only via the macOS scheme; the
+  separately-shipped `ghostty-vt.xcframework.zip` we pin uses a
+  different build (`build-lib-vt-xcframework` job → `zig build
+  -Demit-lib-vt -Doptimize=ReleaseFast`, no target spec) which
+  resolves to whatever the host runner is — Apple Silicon macOS — and
+  that's why the published asset only carries `ios-arm64/`. The
+  `ios-arm64-simulator` slice is not emitted by `-Demit-lib-vt`
+  today; it only exists in the GhosttyKit (macOS-app) path.
+- Upstream **does not publish a multi-arch GhosttyKit.xcframework
+  release asset**. The macOS Ghostty app's `Ghostty.xcodeproj` builds
+  the xcframework as a project step on the developer's machine.
+- **Showstopper this would solve for us:** none, directly. Upstream
+  policy is "consume the source tree, not a binary release," and
+  `ghostty-vt.xcframework.zip` is meant for the
+  `libghostty-vt`-only headless use case (no Metal renderer, no
+  iOS simulator slice promised).
+- Source files referenced: `src/build/GhosttyXCFramework.zig`,
+  `src/build/GhosttyLibVt.zig`, `src/build/xcframework.zig`,
+  `.github/workflows/release-tip.yml`, `macos/Sources/App/iOS/iOSApp.swift`.
+
+#### `Lakr233/libghostty-spm` — the prebuilt multi-arch wrapper
+
+This is the find. Lakr233 publishes a community-maintained
+`GhosttyKit.xcframework.zip` as a GitHub release **with every slice
+swe-kitty needs**, and ships an SPM package that exposes it as a
+binary target.
+
+- **Package.swift** at
+  `https://raw.githubusercontent.com/Lakr233/libghostty-spm/main/Package.swift`:
+  ```swift
+  .binaryTarget(
+      name: "libghostty",
+      url: "https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.1.5/GhosttyKit.xcframework.zip",
+      checksum: "a7045bef1f3149989d79e413b07f2f17847d68348da9f55eb56578093a5af405"
+  )
+  ```
+- **Platforms:** iOS 16+, macOS 13+, macCatalyst 16+.
+- **Build matrix (`.github/workflows/build.yml`)** runs on
+  `macos-15` with this `strategy.matrix.include`:
+  ```yaml
+  - target: aarch64-macos              variant: macosx
+  - target: x86_64-macos               variant: macosx
+  - target: aarch64-ios                variant: iphoneos
+  - target: aarch64-ios-simulator      variant: iphonesimulator
+    cpu: apple_a17
+  - target: x86_64-ios-simulator       variant: iphonesimulator
+  - target: aarch64-ios-macabi         variant: maccatalyst
+    cpu: apple_a17
+  - target: x86_64-ios-macabi          variant: maccatalyst
+  ```
+  Each leg runs `./Script/build-ghostty.sh <source> <target> <out>`
+  which calls:
+  ```bash
+  zig build -Doptimize=ReleaseFast \
+      -Dapp-runtime=none \
+      -Demit-exe=false -Demit-xcframework=false \
+      -Demit-macos-app=false -Demit-docs=false \
+      -Dsentry=false -Dcustom-shaders=false -Dinspector=false \
+      -Dtarget="$ZIG_TARGET" \
+      ${ZIG_CPU:+-Dcpu=$ZIG_CPU}
+  ```
+  i.e. it builds the static `libghostty.a` per target, not the
+  upstream xcframework step.
+- **Stitching** (`Script/merge-xcframework.sh`): per-variant `lipo`
+  of arm64+x86_64 archives → per-variant `.framework` bundle →
+  `xcodebuild -create-xcframework -framework ... -framework ...
+  -output BinaryTarget/GhosttyKit.xcframework`. Final zip via
+  `ditto`.
+- **Patches** (`Patches/ghostty/`): a small directory of upstream
+  patches Lakr233 applies before building. Today it contains
+  fixes for the iOS / Mac Catalyst build graph that haven't all
+  been upstreamed.
+- **Release cadence:** scheduled cron `23 6 * * 1` (weekly Monday)
+  plus `workflow_dispatch`, against the latest upstream Ghostty
+  semver tag. Latest release at time of writing is `1.1.5`
+  (matches Ghostty `1.1.5`).
+- **License:** MIT (the spm wrapper); Ghostty itself is MIT.
+- **Showstopper this solves:** all of them.
+  - Multi-arch xcframework with `ios-arm64-simulator` and
+    `ios-x86_64-simulator` → CI iOS-sim linker resolves.
+  - Catalyst slice present → free upgrade path for the Mac app target.
+  - macOS universal slice present → SwiftUI previews work.
+  - Published via SPM `binaryTarget` URL + sha256 → identical
+    distribution shape to what `PLAN-TERMINAL-REWRITE.md §E`
+    already committed to ("SPM `binaryTarget` URL + checksum from
+    a Ghostty GitHub release asset").
+
+#### Other consumers found via `gh search code "GhosttyKit.xcframework" extension:swift`
+
+| Repo | iOS? | xcframework source |
+| ---- | ---- | ------------------ |
+| `BarutSRB/OmniWM`                    | macOS only | committed binary |
+| `muxy-app/muxy`                      | macOS only | committed binary |
+| `supabitapp/supacode`                | macOS only | `.build/ghostty/...` (built locally) |
+| `iAmCorey/kooky`                     | macOS only | committed `Vendor/` binary |
+| `vaayne/mori`                        | macOS only | committed binary |
+| `zxcvbnmzsedr/devhaven`              | macOS only | committed `Vendor/` binary |
+| `scarce/axel`                        | macOS only | committed binary |
+| `misterclayt0n/the-editor`           | macOS only | path-based |
+| **`Lakr233/libghostty-spm`**         | **iOS + macOS + Catalyst** | **SPM binary target via release URL** |
+
+Every other consumer either is macOS-only (so they only need the
+`macos-arm64_x86_64/` slice that upstream's GhosttyKit step does
+emit) or punts to a local build. Lakr233 is the only one solving
+the actual iOS-simulator problem, and they're solving it by
+running essentially the same recipe we'd have to write ourselves
+in CI.
+
+### Why upstream's `tip` asset is arm64-only
+
+Two reasons stacked:
+
+1. The release asset comes from the `build-lib-vt-xcframework`
+   job, which runs `zig build -Demit-lib-vt -Doptimize=ReleaseFast`
+   with no `-Dtarget=` flag. That builds for the host runner's
+   triple (Apple Silicon macOS → `aarch64-ios` via cross-compile),
+   not the universal xcframework matrix.
+2. `-Demit-lib-vt` invokes a different build graph than
+   `-Demit-xcframework`. The lib-vt path produces a slimmer
+   headless-VT library (`ghostty-vt` — no Metal, no surface) and
+   was never wired to produce the iOS simulator slice; the
+   GhosttyKit path is where the universal-mode simulator slice
+   lives (see `src/build/GhosttyXCFramework.zig` above).
+
+So even if upstream fixed (1), we'd still be missing Metal/surface
+on iOS — exactly the things Stage 1 of our plan needs.
+
+### Options considered for swe-kitty
+
+#### Option A — cross-compile from source in our CI
+
+A new GitHub Actions job (`.github/workflows/ghostty-xcframework.yml`)
+that runs on `macos-15`, checks out Ghostty at a pinned commit,
+loops `zig build -Dtarget=<...> -Demit-lib-vt=false
+-Demit-xcframework=true` for each slice (or runs the same
+`-Demit-xcframework -Dxcframework-target=universal` once), then
+uploads `GhosttyKit.xcframework.zip` as a release asset on the
+**swe-kitty** repo. The xcframework asset URL feeds our existing
+`scripts/fetch-ghostty-vt-xcframework.sh` (renamed).
+
+- **Pros:** no third-party dependency; we control the patch surface
+  and the rebuild cadence; the recipe is well-trodden (Lakr233's
+  workflow is essentially the spec).
+- **Cons:** ~20 minutes of CI per build, including a Zig 0.15
+  toolchain provision; a non-trivial workflow YAML; we own the
+  patches dir if upstream ever needs one for iOS-sim.
+- **Sketch (the workflow that would land):** matrix exactly mirrors
+  Lakr233's, with the `zig build` invocation pinned to
+  `-Demit-xcframework -Dxcframework-target=universal -Doptimize=ReleaseFast`
+  on a single leg (since upstream's `GhosttyXCFramework.zig`
+  already does the per-slice work internally). Falls back to a
+  matrix of individual targets only if the universal path turns
+  out broken for `x86_64-ios-simulator` (it does today — see
+  Lakr233's matrix includes `x86_64-ios-simulator` but
+  `GhosttyXCFramework.zig` does not).
+
+#### Option B — fork Ghostty, run our own release workflow
+
+A `nikhilsh/ghostty` fork with the missing simulator slice wired
+into the upstream `release-tip.yml` job; publish to fork releases;
+pin swe-kitty against the fork.
+
+- **Pros:** maximum control; upstream-shaped recipe.
+- **Cons:** we now own a Ghostty fork. Rebasing against upstream is
+  weekly toil for the lifetime of the project; we've already
+  resolved not to vendor a fork unless forced (xterm.js path
+  precedent in `PLAN-TERMINAL-XTERMJS.md`).
+
+#### Option C — contribute upstream
+
+Open a PR to `ghostty-org/ghostty` adding `ios-arm64-simulator` (and
+ideally `x86_64-ios-simulator`) to the `release-tip.yml`
+`build-lib-vt-xcframework` job's emit graph.
+
+- **Pros:** the right place to fix it; everyone benefits.
+- **Cons:** review/merge timing is not under our control;
+  `mitchellh` may reasonably defer this given the lib-vt path was
+  designed as headless. Stage 0 is blocked **now**.
+
+#### Option D — vendor Ghostty as a git subtree
+
+Add Ghostty source to swe-kitty as a subtree under
+`vendor/ghostty/`, call `zig build -Demit-xcframework
+-Dxcframework-target=universal` from `scripts/build-rust.sh` (or
+a new `scripts/build-ghostty.sh`) as part of the iOS build.
+
+- **Pros:** completely self-contained; no network dep at build
+  time; matches how some of the other consumers do it.
+- **Cons:** Ghostty + libxev + dependencies adds ~80MB to the
+  repo; subtree pulls are clunky; the iOS build now requires Zig
+  0.15+ on every CI runner and every contributor's Mac. We
+  already keep `RELEASE-IOS.md` lean and this would break that.
+
+### Pick — **Option E: pin against Lakr233's prebuilt GhosttyKit.xcframework**
+
+(*A combination of "use someone else's working build" + Option A as the
+contingency.*)
+
+1. Rewrite `apps/ios/GhosttyVT/Package.swift` (or its eventual
+   landing spot — Stage 0 still has it commented out) to point at
+   `https://github.com/Lakr233/libghostty-spm/releases/download/storage.<X.Y.Z>/GhosttyKit.xcframework.zip`
+   instead of `https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip`.
+2. Update `scripts/fetch-ghostty-vt-xcframework.sh` (rename to
+   `fetch-ghostty-kit-xcframework.sh`) to fetch the same URL +
+   sha256.
+3. Pin to the exact tag (`storage.1.1.5` at time of writing — Lakr233
+   ships `storage.<version>` tags as immutable releases, separate
+   from the floating Swift package version tag). Bump on a
+   schedule, not a treadmill.
+4. **Contingency: keep Option A ready.** If Lakr233 stops
+   publishing, drop in the workflow YAML described in Option A
+   above. The matrix and stitching script are already validated
+   by their pipeline; we'd be copying a known-working recipe.
+
+**Why E over A:**
+
+- Stage 0 unblocks **today**, not in a week. Zero new CI to
+  write; the SPM URL+checksum dance is identical to what §E of
+  this plan already committed to.
+- The xcframework Lakr233 publishes contains exactly the slices
+  we need: `ios-arm64`, `ios-arm64_x86_64-simulator`,
+  `macos-arm64_x86_64`, plus Catalyst (free future-proofing if we
+  ever ship a Mac Catalyst build).
+- Lakr233's pipeline tracks upstream Ghostty semver tags
+  automatically (weekly cron + `workflow_dispatch`). We get
+  upstream bumps for free, on the same cadence we'd be willing
+  to bump anyway.
+- If Lakr233 disappears (single maintainer; same shape of risk
+  as `eriklangille/clauntty`), our fallback is Option A — well
+  scoped, ~half a day of agent work, and we have the recipe
+  in this doc.
+
+**Why not A as primary:**
+
+- A is strictly more work today and not strictly safer (any
+  fork/upstream-tracking project is one-maintainer-deep until
+  proven otherwise). Pin first, build later if forced.
+
+**Why not B/C/D:** explained above; all of them are either heavier
+than E or have unbounded timing risk.
+
+### What the next agent does
+
+Concretely, Stage 0.5 (a new substage before Stage 1):
+
+1. `scripts/fetch-ghostty-vt-xcframework.sh` →
+   `scripts/fetch-ghostty-kit-xcframework.sh`. Change
+   `ASSET_URL` to
+   `https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.1.5/GhosttyKit.xcframework.zip`.
+   Pin the new `EXPECTED_SHA256` (the package's binaryTarget
+   checksum is the same sha256 — `a7045bef1f3149989d79e413b07f2f17847d68348da9f55eb56578093a5af405`).
+2. Re-enable the SPM binary target in
+   `apps/ios/GhosttyVT/Package.swift` against the new URL +
+   checksum.
+3. Smoke-run the iOS simulator build locally; CI on the next
+   push should be green.
+4. Roll the swe-kitty release notes to mention we now pin
+   `libghostty-spm storage.1.1.5` (downstream of Ghostty 1.1.5).
+5. If anything in Lakr233's xcframework is missing for Stage 1
+   (e.g. a header we need but they patched out), drop to
+   Option A and write the workflow YAML — recipe is documented
+   above.
