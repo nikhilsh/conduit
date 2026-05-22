@@ -157,11 +157,51 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	sub := sess.Subscribe()
 	textSub := sess.SubscribeText()
-	defer sess.Unsubscribe(sub)
-	defer sess.UnsubscribeText(textSub)
+	// Defer cleanup ordering matters: unsubscribe FIRST so the
+	// SubscriberCount reflects the post-leave total when we
+	// broadcast. tied to function return; gorilla's read/write loops
+	// both exit via c.close() which ripples back here.
+	defer func() {
+		sess.Unsubscribe(sub)
+		sess.UnsubscribeText(textSub)
+		emitViewerStatus(sess)
+	}()
+
+	// Announce the new viewer to every subscriber. Subscribe happens
+	// before this call so SubscriberCount already includes us; our
+	// own writeLoop will forward this view_event back through textSub.
+	emitViewerStatus(sess)
 
 	go c.readLoop()
 	c.writeLoop(sub, textSub, sess.Done())
+}
+
+// emitViewerStatus broadcasts a `view: "status"` view_event reflecting
+// the current viewer_count + PTY dimensions. Optional `display_name`
+// is omitted until rename_session lands the persistence side; older
+// clients ignore unknown keys, so adding it later is wire-safe.
+func emitViewerStatus(sess *session.Session) {
+	rows, cols := sess.Dimensions()
+	event := map[string]any{
+		"viewer_count": sess.SubscriberCount(),
+	}
+	if rows > 0 {
+		event["terminal_rows"] = rows
+	}
+	if cols > 0 {
+		event["terminal_cols"] = cols
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": sess.ID,
+		"view":    "status",
+		"event":   event,
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	sess.PublishText(payload)
 }
 
 // parseDim parses a uint16 dimension query param. Returns 0 on parse
@@ -230,12 +270,25 @@ func (c *client) sendStatus(assistant string, created bool) error {
 	if reason == "" {
 		reason = "ok"
 	}
+	// viewers reflects existing subscribers PLUS this one — we haven't
+	// called Subscribe() yet on the connect path, but the client is
+	// definitely about to count itself as a viewer. Add 1 so the very
+	// first status frame agrees with the view_event mirror's
+	// viewer_count emitted right after Subscribe.
+	viewers := c.sess.SubscriberCount() + 1
+	rows, cols := c.sess.Dimensions()
+	if rows == 0 {
+		rows = 40
+	}
+	if cols == 0 {
+		cols = 120
+	}
 	payload := map[string]any{
 		"type":        "status",
 		"session":     c.sess.ID,
-		"viewers":     1,
-		"rows":        40,
-		"cols":        120,
+		"viewers":     viewers,
+		"rows":        rows,
+		"cols":        cols,
 		"assistant":   assistant,
 		"yolo":        false,
 		"health":      st.Health,
