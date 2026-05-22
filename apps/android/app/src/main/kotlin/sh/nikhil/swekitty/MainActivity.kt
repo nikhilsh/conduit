@@ -50,6 +50,11 @@ class MainActivity : ComponentActivity() {
     private fun handlePairingIntent(intent: android.content.Intent?) {
         val data = intent?.data ?: return
         if (data.scheme?.lowercase() != "swekitty") return
+        // OAuth callbacks (`swekitty://oauth/<provider>/callback?code=...`)
+        // share the `swekitty` scheme with pairing URLs. Route them to
+        // the OAuth handler first; only fall through to pairing if
+        // there's no in-flight OAuth request waiting for this redirect.
+        if (store.handleOAuthCallback(data)) return
         store.applyDeepLink(data.toString())
     }
 }
