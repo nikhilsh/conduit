@@ -72,11 +72,22 @@ let package = Package(
         // framework, no shared path collision). The Ghostty
         // binaryTarget is therefore re-enabled and libghostty actually
         // loads at runtime.
-        .binaryTarget(
-            name: "GhosttyVtKit",
-            url: "https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip",
-            checksum: "0c29329a2e1012d8a6ebf05f164c589aeeaba5d417dd93e075c073ad3fa44ba7"
-        ),
+        // GhosttyVtKit binaryTarget RE-DISABLED — upstream's
+        // `ghostty-vt.xcframework.zip` only ships an `ios-arm64`
+        // slice (real device); no `ios-arm64-simulator` or `x86_64`
+        // slice. xcodebuild for the iOS simulator can't link the
+        // arm64 device archive against a simulator target host. The
+        // fix needs ghostty-org/ghostty to ship a multi-arch
+        // xcframework OR us to cross-compile libghostty from source
+        // on CI for each target slice (Zig, complex).
+        // Track upstream + revisit when a multi-arch tagged release
+        // exists. Until then, Stage 2's CoreText renderer paints
+        // whatever cells `Terminal.snapshot()` returns (empty grid).
+        // .binaryTarget(
+        //     name: "GhosttyVtKit",
+        //     url: "https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip",
+        //     checksum: "0c29329a2e1012d8a6ebf05f164c589aeeaba5d417dd93e075c073ad3fa44ba7"
+        // ),
         // Thin Swift wrapper. Re-exports the C symbols through a
         // typed Swift API (Terminal class + TerminalSnapshot struct).
         // The `#if canImport(GhosttyVt)` guard in Terminal.swift +
@@ -85,7 +96,7 @@ let package = Package(
         // with a stale-checksum error.
         .target(
             name: "GhosttyVT",
-            dependencies: ["GhosttyVtKit"],
+            dependencies: [],
             path: "Sources/GhosttyVT"
         ),
         .testTarget(
