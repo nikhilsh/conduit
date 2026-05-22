@@ -92,6 +92,18 @@ struct WKTerminalView: UIViewRepresentable {
         webView.terminalAccessoryView = bar
         webView.navigationDelegate = context.coordinator
         webView.scrollView.isScrollEnabled = false // xterm.js handles its own scrollback
+        // The xterm.js viewport runs its own touchmove handler that
+        // translates vertical drag into `term.scrollLines`. iOS UIKit
+        // delays touches that enter a scrollview's content by ~150ms
+        // while it sniffs for a pan — long enough that the JS
+        // touchstart never fires for short drags, and the user
+        // perceives the terminal as un-scrollable. Forward the
+        // gesture immediately and don't cancel touches in the
+        // WKWebView's content view so xterm.js sees the full touch
+        // sequence (touchstart → touchmove → touchend).
+        webView.scrollView.delaysContentTouches = false
+        webView.scrollView.panGestureRecognizer.cancelsTouchesInView = false
+        webView.scrollView.bounces = false
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.scrollView.backgroundColor = .black

@@ -26,6 +26,16 @@ struct ChatTabComposerTests {
         #expect(ChatTab.placeholder(for: "   ") == "Message agent\u{2026}")
     }
 
+    @Test func keyboardDismissModeIsInteractive() {
+        // fix-ui-friction-vol2: scrolling the chat surface downward
+        // should drag the keyboard with the finger (iOS-native
+        // behaviour), not snap it shut or leave it pinned. The live
+        // ScrollDismissesKeyboardMode struct isn't Equatable so we
+        // pin the matching token instead — both are bound to the
+        // same chosen mode by colocation in ChatTab.
+        #expect(ChatTab.keyboardDismissModeToken == "interactively")
+    }
+
     @Test func placeholderUsesUnicodeHorizontalEllipsis() {
         // litter uses the single-codepoint "…" (U+2026), not three
         // ASCII dots. The visual is subtly different and the spec

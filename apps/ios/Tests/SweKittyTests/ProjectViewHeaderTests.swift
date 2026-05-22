@@ -25,6 +25,16 @@ struct ProjectViewHeaderTests {
         #expect(ProjectHeaderModel.rows.count == 3)
     }
 
+    @Test func headerCapsVerticalFootprintAt120pt() {
+        // fix-ui-friction-vol2: the user repeatedly flagged the header
+        // as eating too much vertical chrome despite Stage 2's
+        // tightening pass. The cap defends a regression where a future
+        // row gets added without budgeting against the existing three.
+        // 120pt is the budget we chose for [pill] · [caption] · [picker]
+        // with internal padding.
+        #expect(ProjectHeaderModel.maxHeight == 120 as CGFloat)
+    }
+
     // MARK: - Compound agent dropdown
 
     @Test func agentPillExposesDropdownPayload() {

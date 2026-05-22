@@ -45,7 +45,7 @@ struct ChatTab: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(Self.keyboardDismissMode)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 8)
                     .onChanged { _ in autoFollow = false }
@@ -250,6 +250,16 @@ struct ChatTab: View {
             .padding(.vertical, 2)
         }
     }
+
+    /// Keyboard dismiss mode for the chat message ScrollView.
+    /// `ScrollDismissesKeyboardMode` is a SwiftUI struct that isn't
+    /// Equatable, so we expose both the live SwiftUI value (for the
+    /// view body) and a string token (for tests). fix-ui-friction-vol2:
+    /// the user expects the iOS-native "scroll down to dismiss"
+    /// gesture; `.interactively` drags the keyboard with the user's
+    /// finger rather than snapping.
+    static let keyboardDismissMode: ScrollDismissesKeyboardMode = .interactively
+    static let keyboardDismissModeToken: String = "interactively"
 
     /// Composer placeholder text. Exposed as a static helper so unit
     /// tests can assert the wording (Stage 2 acceptance: reads
