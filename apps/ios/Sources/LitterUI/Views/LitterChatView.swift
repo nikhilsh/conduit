@@ -42,7 +42,17 @@ extension LitterUI {
         // MARK: Messages
 
         private var events: [ConversationItem] {
-            store.conversationLog[session.id] ?? []
+            // PR #111 + legacy ChatTab parity: prefer the typed
+            // `conversationLog`, but fall back to the broker's raw
+            // `chatLog` for events that haven't surfaced through the
+            // structured `view_event` stream yet. Without this, codex
+            // assistant replies (delivered via `on_chat_event`) showed
+            // up in the Terminal tab but never reached the chat tab —
+            // the #119 cutover dropped the legacy mapIndexed fallback.
+            LitterUI.ChatViewModel.mergedEvents(
+                conversation: store.conversationLog[session.id] ?? [],
+                chatLog: store.chatLog[session.id] ?? []
+            )
         }
 
         private var messagesList: some View {

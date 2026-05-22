@@ -44,6 +44,63 @@ extension LitterUI {
             !snap.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
+        /// Resolve the events stream the chat surface should render.
+        ///
+        /// Pre-#119 the legacy `ChatTab` preferred the typed
+        /// `conversationLog` (built by `refreshConversation` from the
+        /// broker's structured `view_event` stream) and, when empty,
+        /// fell back to mapping the raw `chatLog` (the broker's
+        /// `on_chat_event` deliveries — PTY-scraped chat events from
+        /// `ConversationRenderer`/the Tier-1 adapter) into synthetic
+        /// `ConversationItem`s.
+        ///
+        /// The #119 LitterUI cutover dropped that fallback and only
+        /// read from `conversationLog`. For sessions where the broker
+        /// emits the assistant reply through `on_chat_event` (codex
+        /// today) but the typed `view_event`/`listConversationItems`
+        /// surface hasn't caught up, the assistant reply was visible
+        /// in the Terminal tab but never reached the chat tab. This
+        /// fallback restores the legacy behaviour: every raw chat
+        /// event missing from the typed log gets synthesized into a
+        /// `ConversationItem` and spliced in by timestamp so the chat
+        /// surface stays chronological.
+        static func mergedEvents(
+            conversation: [ConversationItem],
+            chatLog: [ChatEvent]
+        ) -> [ConversationItem] {
+            // Fast path: nothing raw to fold in.
+            guard !chatLog.isEmpty else { return conversation }
+
+            // Same fingerprint shape `refreshConversation` uses to dedupe
+            // local echoes against the server's typed log — role+content
+            // is the only stable identity we get from `ChatEvent`.
+            let typedFingerprints = Set(
+                conversation.map { "\($0.role.lowercased())|\($0.content)" }
+            )
+            let synthetic: [ConversationItem] = chatLog.enumerated().compactMap { idx, ev in
+                let key = "\(ev.role.lowercased())|\(ev.content)"
+                if typedFingerprints.contains(key) { return nil }
+                return ConversationItem(
+                    id: "chatlog-\(ev.ts)-\(idx)",
+                    role: ev.role,
+                    kind: ev.role.lowercased() == "tool" ? "tool" : "message",
+                    status: "done",
+                    content: ev.content,
+                    ts: ev.ts,
+                    files: ev.files,
+                    toolName: nil,
+                    command: nil,
+                    exitCode: nil,
+                    durationMs: nil,
+                    diffSummary: nil,
+                    pendingOptions: []
+                )
+            }
+            guard !synthetic.isEmpty else { return conversation }
+            // Sort by ts (PR #111 contract — typed log is ts-sorted).
+            return (conversation + synthetic).sorted { $0.ts < $1.ts }
+        }
+
         /// Placeholder text shown in the composer when the draft is
         /// empty. Mirrors litter's "Message litter…" prompt.
         static func composerPlaceholder(forAgent assistant: String?) -> String {
