@@ -161,5 +161,9 @@ class ThreadSwitcherModelTest {
             assistant = assistant,
             branch = "main",
             preview = null,
+            reasoningEffort = null,
+            cwd = null,
+            startedAt = null,
+            lastActivityAt = null,
         )
 }
