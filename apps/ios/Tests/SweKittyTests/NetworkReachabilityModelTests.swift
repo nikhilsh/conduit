@@ -137,7 +137,7 @@ struct NetworkReachabilityModelTests {
         // Drives the observer through a deterministic transition and
         // confirms the public-facing `status` flips + the
         // NotificationCenter listener fires exactly once.
-        let observer = NetworkReachabilityObserver()
+        let observer = NetworkReachabilityObserver(startMonitor: false)
         observer.apply(.unsatisfied)
         let exp = await waitForNotification(.networkBecameReachable) {
             observer.apply(.satisfied(.wifi))
@@ -148,7 +148,7 @@ struct NetworkReachabilityModelTests {
 
     @MainActor
     @Test func applyIsIdempotentOnNoChange() async {
-        let observer = NetworkReachabilityObserver()
+        let observer = NetworkReachabilityObserver(startMonitor: false)
         observer.apply(.satisfied(.wifi))
         // Re-applying the same state must not refire the interface
         // change notification — that'd cause runaway reconnect loops

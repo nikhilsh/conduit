@@ -79,9 +79,16 @@ final class NetworkReachabilityObserver {
     private nonisolated(unsafe) let queue: DispatchQueue
 
     init(monitor: NWPathMonitor = NWPathMonitor(),
-         queue: DispatchQueue = DispatchQueue(label: "swekitty.nwpath")) {
+         queue: DispatchQueue = DispatchQueue(label: "swekitty.nwpath"),
+         startMonitor: Bool = true) {
         self.monitor = monitor
         self.queue = queue
+        // Tests pass startMonitor:false so the real NWPathMonitor does
+        // not race the test driver. Without this, the simulator's path
+        // updates fire `apply` in parallel with the test calls and the
+        // idempotency / transition assertions get false-positive
+        // `networkInterfaceChanged` posts from real interface flaps.
+        guard startMonitor else { return }
         self.monitor.pathUpdateHandler = { [weak self] path in
             let next = Self.classify(path)
             Task { @MainActor [weak self] in
