@@ -167,15 +167,30 @@ struct ProjectView: View {
 
     /// Row 1 — control bar. ZStack so the compound agent dropdown is
     /// truly centered regardless of trailing icon width, matching litter.
+    ///
+    /// The trailing cluster carries a `ViewerCountBadge` ahead of the
+    /// refresh + info circles. The badge is invisible at `nil` / `0` /
+    /// `1` (gated inside `ViewerCountBadgeModel`), so rendering it
+    /// unconditionally is safe — it only reserves space once a second
+    /// viewer is actually attached and the broker emits the count.
     private var controlsRow: some View {
         ZStack {
             agentPill
             HStack(spacing: 6) {
                 Spacer()
+                ViewerCountBadge(count: viewerCount)
                 refreshButton
                 infoButton
             }
         }
+    }
+
+    /// Bridge the UniFFI-typed `viewers: UInt32?` field on `SessionStatus`
+    /// to the `Int?` the badge model takes. `nil` here means the broker
+    /// hasn't broadcast a count yet (older harness or first frame not
+    /// arrived); the badge stays hidden in that case.
+    private var viewerCount: Int? {
+        status?.viewers.map { Int($0) }
     }
 
     /// Row 2 — single mono caption combining `path · branch · running`
@@ -360,6 +375,10 @@ struct ProjectHeaderModel: Equatable {
     let agentPill: AgentPill
     let pathLabel: String
     let pathSubtitle: String
+    /// Pure-data backing for the trailing `ViewerCountBadge`. Mirrors
+    /// the visibility rules so a test can assert "two viewers shows
+    /// the pill" without standing up a SwiftUI host.
+    let viewerBadge: ViewerCountBadgeModel
 
     static func from(session: ProjectSession,
                      status: SessionStatus?,
@@ -392,7 +411,8 @@ struct ProjectHeaderModel: Equatable {
                 showsChevron: true
             ),
             pathLabel: pathLabel,
-            pathSubtitle: subtitleParts.joined(separator: " · ")
+            pathSubtitle: subtitleParts.joined(separator: " · "),
+            viewerBadge: ViewerCountBadgeModel(count: status?.viewers.map { Int($0) })
         )
     }
 }

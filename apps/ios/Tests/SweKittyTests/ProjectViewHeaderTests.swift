@@ -101,6 +101,53 @@ struct ProjectViewHeaderTests {
         #expect(model.pathSubtitle == "feature/x · running · exited(0)")
     }
 
+    // MARK: - Viewer badge wiring
+
+    @Test func viewerBadgeHiddenWhenStatusMissing() {
+        // No status frame → no viewers info → badge invisible. Same
+        // contract as `ViewerCountBadgeModel` defends in isolation,
+        // re-asserted here so a refactor of `ProjectHeaderModel.from`
+        // can't silently break the wiring.
+        let session = makeSession(assistant: "claude")
+        let model = ProjectHeaderModel.from(session: session,
+                                            status: nil,
+                                            lifecycleLabel: nil)
+        #expect(!model.viewerBadge.isVisible)
+    }
+
+    @Test func viewerBadgeHiddenForLoneViewer() {
+        // Broker reports `viewers: 1` (only you) — the badge stays
+        // hidden so it doesn't announce the user to themselves.
+        let session = makeSession(assistant: "claude")
+        let status = makeStatus(assistant: "claude",
+                                phase: "running",
+                                health: "green",
+                                viewers: 1)
+        let model = ProjectHeaderModel.from(session: session,
+                                            status: status,
+                                            lifecycleLabel: nil)
+        #expect(!model.viewerBadge.isVisible)
+    }
+
+    @Test func viewerBadgeVisibleWhenMultipleViewers() {
+        // PR ios-viewer-badge-wire: status carries `viewers > 1`, so
+        // the header pill renders "👥 N" with a matching VoiceOver
+        // label. This is the one assertion that proves the badge is
+        // actually wired into the header (vs. shipping the SwiftUI
+        // file and forgetting to call it).
+        let session = makeSession(assistant: "claude")
+        let status = makeStatus(assistant: "claude",
+                                phase: "running",
+                                health: "green",
+                                viewers: 3)
+        let model = ProjectHeaderModel.from(session: session,
+                                            status: status,
+                                            lifecycleLabel: nil)
+        #expect(model.viewerBadge.isVisible)
+        #expect(model.viewerBadge.label == "👥 3")
+        #expect(model.viewerBadge.accessibilityLabel == "3 viewers")
+    }
+
     // MARK: - Helpers
 
     private func makeSession(assistant: String,
@@ -127,7 +174,8 @@ struct ProjectViewHeaderTests {
 
     private func makeStatus(assistant: String,
                             phase: String,
-                            health: String) -> SessionStatus {
+                            health: String,
+                            viewers: UInt32? = nil) -> SessionStatus {
         // The generated SessionStatus init grew optional fields in
         // commit 2666642. Use the regenerated full-init signature
         // (mirrors `SessionStore.ingestExit` so we drift with it).
@@ -141,7 +189,7 @@ struct ProjectViewHeaderTests {
             yolo: false,
             preview: nil,
             sessionName: nil,
-            viewers: nil,
+            viewers: viewers,
             reasoningEffort: nil,
             cwd: nil,
             startedAt: nil,
