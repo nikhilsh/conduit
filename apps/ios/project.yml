@@ -84,13 +84,18 @@ targets:
       - package: Sentry
       - package: HighlightSwift
       - package: GhosttyVT
-      # Bundle the widget extension inside the host .app so iOS picks
-      # it up when the controller calls Activity.request(...). Without
-      # this `embed: true` the extension target builds in isolation
-      # but the system can't find it at runtime.
-      - target: SweKittyWidgets
-        embed: true
-        codeSign: true
+      # NOTE: Live Activity widget extension (SweKittyWidgets) is built
+      # by CI sim flow but intentionally NOT embedded in the release
+      # IPA. Ad-hoc archive signing requires a separate provisioning
+      # profile for the widget's bundle id (sh.nikhil.swekitty.widgets)
+      # and the release pipeline only ships the host-app profile. With
+      # the widget embedded but unsigned, archive fails with
+      # "Embedded binary is not signed with the same certificate as the
+      # parent app." Until a widget provisioning profile is added to
+      # the release workflow secrets, the embed dependency stays
+      # disabled — the TurnLiveActivityController still calls
+      # Activity.request(...) but iOS no-ops without the extension. See
+      # docs/PLAN-TERMINAL-REWRITE.md / PR fix-widget-extension-signing.
     info:
       path: Sources/Info.plist
       properties:
@@ -206,7 +211,10 @@ schemes:
     build:
       targets:
         SweKitty: all
-        SweKittyWidgets: all
+        # SweKittyWidgets intentionally excluded from the scheme — see
+        # the note on the SweKitty target's dependencies block. The
+        # widget target still exists so a future PR can re-add it once
+        # release-ios.yml ships a widget provisioning profile.
         SweKittyTests: [test]
     run:
       config: Debug
