@@ -53,8 +53,12 @@ extension LitterUI {
                         }
                     }
                     .navigationDestination(isPresented: $showSessionsHistory) {
-                        // Sessions history is a legacy view — fall
-                        // back to it. Tracked as a follow-up.
+                        // Sessions-history surface is the legacy
+                        // `SessionsScreen` (now in `Sources/Shared/`).
+                        // A litter-faithful rebuild is a follow-up;
+                        // for now we expose the existing one as a
+                        // navigation push so the affordance keeps
+                        // working post-cutover.
                         SessionsScreen().environment(store)
                     }
                 }

@@ -41,26 +41,10 @@ struct SweKittyApp: App {
         Telemetry.configure()
     }
 
-    /// Root content branching on the experimental LitterUI flag. When
-    /// the user has opted into the trash-rebuild UI under Settings →
-    /// Experimental → "Litter UI", the app boots into
-    /// `LitterUI.RootView` instead of the legacy `RootView`. Default
-    /// is OFF; the data layer (`SessionStore`, `AppearanceStore`,
-    /// streaming coordinator) is shared across both trees so toggling
-    /// the flag is a pure view-layer swap. See PLAN-LITTER-UI.md.
-    @ViewBuilder
-    private var rootContent: some View {
-        if appearance.experimentalLitterUI {
-            LitterUI.RootView()
-        } else {
-            RootView()
-        }
-    }
-
     var body: some Scene {
         WindowGroup {
             ZStack {
-                rootContent
+                LitterUI.RootView()
                     .environment(store)
                     .environment(appearance)
                     .environment(StreamingRendererCoordinator.shared)
@@ -98,7 +82,7 @@ struct SweKittyApp: App {
                         .presentationDetents([.medium])
                     }
                     .sheet(item: agentPickBinding) { pick in
-                        AgentPickerSheet(headerNote: pick.hostNote)
+                        LitterUI.AgentPickerSheet(headerNote: pick.hostNote)
                             .environment(store)
                     }
                 if showSplash {

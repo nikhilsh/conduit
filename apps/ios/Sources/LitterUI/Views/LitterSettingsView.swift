@@ -20,6 +20,7 @@ extension LitterUI {
         @Environment(\.colorScheme) private var colorScheme
 
         @State private var showAddServer = false
+        @State private var showAgentLogin = false
 
         var body: some View {
             @Bindable var appearance = appearance
@@ -55,6 +56,9 @@ extension LitterUI {
                 .sheet(isPresented: $showAddServer) {
                     LitterUI.AddServerSheet()
                 }
+                .sheet(isPresented: $showAgentLogin) {
+                    LitterUI.AgentLoginSheet()
+                }
             }
         }
 
@@ -62,11 +66,31 @@ extension LitterUI {
 
         private var accountSection: some View {
             sectionCard(title: "Account") {
-                LitterUI.navRow(
-                    icon: "person.crop.circle.fill",
-                    title: store.endpoint.isComplete ? store.endpoint.displayHost : "Not paired",
-                    subtitle: harnessSubtitle
-                )
+                VStack(spacing: 0) {
+                    LitterUI.navRow(
+                        icon: "person.crop.circle.fill",
+                        title: store.endpoint.isComplete ? store.endpoint.displayHost : "Not paired",
+                        subtitle: harnessSubtitle
+                    )
+                    Divider()
+                        .background(LitterUI.Palette.separator.color)
+                        .padding(.leading, 46)
+                    Button {
+                        showAgentLogin = true
+                    } label: {
+                        LitterUI.ListRow(
+                            icon: "key.fill",
+                            title: "Sign in to agent",
+                            subtitle: "OAuth for Claude / ChatGPT (v2, litter pattern)",
+                            iconTint: LitterUI.Palette.brand.color
+                        ) {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
 
@@ -201,10 +225,10 @@ extension LitterUI {
             @Bindable var appearance = appearance
             return sectionCard(title: "Experimental") {
                 LitterUI.toggleRow(
-                    icon: "flask.fill",
-                    title: "Litter UI (preview)",
-                    subtitle: "Currently active — toggle off to return to the legacy UI",
-                    isOn: $appearance.experimentalLitterUI
+                    icon: "rectangle.dashed",
+                    title: "Native terminal (Ghostty)",
+                    subtitle: "Render the terminal tab with libghostty instead of xterm.js",
+                    isOn: $appearance.experimentalNativeTerminal
                 )
             }
         }

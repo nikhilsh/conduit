@@ -190,20 +190,11 @@ struct ConversationRendererTests {
         }
     }
 
-    // MARK: - User-message rendering style
-
-    /// Locks the Claude.ai-style flat user-message render in.
-    ///
-    /// `ConversationBubbleContainer` reads `ConversationStyle.userMessage`
-    /// to decide whether to wrap user content in the legacy padded
-    /// `RoundedRectangle.fill(surfaceLight)` bubble (`.bubble`) or to
-    /// render it as plain right-aligned accent-colored text (`.flat`).
-    ///
-    /// Current design intent is `.flat`. If a future change re-adds the
-    /// bubble background without flipping this constant, this test
-    /// fires and forces a paired update — making the visual regression
-    /// loud rather than silent.
-    @Test func userMessageStyleIsFlat() {
-        #expect(ConversationStyle.userMessage == .flat)
-    }
+    // User-message rendering style is now expressed directly by the
+    // LitterUI chat view (`LitterUI.ChatViewModel.alignment(for:)` +
+    // the row's foreground-color / background-style choices). The
+    // legacy `ConversationStyle.userMessage` pin was deleted in the
+    // litter-ui-cutover along with `ConversationBubbleContainer`; the
+    // `alignment(for:)` rule has its own coverage in
+    // `LitterUI.ChatViewModel`-adjacent tests.
 }

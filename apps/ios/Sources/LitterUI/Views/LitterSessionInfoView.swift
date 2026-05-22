@@ -43,7 +43,10 @@ extension LitterUI {
                     }
                 }
                 .sheet(isPresented: $showRename) {
-                    LitterUI.RenameSheet(session: session)
+                    LitterUI.RenameSessionSheet(
+                        session: session,
+                        initialDraft: store.displayName(for: session)
+                    )
                 }
             }
         }

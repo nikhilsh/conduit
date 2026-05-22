@@ -298,6 +298,17 @@ final class SessionStore {
     /// same key (idempotent with the coordinator's update semantics).
     var streamingCoordinator: StreamingRendererCoordinator?
 
+    /// Active per-user agent OAuth v2 coordinator. Set by the
+    /// `LitterAgentLoginSheet` when the user taps "Login with …";
+    /// inbound `agent_login_url` / `agent_login_complete` /
+    /// `agent_login_failed` view_events are routed here so the
+    /// coordinator's state machine can advance regardless of which
+    /// screen owns the sheet. Cleared on `succeeded` / `failed` /
+    /// `cancelled` so a second login attempt picks up a fresh
+    /// coordinator instance. See `docs/PLAN-AGENT-OAUTH.md` "Approach
+    /// v2" and the comment block on `AgentLoginCoordinator`.
+    var activeLoginCoordinator: AgentLoginCoordinator?
+
     init() {
         self.endpoint = Self.loadPersisted()
         self.savedServers = Self.loadSavedServers()
@@ -851,6 +862,54 @@ final class SessionStore {
             )
         }
         return string
+    }
+
+    // MARK: - Agent OAuth v2 (litter pattern) transport
+    //
+    // The v2 flow (docs/PLAN-AGENT-OAUTH.md "Approach v2") drives the
+    // OAuth dance broker-side: the iOS app sends a `start_agent_login`
+    // control message, the broker spawns the CLI subprocess + emits an
+    // `agent_login_url` view_event, the app opens that URL in
+    // `ASWebAuthenticationSession`, captures the loopback callback on
+    // 127.0.0.1, and ships the raw query string back via
+    // `agent_login_callback`. The broker waits for the CLI to mint
+    // tokens and emits `agent_login_complete`.
+    //
+    // The send-side wiring requires UDL surface
+    // (`SweKittyClient.start_agent_login` etc.) that hasn't shipped in
+    // the SweKittyCore xcframework yet — the broker (PR #114) is live
+    // but the Rust→Swift bridge is the missing link. Until that lands,
+    // the transport methods throw a typed "not yet bridged" error so
+    // the coordinator's state machine resolves to `.failed(...)` with
+    // an actionable message instead of hanging forever. The inbound
+    // dispatch sites below are already wired so the moment the Rust
+    // bridge lands the flow is one method-body update away from green.
+
+    /// Dispatch an inbound `agent_login_*` view_event to the active
+    /// coordinator. Called from the WS receive path (see
+    /// `dispatchViewEvent(_:)`). No-op when no coordinator is bound —
+    /// late deliveries after `cancel()` are silently dropped, same as
+    /// the broker side's stale-token handling in `login_session.go`.
+    func routeAgentLoginViewEvent(kind: String, payload: [String: String]) {
+        guard let coordinator = activeLoginCoordinator else { return }
+        switch kind {
+        case "agent_login_url":
+            guard
+                let portStr = payload["loopback_port"], let port = UInt16(portStr),
+                let token = payload["session_token"],
+                let urlStr = payload["authorize_url"], let url = URL(string: urlStr)
+            else { return }
+            coordinator.handleAgentLoginURL(loopbackPort: port, sessionToken: token, authorizeURL: url)
+        case "agent_login_complete":
+            coordinator.handleAgentLoginComplete()
+            activeLoginCoordinator = nil
+        case "agent_login_failed":
+            let reason = payload["reason"] ?? "broker reported failure"
+            coordinator.handleAgentLoginFailed(reason: reason)
+            activeLoginCoordinator = nil
+        default:
+            break
+        }
     }
 
     /// Re-send any Keychain-stored agent credentials over the (now
@@ -1649,6 +1708,57 @@ final class SshHostKeyBridge: SshHostKeyDelegate {
         }
         sem.wait()
         return decision
+    }
+}
+
+// MARK: - AgentLoginTransport (Approach v2)
+//
+// `AgentLoginCoordinator` ships the control envelopes via this
+// protocol. The Rust core doesn't expose the v2 messages over UDL
+// yet (the broker side is live as of PR #114; the bridge is the gap),
+// so for now every method throws a typed "not yet bridged" error.
+// The inbound dispatch path (`routeAgentLoginViewEvent`) is wired so
+// the moment the UDL surface lands the flow is one method-body
+// update away from end-to-end.
+//
+// Concrete `AgentLoginTransport` conformance is a thin actor-isolated
+// wrapper around a SessionStore reference so the coordinator
+// (`@MainActor`) and the protocol (`Sendable`) compose without
+// dragging the store across actor boundaries.
+
+/// Error raised when the v2 OAuth transport is still waiting on the
+/// Rust→Swift UDL surface. Caught by `AgentLoginCoordinator` and
+/// surfaced to the sheet as a `.failed(reason:)` state.
+struct AgentLoginTransportError: LocalizedError {
+    let detail: String
+    var errorDescription: String? { detail }
+}
+
+/// `AgentLoginTransport` impl backed by `SessionStore`. Kept as a
+/// separate `final class` (not the store itself) so the `Sendable`
+/// conformance can be `nonisolated` while the store stays
+/// `@MainActor`.
+final class SessionStoreAgentLoginTransport: AgentLoginTransport, @unchecked Sendable {
+    private weak var store: SessionStore?
+
+    init(store: SessionStore) { self.store = store }
+
+    func sendStartAgentLogin(provider: String) async throws {
+        throw AgentLoginTransportError(
+            detail: "start_agent_login isn't wired through the Rust core yet. The broker (PR #114) is live; the SweKittyCore xcframework needs the UDL surface."
+        )
+    }
+
+    func sendAgentLoginCallback(sessionToken: String, queryString: String) async throws {
+        throw AgentLoginTransportError(
+            detail: "agent_login_callback not yet bridged through UDL."
+        )
+    }
+
+    func sendCancelAgentLogin(sessionToken: String) async throws {
+        throw AgentLoginTransportError(
+            detail: "cancel_agent_login not yet bridged through UDL."
+        )
     }
 }
 

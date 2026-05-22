@@ -113,8 +113,16 @@ final class AppearanceStore {
         self.collapseTurns = defaults.object(forKey: Keys.collapseTurns) as? Bool ?? false
         self.experimentalNativeTerminal =
             defaults.object(forKey: Keys.experimentalNativeTerminal) as? Bool ?? false
+        // Default flipped to `true` in the litter-ui-cutover (this PR):
+        // LitterUI is now the production tree. The flag is kept around
+        // (rather than being deleted entirely) so an emergency revert
+        // is one line — flip the default back to `false` and ship a
+        // hotfix. The legacy view tree itself is gone, so flipping the
+        // flag without restoring `Sources/Views/` would just render a
+        // blank screen; we'll delete the flag in the next PR once the
+        // cutover has soaked.
         self.experimentalLitterUI =
-            defaults.object(forKey: Keys.experimentalLitterUI) as? Bool ?? false
+            defaults.object(forKey: Keys.experimentalLitterUI) as? Bool ?? true
     }
 
     /// SwiftUI `.font` value to use for chat body text.
