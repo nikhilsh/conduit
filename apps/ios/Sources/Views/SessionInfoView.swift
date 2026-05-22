@@ -73,7 +73,7 @@ struct SessionInfoView: View {
 
     private var status: SessionStatus? { store.statusBySession[session.id] }
     private var events: [ConversationItem] { store.conversationLog[session.id] ?? [] }
-    private var stats: SessionStats { SessionStats.compute(from: events) }
+    private var stats: StatsGridModel { StatsGridModel.compute(from: events) }
 
     // MARK: - Hero block
 
@@ -276,30 +276,7 @@ struct SessionInfoView: View {
                 .foregroundStyle(SweKittyTheme.textPrimary)
                 .padding(.horizontal, 4)
 
-            LazyVGrid(columns: [
-                GridItem(.flexible(), spacing: 12),
-                GridItem(.flexible(), spacing: 12),
-            ], spacing: 12) {
-                StatTile(
-                    value: "\(stats.messages)",
-                    label: "Messages",
-                    secondary: "\(stats.userMessages) user · \(stats.assistantMessages) assistant"
-                )
-                StatTile(value: "\(stats.turns)", label: "Turns", secondary: nil)
-                StatTile(
-                    value: "\(stats.commands)",
-                    label: "Commands",
-                    secondary: "\(stats.commandsOk) ok · \(stats.commandsFail) fail"
-                )
-                // ConversationItem doesn't track per-file additions/deletions
-                // yet, so the secondary line is omitted for "Files Changed".
-                StatTile(value: "\(stats.filesChanged)", label: "Files Changed", secondary: nil)
-                StatTile(value: "\(stats.mcpCalls)", label: "MCP Calls", secondary: nil)
-                StatTile(value: stats.execTimeLabel, label: "Exec Time", secondary: nil)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 14)
-            .glassRoundedRect()
+            StatsGrid(model: stats)
         }
     }
 
@@ -382,83 +359,6 @@ private struct TokenPoint: Identifiable {
     var id: Int { index }
 }
 
-// MARK: - Stats
-
-struct SessionStats: Equatable {
-    let messages: Int
-    let userMessages: Int
-    let assistantMessages: Int
-    let turns: Int
-    let commands: Int
-    let commandsOk: Int
-    let commandsFail: Int
-    let filesChanged: Int
-    let mcpCalls: Int
-    let execTimeMs: UInt64
-
-    var execTimeLabel: String {
-        if execTimeMs == 0 { return "—" }
-        let seconds = Double(execTimeMs) / 1000.0
-        if seconds < 60 { return String(format: "%.1fs", seconds) }
-        let mins = seconds / 60.0
-        if mins < 60 { return String(format: "%.1fm", mins) }
-        let hrs = mins / 60.0
-        return String(format: "%.1fh", hrs)
-    }
-
-    static func compute(from events: [ConversationItem]) -> SessionStats {
-        var turns = 0
-        var userMessages = 0
-        var assistantMessages = 0
-        var commands = 0
-        var commandsOk = 0
-        var commandsFail = 0
-        var mcp = 0
-        var files = Set<String>()
-        var execTime: UInt64 = 0
-
-        for ev in events {
-            switch ev.role.lowercased() {
-            case "user":
-                turns += 1
-                userMessages += 1
-            case "assistant":
-                assistantMessages += 1
-            default:
-                break
-            }
-            if ev.kind == "tool" {
-                if let cmd = ev.command, !cmd.isEmpty {
-                    commands += 1
-                    if let code = ev.exitCode {
-                        if code == 0 { commandsOk += 1 } else { commandsFail += 1 }
-                    } else {
-                        // No exit code recorded — assume success so the
-                        // "X ok · Y fail" line still adds up to total.
-                        commandsOk += 1
-                    }
-                }
-                if let tool = ev.toolName, tool.lowercased().contains("mcp") { mcp += 1 }
-            }
-            if let dur = ev.durationMs { execTime += dur }
-            for f in ev.files { files.insert(f.path) }
-        }
-
-        return SessionStats(
-            messages: events.count,
-            userMessages: userMessages,
-            assistantMessages: assistantMessages,
-            turns: turns,
-            commands: commands,
-            commandsOk: commandsOk,
-            commandsFail: commandsFail,
-            filesChanged: files.count,
-            mcpCalls: mcp,
-            execTimeMs: execTime
-        )
-    }
-}
-
 // MARK: - Building blocks
 
 private struct AgentPill: View {
@@ -514,30 +414,3 @@ private struct ActionTile: View {
     }
 }
 
-private struct StatTile: View {
-    let value: String
-    let label: String
-    let secondary: String?
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(value)
-                .font(.system(.title2, design: .monospaced).weight(.bold))
-                .foregroundStyle(SweKittyTheme.accentStrong)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(SweKittyTheme.textSecondary)
-                .lineLimit(1)
-            if let secondary, !secondary.isEmpty {
-                Text(secondary)
-                    .font(.caption2)
-                    .foregroundStyle(SweKittyTheme.textMuted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
