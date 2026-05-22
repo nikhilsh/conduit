@@ -176,7 +176,7 @@ EOF
     <key>CFBundleExecutable</key>
     <string>$MODULE_NAME</string>
     <key>CFBundleIdentifier</key>
-    <string>sh.nikhil.swekitty.$MODULE_NAME</string>
+    <string>sh.nikhil.swekitty.${MODULE_NAME//_/-}</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
