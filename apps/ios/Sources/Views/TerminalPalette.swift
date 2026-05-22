@@ -104,12 +104,12 @@ struct TerminalPalette {
         return UIColor(red: gray, green: gray, blue: gray, alpha: 1.0)
     }
 
-    /// Hand-picked v1 palette — black background, light foreground,
+    /// Hand-picked dark palette — black background, light foreground,
     /// the 16-color ANSI slots tuned to roughly match what Ghostty
-    /// paints on macOS Sequoia dark mode. Picked so this PR can land
-    /// without piping `AppearanceStore` through the VT layer; the
-    /// next Stage 3 PR replaces this with theme-driven colors.
-    static let `default` = TerminalPalette(
+    /// paints on macOS Sequoia dark mode. Originally the only palette
+    /// the Stage 3 renderer knew about (the static `.default` below
+    /// still aliases this for back-compat with the SGR color tests).
+    static let dark = TerminalPalette(
         defaultForeground: UIColor(red: 0.93, green: 0.93, blue: 0.93, alpha: 1.0),
         defaultBackground: UIColor.black,
         ansi: [
@@ -133,4 +133,60 @@ struct TerminalPalette {
             UIColor(red: 1.00, green: 1.00, blue: 1.00, alpha: 1.0),
         ]
     )
+
+    /// Hand-picked light palette — paper-white background, near-black
+    /// foreground, the 16 ANSI slots desaturated and darkened so a red
+    /// `error:` token still reads as red on a white surface without
+    /// blinding the user. Tuned to roughly match the Solarized-Light /
+    /// Apple-Terminal "Basic" palette pair.
+    static let light = TerminalPalette(
+        defaultForeground: UIColor(red: 0.10, green: 0.10, blue: 0.10, alpha: 1.0),
+        defaultBackground: UIColor(red: 0.98, green: 0.98, blue: 0.97, alpha: 1.0),
+        ansi: [
+            // Normal (0..7): black, red, green, yellow, blue, magenta, cyan, white
+            UIColor(red: 0.10, green: 0.10, blue: 0.10, alpha: 1.0),
+            UIColor(red: 0.70, green: 0.15, blue: 0.15, alpha: 1.0),
+            UIColor(red: 0.15, green: 0.55, blue: 0.20, alpha: 1.0),
+            UIColor(red: 0.60, green: 0.50, blue: 0.10, alpha: 1.0),
+            UIColor(red: 0.15, green: 0.30, blue: 0.70, alpha: 1.0),
+            UIColor(red: 0.55, green: 0.20, blue: 0.60, alpha: 1.0),
+            UIColor(red: 0.15, green: 0.55, blue: 0.60, alpha: 1.0),
+            UIColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1.0),
+            // Bright (8..15)
+            UIColor(red: 0.35, green: 0.35, blue: 0.35, alpha: 1.0),
+            UIColor(red: 0.85, green: 0.25, blue: 0.25, alpha: 1.0),
+            UIColor(red: 0.20, green: 0.70, blue: 0.30, alpha: 1.0),
+            UIColor(red: 0.75, green: 0.60, blue: 0.10, alpha: 1.0),
+            UIColor(red: 0.25, green: 0.45, blue: 0.85, alpha: 1.0),
+            UIColor(red: 0.70, green: 0.30, blue: 0.75, alpha: 1.0),
+            UIColor(red: 0.20, green: 0.65, blue: 0.70, alpha: 1.0),
+            UIColor(red: 0.20, green: 0.20, blue: 0.20, alpha: 1.0),
+        ]
+    )
+
+    /// Back-compat alias for the Stage 3 callsite that hard-coded the
+    /// dark palette before this PR. Existing tests / call sites that
+    /// read `.default` still see the dark variant.
+    static let `default` = TerminalPalette.dark
+
+    /// Resolve a theme-aware palette from the user's
+    /// [AppearanceStore.ThemeMode]. `.system` reads the supplied
+    /// `userInterfaceStyle` (which the caller pulls from the
+    /// `traitCollection` of the live view) so the resolution happens
+    /// at draw time — toggling the system appearance mid-session
+    /// causes the next `setNeedsDisplay` to repaint with the new
+    /// palette.
+    static func palette(
+        for mode: AppearanceStore.ThemeMode,
+        systemStyle: UIUserInterfaceStyle
+    ) -> TerminalPalette {
+        switch mode {
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        case .system:
+            return systemStyle == .light ? .light : .dark
+        }
+    }
 }

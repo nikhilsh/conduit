@@ -42,6 +42,7 @@ import GhosttyVT
 /// keeps the door open for a Metal swap in Stage 3.
 struct GhosttyTerminalTab: View {
     @Environment(SessionStore.self) private var store
+    @Environment(AppearanceStore.self) private var appearance
     let session: ProjectSession
 
     var body: some View {
@@ -49,6 +50,8 @@ struct GhosttyTerminalTab: View {
             sessionID: session.id,
             bufferProvider: { store.terminalBuffer[session.id] ?? Data() },
             bufferRevision: store.terminalBuffer[session.id]?.count ?? 0,
+            themeMode: appearance.themeMode,
+            fontFamily: appearance.fontFamily,
             onInput: { bytes in
                 store.sendInput(sessionID: session.id, bytes: bytes)
             },
@@ -71,6 +74,17 @@ struct GhosttyTerminalView: UIViewRepresentable {
     let sessionID: String
     let bufferProvider: () -> Data
     let bufferRevision: Int
+    /// User-selected theme mode read from `AppearanceStore`. `.system`
+    /// resolves at draw time off the live trait collection so a
+    /// light/dark system toggle repaints without a re-mount.
+    let themeMode: AppearanceStore.ThemeMode
+    /// User-selected body font from `AppearanceStore`. The terminal
+    /// always uses a monospaced variant (cell-grid renderer can't
+    /// tolerate proportional glyph widths) but the user's choice
+    /// modulates the system-font fallback path (serif → falls back to
+    /// monospaced, system → monospaced system font, monospaced →
+    /// explicitly monospaced).
+    let fontFamily: AppearanceStore.FontFamily
     let onInput: (Data) -> Void
     let onResize: (Int, Int) -> Void
 
@@ -78,6 +92,7 @@ struct GhosttyTerminalView: UIViewRepresentable {
         let view = GhosttyRenderView(frame: .zero)
         view.onInput = onInput
         view.onResize = onResize
+        view.applyAppearance(themeMode: themeMode, fontFamily: fontFamily)
         // First update: feed whatever the buffer already holds so a
         // tab-switch-back reattach doesn't show an empty grid.
         view.feed(bufferProvider())
@@ -87,6 +102,11 @@ struct GhosttyTerminalView: UIViewRepresentable {
     func updateUIView(_ view: GhosttyRenderView, context: Context) {
         view.onInput = onInput
         view.onResize = onResize
+        // Apply appearance every update so changes in
+        // `AppearanceStore.themeMode` / `fontFamily` propagate to the
+        // live view without a remount. `applyAppearance` is a no-op
+        // when the values didn't actually change, so this is cheap.
+        view.applyAppearance(themeMode: themeMode, fontFamily: fontFamily)
         let buf = bufferProvider()
         let last = view.lastFedByteCount
         if buf.count > last {
@@ -118,19 +138,41 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// this on every refresh so we only ever ship the new tail.
     var lastFedByteCount: Int = 0
 
-    /// Cell typography — picked to roughly match xterm.js defaults so
-    /// switching the flag mid-session doesn't shock the eye. Stage 3
-    /// will read these from `AppearanceStore`.
-    private let fontSize: CGFloat = 13
-    private lazy var font: UIFont = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
-    /// Width of a single character in `font`. Memoized at first layout
-    /// so resize math doesn't re-measure on every frame.
-    private lazy var cellWidth: CGFloat = {
-        let attrs: [NSAttributedString.Key: Any] = [.font: font]
-        // 'M' is the canonical monospace measurement glyph.
-        return ("M" as NSString).size(withAttributes: attrs).width
-    }()
-    private lazy var cellHeight: CGFloat = font.lineHeight
+    /// Base point size before Dynamic Type scaling. Stays at 13pt — the
+    /// xterm.js default — so toggling the flag at the same accessibility
+    /// setting doesn't shift cell density.
+    private static let baseFontSize: CGFloat = 13
+
+    /// Theme + font choice resolved from `AppearanceStore`. Held so the
+    /// `traitCollectionDidChange` hook can repaint when the system
+    /// flips light↔dark while we're in `.system` mode without re-running
+    /// `applyAppearance`. Defaults match the pre-PR behaviour
+    /// (monospaced font, dark palette).
+    private var themeMode: AppearanceStore.ThemeMode = .system
+    private var fontFamily: AppearanceStore.FontFamily = .monospaced
+
+    /// Scaled point size — recomputed every time `applyAppearance` runs
+    /// off `UIFontMetrics.default.scaledValue(for:)` so larger Dynamic
+    /// Type categories give a larger cell font (better readability for
+    /// the Larger Text accessibility setting). The base value is fixed
+    /// at 13pt; the scaled value floats per category.
+    private var fontSize: CGFloat = baseFontSize
+
+    /// Active glyph font. Recomputed in `applyAppearance`. Always a
+    /// monospaced face — the cell-grid renderer can't tolerate
+    /// proportional widths — but the underlying descriptor is selected
+    /// to match the user's font-family choice so a serif/system reader
+    /// gets the closest monospaced variant the system ships.
+    private var font: UIFont = UIFont.monospacedSystemFont(
+        ofSize: GhosttyRenderView.baseFontSize,
+        weight: .regular
+    )
+
+    /// Width of a single character in `font`. Recomputed whenever the
+    /// font changes (`applyAppearance`); resize math reads the cached
+    /// value so a frame doesn't re-measure.
+    private var cellWidth: CGFloat = GhosttyRenderView.baseFontSize * 0.6
+    private var cellHeight: CGFloat = GhosttyRenderView.baseFontSize
 
     /// Current grid geometry. Tracked locally because the emulator's
     /// own cols/rows are write-only from our side except via
@@ -167,11 +209,107 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     override init(frame: CGRect) {
         super.init(frame: frame)
         configure()
+        recomputeTypography()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         configure()
+        recomputeTypography()
+    }
+
+    // MARK: - Appearance plumbing
+
+    /// Called from the UIViewRepresentable on every Compose-style
+    /// update with the latest theme + font choice from
+    /// `AppearanceStore`. No-op when nothing changed; otherwise
+    /// recomputes the cached typography (and triggers a re-layout if
+    /// the cell metrics shifted) and a repaint.
+    func applyAppearance(
+        themeMode: AppearanceStore.ThemeMode,
+        fontFamily: AppearanceStore.FontFamily
+    ) {
+        let themeChanged = themeMode != self.themeMode
+        let fontChanged = fontFamily != self.fontFamily
+        guard themeChanged || fontChanged else { return }
+        self.themeMode = themeMode
+        self.fontFamily = fontFamily
+        if fontChanged {
+            recomputeTypography()
+            // Cell geometry may have shifted — re-evaluate the grid
+            // and let the harness know about a possible resize.
+            recomputeGridFromBounds()
+        }
+        setNeedsDisplay()
+    }
+
+    /// Re-derive `fontSize`, `font`, `cellWidth`, `cellHeight` from
+    /// the current `fontFamily` choice and the user's Dynamic Type
+    /// category. Stored on the view so `draw(_:)` and the per-cell
+    /// layout math read consistent values.
+    private func recomputeTypography() {
+        // Honour the user's content-size category. `UIFontMetrics.default`
+        // scales the base point size against the Larger Text setting so
+        // the terminal grid grows for accessibility users instead of
+        // staying pinned at 13pt.
+        let traits = traitCollection
+        fontSize = UIFontMetrics.default.scaledValue(
+            for: GhosttyRenderView.baseFontSize,
+            compatibleWith: traits
+        )
+        // Pick a monospaced face that respects the user's family choice.
+        // Serif / system both fall back to monospacedSystemFont because
+        // a proportional face would break the cell grid; the choice
+        // still matters when iOS ships a serif-monospaced variant in a
+        // future OS update — feeding the chosen design through here
+        // lets that land "for free".
+        let design: UIFontDescriptor.SystemDesign
+        switch fontFamily {
+        case .serif:      design = .serif
+        case .system:     design = .default
+        case .monospaced: design = .monospaced
+        }
+        let base = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        if let descriptor = base.fontDescriptor.withDesign(design),
+           let designed = UIFont(descriptor: descriptor, size: fontSize) {
+            font = designed
+        } else {
+            font = base
+        }
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        cellWidth = ("M" as NSString).size(withAttributes: attrs).width
+        cellHeight = font.lineHeight
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        // Repaint when the system flips appearance under us — `.system`
+        // mode reads the live trait collection at draw time, so a
+        // light↔dark toggle should change colours immediately. Also
+        // catches Dynamic Type changes: if the user bumps Larger Text
+        // while the app is running, the cell font grows on the next
+        // layout.
+        if previousTraitCollection?.preferredContentSizeCategory
+            != traitCollection.preferredContentSizeCategory
+        {
+            recomputeTypography()
+            recomputeGridFromBounds()
+        }
+        if previousTraitCollection?.userInterfaceStyle
+            != traitCollection.userInterfaceStyle
+        {
+            setNeedsDisplay()
+        }
+    }
+
+    /// Theme-resolved palette for the current draw pass. Re-evaluates
+    /// the trait collection every call so `.system` mode picks the
+    /// right variant for the live UI style.
+    private var resolvedPalette: TerminalPalette {
+        TerminalPalette.palette(
+            for: themeMode,
+            systemStyle: traitCollection.userInterfaceStyle
+        )
     }
 
     // MARK: - First responder / accessory bar
@@ -239,7 +377,11 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     // MARK: - Setup
 
     private func configure() {
-        backgroundColor = .black
+        // Start at dark-palette black so the first frame doesn't flash
+        // a UIView-default grey. `draw(_:)` paints the resolved palette
+        // background underneath every cell, so this colour only shows
+        // through if `cachedSnapshot` is nil during initial layout.
+        backgroundColor = TerminalPalette.dark.defaultBackground
         isOpaque = true
         contentMode = .redraw
         layer.contentsScale = UIScreen.main.scale
@@ -570,7 +712,10 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
-        let palette = TerminalPalette.default
+        // Resolve theme + font here so the draw pass reads the same
+        // values the per-cell layout math already used in
+        // `recomputeTypography`.
+        let palette = resolvedPalette
         ctx.setFillColor(palette.defaultBackground.cgColor)
         ctx.fill(bounds)
 
@@ -760,7 +905,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         #endif
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: TerminalPalette.default.defaultForeground,
+            .foregroundColor: resolvedPalette.defaultForeground,
         ]
         let attr = NSAttributedString(string: text, attributes: attrs)
         let size = attr.size()
