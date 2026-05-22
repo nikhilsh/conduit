@@ -21,14 +21,24 @@ OUT_DIR="$REPO_ROOT/apps/ios/GhosttyVT"
 ZIP_PATH="$OUT_DIR/ghostty-vt.xcframework.zip"
 XCFW_PATH="$OUT_DIR/ghostty-vt.xcframework"
 
-# Pinned against the Ghostty "tip" release as of 2026-05-22 (Stage 2
-# re-pin). Upstream rotates the `tip` asset on every nightly cut, so
-# this checksum will go stale; whenever SPM resolve fails with a
-# checksum mismatch, recompute via:
+# Pinned against the Ghostty "tip" release as of 2026-05-22 (re-verified
+# in the ghostty-binarytarget-reenable investigation — sha unchanged
+# from PR #86's value, so no bump needed yet). Upstream rotates the `tip`
+# asset on every nightly cut, so this checksum will go stale; whenever
+# SPM resolve fails with a checksum mismatch, recompute via:
 #   curl -fsSL "$ASSET_URL" | shasum -a 256
 # and update BOTH this script and apps/ios/GhosttyVT/Package.swift
 # in lockstep. No stable tagged release exists upstream yet — only
 # the rotating `tip` tag — so this pin needs periodic refresh.
+#
+# NOTE: even with a fresh checksum, the binaryTarget in
+# `apps/ios/GhosttyVT/Package.swift` is currently commented out —
+# `ghostty-vt.xcframework` and `SweKittyCore.xcframework` both ship
+# as "-library + -headers" style xcframeworks whose module.modulemap
+# files collide at `$BUILT_PRODUCTS_DIR/include/module.modulemap`
+# during ProcessXCFramework. PR #88 mis-diagnosed this as a widget
+# extension link issue. See the long comment in Package.swift for
+# the actual root cause + re-enable options.
 ASSET_URL="https://github.com/ghostty-org/ghostty/releases/download/tip/ghostty-vt.xcframework.zip"
 EXPECTED_SHA256="0c29329a2e1012d8a6ebf05f164c589aeeaba5d417dd93e075c073ad3fa44ba7"
 
