@@ -38,10 +38,14 @@ extension LitterUI {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
+                        // Plain Button per PLAN-LITTER-VISUAL-PARITY
+                        // audit §A.3.5 — drop the explicit brand
+                        // overlay; the navigation `.tint(...)` below
+                        // already paints the link in the accent.
                         Button("Done") { dismiss() }
-                            .foregroundStyle(LitterUI.Palette.brand.color)
                     }
                 }
+                .tint(LitterUI.Palette.brand.color)
                 .sheet(isPresented: $showRename) {
                     LitterUI.RenameSessionSheet(
                         session: session,

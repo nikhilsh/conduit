@@ -42,12 +42,30 @@ struct ServerPill: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .glassCapsule(
-                interactive: true,
-                tint: model.isActive
-                    ? SweKittyTheme.accentStrong.opacity(0.32)
-                    : SweKittyTheme.surface.opacity(0.65)
+            // PLAN-LITTER-VISUAL-PARITY PR 5, audit §A.5/A.4: drop the
+            // glass-capsule fill in favour of a transparent
+            // background + accent / muted stroke. The prior treatment
+            // gave every pill a "saved chip" look and made it hard to
+            // distinguish the active server at a glance; with the
+            // stroke approach the active pill carries a 1.2pt accent
+            // border (loud), inactive pills carry a 0.6pt textMuted
+            // border at 25% opacity (quiet).
+            .background(
+                Capsule()
+                    .fill(model.isActive
+                          ? SweKittyTheme.accentStrong.opacity(0.12)
+                          : Color.clear)
             )
+            .overlay(
+                Capsule()
+                    .stroke(
+                        model.isActive
+                            ? SweKittyTheme.accentStrong.opacity(ServerPillStroke.activeOpacity)
+                            : SweKittyTheme.textMuted.opacity(ServerPillStroke.inactiveOpacity),
+                        lineWidth: model.isActive ? ServerPillStroke.activeWidth : ServerPillStroke.inactiveWidth
+                    )
+            )
+            .clipShape(Capsule())
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -66,6 +84,23 @@ struct ServerPill: View {
         }
         .accessibilityLabel(model.accessibilityLabel)
     }
+}
+
+/// Stroke metrics for `ServerPill`'s active vs inactive treatment
+/// (PLAN-LITTER-VISUAL-PARITY PR 5, audit §A.5/A.4). Extracted so
+/// `ServerPillStrokeTests` can pin the values — the prior glass-
+/// capsule fill couldn't distinguish active vs idle at a glance, and
+/// the next pass at "tightening" the pill could quietly drop these
+/// to invisible without the test failing.
+enum ServerPillStroke {
+    /// 1.2pt accent border on the active pill — visible at a glance.
+    static let activeWidth: CGFloat = 1.2
+    /// 0.6pt muted border on the inactive pill — present but quiet.
+    static let inactiveWidth: CGFloat = 0.6
+    /// 0.75 opacity for the active accent stroke.
+    static let activeOpacity: Double = 0.75
+    /// 0.25 opacity for the inactive muted stroke.
+    static let inactiveOpacity: Double = 0.25
 }
 
 /// Pure-data model for `ServerPill`. Lifts the colour mapping, caption

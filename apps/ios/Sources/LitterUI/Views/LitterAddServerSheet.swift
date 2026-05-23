@@ -37,28 +37,24 @@ extension LitterUI {
 
                             entryCard(
                                 icon: "qrcode.viewfinder",
-                                tint: LitterUI.Palette.accentStrong.color,
                                 title: "Scan pairing QR",
                                 subtitle: "Camera-scan the QR from the broker terminal.",
                                 action: { showScanner = true }
                             )
                             entryCard(
                                 icon: "wifi.circle",
-                                tint: LitterUI.Palette.success.color,
                                 title: "Discover on LAN",
                                 subtitle: "Find a broker advertising via mDNS on the same Wi-Fi.",
                                 action: { showDiscover = true }
                             )
                             entryCard(
                                 icon: "terminal",
-                                tint: LitterUI.Palette.brand.color,
                                 title: "SSH bootstrap",
                                 subtitle: "Cold-start a broker on a remote box you can SSH to.",
                                 action: { showSshLogin = true }
                             )
                             entryCard(
                                 icon: "link",
-                                tint: LitterUI.Palette.warning.color,
                                 title: "Paste URL + token",
                                 subtitle: "If you already have ws://… + the bearer token.",
                                 action: { showManual = true }
@@ -114,15 +110,16 @@ extension LitterUI {
                 .foregroundStyle(LitterUI.Palette.textMuted.color)
         }
 
-        private func entryCard(icon: String, tint: Color, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        // Per audit §A.4.3 the per-route `tint` argument was dropped
+        // — every row now uses the brand accent for its icon. Callers
+        // updated to match (`scan`, `discover`, `ssh`, `manual`).
+        private func entryCard(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
             Button(action: action) {
                 HStack(spacing: 14) {
                     Image(systemName: icon)
-                        .font(.title3)
-                        .foregroundStyle(LitterUI.Palette.textOnAccent.color)
-                        .frame(width: 36, height: 36)
-                        .background(tint)
-                        .clipShape(Circle())
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(LitterUI.Palette.brand.color)
+                        .frame(width: LitterAddServerSheetMetrics.iconSize)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
                             .font(.footnote.weight(.semibold))
@@ -144,6 +141,15 @@ extension LitterUI {
             .buttonStyle(.plain)
         }
     }
+}
+
+/// Visual constants for `LitterAddServerSheet` rows. Extracted so
+/// `LitterAddServerSheetMetricsTests` can pin the post-PR-5 icon size.
+/// Before PR 5 each row carried a 36pt filled-color circle icon; the
+/// audit (§A.4.2) called this out as reading "launchpad" rather than
+/// "settings sheet."
+enum LitterAddServerSheetMetrics {
+    static let iconSize: CGFloat = 28
 }
 
 /// LitterUI port of the legacy `ManualPairSheet`. Plain URL + token
