@@ -115,7 +115,7 @@ final class AppearanceStore {
     /// scales off. Setter clamps into [bodyPointSizeRange] so an
     /// out-of-range value (corrupted defaults, future migration) can't
     /// blow out the layout. Persisted on every set.
-    var bodyPointSize: CGFloat = Self.defaultBodyPointSize {
+    var bodyPointSize: CGFloat = AppearanceStore.defaultBodyPointSize {
         didSet {
             let clamped = bodyPointSize.clamped(to: Self.bodyPointSizeRange)
             if clamped != bodyPointSize {
