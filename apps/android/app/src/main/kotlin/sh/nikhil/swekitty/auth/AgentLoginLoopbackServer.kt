@@ -43,7 +43,7 @@ import java.util.concurrent.TimeUnit
  * Stage 3 scope: shape + start/stop lifecycle + pure parser. Wiring
  * into the live Sheet (Chrome Custom Tabs intent) is a follow-up.
  */
-class AgentLoginLoopbackServer(
+open class AgentLoginLoopbackServer(
     /** Port to bind. Mirrors `loopback_port` from the broker's `agent_login_url` view_event. */
     val port: Int,
     /** Path the listener accepts. Anything else gets a 404. */
@@ -81,7 +81,7 @@ class AgentLoginLoopbackServer(
      * on timeout). Errors at bind time bubble out as a throw.
      */
     @Throws(IOException::class)
-    fun start(
+    open fun start(
         timeoutMillis: Long = TimeUnit.SECONDS.toMillis(600),
         onCallback: (Result<CallbackResult>) -> Unit,
     ) {
@@ -108,7 +108,7 @@ class AgentLoginLoopbackServer(
      * Tear the listener down. Idempotent; subsequent `onCallback`
      * invocations are suppressed by [didDeliver].
      */
-    fun stop() {
+    open fun stop() {
         val sock: ServerSocket? = synchronized(lock) {
             val s = serverSocket
             serverSocket = null
