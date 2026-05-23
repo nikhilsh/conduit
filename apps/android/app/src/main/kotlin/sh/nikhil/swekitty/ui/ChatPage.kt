@@ -690,15 +690,30 @@ private fun RoleIcon(role: ConversationRole, tint: Color = role.accent) {
 private fun MarkdownBlock(text: String, role: ConversationRole) {
     val appearance = sh.nikhil.swekitty.LocalAppearanceStore.current
     val fontChoice by appearance.fontFamily.collectAsState()
+    val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val resolvedFont = if (fontChoice == sh.nikhil.swekitty.AppearanceStore.FontFamily.Monospaced) {
         FontFamily.Monospace
     } else {
         FontFamily.Default
     }
+    // PLAN-LITTER-VISUAL-PARITY PR 4: chat body picks up the user's
+    // `bodyPointSize` slider (landed in PR 2 on Android). Headings
+    // (`#`, `##`, `###`, `####`) get a per-line scale walk — the
+    // Compose Text path doesn't compose markdown into runs the way
+    // SwiftUI does, so we render the per-heading scale as an
+    // `AnnotatedString` with per-line `SpanStyle`.
+    val annotated = remember(text, bodyPointSize) {
+        LitterMarkdownHeadingScaler.scaledAnnotated(text, basePointSize = bodyPointSize)
+    }
     SelectionContainer {
         Text(
-            text = text,
-            style = MaterialTheme.typography.bodyMedium,
+            text = annotated,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = androidx.compose.ui.unit.TextUnit(
+                    bodyPointSize,
+                    androidx.compose.ui.unit.TextUnitType.Sp,
+                ),
+            ),
             // Body font driven by AppearanceStore — defaults to monospace
             // (litter / codex aesthetic), switchable via Settings → Font.
             fontFamily = resolvedFont,
