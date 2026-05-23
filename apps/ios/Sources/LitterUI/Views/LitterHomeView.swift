@@ -114,13 +114,15 @@ extension LitterUI {
         // MARK: Subviews
 
         private var topRow: some View {
+            // PLAN-LITTER-VISUAL-PARITY PR 3, audit §A.1.6: litter has
+            // no top-row settings gear — settings is accessed via a
+            // long-press on the brand mark. The leading slot is empty
+            // now; trailing keeps the sessions-history + search icons
+            // because those are swe-kitty-specific affordances litter
+            // doesn't ship (litter has only one server / no remote
+            // multiplexer).
             LitterUI.Header(
-                leading: {
-                    LitterUI.HeaderIconButton(systemImage: "gearshape.fill",
-                                              accessibilityLabel: "Settings") {
-                        showSettings = true
-                    }
-                },
+                leading: { Color.clear.frame(width: 36, height: 36) },
                 center: {
                     Image("KittyMark")
                         .resizable()
@@ -128,6 +130,16 @@ extension LitterUI {
                         .frame(width: 32, height: 32)
                         .cornerRadius(7)
                         .accessibilityLabel("SweKitty")
+                        // Long-press the logo to surface Settings. The
+                        // affordance is hidden — discoverability is
+                        // sacrificed to keep the litter-faithful flat
+                        // top-row. A "press and hold for settings"
+                        // accessibility hint compensates for screen-
+                        // reader users.
+                        .accessibilityHint("Press and hold for settings")
+                        .onLongPressGesture(minimumDuration: 0.4) {
+                            showSettings = true
+                        }
                 },
                 trailing: {
                     HStack(spacing: 8) {
@@ -292,30 +304,42 @@ extension LitterUI {
         }
 
         private var bottomBar: some View {
-            HStack(spacing: 16) {
-                LitterUI.PillButton(systemImage: "mic.fill") {
-                    // Voice is wired in a follow-up. Falls back to
-                    // the legacy in-chat voice path for now.
-                }
-                Spacer()
-                LitterUI.PillButton(
-                    systemImage: "plus",
-                    size: 56,
-                    tint: LitterUI.Palette.brand.color,
-                    isProminent: true
-                ) {
-                    if store.harness.canIssueCommands {
-                        showAgentPicker = true
-                    } else {
-                        showAddServer = true
+            // PLAN-LITTER-VISUAL-PARITY PR 3, audit §A.1.5: litter wraps
+            // the bottom bar in TWO `GlassMorphContainer`s so the `+`
+            // can morph into a composer without the surrounding
+            // mic / search merging into the same glass blob. All three
+            // controls drop to a single 44pt — the prior 56pt copper-
+            // outlined plus was over-built relative to litter.
+            HStack(spacing: 14) {
+                LitterUI.GlassMorphContainer(spacing: 14) {
+                    LitterUI.PillButton(systemImage: "mic.fill", size: 44) {
+                        // Voice is wired in a follow-up. Falls back to
+                        // the legacy in-chat voice path for now.
                     }
                 }
                 Spacer()
-                LitterUI.PillButton(systemImage: "magnifyingglass") {
-                    showSearch = true
+                LitterUI.GlassMorphContainer(spacing: 14) {
+                    LitterUI.PillButton(
+                        systemImage: "plus",
+                        size: 44,
+                        tint: LitterUI.Palette.brand.color,
+                        isProminent: true
+                    ) {
+                        if store.harness.canIssueCommands {
+                            showAgentPicker = true
+                        } else {
+                            showAddServer = true
+                        }
+                    }
+                }
+                Spacer()
+                LitterUI.GlassMorphContainer(spacing: 14) {
+                    LitterUI.PillButton(systemImage: "magnifyingglass", size: 44) {
+                        showSearch = true
+                    }
                 }
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 14)
             .padding(.bottom, 4)
         }
     }
@@ -330,26 +354,54 @@ private struct PendingSessionDelete: Identifiable, Equatable {
     let title: String
 }
 
+/// Row metrics extracted as named constants so `LitterHomeRowGeometry
+/// Tests` can pin them. Changing any of these silently re-grows / re-
+/// shrinks the home list, which is exactly the drift the rebuild PR
+/// is trying to stop. Values are taken from litter's
+/// `SessionCanvasLine.swift` (audit §A.1.1 / §A.1.2 / §A.1.7).
+enum HomeRowMetrics {
+    static let titlePointSize: CGFloat = 13
+    static let subtitlePointSize: CGFloat = 11
+    static let leadingPadding: CGFloat = 1
+    static let trailingPadding: CGFloat = 8
+    static let verticalPadding: CGFloat = 5
+    static let indicatorSize: CGFloat = 7
+    static let activeRowCornerRadius: CGFloat = 6
+    static let activeRowOpacity: Double = 0.55
+}
+
 private struct HomeRowView: View {
     let row: LitterUI.HomeRow
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             indicator
-            VStack(alignment: .leading, spacing: 2) {
+                .frame(width: HomeRowMetrics.indicatorSize, height: HomeRowMetrics.indicatorSize)
+            VStack(alignment: .leading, spacing: 1) {
+                // Title shrunk from .title3 (~20pt) bold mono to footnote-
+                // sized 13pt semibold per audit §A.1.1. Subtitle drops
+                // to caption2-sized 11pt mono (audit §A.1.1).
                 Text(row.title)
-                    .font(.system(.title3, design: .monospaced).weight(.bold))
+                    .font(.system(size: HomeRowMetrics.titlePointSize, weight: .semibold))
                     .foregroundStyle(LitterUI.Palette.textPrimary.color)
                     .lineLimit(1)
                 Text(row.subtitle)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(size: HomeRowMetrics.subtitlePointSize, weight: .regular, design: .monospaced))
                     .foregroundStyle(LitterUI.Palette.textMuted.color)
                     .lineLimit(1)
             }
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.leading, HomeRowMetrics.leadingPadding)
+        .padding(.trailing, HomeRowMetrics.trailingPadding)
+        .padding(.vertical, HomeRowMetrics.verticalPadding)
+        .background(
+            // Active-row fill per audit §A.1.3 — litter selects a row
+            // by painting a 6pt rounded rect at 55% surfaceLight,
+            // not by swapping an SF Symbol.
+            RoundedRectangle(cornerRadius: HomeRowMetrics.activeRowCornerRadius, style: .continuous)
+                .fill(LitterUI.Palette.surfaceLight.color.opacity(row.isSelected ? HomeRowMetrics.activeRowOpacity : 0))
+        )
         .contentShape(Rectangle())
     }
 
@@ -357,13 +409,17 @@ private struct HomeRowView: View {
     private var indicator: some View {
         switch row.kind {
         case .creatingPlaceholder:
-            ProgressView().controlSize(.small)
+            // ProgressView is bigger than 7pt natively; clip into the
+            // indicator frame so the row vertical rhythm doesn't break.
+            ProgressView()
+                .controlSize(.mini)
         case .session:
-            Image(systemName: row.isSelected ? "circle.fill" : "circle")
-                .font(.subheadline)
-                .foregroundStyle(row.isSelected
-                                 ? LitterUI.Palette.brand.color
-                                 : LitterUI.Palette.textMuted.color.opacity(0.5))
+            // 7pt filled circle per audit §A.1.7 — accent for live
+            // status (selected → pulse-able later), muted for idle.
+            Circle()
+                .fill(row.isSelected
+                      ? LitterUI.Palette.accentStrong.color
+                      : LitterUI.Palette.textMuted.color.opacity(0.5))
         }
     }
 }

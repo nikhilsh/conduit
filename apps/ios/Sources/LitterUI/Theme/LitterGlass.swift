@@ -136,6 +136,49 @@ extension LitterUI {
     }
 }
 
+extension LitterUI {
+    /// Wraps a group of LitterUI glass surfaces so iOS 26's Liquid
+    /// Glass can morph between them (e.g. the bottom-bar `+` button
+    /// expanding into a composer). On iOS 26+ this is SwiftUI's
+    /// `GlassEffectContainer`; on older OSes it falls through to a
+    /// pass-through `Group` and `litterGlassMorphID` falls back to
+    /// `matchedGeometryEffect`. Mirrors the same container landed in
+    /// `apps/ios/Sources/Theme/Glass.swift` (PR 1) but namespaced into
+    /// LitterUI so the rebuilt home / chat surfaces can opt in
+    /// independently.
+    struct GlassMorphContainer<Content: View>: View {
+        var spacing: CGFloat = 14
+        @ViewBuilder var content: () -> Content
+
+        var body: some View {
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: spacing) {
+                    content()
+                }
+            } else {
+                Group { content() }
+            }
+        }
+    }
+}
+
+extension View {
+    /// Pairs with `LitterUI.GlassMorphContainer` so iOS 26's Liquid
+    /// Glass can morph between surfaces (e.g. `+` button expanding into
+    /// the composer). On iOS 26+ delegates to `glassEffectID(_:in:)`
+    /// so the system owns the morph; pre-26 falls back to
+    /// `matchedGeometryEffect`, which animates frame/opacity but does
+    /// not actually melt-and-fuse the surfaces.
+    @ViewBuilder
+    func litterGlassMorphID(_ id: String, in namespace: Namespace.ID) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffectID(id, in: namespace)
+        } else {
+            self.matchedGeometryEffect(id: id, in: namespace)
+        }
+    }
+}
+
 extension View {
     /// Litter-style rounded-rect glass surface. Default corner radius
     /// dropped from 16 → 14 in PLAN-LITTER-VISUAL-PARITY PR 2 to match
