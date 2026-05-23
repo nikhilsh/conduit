@@ -63,51 +63,86 @@ extension LitterUI {
             let glow = (tint ?? LitterUI.Palette.brand.color).opacity(config.highlightOpacity)
 
             content
-                .background {
-                    shape
-                        .fill(.regularMaterial)
-                        .overlay {
-                            shape
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            glow,
-                                            LitterUI.Palette.surfaceLight.color.opacity(0.04),
-                                            .clear,
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                        }
-                        .overlay {
-                            // Tint overlay (low opacity) when explicitly
-                            // requested — agent-tinted variants want a
-                            // faint hue on top of the material.
-                            if let tint {
-                                shape.fill(tint.opacity(0.06))
-                            }
-                        }
-                }
+                .modifier(LitterGlassBackdrop(shape: shape, config: config, glow: glow, tint: tint))
                 .overlay {
                     shape.stroke(stroke, lineWidth: 1)
                 }
                 .clipShape(shape)
+                // Shadow halved (radius 12→8, y 6→4) in PLAN-LITTER-
+                // VISUAL-PARITY PR 2 to match SweKittyTheme/Glass.swift
+                // PR 1. Card / pill / floating shadowOpacity values
+                // were already in the right band; only radius + offset
+                // needed the trim so settings cards stop dropping a
+                // "magazine" shadow over flat content.
                 .shadow(
                     color: LitterUI.Palette.textPrimary.color.opacity(config.shadowOpacity),
-                    radius: 12,
+                    radius: 8,
                     x: 0,
-                    y: 6
+                    y: 4
                 )
+        }
+    }
+
+    /// Picks the right backdrop based on OS version. On iOS 26+ we call
+    /// SwiftUI's native `.glassEffect(_:in:)` (Liquid Glass) so surfaces
+    /// actually refract instead of just blurring; on older OSes we keep
+    /// the existing material + gradient + tint stack so the visual
+    /// shape stays consistent. Mirrors the pattern landed in
+    /// `apps/ios/Sources/Theme/Glass.swift` (PR 1) for the SweKittyTheme
+    /// glass primitives — same direction, applied to the LitterUI tree
+    /// so the visual rebuild in PR 3-5 has real glass where it ships.
+    fileprivate struct LitterGlassBackdrop<S: InsettableShape>: ViewModifier {
+        let shape: S
+        let config: LitterUI.GlassConfig
+        let glow: Color
+        let tint: Color?
+
+        func body(content: Content) -> some View {
+            if #available(iOS 26.0, *) {
+                content
+                    .glassEffect(.regular, in: shape)
+                    .overlay {
+                        if let tint {
+                            shape.fill(tint.opacity(0.06))
+                        }
+                    }
+            } else {
+                content
+                    .background {
+                        shape
+                            .fill(.regularMaterial)
+                            .overlay {
+                                shape
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                glow,
+                                                LitterUI.Palette.surfaceLight.color.opacity(0.04),
+                                                .clear,
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                            }
+                            .overlay {
+                                if let tint {
+                                    shape.fill(tint.opacity(0.06))
+                                }
+                            }
+                    }
+            }
         }
     }
 }
 
 extension View {
-    /// Litter-style rounded-rect glass surface. Defaults match litter's
-    /// `GlassRoundedRectModifier` (16pt corner radius).
+    /// Litter-style rounded-rect glass surface. Default corner radius
+    /// dropped from 16 → 14 in PLAN-LITTER-VISUAL-PARITY PR 2 to match
+    /// litter's flatter card shape (audit §A.3.2 / §B.3); hero surfaces
+    /// that want the previous chunkier radius pass an explicit value.
     func litterGlassRoundedRect(
-        cornerRadius: CGFloat = 16,
+        cornerRadius: CGFloat = 14,
         tint: Color? = nil,
         config: LitterUI.GlassConfig = .card
     ) -> some View {

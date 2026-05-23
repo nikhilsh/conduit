@@ -37,6 +37,7 @@ extension LitterUI {
                             accountSection
                             themeSection
                             fontSection
+                            fontSizeSection
                             conversationSection
                             serversSection
                             experimentalSection
@@ -52,8 +53,14 @@ extension LitterUI {
                 .tint(LitterUI.Palette.brand.color)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
+                        // Plain Button (no copper-tint overlay) per
+                        // PLAN-LITTER-VISUAL-PARITY audit §A.3.5 — litter
+                        // uses a flat `.confirmationAction` link, not a
+                        // tinted capsule. The surrounding NavigationStack
+                        // `.tint(LitterUI.Palette.brand.color)` still
+                        // picks up the accent colour on the link itself,
+                        // we just stop double-painting it.
                         Button("Done") { dismiss() }
-                            .foregroundStyle(LitterUI.Palette.brand.color)
                     }
                 }
                 .sheet(isPresented: $showAddServer) {
@@ -191,6 +198,45 @@ extension LitterUI {
             }
         }
 
+        /// Body font size slider. Drives `AppearanceStore.bodyPointSize`
+        /// (the base size the `SweKittyTypography` ramp scales off,
+        /// landed in PR 1). Range / clamp lives in `AppearanceStore`;
+        /// the slider just binds and previews the current size in the
+        /// user's chosen family so they can read what they're choosing
+        /// at the value they're choosing it at.
+        private var fontSizeSection: some View {
+            @Bindable var appearance = appearance
+            return sectionCard(title: "Font Size") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "textformat.size")
+                            .font(.body)
+                            .frame(width: 20)
+                            .foregroundStyle(LitterUI.Palette.brand.color)
+                        Text("Body")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                        Spacer(minLength: 6)
+                        Text("\(Int(appearance.bodyPointSize))pt")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(LitterUI.Palette.textMuted.color)
+                    }
+                    Slider(
+                        value: $appearance.bodyPointSize,
+                        in: AppearanceStore.bodyPointSizeRange,
+                        step: 1
+                    )
+                    .tint(LitterUI.Palette.brand.color)
+                    Text("The quick brown fox jumps over the lazy dog.")
+                        .font(SweKittyTypography.body(appearance))
+                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+        }
+
         private var conversationSection: some View {
             @Bindable var appearance = appearance
             return sectionCard(title: "Conversation") {
@@ -320,8 +366,11 @@ extension LitterUI {
                     .foregroundStyle(LitterUI.Palette.textSecondary.color)
                     .textCase(.uppercase)
                     .padding(.horizontal, 4)
+                // Corner radius left at the modifier default (now 14
+                // post PR 2) so the whole sheet picks up the flatter
+                // litter shape without per-call overrides.
                 content()
-                    .litterGlassRoundedRect(cornerRadius: 16, config: .card)
+                    .litterGlassRoundedRect(config: .card)
             }
         }
 

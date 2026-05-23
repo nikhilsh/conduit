@@ -49,6 +49,16 @@ class AppearanceStore : ViewModel() {
     private val _experimentalNativeTerminal = MutableStateFlow(false)
     val experimentalNativeTerminal: StateFlow<Boolean> = _experimentalNativeTerminal.asStateFlow()
 
+    /**
+     * Body point size for the chat typography ramp (Android mirror of
+     * iOS [AppearanceStore.bodyPointSize], landed alongside the
+     * Settings → Font Size slider in PLAN-LITTER-VISUAL-PARITY PR 2).
+     * Range is [BODY_POINT_SIZE_RANGE]; setters clamp out-of-range
+     * writes so corrupted prefs cannot blow out the layout.
+     */
+    private val _bodyPointSize = MutableStateFlow(DEFAULT_BODY_POINT_SIZE)
+    val bodyPointSize: StateFlow<Float> = _bodyPointSize.asStateFlow()
+
     private var prefs: SharedPreferences? = null
 
     fun hydrate(ctx: Context) {
@@ -62,6 +72,8 @@ class AppearanceStore : ViewModel() {
             ?: ThemeMode.System
         _collapseTurns.value = p.getBoolean(KEY_COLLAPSE, false)
         _experimentalNativeTerminal.value = p.getBoolean(KEY_EXPERIMENTAL_NATIVE_TERMINAL, false)
+        _bodyPointSize.value = p.getFloat(KEY_BODY_POINT_SIZE, DEFAULT_BODY_POINT_SIZE)
+            .coerceIn(BODY_POINT_SIZE_RANGE)
     }
 
     fun setFontFamily(value: FontFamily) {
@@ -84,11 +96,31 @@ class AppearanceStore : ViewModel() {
         prefs?.edit()?.putBoolean(KEY_EXPERIMENTAL_NATIVE_TERMINAL, value)?.apply()
     }
 
+    /**
+     * Set body point size, clamped into [BODY_POINT_SIZE_RANGE]. Mirrors
+     * the iOS setter: silent clamp on out-of-range writes so a slider
+     * with rounding error or a corrupted pref cannot blow out the
+     * layout.
+     */
+    fun setBodyPointSize(value: Float) {
+        val clamped = value.coerceIn(BODY_POINT_SIZE_RANGE)
+        _bodyPointSize.value = clamped
+        prefs?.edit()?.putFloat(KEY_BODY_POINT_SIZE, clamped)?.apply()
+    }
+
+    companion object {
+        /** Clamp range for [bodyPointSize] (matches iOS). */
+        val BODY_POINT_SIZE_RANGE: ClosedFloatingPointRange<Float> = 12f..18f
+        /** Default body point size on a fresh install (matches iOS). */
+        const val DEFAULT_BODY_POINT_SIZE: Float = 14f
+    }
+
     private companion object {
         const val KEY_FONT = "font"
         const val KEY_THEME = "theme"
         const val KEY_COLLAPSE = "collapseTurns"
         const val KEY_EXPERIMENTAL_NATIVE_TERMINAL = "experimentalNativeTerminal"
+        const val KEY_BODY_POINT_SIZE = "bodyPointSize"
     }
 }
 
