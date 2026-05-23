@@ -17,24 +17,24 @@ class LitterMarkdownHeadingScalerTest {
 
     @Test
     fun multipliersMatchIOS() {
-        assertEquals(1.43f, LitterMarkdownHeadingScaler.multiplier(forLevel = 1))
-        assertEquals(1.30f, LitterMarkdownHeadingScaler.multiplier(forLevel = 2))
-        assertEquals(1.15f, LitterMarkdownHeadingScaler.multiplier(forLevel = 3))
-        assertEquals(1.07f, LitterMarkdownHeadingScaler.multiplier(forLevel = 4))
+        assertEquals(1.43f, LitterMarkdownHeadingScaler.multiplier(level =1))
+        assertEquals(1.30f, LitterMarkdownHeadingScaler.multiplier(level =2))
+        assertEquals(1.15f, LitterMarkdownHeadingScaler.multiplier(level =3))
+        assertEquals(1.07f, LitterMarkdownHeadingScaler.multiplier(level =4))
     }
 
     @Test
     fun h5AndBelowDoNotScale() {
-        assertNull(LitterMarkdownHeadingScaler.multiplier(forLevel = 5))
-        assertNull(LitterMarkdownHeadingScaler.multiplier(forLevel = 6))
+        assertNull(LitterMarkdownHeadingScaler.multiplier(level =5))
+        assertNull(LitterMarkdownHeadingScaler.multiplier(level =6))
     }
 
     @Test
     fun multipliersAreMonotonicallyIncreasing() {
-        val m1 = LitterMarkdownHeadingScaler.multiplier(forLevel = 1)!!
-        val m2 = LitterMarkdownHeadingScaler.multiplier(forLevel = 2)!!
-        val m3 = LitterMarkdownHeadingScaler.multiplier(forLevel = 3)!!
-        val m4 = LitterMarkdownHeadingScaler.multiplier(forLevel = 4)!!
+        val m1 = LitterMarkdownHeadingScaler.multiplier(level =1)!!
+        val m2 = LitterMarkdownHeadingScaler.multiplier(level =2)!!
+        val m3 = LitterMarkdownHeadingScaler.multiplier(level =3)!!
+        val m4 = LitterMarkdownHeadingScaler.multiplier(level =4)!!
         assertTrue("m1 > m2", m1 > m2)
         assertTrue("m2 > m3", m2 > m3)
         assertTrue("m3 > m4", m3 > m4)

@@ -30,7 +30,7 @@ object LitterMarkdownHeadingScaler {
         4 to 1.07f,
     )
 
-    fun multiplier(forLevel level: Int): Float? = multipliers[level]
+    fun multiplier(level: Int): Float? = multipliers[level]
 
     /**
      * Build an [AnnotatedString] where each markdown heading line is
