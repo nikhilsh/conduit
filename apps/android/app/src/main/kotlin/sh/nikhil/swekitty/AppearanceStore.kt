@@ -113,14 +113,16 @@ class AppearanceStore : ViewModel() {
         val BODY_POINT_SIZE_RANGE: ClosedFloatingPointRange<Float> = 12f..18f
         /** Default body point size on a fresh install (matches iOS). */
         const val DEFAULT_BODY_POINT_SIZE: Float = 14f
-    }
 
-    private companion object {
-        const val KEY_FONT = "font"
-        const val KEY_THEME = "theme"
-        const val KEY_COLLAPSE = "collapseTurns"
-        const val KEY_EXPERIMENTAL_NATIVE_TERMINAL = "experimentalNativeTerminal"
-        const val KEY_BODY_POINT_SIZE = "bodyPointSize"
+        // SharedPreferences keys — kept private (file-scope) so callers
+        // go through the typed setters / state flows above. Live in the
+        // public companion so we can have just one (Kotlin only allows a
+        // single companion object per class).
+        private const val KEY_FONT = "font"
+        private const val KEY_THEME = "theme"
+        private const val KEY_COLLAPSE = "collapseTurns"
+        private const val KEY_EXPERIMENTAL_NATIVE_TERMINAL = "experimentalNativeTerminal"
+        private const val KEY_BODY_POINT_SIZE = "bodyPointSize"
     }
 }
 
