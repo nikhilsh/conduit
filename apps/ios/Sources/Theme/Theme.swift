@@ -50,11 +50,17 @@ enum SweKittyTheme {
     static var textSecondary: Color { SweKittyPalette.textSecondary.color }
     static var textMuted: Color     { SweKittyPalette.textMuted.color }
     static var textBody: Color      { SweKittyPalette.textBody.color }
+    /// System/handoff text tone added in PLAN-LITTER-VISUAL-PARITY PR 1
+    /// (muted-green) so handoff/system rows can stop opacity-tinting
+    /// `textSecondary` ad-hoc.
+    static var textSystem: Color    { SweKittyPalette.textSystem.color }
     static var textOnAccent: Color  { SweKittyPalette.textOnAccent.color }
     static var surface: Color       { SweKittyPalette.surface.color }
     static var surfaceLight: Color  { SweKittyPalette.surfaceLight.color }
     static var border: Color        { SweKittyPalette.border.color }
     static var separator: Color     { SweKittyPalette.separator.color }
+    /// Inline-code / fenced-code background. Matches LitterPalette.
+    static var codeBackground: Color { SweKittyPalette.codeBackground.color }
     static var danger: Color        { SweKittyPalette.danger.color }
     static var success: Color       { SweKittyPalette.success.color }
     static var warning: Color       { SweKittyPalette.warning.color }
@@ -65,29 +71,32 @@ enum SweKittyTheme {
 
     // MARK: - Shape tokens
 
-    static let cardCornerRadius: CGFloat = 22
+    /// Settings / list-panel card radius. PLAN-LITTER-VISUAL-PARITY
+    /// PR 1 reduced this from 22 → 14 to match litter's flatter card
+    /// shape; hero-style cards that intentionally want the larger
+    /// radius should reach for [heroCardCornerRadius] instead.
+    static let cardCornerRadius: CGFloat = 14
+    /// Opt-in for the legacy 22pt card radius — keep for the
+    /// occasional hero card (chat empty state, agent-picker featured
+    /// row) where the rounder shape carries weight. Default cards
+    /// use [cardCornerRadius] = 14.
+    static let heroCardCornerRadius: CGFloat = 22
     static let smallCornerRadius: CGFloat = 14
+    /// Hard-edged inline tag / status chip (matches litter).
+    static let tagCornerRadius: CGFloat = 4
+    /// Fenced + inline code block radius.
+    static let codeBlockCornerRadius: CGFloat = 10
 
     // MARK: - Background gradient
 
+    /// Flat `surface` background (PLAN-LITTER-VISUAL-PARITY PR 1
+    /// dropped the brightness-shifted 3-stop gradient — litter renders
+    /// a flat surface and the extra shimmer added noise without
+    /// value). Returned as a `LinearGradient` with identical stops so
+    /// call sites that expect the gradient type compile unchanged; the
+    /// rendered result is a flat fill.
     static func backgroundGradient(for scheme: ColorScheme) -> LinearGradient {
         let base = SweKittyPalette.background.color(for: scheme)
-        return LinearGradient(
-            colors: [
-                base,
-                adjust(base, brightnessDelta: scheme == .dark ?  0.02 : -0.01),
-                adjust(base, brightnessDelta: scheme == .dark ? -0.01 :  0.01),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private static func adjust(_ color: Color, brightnessDelta: Double) -> Color {
-        let ui = UIColor(color)
-        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        ui.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-        let nb = max(0, min(1, b + CGFloat(brightnessDelta)))
-        return Color(hue: Double(h), saturation: Double(s), brightness: Double(nb), opacity: Double(a))
+        return LinearGradient(colors: [base, base], startPoint: .top, endPoint: .bottom)
     }
 }

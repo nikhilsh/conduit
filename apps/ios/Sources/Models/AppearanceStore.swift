@@ -64,7 +64,19 @@ final class AppearanceStore {
         /// PR — follow-up PRs flip the default and delete the old
         /// views. See `docs/PLAN-LITTER-UI.md`.
         static let experimentalLitterUI = "swekitty.experimental.litterUI"
+        /// Body point size for the typography ramp
+        /// (`SweKittyTypography`). User-tunable within
+        /// [bodyPointSizeRange]; everything in the ramp scales off this.
+        static let bodyPointSize = "swekitty.appearance.bodyPointSize"
     }
+
+    /// Clamp range for [bodyPointSize]. Lower bound keeps captions
+    /// readable; upper bound prevents headings from blowing out the
+    /// composer / list rows.
+    static let bodyPointSizeRange: ClosedRange<CGFloat> = 12...18
+    /// Default chosen to match litter's `LitterFont.conversationBodyPointSize`
+    /// starting value at the centre of the slider's range.
+    static let defaultBodyPointSize: CGFloat = 14
 
     var fontFamily: FontFamily {
         didSet { defaults.set(fontFamily.rawValue, forKey: Keys.font) }
@@ -99,6 +111,21 @@ final class AppearanceStore {
         didSet { defaults.set(experimentalLitterUI, forKey: Keys.experimentalLitterUI) }
     }
 
+    /// Base point size the typography ramp (`SweKittyTypography`)
+    /// scales off. Setter clamps into [bodyPointSizeRange] so an
+    /// out-of-range value (corrupted defaults, future migration) can't
+    /// blow out the layout. Persisted on every set.
+    var bodyPointSize: CGFloat = Self.defaultBodyPointSize {
+        didSet {
+            let clamped = bodyPointSize.clamped(to: Self.bodyPointSizeRange)
+            if clamped != bodyPointSize {
+                bodyPointSize = clamped
+                return
+            }
+            defaults.set(Double(bodyPointSize), forKey: Keys.bodyPointSize)
+        }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -123,6 +150,9 @@ final class AppearanceStore {
         // cutover has soaked.
         self.experimentalLitterUI =
             defaults.object(forKey: Keys.experimentalLitterUI) as? Bool ?? true
+        let storedBody = defaults.object(forKey: Keys.bodyPointSize) as? Double
+        self.bodyPointSize = CGFloat(storedBody ?? Double(Self.defaultBodyPointSize))
+            .clamped(to: Self.bodyPointSizeRange)
     }
 
     /// SwiftUI `.font` value to use for chat body text.
@@ -171,5 +201,11 @@ final class AppearanceStore {
                 window.overrideUserInterfaceStyle = style
             }
         }
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }

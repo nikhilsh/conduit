@@ -21,26 +21,36 @@ import SwiftUI
 /// Pure-data summary of a glass surface's tunables. Used directly by the
 /// rendering modifiers, and exposed so the test suite can compare
 /// configurations without running SwiftUI.
+///
+/// `shadowOpacity` values were halved (0.16 → 0.08) in
+/// `PLAN-LITTER-VISUAL-PARITY` PR 1 — the prior "magazine drop shadow"
+/// under every glass surface read heavy against litter's nearly-flat
+/// reference. `isInteractive` was added so the capsule path can opt
+/// into iOS 26's `.glassEffect(.regular.interactive(), …)` modifier
+/// (Liquid Glass press-deformation) without a separate config field.
 struct GlassConfig: Equatable {
     var material: GlassMaterial
     var highlightOpacity: Double
     var shadowOpacity: Double
     var tintOverlayOpacity: Double
+    var isInteractive: Bool
 
     /// Default for solid card surfaces (`glassRoundedRect`, `glassCapsule`).
     static let solid = GlassConfig(
         material: .regular,
         highlightOpacity: 0.24,
-        shadowOpacity: 0.16,
-        tintOverlayOpacity: 0.0
+        shadowOpacity: 0.08,
+        tintOverlayOpacity: 0.0,
+        isInteractive: false
     )
 
     /// Default for transient / floating surfaces (`glassCircle`).
     static let transient = GlassConfig(
         material: .ultraThin,
         highlightOpacity: 0.28,
-        shadowOpacity: 0.16,
-        tintOverlayOpacity: 0.0
+        shadowOpacity: 0.08,
+        tintOverlayOpacity: 0.0,
+        isInteractive: false
     )
 
     /// Solid card with a per-agent tint overlay (8% opacity of the
@@ -49,8 +59,9 @@ struct GlassConfig: Equatable {
         GlassConfig(
             material: .regular,
             highlightOpacity: 0.24,
-            shadowOpacity: 0.16,
-            tintOverlayOpacity: opacity
+            shadowOpacity: 0.08,
+            tintOverlayOpacity: opacity,
+            isInteractive: false
         )
     }
 }
@@ -81,38 +92,77 @@ private struct GlassSurfaceModifier<S: InsettableShape>: ViewModifier {
         let glow = (tint ?? SweKittyTheme.accentStrong).opacity(config.highlightOpacity)
 
         content
-            .background {
-                shape
-                    .fill(config.material.swiftUIMaterial)
-                    .overlay {
-                        shape
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        glow,
-                                        SweKittyTheme.surfaceLight.opacity(0.06),
-                                        .clear,
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    }
-                    .overlay {
-                        // Per-agent tint overlay — flat fill at a low
-                        // opacity so the card picks up the agent hue
-                        // without drowning out the underlying material.
-                        if let tint, config.tintOverlayOpacity > 0 {
-                            shape.fill(tint.opacity(config.tintOverlayOpacity))
-                        }
-                    }
-            }
+            .modifier(GlassBackdrop(shape: shape, config: config, glow: glow, tint: tint))
             .overlay {
                 shape
                     .stroke(stroke, lineWidth: 1)
             }
             .clipShape(shape)
-            .shadow(color: SweKittyTheme.textPrimary.opacity(config.shadowOpacity), radius: 18, x: 0, y: 10)
+            // Shadow halved in PLAN-LITTER-VISUAL-PARITY PR 1 — radius
+            // 18 → 10, y 10 → 5 — so glass surfaces no longer drop a
+            // "magazine" shadow over flat content. Shadow opacity is
+            // driven by [GlassConfig.shadowOpacity] (also halved).
+            .shadow(color: SweKittyTheme.textPrimary.opacity(config.shadowOpacity), radius: 10, x: 0, y: 5)
+    }
+}
+
+/// Picks the right backdrop primitive based on OS version. On iOS 26+
+/// we call SwiftUI's native `.glassEffect(_:in:)` (Liquid Glass) so
+/// surfaces actually refract instead of just blurring — that's the
+/// jump from "Material" to "real glass" the audit (PLAN-LITTER-VISUAL-
+/// PARITY §B.4) flagged as the biggest missing capability. On older
+/// OSes we keep the existing `.regularMaterial` background + highlight
+/// gradient stack so the visual shape stays consistent. The per-agent
+/// tint overlay applies on both paths.
+private struct GlassBackdrop<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let config: GlassConfig
+    let glow: Color
+    let tint: Color?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            // Liquid Glass: the system primitive provides refraction +
+            // highlight natively, so we skip the manual glow gradient
+            // here and only paint the optional per-agent tint on top.
+            content
+                .glassEffect(
+                    config.isInteractive ? .regular.interactive() : .regular,
+                    in: shape
+                )
+                .overlay {
+                    if let tint, config.tintOverlayOpacity > 0 {
+                        shape.fill(tint.opacity(config.tintOverlayOpacity))
+                    }
+                }
+        } else {
+            // Material fallback path (pre-iOS-26): manual gradient
+            // glow + material fill, identical to the pre-PR shape.
+            content
+                .background {
+                    shape
+                        .fill(config.material.swiftUIMaterial)
+                        .overlay {
+                            shape
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            glow,
+                                            SweKittyTheme.surfaceLight.opacity(0.06),
+                                            .clear,
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                        }
+                        .overlay {
+                            if let tint, config.tintOverlayOpacity > 0 {
+                                shape.fill(tint.opacity(config.tintOverlayOpacity))
+                            }
+                        }
+                }
+        }
     }
 }
 
@@ -153,7 +203,13 @@ struct GlassCapsuleModifier: ViewModifier {
     func body(content: Content) -> some View {
         var config = GlassConfig.solid
         config.highlightOpacity = interactive ? 0.34 : 0.22
-        config.shadowOpacity = interactive ? 0.22 : 0.14
+        // Shadow halved alongside the rest of the surfaces in PR 1
+        // (0.22 → 0.11 interactive, 0.14 → 0.07 static).
+        config.shadowOpacity = interactive ? 0.11 : 0.07
+        // Routes to `.glassEffect(.regular.interactive(), in: shape)`
+        // on iOS 26+ for press-deformation; pre-26 path keeps today's
+        // material treatment.
+        config.isInteractive = interactive
         return content
             .modifier(
                 GlassSurfaceModifier(
@@ -180,14 +236,24 @@ struct GlassCircleModifier: ViewModifier {
     }
 }
 
-/// Future shell rewrites can replace this with platform-native morphing
-/// once the SDK is available in CI. For now it is a pass-through wrapper.
+/// Wraps a group of glass surfaces so iOS 26's Liquid Glass can morph
+/// between them (e.g. `+` button → composer). On iOS 26+ this drops in
+/// SwiftUI's `GlassEffectContainer` so child surfaces decorated with
+/// `glassMorphID(_:in:)` actually morph; on older OSes we fall through
+/// to the previous pass-through container and `glassMorphID` keeps
+/// using `matchedGeometryEffect`.
 struct GlassMorphContainer<Content: View>: View {
     var spacing: CGFloat = 10
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        content()
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) {
+                content()
+            }
+        } else {
+            content()
+        }
     }
 }
 
@@ -215,7 +281,18 @@ extension View {
         modifier(GlassCircleModifier(tint: tint))
     }
 
+    /// Pairs with `GlassMorphContainer` so iOS 26's Liquid Glass can
+    /// morph between surfaces (e.g. `+` button → expanded composer).
+    /// On iOS 26+ delegates to `glassEffectID(_:in:)` so the system
+    /// owns the morph; pre-26 falls back to `matchedGeometryEffect`,
+    /// which animates frame/opacity but does not actually melt-and-fuse
+    /// the glass surfaces.
+    @ViewBuilder
     func glassMorphID(_ id: String, in namespace: Namespace.ID) -> some View {
-        matchedGeometryEffect(id: id, in: namespace)
+        if #available(iOS 26.0, *) {
+            self.glassEffectID(id, in: namespace)
+        } else {
+            self.matchedGeometryEffect(id: id, in: namespace)
+        }
     }
 }

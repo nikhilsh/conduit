@@ -42,11 +42,20 @@ enum SweKittyPalette {
     static let textSecondary   = Pair(light: "#6B6B6B", dark: "#888888")
     static let textMuted       = Pair(light: "#9E9E9E", dark: "#555555")
     static let textBody        = Pair(light: "#2D2D2D", dark: "#E0E0E0")
+    /// Muted-green tone used by handoff / system-emitted bubble rendering
+    /// (mirrors litter's `LitterPalette.textSystem`). Added in the
+    /// PLAN-LITTER-VISUAL-PARITY PR 1 foundation pass so non-LitterUI
+    /// surfaces stop falling back to ad-hoc opacity tricks.
+    static let textSystem      = Pair(light: "#3A4A3F", dark: "#C6D0CA")
     static let textOnAccent    = Pair(light: "#FFFFFF", dark: "#0D0D0D")
     static let surface         = Pair(light: "#F2F2F7", dark: "#1A1A1A")
     static let surfaceLight    = Pair(light: "#E5E5EA", dark: "#2A2A2A")
     static let border          = Pair(light: "#D1D1D6", dark: "#333333")
     static let separator       = Pair(light: "#E0E0E0", dark: "#1E1E1E")
+    /// Background tone for inline code / code blocks (mirrors litter's
+    /// `LitterPalette.codeBackground`). Until PR 1 we used
+    /// `surface.opacity(0.72)` ad-hoc, which read differently per scheme.
+    static let codeBackground  = Pair(light: "#F0F0F5", dark: "#111111")
     static let danger          = Pair(light: "#D32F2F", dark: "#FF5555")
     static let success         = Pair(light: "#2E7D32", dark: "#6EA676")
     static let warning         = Pair(light: "#E65100", dark: "#E2A644")
