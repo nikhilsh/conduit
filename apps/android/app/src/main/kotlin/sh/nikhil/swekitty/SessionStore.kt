@@ -614,6 +614,31 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         }
     }
 
+    /**
+     * Drop a saved server entirely — removes the row from
+     * [savedServers], clears any locally-stored display-name override
+     * keyed by that id, and persists both to disk
+     * (EncryptedSharedPreferences). Idempotent; safe to call with an
+     * unknown id.
+     *
+     * Mirror of iOS `SessionStore.forgetServer(_:)` (PR #128). This is
+     * the entry point UI affordances (swipe-to-dismiss in Settings,
+     * "Forget" long-press on the server pill) call. It builds on
+     * [removeSavedServer] for the savedServers + endpoint bookkeeping
+     * but additionally sweeps the display-name override — without that
+     * step a stale rename for a `SavedServer.id` we just dropped would
+     * linger in EncryptedSharedPreferences forever.
+     */
+    fun forgetServer(id: String) {
+        removeSavedServer(id)
+        if (_displayNames.value.containsKey(id)) {
+            val next = _displayNames.value.toMutableMap()
+            next.remove(id)
+            _displayNames.value = next
+            prefs?.edit()?.putString(KEY_DISPLAY_NAMES, encodeDisplayNames(next))?.apply()
+        }
+    }
+
     fun forgetEndpoint() {
         disconnect()
         _endpoint.value = Endpoint()

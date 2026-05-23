@@ -54,8 +54,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.AlertDialog
 import sh.nikhil.swekitty.AppearanceStore
 import sh.nikhil.swekitty.LocalAppearanceStore
+import sh.nikhil.swekitty.SavedServer
 import sh.nikhil.swekitty.SessionStore
 
 /**
@@ -83,6 +85,13 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     var showAddServer by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
     var showAgentLogin by remember { mutableStateOf(false) }
+    // Saved-server pending deletion. Mirror of iOS PR #128's
+    // `pendingServerDelete`: gating the destructive sweep behind an
+    // explicit confirm lets us call `forgetServer` (which also drops
+    // the per-id displayName override) instead of the legacy
+    // `removeSavedServer`, and gives the prompt somewhere to explain
+    // what's being cleared.
+    var pendingForget by remember { mutableStateOf<SavedServer?>(null) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -191,8 +200,8 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                         TextButton(onClick = { store.selectSavedServer(server.id, autoConnect = true) }) {
                             Text("Use")
                         }
-                        IconButton(onClick = { store.removeSavedServer(server.id) }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Remove")
+                        IconButton(onClick = { pendingForget = server }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Forget")
                         }
                     }
                     HorizontalDivider()
@@ -295,6 +304,28 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     }
     if (showAgentLogin) {
         AgentLoginSheet(store = store, onDismiss = { showAgentLogin = false })
+    }
+    pendingForget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingForget = null },
+            title = { Text("Forget server?") },
+            text = {
+                Text(
+                    "Drops the saved pairing for ${target.name}. Sessions already running on this server keep running until you delete them.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.forgetServer(target.id)
+                    pendingForget = null
+                }) {
+                    Text("Forget", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingForget = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 

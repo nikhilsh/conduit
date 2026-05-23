@@ -1,15 +1,25 @@
 package sh.nikhil.swekitty.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,11 +47,19 @@ import androidx.compose.foundation.background as composeBackground
  *  - `.Saved` — solid status dot, name as the headline, `host:port` caption.
  *  - `.Discovered` — soft "discovered · host:port" caption, optional version tag.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ServerPill(
     model: ServerPillModel,
     onTap: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * Long-press affordance for saved pills — opens a dropdown with a
+     * "Forget" item. `null` (the default) suppresses the menu, which is
+     * what discovered rows pass since they aren't persisted.
+     * Mirror of iOS PR #128's `onForget` wiring.
+     */
+    onForget: (() -> Unit)? = null,
 ) {
     val tint: Color = if (model.isActive) {
         SweKittyTheme.accentStrong().copy(alpha = 0.32f)
@@ -50,11 +68,18 @@ fun ServerPill(
     }
     val nameColor = if (model.isActive) SweKittyTheme.textPrimary() else SweKittyTheme.textSecondary()
 
+    var menuOpen by remember { mutableStateOf(false) }
+
     Row(
         modifier = modifier
             .semantics { contentDescription = model.accessibilityLabel }
             .glassCapsule(interactive = true, tint = tint)
-            .clickable(onClick = onTap)
+            .combinedClickable(
+                onClick = onTap,
+                onLongClick = if (onForget != null) {
+                    { menuOpen = true }
+                } else null,
+            )
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -79,6 +104,24 @@ fun ServerPill(
                     color = SweKittyTheme.textMuted(),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (onForget != null) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Forget") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    },
+                    onClick = {
+                        menuOpen = false
+                        onForget()
+                    },
                 )
             }
         }

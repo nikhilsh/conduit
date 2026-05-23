@@ -207,6 +207,7 @@ fun DiscoveryScreen(
                             onDismiss()
                         },
                         onSelectDiscovered = { entry -> pairWith(entry) },
+                        onForgetSaved = { server -> store.forgetServer(server.id) },
                     )
                 }
             }

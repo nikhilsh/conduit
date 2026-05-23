@@ -32,13 +32,26 @@ fun ServerPillRow(
     onSelectSaved: (SavedServer) -> Unit,
     onSelectDiscovered: (DiscoveredEntry) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * Long-press affordance on saved pills — wires through to
+     * `SessionStore.forgetServer` at the call site. Discovered pills
+     * still pass `null` (the `ServerPill` default), which suppresses
+     * the menu. Mirror of iOS PR #128's `onForget` plumbing.
+     */
+    onForgetSaved: ((SavedServer) -> Unit)? = null,
 ) {
-    val items: List<Pair<ServerPillModel, () -> Unit>> = buildList {
+    val items: List<PillEntry> = buildList {
         // Saved first — the curated set should always be reachable
         // without scrolling past a transient mDNS list.
         savedServers.forEach { server ->
             val model = ServerPillModel.fromSaved(server, currentEndpoint, harness)
-            add(model to { onSelectSaved(server) })
+            add(
+                PillEntry(
+                    model = model,
+                    onTap = { onSelectSaved(server) },
+                    onForget = onForgetSaved?.let { cb -> { cb(server) } },
+                ),
+            )
         }
         // Then discovered. Dedupe against saved by URL: if the user has
         // already saved this advertiser we don't need to show the
@@ -55,7 +68,7 @@ fun ServerPillRow(
                     version = d.version,
                     isActive = currentEndpoint.url == d.url,
                 )
-                add(model to { onSelectDiscovered(d) })
+                add(PillEntry(model = model, onTap = { onSelectDiscovered(d) }, onForget = null))
             }
     }
 
@@ -64,11 +77,17 @@ fun ServerPillRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(horizontal = 16.dp),
     ) {
-        items(items, key = { it.first.id }) { (model, onTap) ->
-            ServerPill(model = model, onTap = onTap)
+        items(items, key = { it.model.id }) { entry ->
+            ServerPill(model = entry.model, onTap = entry.onTap, onForget = entry.onForget)
         }
     }
 }
+
+private data class PillEntry(
+    val model: ServerPillModel,
+    val onTap: () -> Unit,
+    val onForget: (() -> Unit)?,
+)
 
 /**
  * Lightweight transport for a discovered LAN server. Lives separately

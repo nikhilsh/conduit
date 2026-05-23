@@ -1,7 +1,9 @@
 package sh.nikhil.swekitty.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,13 +28,18 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.RadioButtonChecked
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +58,7 @@ import sh.nikhil.swekitty.SessionLifecycle
  * ServerTabsStrip + sessions list + BottomActionBar (mic / + / search).
  * Mirrors `apps/ios/Sources/Views/HomeView.swift`.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     store: SessionStore,
@@ -69,6 +77,12 @@ fun HomeScreen(
     val statuses by store.statusBySession.collectAsState()
     val lifecycle by store.sessionLifecycle.collectAsState()
     val selectedId by store.selectedId.collectAsState()
+
+    // Pending exit target for the session-row long-press confirmation.
+    // Mirror of iOS PR #128's `pendingDelete` on LitterHomeView — we
+    // keep the title alongside the id so the prompt can name the
+    // session being ended without re-resolving displayNames.
+    var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
         // Top row: settings · centered title · list (drawer)
@@ -179,10 +193,16 @@ fun HomeScreen(
                 ) {
                     sessions.forEach { session ->
                         val isSelected = selectedId == session.id
+                        val rowTitle = displayNames[session.id] ?: session.name
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { store.select(session.id) }
+                                .combinedClickable(
+                                    onClick = { store.select(session.id) },
+                                    onLongClick = {
+                                        pendingDelete = SessionDeleteTarget(session.id, rowTitle)
+                                    },
+                                )
                                 .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -195,7 +215,7 @@ fun HomeScreen(
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    displayNames[session.id] ?: session.name,
+                                    rowTitle,
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -244,7 +264,39 @@ fun HomeScreen(
             CircleActionButton(Icons.Default.Search, "Search", size = 52.dp, onClick = onSearch)
         }
     }
+
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete session?") },
+            text = {
+                Text(
+                    "This ends ${target.title} on the harness. The conversation history stays available under Sessions.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.exit(target.id)
+                    pendingDelete = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
+
+/**
+ * Carrier for the long-press delete confirmation on the home sessions
+ * list. Holds the session id (so we know what to call `store.exit` on)
+ * plus its already-resolved title (so the prompt can name the session
+ * without re-resolving `displayNames` at render time, and the row's
+ * label can never disagree with the alert's body text).
+ */
+private data class SessionDeleteTarget(val id: String, val title: String)
 
 private fun canIssueCommands(state: HarnessState): Boolean = when (state) {
     is HarnessState.Live, is HarnessState.Linked -> true
