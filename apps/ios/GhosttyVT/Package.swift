@@ -110,11 +110,21 @@ let package = Package(
                 // / UIKit (iOS) symbols. Match Lakr233's GhosttyKit
                 // target's c++ STL link + add the iOS-side frameworks
                 // that libghostty's compiled .o files reference.
+                //
+                // IOSurface is the Metal renderer's GPU-shared-buffer
+                // path (libghostty's GPU surface backs Metal textures
+                // with `IOSurfaceCreate` + `kIOSurface*` keys). PR #134
+                // shipped the CoreGraphics / CoreText / Metal / c++
+                // frameworks but missed IOSurface, so the iOS simulator
+                // link still failed with `Undefined symbol:
+                // _IOSurfaceCreate` and ~10 sibling symbols. Adding it
+                // here closes the last gap from the #129 bridge.
                 .linkedLibrary("c++"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("CoreText"),
                 .linkedFramework("Metal"),
                 .linkedFramework("QuartzCore"),
+                .linkedFramework("IOSurface"),
                 .linkedFramework("Carbon", .when(platforms: [.macOS])),
             ]
         ),
