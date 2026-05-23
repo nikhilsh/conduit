@@ -25,9 +25,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.Circle
-import androidx.compose.material.icons.outlined.RadioButtonChecked
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -85,15 +82,27 @@ fun HomeScreen(
     var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
-        // Top row: settings · centered title · list (drawer)
+        // Top row — litter has no settings gear (audit §A.1.6 / PR 3);
+        // settings is accessed via a long-press on the centered brand
+        // mark. Leading slot is intentionally a transparent 40dp
+        // spacer so the centred title still sits where the eye expects
+        // it; trailing keeps the sessions-drawer affordance (litter
+        // doesn't have a remote-multiplexer drawer so this is
+        // swe-kitty-specific).
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            CircleIconButton(Icons.Default.Settings, "Settings", onClick = onOpenSettings)
+            Spacer(Modifier.size(40.dp))
             Spacer(Modifier.weight(1f))
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = onOpenSettings,
+                ),
+            ) {
                 Text("SweKitty", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
                     if (endpoint.isComplete) endpoint.displayHost else "no harness",
@@ -194,7 +203,15 @@ fun HomeScreen(
                     sessions.forEach { session ->
                         val isSelected = selectedId == session.id
                         val rowTitle = displayNames[session.id] ?: session.name
-                        Row(
+                        // Active-row fill per audit §A.1.3 — litter
+                        // selects by painting a 6dp rounded rect at
+                        // 55% surfaceVariant, not by swapping an icon.
+                        Surface(
+                            shape = RoundedCornerShape(LitterHomeRowMetrics.activeRowCornerRadius.dp),
+                            color = if (isSelected)
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = LitterHomeRowMetrics.activeRowOpacity)
+                            else
+                                androidx.compose.ui.graphics.Color.Transparent,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .combinedClickable(
@@ -202,33 +219,53 @@ fun HomeScreen(
                                     onLongClick = {
                                         pendingDelete = SessionDeleteTarget(session.id, rowTitle)
                                     },
-                                )
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ),
                         ) {
-                            Icon(
-                                if (isSelected) Icons.Outlined.RadioButtonChecked else Icons.Outlined.Circle,
-                                contentDescription = null,
-                                tint = if (isSelected) SweKittyTheme.accentStrong() else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    rowTitle,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        start = LitterHomeRowMetrics.leadingPadding.dp,
+                                        end = LitterHomeRowMetrics.trailingPadding.dp,
+                                        top = LitterHomeRowMetrics.verticalPadding.dp,
+                                        bottom = LitterHomeRowMetrics.verticalPadding.dp,
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                // 7dp filled circle per audit §A.1.7
+                                // (replaces 16dp SF Symbol equivalent).
+                                Box(
+                                    modifier = Modifier
+                                        .size(LitterHomeRowMetrics.indicatorSize.dp)
+                                        .background(
+                                            color = if (isSelected) SweKittyTheme.accentStrong() else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            shape = CircleShape,
+                                        ),
                                 )
-                                Text(
-                                    "${session.assistant} · ${statuses[session.id]?.phase ?: "ready"}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        rowTitle,
+                                        fontSize = androidx.compose.ui.unit.TextUnit(
+                                            LitterHomeRowMetrics.titlePointSize,
+                                            androidx.compose.ui.unit.TextUnitType.Sp,
+                                        ),
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        "${session.assistant} · ${statuses[session.id]?.phase ?: "ready"}",
+                                        fontSize = androidx.compose.ui.unit.TextUnit(
+                                            LitterHomeRowMetrics.subtitlePointSize,
+                                            androidx.compose.ui.unit.TextUnitType.Sp,
+                                        ),
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
@@ -236,19 +273,22 @@ fun HomeScreen(
             }
         }
 
-        // Bottom action bar
+        // Bottom action bar — audit §A.1.5 / PR 3. Litter uses 44dp
+        // for ALL three controls (not 52/68); the prior 68dp filled
+        // accent + plus over-built the FAB relative to the mic/search
+        // peers. We keep the brand fill on the plus so it still reads
+        // as the primary action, but the size now matches.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
         ) {
-            CircleActionButton(Icons.Default.Mic, "Voice", size = 52.dp, onClick = onVoice)
-            // Primary +
+            CircleActionButton(Icons.Default.Mic, "Voice", size = 44.dp, onClick = onVoice)
             Surface(
                 shape = CircleShape,
                 color = SweKittyTheme.accentStrong(),
                 modifier = Modifier
-                    .size(68.dp)
+                    .size(44.dp)
                     .clip(CircleShape)
                     .clickable(onClick = onNewSession),
             ) {
@@ -257,11 +297,11 @@ fun HomeScreen(
                         Icons.Default.Add,
                         contentDescription = "New session",
                         tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(32.dp),
+                        modifier = Modifier.size(22.dp),
                     )
                 }
             }
-            CircleActionButton(Icons.Default.Search, "Search", size = 52.dp, onClick = onSearch)
+            CircleActionButton(Icons.Default.Search, "Search", size = 44.dp, onClick = onSearch)
         }
     }
 
@@ -297,6 +337,24 @@ fun HomeScreen(
  * label can never disagree with the alert's body text).
  */
 private data class SessionDeleteTarget(val id: String, val title: String)
+
+/**
+ * Row metrics for the litter-faithful home list, mirror of iOS
+ * `HomeRowMetrics`. Extracted as named constants so
+ * `LitterHomeRowMetricsTest` can pin them — silently regrowing any of
+ * these would re-introduce the audit drift PR 3 is trying to stop
+ * (audit §A.1.1 / §A.1.2 / §A.1.7).
+ */
+internal object LitterHomeRowMetrics {
+    const val titlePointSize: Float = 13f
+    const val subtitlePointSize: Float = 11f
+    const val leadingPadding: Float = 1f
+    const val trailingPadding: Float = 8f
+    const val verticalPadding: Float = 5f
+    const val indicatorSize: Float = 7f
+    const val activeRowCornerRadius: Float = 6f
+    const val activeRowOpacity: Float = 0.55f
+}
 
 private fun canIssueCommands(state: HarnessState): Boolean = when (state) {
     is HarnessState.Live, is HarnessState.Linked -> true
