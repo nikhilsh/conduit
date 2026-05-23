@@ -10,7 +10,10 @@ import SwiftUI
 extension LitterUI {
     struct Card<Content: View>: View {
         var padding: CGFloat = 14
-        var cornerRadius: CGFloat = 16
+        // Default corner radius dropped 16 → 14 in PLAN-LITTER-VISUAL-
+        // PARITY PR 2 to match `litterGlassRoundedRect`'s new default
+        // and the audit's flatter card target.
+        var cornerRadius: CGFloat = 14
         var tint: Color? = nil
         @ViewBuilder var content: () -> Content
 

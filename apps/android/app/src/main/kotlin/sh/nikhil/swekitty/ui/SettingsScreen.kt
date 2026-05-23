@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +33,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -81,6 +84,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
+    val bodyPointSize by appearance.bodyPointSize.collectAsState()
 
     var showAddServer by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
@@ -141,6 +145,58 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                         onClick = { appearance.setFontFamily(choice) },
                     )
                     if (idx < AppearanceStore.FontFamily.values().lastIndex) HorizontalDivider()
+                }
+            }
+
+            // Font Size — Android mirror of iOS LitterSettingsView's
+            // Font Size slider (PLAN-LITTER-VISUAL-PARITY PR 2). Range
+            // and default live in [AppearanceStore]; the setter
+            // clamps so out-of-range writes can't blow out layout.
+            SettingsSection("Font Size") {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.FormatSize,
+                            contentDescription = null,
+                            tint = SweKittyTheme.accentStrong(),
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "Body",
+                            color = SweKittyTheme.textPrimary(),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "${bodyPointSize.toInt()}pt",
+                            color = SweKittyTheme.textMuted(),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Slider(
+                        value = bodyPointSize,
+                        onValueChange = { appearance.setBodyPointSize(it) },
+                        valueRange = AppearanceStore.BODY_POINT_SIZE_RANGE,
+                        steps = (AppearanceStore.BODY_POINT_SIZE_RANGE.endInclusive
+                            - AppearanceStore.BODY_POINT_SIZE_RANGE.start).toInt() - 1,
+                        colors = SliderDefaults.colors(
+                            thumbColor = SweKittyTheme.accentStrong(),
+                            activeTrackColor = SweKittyTheme.accentStrong(),
+                        ),
+                    )
+                    Text(
+                        "The quick brown fox jumps over the lazy dog.",
+                        color = SweKittyTheme.textSecondary(),
+                        fontSize = androidx.compose.ui.unit.TextUnit(
+                            bodyPointSize,
+                            androidx.compose.ui.unit.TextUnitType.Sp,
+                        ),
+                    )
                 }
             }
 
