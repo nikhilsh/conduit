@@ -67,7 +67,26 @@ func (s *Session) commandDir(adapter agents.Adapter) string {
 }
 
 func (s *Session) commandEnv(extra map[string]string) []string {
-	env := append([]string{}, os.Environ()...)
+	// Drop ANTHROPIC_API_KEY / OPENAI_API_KEY from the inherited env
+	// when they are present but empty. systemd EnvironmentFile= lines
+	// like `ANTHROPIC_API_KEY=` (shipped in the install template as a
+	// placeholder) export the variable with an empty value, and the
+	// Claude / Codex CLIs treat an explicit empty key as "use API-key
+	// auth with no key" — short-circuiting the OAuth file lookup at
+	// ~/.claude/.credentials.json and reporting the session as logged
+	// out. A user who deliberately sets a real key is unaffected.
+	inherited := os.Environ()
+	env := make([]string, 0, len(inherited)+8)
+	for _, kv := range inherited {
+		if eq := strings.IndexByte(kv, '='); eq > 0 {
+			k := kv[:eq]
+			v := kv[eq+1:]
+			if v == "" && (k == "ANTHROPIC_API_KEY" || k == "OPENAI_API_KEY") {
+				continue
+			}
+		}
+		env = append(env, kv)
+	}
 	env = append(env, "TERM=xterm-256color", "PS1=$ ")
 	pairs := map[string]string{
 		"SESSION_UUID":           s.ID,
