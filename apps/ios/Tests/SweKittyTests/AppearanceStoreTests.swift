@@ -97,6 +97,44 @@ struct AppearanceStoreTests {
         #expect(store.experimentalNativeTerminal == false)
     }
 
+    // MARK: - bodyPointSize (PLAN-LITTER-VISUAL-PARITY PR 1)
+
+    @Test func freshInstallBodyPointSizeIsDefault() {
+        let store = AppearanceStore(defaults: freshDefaults())
+        #expect(store.bodyPointSize == AppearanceStore.defaultBodyPointSize)
+    }
+
+    @Test func persistsBodyPointSize() {
+        let defaults = freshDefaults()
+        let first = AppearanceStore(defaults: defaults)
+        first.bodyPointSize = 16
+
+        let second = AppearanceStore(defaults: defaults)
+        #expect(second.bodyPointSize == 16)
+    }
+
+    @Test func bodyPointSizeClampsAboveRange() {
+        let store = AppearanceStore(defaults: freshDefaults())
+        store.bodyPointSize = 99
+        #expect(store.bodyPointSize == AppearanceStore.bodyPointSizeRange.upperBound)
+    }
+
+    @Test func bodyPointSizeClampsBelowRange() {
+        let store = AppearanceStore(defaults: freshDefaults())
+        store.bodyPointSize = 4
+        #expect(store.bodyPointSize == AppearanceStore.bodyPointSizeRange.lowerBound)
+    }
+
+    @Test func corruptedBodyPointSizeFallsBackToDefault() {
+        // Defaults could carry an out-of-range value from a future
+        // build / corrupted plist; hydrate should clamp rather than
+        // ship a layout-breaking 200pt body.
+        let defaults = freshDefaults()
+        defaults.set(99.0, forKey: "swekitty.appearance.bodyPointSize")
+        let store = AppearanceStore(defaults: defaults)
+        #expect(store.bodyPointSize == AppearanceStore.bodyPointSizeRange.upperBound)
+    }
+
     // MARK: - Backwards-compat for existing installs
 
     @Test func legacyMonospacedPreferenceSurvives() {
