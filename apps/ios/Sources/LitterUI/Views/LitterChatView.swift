@@ -278,7 +278,16 @@ private struct LitterMarkdownBlock: View {
     @Environment(AppearanceStore.self) private var appearance
     @Environment(StreamingRendererCoordinator.self) private var coordinator
 
-    private func revision(for content: String) -> Int { content.hashValue }
+    private func revision(for content: String) -> Int {
+        // Re-render when the user changes their body-size slider — the
+        // attributed cache stores absolute font sizes (PR 4 heading
+        // scale) so the cache key has to vary with the size.
+        var hasher = Hasher()
+        hasher.combine(content)
+        hasher.combine(appearance.bodyPointSize)
+        hasher.combine(appearance.fontFamily.rawValue)
+        return hasher.finalize()
+    }
 
     private func attributed(for content: String) -> AttributedString {
         if let id = itemID {
@@ -286,17 +295,24 @@ private struct LitterMarkdownBlock: View {
             if let hit = MessageRenderCache.shared.get(itemID: id, revision: rev) {
                 return hit
             }
-            let parsed = (try? AttributedString(
-                markdown: content,
-                options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
-            )) ?? AttributedString(content)
+            let parsed = parseAndScale(content)
             MessageRenderCache.shared.set(itemID: id, revision: rev, value: parsed)
             return parsed
         }
-        return (try? AttributedString(
+        return parseAndScale(content)
+    }
+
+    private func parseAndScale(_ content: String) -> AttributedString {
+        var attr = (try? AttributedString(
             markdown: content,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
         )) ?? AttributedString(content)
+        LitterMarkdownHeadingScaler.apply(
+            to: &attr,
+            basePointSize: appearance.bodyPointSize,
+            design: SweKittyTypography.design(for: appearance.fontFamily)
+        )
+        return attr
     }
 
     private var displayedText: String {
@@ -319,8 +335,13 @@ private struct LitterMarkdownBlock: View {
 
     var body: some View {
         let content = displayedText
+        // Outer `.font` now picks up `bodyPointSize` (PR 1 slider) via
+        // `SweKittyTypography.body(appearance)`. The attributed string
+        // itself carries per-run overrides for headings via
+        // `LitterMarkdownHeadingScaler`, so this base only applies to
+        // body / paragraph runs and the larger header sizes win.
         return Text(attributed(for: content))
-            .font(appearance.bodyFont())
+            .font(SweKittyTypography.body(appearance))
             .foregroundStyle(foregroundForRole)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -400,6 +421,23 @@ private struct LitterToolSummaryBlock: View {
 
 // MARK: - Tool card
 
+/// Visual constants for the litter-faithful tool card surface (PLAN-
+/// LITTER-VISUAL-PARITY PR 4, audit §A.2.3 / §A.2.8). Extracted so
+/// `LitterToolCardSurfaceTests` can pin the rebuild — without that pin
+/// the next "tweak this card" PR could quietly restore the glass +
+/// status-tint overlay that the audit called out as too prominent.
+enum LitterToolCardMetrics {
+    /// Leading 6pt status dot replaces the previous wrench glyph.
+    static let statusDotSize: CGFloat = 6
+    /// Outer corner radius — 14pt matches the new flatter card shape
+    /// landed in PR 2 (`litterGlassRoundedRect` default).
+    static let surfaceCornerRadius: CGFloat = 14
+    /// Surface fill opacity — 0.6 keeps the card legible without the
+    /// "card-inside-card" layering the prior glass treatment produced
+    /// once a code or diff sub-block landed inside.
+    static let surfaceOpacity: Double = 0.6
+}
+
 private struct LitterToolCard: View {
     let event: ConversationItem
     @State private var expanded = true
@@ -429,9 +467,13 @@ private struct LitterToolCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "wrench.and.screwdriver.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(statusTint)
+                // 6pt status dot replaces the wrench.and.screwdriver
+                // glyph per audit §A.2.8 — litter's tool cards are
+                // text-forward (header label + small status indicator)
+                // rather than icon-forward.
+                Circle()
+                    .fill(statusTint)
+                    .frame(width: LitterToolCardMetrics.statusDotSize, height: LitterToolCardMetrics.statusDotSize)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(headerLabel)
@@ -498,7 +540,16 @@ private struct LitterToolCard: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .litterGlassRoundedRect(cornerRadius: 14, tint: statusTint.opacity(0.20))
+        // PLAN-LITTER-VISUAL-PARITY audit §A.2.3 — drop the glass
+        // surface + 0.20-opacity statusTint overlay; tool cards now
+        // render as a flat 0.6-opacity surfaceLight rounded rect, with
+        // the per-status tint reduced to the leading 6pt dot. This
+        // stops the "card inside card inside card" stacking that
+        // happens once a tool card carries a code / diff sub-block.
+        .background(
+            RoundedRectangle(cornerRadius: LitterToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                .fill(LitterUI.Palette.surfaceLight.color.opacity(LitterToolCardMetrics.surfaceOpacity))
+        )
     }
 
     private var statusTint: Color {
@@ -704,10 +755,10 @@ private struct LitterDiffBlock: View {
                 .padding(12)
                 .background(LitterUI.Palette.codeBackground.color)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(LitterUI.Palette.border.color.opacity(0.55), lineWidth: 0.8)
-                )
+                // PLAN-LITTER-VISUAL-PARITY audit §A.2.9 — drop the
+                // 0.8pt border stroke on diff blocks; litter tints
+                // diff lines (green/red/warning) against a flat
+                // surface without an outer rectangle outline.
             }
         }
         .onAppear {
