@@ -1,5 +1,8 @@
 package sh.nikhil.swekitty.ui
 
+import android.content.Context
+import android.net.Uri
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -26,8 +29,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,39 +41,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import sh.nikhil.swekitty.SessionStore
-import sh.nikhil.swekitty.auth.OAuthClient
-import sh.nikhil.swekitty.auth.OAuthClientError
-import sh.nikhil.swekitty.auth.OAuthCredential
-import sh.nikhil.swekitty.auth.OAuthProvider
-import sh.nikhil.swekitty.auth.OAuthRequest
-import sh.nikhil.swekitty.auth.OAuthStore
+import sh.nikhil.swekitty.auth.AgentLoginCoordinator
+import sh.nikhil.swekitty.auth.AgentLoginProvider
+import sh.nikhil.swekitty.auth.SessionStoreAgentLoginTransport
 
 /**
- * Android port of `apps/ios/Sources/Views/AgentLoginSheet.swift`. Two
- * rows:
+ * Android port of `apps/ios/Sources/LitterUI/Views/LitterAgentLoginSheet.swift`.
  *
- * - "Login with ChatGPT" — kicks off OpenAI / Codex OAuth via
- *   `OAuthClient(provider = OPENAI).startLogin(ctx)`, persists the
- *   resulting `AuthDotJson` blob in [OAuthStore], hands the credential
- *   to [SessionStore.sendAgentCredentials] for the eventual broker
- *   round-trip.
- * - "Login with Claude" — same flow, provider `ANTHROPIC`, persists a
- *   `ClaudeCredentialsJson` blob. Anthropic's OAuth params were
- *   reverse-engineered from the `claude` CLI; if the authorize
- *   endpoint refuses the `swekitty://` redirect, the call fails at
- *   `/oauth/authorize` (documented risk; same one iOS PR #104 carries).
+ * v2 (litter-pattern, broker-driven) agent login. Two rows kick off the
+ * `AgentLoginCoordinator` flow for OpenAI / Anthropic:
  *
- * The Custom Tabs handoff is asynchronous: the sheet kicks off the
- * browser tab, then [SessionStore.pendingOAuth] holds the
- * [OAuthRequest] (verifier + state). When `MainActivity.onNewIntent`
- * receives `swekitty://oauth/<provider>/callback?code=...`, it routes
- * the Uri back into [SessionStore.completeOAuthCallback], which calls
- * [OAuthClient.completeWithCallbackUri] and surfaces the result here
- * via the `pendingOAuth` flow.
+ *   1. Sheet builds a [SessionStoreAgentLoginTransport] + an
+ *      [AgentLoginCoordinator], registers it on
+ *      [SessionStore.activeLoginCoordinator], and calls `start(provider)`.
+ *   2. The broker mints an authorize URL + loopback port and emits an
+ *      `agent_login_url` view_event; the core routes it back into the
+ *      coordinator (via `SessionStore.routeAgentLoginViewEvent`), which
+ *      binds the loopback and moves to `AwaitingBrowserRedirect`.
+ *   3. This sheet observes that state and opens the authorize URL in a
+ *      Chrome Custom Tab. The coordinator's loopback captures the
+ *      redirect and ships `agent_login_callback`; the broker completes
+ *      the CLI token exchange and emits `agent_login_complete`.
+ *
+ * The legacy client-side PKCE flow (`OAuthClient` + `swekitty://` deep
+ * link) is replaced here; `OAuthClient` itself is deleted in Stage 4.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,40 +75,79 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    var coordinator by remember { mutableStateOf<AgentLoginCoordinator?>(null) }
     var isWorking by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    // Guards against re-opening the browser if the StateFlow replays
+    // AwaitingBrowserRedirect to a fresh collector.
+    var launchedToken by remember { mutableStateOf<String?>(null) }
 
-    val callback by store.oauthCallback.collectAsState()
+    // Observe the active coordinator's state and drive UI + the browser
+    // hand-off. Keyed on the coordinator instance so a new login attempt
+    // re-subscribes cleanly.
+    LaunchedEffect(coordinator) {
+        val coord = coordinator ?: return@LaunchedEffect
+        coord.state.collect { state ->
+            when (state) {
+                is AgentLoginCoordinator.State.Idle -> {}
+                is AgentLoginCoordinator.State.WaitingForBrokerURL -> {
+                    statusMessage = "Waiting for the broker to mint the login URL…"
+                    errorMessage = null
+                }
+                is AgentLoginCoordinator.State.AwaitingBrowserRedirect -> {
+                    statusMessage = "Complete the sign-in in the browser, then return here."
+                    errorMessage = null
+                    if (launchedToken != state.sessionToken) {
+                        launchedToken = state.sessionToken
+                        openAuthorizeUrl(ctx, state.authorizeUrl.toString())
+                    }
+                }
+                is AgentLoginCoordinator.State.ForwardingCallback -> {
+                    statusMessage = "Finishing sign-in with the broker…"
+                }
+                is AgentLoginCoordinator.State.Succeeded -> {
+                    isWorking = false
+                    statusMessage = "Signed in. The broker has your credentials for future sessions."
+                    errorMessage = null
+                }
+                is AgentLoginCoordinator.State.Failed -> {
+                    isWorking = false
+                    statusMessage = null
+                    errorMessage = "Sign-in failed: ${state.reason}"
+                }
+                is AgentLoginCoordinator.State.Cancelled -> {
+                    isWorking = false
+                    statusMessage = null
+                }
+            }
+        }
+    }
 
-    // When MainActivity hands back a `swekitty://oauth/...` Uri, the
-    // sheet drives the token exchange. We do it here (not in the
-    // SessionStore) so the UI can show progress + errors without
-    // re-plumbing state.
-    LaunchedEffect(callback) {
-        val c = callback ?: return@LaunchedEffect
-        store.clearOAuthCallback()
+    // If the sheet leaves composition mid-flow, cancel so the broker
+    // tears down the spawned CLI login subprocess.
+    DisposableEffect(Unit) {
+        onDispose {
+            coordinator?.cancel()
+            store.activeLoginCoordinator = null
+        }
+    }
+
+    fun startLogin(provider: AgentLoginProvider) {
         isWorking = true
-        statusMessage = "Exchanging authorization code…"
+        statusMessage = "Asking the broker to start the ${provider.wireName} login flow…"
         errorMessage = null
+        launchedToken = null
+        val coord = AgentLoginCoordinator(transport = SessionStoreAgentLoginTransport(store))
+        coordinator = coord
+        store.activeLoginCoordinator = coord
         scope.launch {
             try {
-                val client = OAuthClient(provider = c.request.provider)
-                val credential = withContext(Dispatchers.IO) {
-                    client.completeWithCallbackUri(c.uri, c.request)
-                }
-                OAuthStore.save(ctx.applicationContext, credential)
-                store.sendAgentCredentials(credential)
-                statusMessage = "Signed in — credential saved."
-                logCredentialToConsole(credential)
-            } catch (e: OAuthClientError.UserCancelled) {
-                statusMessage = null
-                errorMessage = "Sign-in cancelled."
+                coord.start(provider)
             } catch (t: Throwable) {
-                statusMessage = null
-                errorMessage = "Sign-in failed: ${t.message ?: t}"
-            } finally {
                 isWorking = false
+                store.activeLoginCoordinator = null
+                errorMessage = "Sign-in failed to start: ${t.message ?: t}"
             }
         }
     }
@@ -131,8 +166,8 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "Stage 0/1 spike — credential is stashed in EncryptedSharedPreferences " +
-                    "and logged. Broker round-trip lands in a follow-up.",
+                "Sign in on the broker host. The agent CLI's own login runs there; " +
+                    "you just complete the browser step and the broker keeps the credentials.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -145,28 +180,16 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
                     ProviderRow(
                         title = "Login with ChatGPT",
-                        subtitle = "Codex / ChatGPT OAuth · auth.openai.com",
+                        subtitle = "Codex / ChatGPT OAuth · runs `codex login` on the broker",
                         enabled = !isWorking,
-                        onClick = {
-                            scope.launch { startLogin(ctx.applicationContext, store, OAuthProvider.OPENAI) { working, status, error ->
-                                isWorking = working
-                                if (status != null) statusMessage = status
-                                if (error != null) errorMessage = error
-                            } }
-                        },
+                        onClick = { startLogin(AgentLoginProvider.OPENAI) },
                     )
                     HorizontalDivider()
                     ProviderRow(
                         title = "Login with Claude",
-                        subtitle = "Claude OAuth · claude.ai",
+                        subtitle = "Claude OAuth · runs `claude` login on the broker",
                         enabled = !isWorking,
-                        onClick = {
-                            scope.launch { startLogin(ctx.applicationContext, store, OAuthProvider.ANTHROPIC) { working, status, error ->
-                                isWorking = working
-                                if (status != null) statusMessage = status
-                                if (error != null) errorMessage = error
-                            } }
-                        },
+                        onClick = { startLogin(AgentLoginProvider.ANTHROPIC) },
                     )
                 }
             }
@@ -176,6 +199,12 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
 
             Spacer(Modifier.height(8.dp))
         }
+    }
+}
+
+private fun openAuthorizeUrl(ctx: Context, url: String) {
+    runCatching {
+        CustomTabsIntent.Builder().build().launchUrl(ctx, Uri.parse(url))
     }
 }
 
@@ -229,38 +258,4 @@ private fun StatusPill(text: String, isError: Boolean) {
             color = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
         )
     }
-}
-
-private suspend fun startLogin(
-    appCtx: android.content.Context,
-    store: SessionStore,
-    provider: OAuthProvider,
-    update: (working: Boolean, status: String?, error: String?) -> Unit,
-) {
-    update(true, "Opening sign-in browser…", null)
-    try {
-        val client = OAuthClient(provider = provider)
-        val req: OAuthRequest = withContext(Dispatchers.Main) { client.startLogin(appCtx) }
-        store.armOAuth(req)
-        // The Custom Tabs intent is fire-and-forget. Keep `isWorking`
-        // true here because the LaunchedEffect upstream will pick up
-        // the callback Uri and finish the flow; if the user just
-        // never returns we re-enable on cancel from the system back.
-    } catch (t: Throwable) {
-        update(false, null, "Couldn't open browser: ${t.message ?: t}")
-        return
-    }
-    // We deliberately don't flip isWorking=false here — the
-    // LaunchedEffect that observes the callback owns the next
-    // transition. If the user backs out of Chrome without
-    // completing, the AgentLoginSheet's own dismiss/cancel button
-    // resets state.
-}
-
-/** Logs the credential JSON to logcat for the spike demo (mirrors iOS). */
-private fun logCredentialToConsole(credential: OAuthCredential) {
-    android.util.Log.i(
-        "AgentLoginSheet",
-        "credential blob (${credential.provider.raw}): ${credential.toJson()}",
-    )
 }
