@@ -173,12 +173,25 @@ extension LitterUI {
                 HStack(spacing: 8) {
                     ForEach(store.savedServers) { server in
                         let isActive = store.endpoint == server.endpoint
+                        // device bug #23: the dot used to mean "selected",
+                        // so it stayed green even with the broker down. Drive
+                        // it from the live connection state for the active
+                        // server (green=connected, amber=connecting/retrying,
+                        // muted=down/idle).
+                        let dotColor: Color = {
+                            guard isActive else { return LitterUI.Palette.textMuted.color }
+                            switch store.harness {
+                            case .live, .linked: return LitterUI.Palette.success.color
+                            case .connecting, .reconnecting: return LitterUI.Palette.warning.color
+                            case .disconnected, .failed: return LitterUI.Palette.textMuted.color
+                            }
+                        }()
                         Button {
                             store.selectSavedServer(server.id, autoConnect: true)
                         } label: {
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(isActive ? LitterUI.Palette.accentStrong.color : LitterUI.Palette.textMuted.color)
+                                    .fill(dotColor)
                                     .frame(width: 6, height: 6)
                                 Text(server.name)
                                     .font(.system(size: 12, weight: .semibold))

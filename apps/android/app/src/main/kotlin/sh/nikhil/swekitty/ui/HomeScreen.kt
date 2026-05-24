@@ -126,6 +126,15 @@ fun HomeScreen(
             Spacer(Modifier.width(8.dp))
             savedServers.forEach { server ->
                 val isActive = endpoint == server.endpoint
+                // device bug #23: the dot meant "selected", so it stayed
+                // green with the broker down. Drive it from the live
+                // connection state for the active server.
+                val dotColor = when {
+                    !isActive -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    harness is HarnessState.Live || harness is HarnessState.Linked -> SweKittyTheme.accentStrong()
+                    harness is HarnessState.Connecting || harness is HarnessState.Reconnecting -> SweKittyTheme.warning()
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                }
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = if (isActive) SweKittyTheme.accentStrong().copy(alpha = 0.32f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
@@ -139,10 +148,7 @@ fun HomeScreen(
                         Box(
                             modifier = Modifier
                                 .size(6.dp)
-                                .background(
-                                    if (isActive) SweKittyTheme.accentStrong() else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                                    CircleShape,
-                                ),
+                                .background(dotColor, CircleShape),
                         )
                         Text(
                             server.name,
