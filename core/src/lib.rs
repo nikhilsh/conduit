@@ -315,6 +315,68 @@ impl SweKittyClient {
         .await
     }
 
+    /// Begin a per-user agent OAuth login (docs/PLAN-AGENT-OAUTH.md
+    /// "Approach v2"). The broker spawns the agent CLI's own `login`
+    /// subcommand, parses the authorize URL + loopback port from its
+    /// stdout, and ferries progress back over the WS as `agent_login_*`
+    /// view-events the delegate surfaces (consumed iOS-side by
+    /// `AgentLoginCoordinator`). Like `set_agent_credentials`, the flow
+    /// is identity-scoped rather than session-scoped, so we carry the
+    /// control frame over any live session WS. Returns `NotConnected`
+    /// if no session is live yet.
+    pub async fn start_agent_login(&self, provider: String) -> Result<(), SweKittyError> {
+        let handle = self.inner.any_handle()?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "start_agent_login",
+                    "provider": provider,
+                }))
+                .await
+        })
+        .await
+    }
+
+    /// Hand the loopback redirect back to the broker so it can complete
+    /// the agent CLI's OAuth exchange. `session_token` is the opaque
+    /// handle the broker emitted in its `agent_login_started`
+    /// view-event; `query_string` is the raw `code=…&state=…` the
+    /// on-device loopback server captured from the redirect.
+    pub async fn agent_login_callback(
+        &self,
+        session_token: String,
+        query_string: String,
+    ) -> Result<(), SweKittyError> {
+        let handle = self.inner.any_handle()?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "agent_login_callback",
+                    "session_token": session_token,
+                    "query_string": query_string,
+                }))
+                .await
+        })
+        .await
+    }
+
+    /// Abort an in-flight agent login (the user dismissed the sheet).
+    /// The broker tears down the spawned `login` subprocess keyed by
+    /// `session_token`. Idempotent broker-side, so a cancel for an
+    /// already-finished flow is harmless.
+    pub async fn cancel_agent_login(&self, session_token: String) -> Result<(), SweKittyError> {
+        let handle = self.inner.any_handle()?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "cancel_agent_login",
+                    "session_token": session_token,
+                }))
+                .await
+        })
+        .await
+    }
+
     pub async fn exit_session(&self, session_id: String) -> Result<(), SweKittyError> {
         let inner = Arc::clone(&self.inner);
         run_on_core(async move {

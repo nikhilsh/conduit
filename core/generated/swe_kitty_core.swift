@@ -808,6 +808,10 @@ public func FfiConverterTypeSessionStoreCore_lower(_ value: SessionStoreCore) ->
 
 public protocol SweKittyClientProtocol : AnyObject {
     
+    func agentLoginCallback(sessionToken: String, queryString: String) async throws 
+    
+    func cancelAgentLogin(sessionToken: String) async throws 
+    
     func connect(delegate: SweKittyDelegate) async throws 
     
     func createSession(assistant: String, branch: String?) async throws  -> String
@@ -833,6 +837,10 @@ public protocol SweKittyClientProtocol : AnyObject {
     func sendFile(sessionId: String, filename: String, mime: String, payload: Data) async throws 
     
     func sendInput(sessionId: String, data: Data) async throws 
+    
+    func setAgentCredentials(provider: String, credentialJson: String) async throws 
+    
+    func startAgentLogin(provider: String) async throws 
     
     func switchAgent(sessionId: String, assistant: String) async throws 
     
@@ -896,6 +904,40 @@ public convenience init(endpoint: String, bearerToken: String) {
 
     
 
+    
+open func agentLoginCallback(sessionToken: String, queryString: String)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_swe_kitty_core_fn_method_swekittyclient_agent_login_callback(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(sessionToken),FfiConverterString.lower(queryString)
+                )
+            },
+            pollFunc: ffi_swe_kitty_core_rust_future_poll_void,
+            completeFunc: ffi_swe_kitty_core_rust_future_complete_void,
+            freeFunc: ffi_swe_kitty_core_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeSweKittyError.lift
+        )
+}
+    
+open func cancelAgentLogin(sessionToken: String)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_swe_kitty_core_fn_method_swekittyclient_cancel_agent_login(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(sessionToken)
+                )
+            },
+            pollFunc: ffi_swe_kitty_core_rust_future_poll_void,
+            completeFunc: ffi_swe_kitty_core_rust_future_complete_void,
+            freeFunc: ffi_swe_kitty_core_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeSweKittyError.lift
+        )
+}
     
 open func connect(delegate: SweKittyDelegate)async throws  {
     return
@@ -1058,6 +1100,40 @@ open func sendInput(sessionId: String, data: Data)async throws  {
                 uniffi_swe_kitty_core_fn_method_swekittyclient_send_input(
                     self.uniffiClonePointer(),
                     FfiConverterString.lower(sessionId),FfiConverterData.lower(data)
+                )
+            },
+            pollFunc: ffi_swe_kitty_core_rust_future_poll_void,
+            completeFunc: ffi_swe_kitty_core_rust_future_complete_void,
+            freeFunc: ffi_swe_kitty_core_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeSweKittyError.lift
+        )
+}
+    
+open func setAgentCredentials(provider: String, credentialJson: String)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_swe_kitty_core_fn_method_swekittyclient_set_agent_credentials(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(provider),FfiConverterString.lower(credentialJson)
+                )
+            },
+            pollFunc: ffi_swe_kitty_core_rust_future_poll_void,
+            completeFunc: ffi_swe_kitty_core_rust_future_complete_void,
+            freeFunc: ffi_swe_kitty_core_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeSweKittyError.lift
+        )
+}
+    
+open func startAgentLogin(provider: String)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_swe_kitty_core_fn_method_swekittyclient_start_agent_login(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(provider)
                 )
             },
             pollFunc: ffi_swe_kitty_core_rust_future_poll_void,
@@ -3598,6 +3674,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_swe_kitty_core_checksum_method_sessionstorecore_sessions() != 42007) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_agent_login_callback() != 23627) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_cancel_agent_login() != 59927) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3635,6 +3717,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_send_input() != 63479) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_set_agent_credentials() != 60700) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_start_agent_login() != 54101) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_switch_agent() != 23090) {

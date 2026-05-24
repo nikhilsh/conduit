@@ -876,6 +876,14 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -937,6 +945,10 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_swe_kitty_core_fn_constructor_swekittyclient_new(`endpoint`: RustBuffer.ByValue,`bearerToken`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_agent_login_callback(`ptr`: Pointer,`sessionToken`: RustBuffer.ByValue,`queryString`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_cancel_agent_login(`ptr`: Pointer,`sessionToken`: RustBuffer.ByValue,
+    ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_connect(`ptr`: Pointer,`delegate`: Long,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,
@@ -962,6 +974,10 @@ internal interface UniffiLib : Library {
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_send_file(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,`mime`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_send_input(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_set_agent_credentials(`ptr`: Pointer,`provider`: RustBuffer.ByValue,`credentialJson`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_start_agent_login(`ptr`: Pointer,`provider`: RustBuffer.ByValue,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_switch_agent(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`assistant`: RustBuffer.ByValue,
     ): Long
@@ -1113,6 +1129,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_sessionstorecore_sessions(
     ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittyclient_agent_login_callback(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittyclient_cancel_agent_login(
+    ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_connect(
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session(
@@ -1138,6 +1158,10 @@ internal interface UniffiLib : Library {
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_send_file(
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_send_input(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittyclient_set_agent_credentials(
+    ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittyclient_start_agent_login(
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_switch_agent(
     ): Short
@@ -1225,6 +1249,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_swe_kitty_core_checksum_method_sessionstorecore_sessions() != 42007.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_agent_login_callback() != 23627.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_cancel_agent_login() != 59927.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1262,6 +1292,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_send_input() != 63479.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_set_agent_credentials() != 60700.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_start_agent_login() != 54101.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_switch_agent() != 23090.toShort()) {
@@ -2163,6 +2199,10 @@ public object FfiConverterTypeSessionStoreCore: FfiConverter<SessionStoreCore, P
 
 public interface SweKittyClientInterface {
     
+    suspend fun `agentLoginCallback`(`sessionToken`: kotlin.String, `queryString`: kotlin.String)
+    
+    suspend fun `cancelAgentLogin`(`sessionToken`: kotlin.String)
+    
     suspend fun `connect`(`delegate`: SweKittyDelegate)
     
     suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?): kotlin.String
@@ -2188,6 +2228,10 @@ public interface SweKittyClientInterface {
     suspend fun `sendFile`(`sessionId`: kotlin.String, `filename`: kotlin.String, `mime`: kotlin.String, `payload`: kotlin.ByteArray)
     
     suspend fun `sendInput`(`sessionId`: kotlin.String, `data`: kotlin.ByteArray)
+    
+    suspend fun `setAgentCredentials`(`provider`: kotlin.String, `credentialJson`: kotlin.String)
+    
+    suspend fun `startAgentLogin`(`provider`: kotlin.String)
     
     suspend fun `switchAgent`(`sessionId`: kotlin.String, `assistant`: kotlin.String)
     
@@ -2280,6 +2324,50 @@ open class SweKittyClient: Disposable, AutoCloseable, SweKittyClientInterface {
         return uniffiRustCall() { status ->
             UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_clone_swekittyclient(pointer!!, status)
         }
+    }
+
+    
+    @Throws(SweKittyException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `agentLoginCallback`(`sessionToken`: kotlin.String, `queryString`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_agent_login_callback(
+                thisPtr,
+                FfiConverterString.lower(`sessionToken`),FfiConverterString.lower(`queryString`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        SweKittyException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(SweKittyException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `cancelAgentLogin`(`sessionToken`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_cancel_agent_login(
+                thisPtr,
+                FfiConverterString.lower(`sessionToken`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        SweKittyException.ErrorHandler,
+    )
     }
 
     
@@ -2504,6 +2592,50 @@ open class SweKittyClient: Disposable, AutoCloseable, SweKittyClientInterface {
             UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_send_input(
                 thisPtr,
                 FfiConverterString.lower(`sessionId`),FfiConverterByteArray.lower(`data`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        SweKittyException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(SweKittyException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `setAgentCredentials`(`provider`: kotlin.String, `credentialJson`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_set_agent_credentials(
+                thisPtr,
+                FfiConverterString.lower(`provider`),FfiConverterString.lower(`credentialJson`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        SweKittyException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(SweKittyException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `startAgentLogin`(`provider`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_start_agent_login(
+                thisPtr,
+                FfiConverterString.lower(`provider`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_void(future, callback, continuation) },

@@ -75,21 +75,27 @@ struct LitterAgentLoginSheetTests {
         #expect(store.activeLoginCoordinator == nil)
     }
 
-    /// The production `SessionStoreAgentLoginTransport` throws
-    /// `AgentLoginTransportError` until the Rust UDL bridge ships —
-    /// pin that so the gap stays surfaced in CI and we notice the
-    /// moment a future PR wires the real send path.
+    /// The production `SessionStoreAgentLoginTransport` now forwards
+    /// through the Rust UDL bridge (`SweKittyClient.startAgentLogin`).
+    /// With no live session/client it surfaces
+    /// `SweKittyError.NotConnected` — the broker-bound send path is
+    /// wired, it just needs a session to carry the control frame. (Was
+    /// previously an `AgentLoginTransportError` "not yet bridged" stub.)
     @Test @MainActor
-    func sessionStoreTransportThrowsUntilUDLBridgeShips() async {
+    func sessionStoreTransportForwardsAndThrowsNotConnectedWithoutSession() async {
         let store = SessionStore()
         let transport = SessionStoreAgentLoginTransport(store: store)
         do {
             try await transport.sendStartAgentLogin(provider: "openai")
-            Issue.record("expected sendStartAgentLogin to throw until the UDL bridge ships")
-        } catch is AgentLoginTransportError {
-            // expected
+            Issue.record("expected sendStartAgentLogin to throw without a live session")
+        } catch let error as SweKittyError {
+            if case .NotConnected = error {
+                // expected — bridge forwards, but there's no live session yet
+            } else {
+                Issue.record("expected SweKittyError.NotConnected, got \(error)")
+            }
         } catch {
-            Issue.record("expected AgentLoginTransportError, got \(error)")
+            Issue.record("expected SweKittyError.NotConnected, got \(error)")
         }
     }
 }

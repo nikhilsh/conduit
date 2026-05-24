@@ -852,6 +852,37 @@ final class SessionStore {
         )
     }
 
+    // MARK: - Agent OAuth login v2 (outbound)
+    //
+    // Forward the three v2 login control frames through the Rust core's
+    // UDL surface. Like `sendAgentCredentials`, the flow is identity-
+    // scoped, so the core carries each frame over any live session WS;
+    // broker handlers are live (PR #114) and progress returns as
+    // `agent_login_*` view-events routed by `routeAgentLoginViewEvent`.
+    // Throws `SweKittyError.NotConnected` if no session is live — the
+    // coordinator surfaces it to the sheet as `.failed`.
+
+    func sendAgentLoginStart(provider: String) async throws {
+        guard let client else {
+            throw SweKittyError.NotConnected(message: "no active swe-kitty client")
+        }
+        try await client.startAgentLogin(provider: provider)
+    }
+
+    func sendAgentLoginCallback(sessionToken: String, queryString: String) async throws {
+        guard let client else {
+            throw SweKittyError.NotConnected(message: "no active swe-kitty client")
+        }
+        try await client.agentLoginCallback(sessionToken: sessionToken, queryString: queryString)
+    }
+
+    func sendAgentLoginCancel(sessionToken: String) async throws {
+        guard let client else {
+            throw SweKittyError.NotConnected(message: "no active swe-kitty client")
+        }
+        try await client.cancelAgentLogin(sessionToken: sessionToken)
+    }
+
     /// Encode the credential's native blob to a JSON string suitable
     /// for the wire envelope's `credential` field. Hoisted as a
     /// `static` so the envelope-shape test in
@@ -1731,21 +1762,21 @@ final class SshHostKeyBridge: SshHostKeyDelegate {
 
 // MARK: - AgentLoginTransport (Approach v2)
 //
-// `AgentLoginCoordinator` ships the control envelopes via this
-// protocol. The Rust core doesn't expose the v2 messages over UDL
-// yet (the broker side is live as of PR #114; the bridge is the gap),
-// so for now every method throws a typed "not yet bridged" error.
-// The inbound dispatch path (`routeAgentLoginViewEvent`) is wired so
-// the moment the UDL surface lands the flow is one method-body
-// update away from end-to-end.
+// `AgentLoginCoordinator` ships the outbound control envelopes via this
+// protocol; each method forwards through the SessionStore's Rust client
+// (`startAgentLogin` / `agentLoginCallback` / `cancelAgentLogin`, bridged
+// over UDL). The broker handlers are live (PR #114) and the inbound
+// dispatch path (`routeAgentLoginViewEvent`) consumes the `agent_login_*`
+// view-events, so the flow is now end-to-end.
 //
 // Concrete `AgentLoginTransport` conformance is a thin actor-isolated
 // wrapper around a SessionStore reference so the coordinator
 // (`@MainActor`) and the protocol (`Sendable`) compose without
 // dragging the store across actor boundaries.
 
-/// Error raised when the v2 OAuth transport is still waiting on the
-/// Rust→Swift UDL surface. Caught by `AgentLoginCoordinator` and
+/// Error raised when the v2 OAuth transport can't reach the store
+/// (released) — the live-client `NotConnected` case is thrown by the
+/// store methods themselves. Caught by `AgentLoginCoordinator` and
 /// surfaced to the sheet as a `.failed(reason:)` state.
 struct AgentLoginTransportError: LocalizedError {
     let detail: String
@@ -1762,21 +1793,24 @@ final class SessionStoreAgentLoginTransport: AgentLoginTransport, @unchecked Sen
     init(store: SessionStore) { self.store = store }
 
     func sendStartAgentLogin(provider: String) async throws {
-        throw AgentLoginTransportError(
-            detail: "start_agent_login isn't wired through the Rust core yet. The broker (PR #114) is live; the SweKittyCore xcframework needs the UDL surface."
-        )
+        guard let store else {
+            throw AgentLoginTransportError(detail: "SessionStore was released")
+        }
+        try await store.sendAgentLoginStart(provider: provider)
     }
 
     func sendAgentLoginCallback(sessionToken: String, queryString: String) async throws {
-        throw AgentLoginTransportError(
-            detail: "agent_login_callback not yet bridged through UDL."
-        )
+        guard let store else {
+            throw AgentLoginTransportError(detail: "SessionStore was released")
+        }
+        try await store.sendAgentLoginCallback(sessionToken: sessionToken, queryString: queryString)
     }
 
     func sendCancelAgentLogin(sessionToken: String) async throws {
-        throw AgentLoginTransportError(
-            detail: "cancel_agent_login not yet bridged through UDL."
-        )
+        guard let store else {
+            throw AgentLoginTransportError(detail: "SessionStore was released")
+        }
+        try await store.sendAgentLoginCancel(sessionToken: sessionToken)
     }
 }
 

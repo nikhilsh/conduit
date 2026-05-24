@@ -261,6 +261,20 @@ interface SweKittyClient {
     [Async, Throws=SweKittyError]
     void set_agent_credentials(string provider, string credential_json);
 
+    // Agent OAuth login v2 (docs/PLAN-AGENT-OAUTH.md "Approach v2").
+    // Outbound control frames carried over any live session WS; the
+    // broker's matching handlers (start_agent_login / agent_login_callback
+    // / cancel_agent_login) are live, and progress comes back as
+    // `agent_login_*` view-events the delegate surfaces.
+    [Async, Throws=SweKittyError]
+    void start_agent_login(string provider);
+
+    [Async, Throws=SweKittyError]
+    void agent_login_callback(string session_token, string query_string);
+
+    [Async, Throws=SweKittyError]
+    void cancel_agent_login(string session_token);
+
     [Async, Throws=SweKittyError]
     void exit_session(string session_id);
 
