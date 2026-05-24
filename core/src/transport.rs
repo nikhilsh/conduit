@@ -40,6 +40,8 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
+use std::collections::HashMap;
+
 use crate::views::{ChatEvent, PreviewInfo, SessionStatus, ViewEventFile};
 use crate::{SweKittyDelegate, SweKittyError};
 
@@ -663,8 +665,11 @@ async fn handle_text(
         code: Option<i32>,
         #[serde(default)]
         view: Option<String>,
+        // Raw so a `view:"status"` sub-event (e.g. agent_login_*) doesn't
+        // fail ChatEvent deserialization and drop the whole envelope. The
+        // "chat" arm deserializes this into a ChatEvent on demand.
         #[serde(default)]
-        event: Option<ChatEvent>,
+        event: Option<serde_json::Value>,
         #[serde(default)]
         from: Option<String>,
         #[serde(default)]
@@ -717,9 +722,40 @@ async fn handle_text(
             delegate.on_exit(session_id.to_string(), env.code.unwrap_or(0));
         }
         "view_event" => {
-            if let (Some(view), Some(ev)) = (env.view, env.event) {
-                if view == "chat" {
-                    delegate.on_chat_event(session_id.to_string(), ev);
+            if let (Some(view), Some(ev)) = (env.view.as_deref(), env.event) {
+                match view {
+                    "chat" => {
+                        if let Ok(chat) = serde_json::from_value::<ChatEvent>(ev) {
+                            delegate.on_chat_event(session_id.to_string(), chat);
+                        }
+                    }
+                    // view:"status" carries typed sub-events keyed by name,
+                    // e.g. {"agent_login_url": {"url": ..., "loopback_port": 8080, ...}}.
+                    // Flatten each sub-event's inner object to string values and
+                    // hand it to the platform router via on_view_event.
+                    "status" => {
+                        if let Some(obj) = ev.as_object() {
+                            for (kind, body) in obj {
+                                let mut payload = HashMap::new();
+                                if let Some(fields) = body.as_object() {
+                                    for (k, v) in fields {
+                                        let s = match v {
+                                            serde_json::Value::String(s) => s.clone(),
+                                            serde_json::Value::Null => continue,
+                                            other => other.to_string(),
+                                        };
+                                        payload.insert(k.clone(), s);
+                                    }
+                                }
+                                delegate.on_view_event(
+                                    session_id.to_string(),
+                                    kind.clone(),
+                                    payload,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

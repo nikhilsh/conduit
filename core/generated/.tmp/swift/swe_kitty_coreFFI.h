@@ -314,6 +314,13 @@ typedef void (*UniffiCallbackInterfaceSweKittyDelegateMethod7)(uint64_t, RustBuf
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_SWE_KITTY_DELEGATE_METHOD8
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_SWE_KITTY_DELEGATE_METHOD8
+typedef void (*UniffiCallbackInterfaceSweKittyDelegateMethod8)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_SSH_HOST_KEY_DELEGATE
 #define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_SSH_HOST_KEY_DELEGATE
 typedef struct UniffiVTableCallbackInterfaceSshHostKeyDelegate {
@@ -333,6 +340,7 @@ typedef struct UniffiVTableCallbackInterfaceSweKittyDelegate {
     UniffiCallbackInterfaceSweKittyDelegateMethod5 _Nonnull onExit;
     UniffiCallbackInterfaceSweKittyDelegateMethod6 _Nonnull onDisconnected;
     UniffiCallbackInterfaceSweKittyDelegateMethod7 _Nonnull onConnectionHealth;
+    UniffiCallbackInterfaceSweKittyDelegateMethod8 _Nonnull onViewEvent;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceSweKittyDelegate;
 
@@ -1084,6 +1092,12 @@ uint16_t uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_disconnected(
 #ifndef UNIFFI_FFIDEF_UNIFFI_SWE_KITTY_CORE_CHECKSUM_METHOD_SWEKITTYDELEGATE_ON_CONNECTION_HEALTH
 #define UNIFFI_FFIDEF_UNIFFI_SWE_KITTY_CORE_CHECKSUM_METHOD_SWEKITTYDELEGATE_ON_CONNECTION_HEALTH
 uint16_t uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_connection_health(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SWE_KITTY_CORE_CHECKSUM_METHOD_SWEKITTYDELEGATE_ON_VIEW_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_SWE_KITTY_CORE_CHECKSUM_METHOD_SWEKITTYDELEGATE_ON_VIEW_EVENT
+uint16_t uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_view_event(void
     
 );
 #endif

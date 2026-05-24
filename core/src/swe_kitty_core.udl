@@ -214,6 +214,11 @@ callback interface SweKittyDelegate {
     void on_exit(string session_id, i32 code);
     void on_disconnected(string reason);
     void on_connection_health(string session_id, ConnectionHealth health);
+    // Typed view_event the core doesn't model directly — currently the
+    // broker's view:"status" sub-events (agent_login_url/_complete/_failed).
+    // `kind` is the sub-event key; `payload` is its inner object flattened
+    // to string values. Platform routes by `kind`.
+    void on_view_event(string session_id, string kind, record<string, string> payload);
 };
 
 interface SweKittyClient {

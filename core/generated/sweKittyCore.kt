@@ -688,6 +688,9 @@ internal interface UniffiCallbackInterfaceSweKittyDelegateMethod6 : com.sun.jna.
 internal interface UniffiCallbackInterfaceSweKittyDelegateMethod7 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`health`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceSweKittyDelegateMethod8 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 @Structure.FieldOrder("acceptHostKey", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceSshHostKeyDelegate(
     @JvmField internal var `acceptHostKey`: UniffiCallbackInterfaceSshHostKeyDelegateMethod0? = null,
@@ -704,7 +707,7 @@ internal open class UniffiVTableCallbackInterfaceSshHostKeyDelegate(
     }
 
 }
-@Structure.FieldOrder("onPtyData", "onChatEvent", "onPreviewReady", "onStatus", "onSnapshot", "onExit", "onDisconnected", "onConnectionHealth", "uniffiFree")
+@Structure.FieldOrder("onPtyData", "onChatEvent", "onPreviewReady", "onStatus", "onSnapshot", "onExit", "onDisconnected", "onConnectionHealth", "onViewEvent", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
     @JvmField internal var `onPtyData`: UniffiCallbackInterfaceSweKittyDelegateMethod0? = null,
     @JvmField internal var `onChatEvent`: UniffiCallbackInterfaceSweKittyDelegateMethod1? = null,
@@ -714,6 +717,7 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
     @JvmField internal var `onExit`: UniffiCallbackInterfaceSweKittyDelegateMethod5? = null,
     @JvmField internal var `onDisconnected`: UniffiCallbackInterfaceSweKittyDelegateMethod6? = null,
     @JvmField internal var `onConnectionHealth`: UniffiCallbackInterfaceSweKittyDelegateMethod7? = null,
+    @JvmField internal var `onViewEvent`: UniffiCallbackInterfaceSweKittyDelegateMethod8? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
@@ -725,8 +729,9 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
         `onExit`: UniffiCallbackInterfaceSweKittyDelegateMethod5? = null,
         `onDisconnected`: UniffiCallbackInterfaceSweKittyDelegateMethod6? = null,
         `onConnectionHealth`: UniffiCallbackInterfaceSweKittyDelegateMethod7? = null,
+        `onViewEvent`: UniffiCallbackInterfaceSweKittyDelegateMethod8? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceSweKittyDelegate(`onPtyData`,`onChatEvent`,`onPreviewReady`,`onStatus`,`onSnapshot`,`onExit`,`onDisconnected`,`onConnectionHealth`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceSweKittyDelegate(`onPtyData`,`onChatEvent`,`onPreviewReady`,`onStatus`,`onSnapshot`,`onExit`,`onDisconnected`,`onConnectionHealth`,`onViewEvent`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceSweKittyDelegate) {
         `onPtyData` = other.`onPtyData`
@@ -737,10 +742,12 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
         `onExit` = other.`onExit`
         `onDisconnected` = other.`onDisconnected`
         `onConnectionHealth` = other.`onConnectionHealth`
+        `onViewEvent` = other.`onViewEvent`
         `uniffiFree` = other.`uniffiFree`
     }
 
 }
+
 
 
 
@@ -1187,6 +1194,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_connection_health(
     ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_view_event(
+    ): Short
     fun ffi_swe_kitty_core_uniffi_contract_version(
     ): Int
     
@@ -1334,6 +1343,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_connection_health() != 43974.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_view_event() != 27595.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -3837,6 +3849,8 @@ public interface SweKittyDelegate {
     
     fun `onConnectionHealth`(`sessionId`: kotlin.String, `health`: ConnectionHealth)
     
+    fun `onViewEvent`(`sessionId`: kotlin.String, `kind`: kotlin.String, `payload`: Map<kotlin.String, kotlin.String>)
+    
     companion object
 }
 
@@ -3946,6 +3960,20 @@ internal object uniffiCallbackInterfaceSweKittyDelegate {
             uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
         }
     }
+    internal object `onViewEvent`: UniffiCallbackInterfaceSweKittyDelegateMethod8 {
+        override fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSweKittyDelegate.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onViewEvent`(
+                    FfiConverterString.lift(`sessionId`),
+                    FfiConverterString.lift(`kind`),
+                    FfiConverterMapStringString.lift(`payload`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
 
     internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
@@ -3962,6 +3990,7 @@ internal object uniffiCallbackInterfaceSweKittyDelegate {
         `onExit`,
         `onDisconnected`,
         `onConnectionHealth`,
+        `onViewEvent`,
         uniffiFree,
     )
 
@@ -4371,6 +4400,45 @@ public object FfiConverterSequenceTypeViewEventFile: FfiConverterRustBuffer<List
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeViewEventFile.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.String, kotlin.String>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, kotlin.String> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, kotlin.String>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterString.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, kotlin.String>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterString.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterString.write(v, buf)
         }
     }
 }

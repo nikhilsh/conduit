@@ -27,7 +27,9 @@ struct LitterAgentLoginSheetTests {
             payload: [
                 "loopback_port": "1455",
                 "session_token": "tok-abc",
-                "authorize_url": "https://example.com/oauth"
+                // Broker emits the field as `url` (see emitAgentLoginURL);
+                // routeAgentLoginViewEvent now reads that verbatim.
+                "url": "https://example.com/oauth"
             ]
         )
 

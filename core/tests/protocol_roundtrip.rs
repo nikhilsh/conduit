@@ -10,6 +10,7 @@
 //! Until this existed, drift between core and broker only showed up when
 //! a user opened the app on a fresh build and noticed missing data.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,6 +21,9 @@ use swe_kitty_core::{
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+/// One recorded `on_view_event` call: (session_id, kind, payload).
+type ViewEventRecord = (String, String, HashMap<String, String>);
+
 /// Records every delegate call so tests can assert on the post-hoc shape.
 #[derive(Default)]
 struct RecordingDelegate {
@@ -27,6 +31,7 @@ struct RecordingDelegate {
     chats: Mutex<Vec<(String, ChatEvent)>>,
     healths: Mutex<Vec<(String, ConnectionHealth)>>,
     disconnects: Mutex<Vec<String>>,
+    view_events: Mutex<Vec<ViewEventRecord>>,
 }
 
 impl SweKittyDelegate for RecordingDelegate {
@@ -45,6 +50,12 @@ impl SweKittyDelegate for RecordingDelegate {
     }
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
         self.healths.lock().unwrap().push((session_id, health));
+    }
+    fn on_view_event(&self, session_id: String, kind: String, payload: HashMap<String, String>) {
+        self.view_events
+            .lock()
+            .unwrap()
+            .push((session_id, kind, payload));
     }
 }
 
@@ -202,6 +213,77 @@ async fn view_event_chat_round_trips_to_delegate() {
     assert_eq!(ev.role, "assistant");
     assert_eq!(ev.content, "hello from the broker");
     assert_eq!(ev.ts, "2026-05-21T08:00:00Z");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn view_event_status_agent_login_round_trips_to_delegate() {
+    // Regression: the broker emits agent_login_* as view_event with
+    // view:"status" and a non-ChatEvent `event` body. Before the core
+    // accepted a raw `event`, this whole envelope failed ChatEvent
+    // deserialization and was dropped — so OAuth login never advanced.
+    let (endpoint, server) = spawn_test_server(|mut ws| async move {
+        let status = serde_json::json!({
+            "type": "status", "session": "s-oauth", "assistant": "codex",
+            "phase": "running", "health": "healthy", "rows": 24, "cols": 80, "yolo": false,
+        });
+        ws.send(Message::Text(status.to_string())).await.unwrap();
+
+        let login = serde_json::json!({
+            "type": "view_event",
+            "session": "s-oauth",
+            "view": "status",
+            "event": {
+                "agent_login_url": {
+                    "provider": "openai",
+                    "url": "https://auth.openai.com/authorize?x=1",
+                    "loopback_port": 8123,
+                    "session_token": "tok-abc",
+                }
+            },
+        });
+        ws.send(Message::Text(login.to_string())).await.unwrap();
+        let _ = ws.next().await;
+    })
+    .await;
+
+    let delegate = Arc::new(RecordingDelegate::default());
+    let _handle = transport::connect(
+        endpoint,
+        "s-oauth".into(),
+        "codex".into(),
+        "test-token".into(),
+        delegate.clone(),
+    )
+    .await
+    .expect("connect");
+
+    let got = wait_until(Duration::from_secs(2), || {
+        !delegate.view_events.lock().unwrap().is_empty()
+    })
+    .await;
+    assert!(got, "delegate never received the agent_login view_event");
+
+    let events = delegate.view_events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    let (sid, kind, payload) = &events[0];
+    assert_eq!(sid, "s-oauth");
+    assert_eq!(kind, "agent_login_url");
+    assert_eq!(payload.get("provider").map(String::as_str), Some("openai"));
+    assert_eq!(
+        payload.get("url").map(String::as_str),
+        Some("https://auth.openai.com/authorize?x=1")
+    );
+    // Numbers are stringified (no quotes) so the platform can parse them.
+    assert_eq!(
+        payload.get("loopback_port").map(String::as_str),
+        Some("8123")
+    );
+    assert_eq!(
+        payload.get("session_token").map(String::as_str),
+        Some("tok-abc")
+    );
 
     server.abort();
 }

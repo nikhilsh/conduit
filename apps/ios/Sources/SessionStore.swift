@@ -946,7 +946,7 @@ final class SessionStore {
             guard
                 let portStr = payload["loopback_port"], let port = UInt16(portStr),
                 let token = payload["session_token"],
-                let urlStr = payload["authorize_url"], let url = URL(string: urlStr)
+                let urlStr = payload["url"], let url = URL(string: urlStr)
             else { return }
             coordinator.handleAgentLoginURL(loopbackPort: port, sessionToken: token, authorizeURL: url)
         case "agent_login_complete":
@@ -1842,5 +1842,8 @@ private final class StoreDelegate: SweKittyDelegate {
     }
     func onConnectionHealth(sessionId: String, health: ConnectionHealth) {
         Task { @MainActor in self.store?.ingestConnectionHealth(sessionId, health) }
+    }
+    func onViewEvent(sessionId: String, kind: String, payload: [String: String]) {
+        Task { @MainActor in self.store?.routeAgentLoginViewEvent(kind: kind, payload: payload) }
     }
 }

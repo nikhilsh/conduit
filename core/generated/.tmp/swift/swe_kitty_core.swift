@@ -2965,6 +2965,8 @@ public protocol SweKittyDelegate : AnyObject {
     
     func onConnectionHealth(sessionId: String, health: ConnectionHealth) 
     
+    func onViewEvent(sessionId: String, kind: String, payload: [String: String]) 
+    
 }
 
 
@@ -3168,6 +3170,34 @@ fileprivate struct UniffiCallbackInterfaceSweKittyDelegate {
                 return uniffiObj.onConnectionHealth(
                      sessionId: try FfiConverterString.lift(sessionId),
                      health: try FfiConverterTypeConnectionHealth.lift(health)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onViewEvent: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            kind: RustBuffer,
+            payload: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceSweKittyDelegate.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onViewEvent(
+                     sessionId: try FfiConverterString.lift(sessionId),
+                     kind: try FfiConverterString.lift(kind),
+                     payload: try FfiConverterDictionaryStringString.lift(payload)
                 )
             }
 
@@ -3553,6 +3583,32 @@ fileprivate struct FfiConverterSequenceTypeViewEventFile: FfiConverterRustBuffer
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
+    public static func write(_ value: [String: String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for (key, value) in value {
+            FfiConverterString.write(key, into: &buf)
+            FfiConverterString.write(value, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String: String] {
+        let len: Int32 = try readInt(&buf)
+        var dict = [String: String]()
+        dict.reserveCapacity(Int(len))
+        for _ in 0..<len {
+            let key = try FfiConverterString.read(from: &buf)
+            let value = try FfiConverterString.read(from: &buf)
+            dict[key] = value
+        }
+        return dict
+    }
+}
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
 private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
 
@@ -3759,6 +3815,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_connection_health() != 43974) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_swekittydelegate_on_view_event() != 27595) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -47,6 +47,14 @@ impl SweKittyDelegate for StdoutDelegate {
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
         eprintln!("[health:{session_id}] {health:?}");
     }
+    fn on_view_event(
+        &self,
+        session_id: String,
+        kind: String,
+        payload: std::collections::HashMap<String, String>,
+    ) {
+        eprintln!("[view_event:{session_id}] {kind} {payload:?}");
+    }
 }
 
 #[tokio::main]

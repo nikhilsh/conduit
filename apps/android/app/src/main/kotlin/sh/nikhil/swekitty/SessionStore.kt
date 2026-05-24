@@ -37,6 +37,7 @@ import uniffi.swe_kitty_core.SshCredentials
 import uniffi.swe_kitty_core.SshException
 import uniffi.swe_kitty_core.SshHostKeyDelegate
 import uniffi.swe_kitty_core.SweKittyClient
+import sh.nikhil.swekitty.auth.AgentLoginCoordinator
 import uniffi.swe_kitty_core.SweKittyDelegate
 import uniffi.swe_kitty_core.sshBootstrap as ffiSshBootstrap
 import java.util.concurrent.CountDownLatch
@@ -1061,6 +1062,40 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         _sessionLifecycle.value = transform(_sessionLifecycle.value)
     }
 
+    /**
+     * Active v2 agent-login coordinator, set by the login sheet while a
+     * flow is in progress. Inbound `agent_login_*` view_events route
+     * here. Mirrors iOS `SessionStore.activeLoginCoordinator`.
+     */
+    @Volatile
+    var activeLoginCoordinator: AgentLoginCoordinator? = null
+
+    /**
+     * Route an inbound `agent_login_*` view_event (delivered by the
+     * core's `on_view_event`) to the active coordinator. No-op when no
+     * flow is active — late deliveries after cancel are dropped. Mirror
+     * of iOS `routeAgentLoginViewEvent`.
+     */
+    fun routeAgentLoginViewEvent(kind: String, payload: Map<String, String>) {
+        val coordinator = activeLoginCoordinator ?: return
+        when (kind) {
+            "agent_login_url" -> {
+                val port = payload["loopback_port"]?.toIntOrNull() ?: return
+                val token = payload["session_token"] ?: return
+                val url = payload["url"]?.let { runCatching { java.net.URI.create(it) }.getOrNull() } ?: return
+                coordinator.handleAgentLoginURL(port, token, url)
+            }
+            "agent_login_complete" -> {
+                coordinator.handleAgentLoginComplete()
+                activeLoginCoordinator = null
+            }
+            "agent_login_failed" -> {
+                coordinator.handleAgentLoginFailed(payload["reason"] ?: "broker reported failure")
+                activeLoginCoordinator = null
+            }
+        }
+    }
+
     // SweKittyDelegate — callbacks arrive on UniFFI worker threads; mutate
     // StateFlows directly (they're thread-safe) but no UI assumptions here.
 
@@ -1076,6 +1111,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
         }
         refreshConversation(sessionId)
+    }
+
+    override fun onViewEvent(sessionId: String, kind: String, payload: Map<String, String>) {
+        routeAgentLoginViewEvent(kind, payload)
     }
 
     override fun onPreviewReady(sessionId: String, preview: PreviewInfo) {

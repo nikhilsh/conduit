@@ -75,6 +75,13 @@ pub trait SweKittyDelegate: Send + Sync {
     fn on_exit(&self, session_id: String, code: i32);
     fn on_disconnected(&self, reason: String);
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth);
+    /// A typed `view_event` the core doesn't model as its own delegate
+    /// call — currently the broker's `view:"status"` sub-events
+    /// (`agent_login_url` / `_complete` / `_failed`, see
+    /// docs/PLAN-AGENT-OAUTH.md "Approach v2"). `kind` is the sub-event
+    /// key; `payload` is its inner object flattened to string values
+    /// (numbers/bools stringified). The platform routes by `kind`.
+    fn on_view_event(&self, session_id: String, kind: String, payload: HashMap<String, String>);
 }
 
 pub use ssh::{SshAuth, SshBootstrapResult, SshCredentials, SshError};
@@ -566,5 +573,9 @@ impl SweKittyDelegate for ClientDelegate {
 
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
         self.delegate.on_connection_health(session_id, health);
+    }
+
+    fn on_view_event(&self, session_id: String, kind: String, payload: HashMap<String, String>) {
+        self.delegate.on_view_event(session_id, kind, payload);
     }
 }
