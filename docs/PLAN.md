@@ -46,7 +46,7 @@
   - iOS outbound bridge: `SessionStore.startAgentLogin/...callback/...cancel` currently surface "not yet bridged through UDL" toasts — the Rust core / UniFFI surface for `start_agent_login` etc. is not wired (`apps/ios/Sources/SessionStore.swift:1766`). Without this, the iOS sheet can render broker-emitted login URLs but cannot initiate or complete a flow.
   - Android Stage 3 finish: pure-data parser + state machine landed, but `AgentLoginSheet.kt` is not wired to a real Chrome Custom Tabs flow + `java.net.ServerSocket` loopback yet.
   - Stage 4 cleanup: v1 `OAuthClient` (iOS+Android) + `set_agent_credentials` WS message + Keychain blobs still ship; deletion is gated on v2 working end-to-end on both platforms.
-- **Rust-first refactor slice 3** (`docs/PLAN-2026-05-19.md` §8): lift reducer logic from `apps/ios/Sources/SessionStore.swift` + Android `SessionStore.kt` into `core/src/store/`. Slices 1 & 2 (typed classifier + tool-card consumption) shipped; slice 3 (AppStore in Rust) open.
+- **Rust-first refactor slice 3** (`docs/PLAN-2026-05-19.md` §8): the shared reducer `core/src/store/mod.rs` (`SessionStoreCore`) **already exists** — skeleton in PR #41, and iOS shadow-writes into it as of PR #52 (see `apps/ios/Sources/SessionStore.swift:280` + the `Rust shadow-store helpers` MARK ~line 1507). What's still open: (1) port the same shadow-write into Android `SessionStore.kt`, then (2) make both platforms *read* from the Rust store and drop their private reducer maps so the dual-write goes away. Slices 1 & 2 (typed classifier + tool-card consumption) shipped.
 - **Terminal Stage 3** (selection / copy / paste) on Android — iOS done (`docs/PLAN-TERMINAL-REWRITE.md`).
 - **Voice rail B** (realtime WebRTC) — rail A (Whisper-style push-to-talk) shipped.
 - **Discovery UI parity** (mDNS browser / server switching UX polish).
@@ -54,7 +54,6 @@
 ### Planned / Future
 - Push notifications + background fetch/wakeup (Package 5; broker has no `push/` package yet).
 - Composer attach sheet + context bar + expanded editor (final KittyLitter polish round, no plan doc yet).
-- `core/src/store/` (Rust-first AppStore) — replaces the duplicated reducer logic in both `SessionStore`s.
 
 ## Original Planning Context (Preserved)
 
