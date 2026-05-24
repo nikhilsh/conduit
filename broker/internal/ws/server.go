@@ -595,15 +595,20 @@ func (c *client) handleText(payload []byte) {
 		// Mobile-side optimistic local echo (SessionStore.sendChat)
 		// handles the chat-tab visibility for the outgoing message.
 		if env.Msg != "" {
-			// Prime the chat scraper to capture the agent's reply.
-			// Must happen before the Write — drain may start producing
-			// reply bytes immediately, and we want them captured.
-			c.sess.MarkUserChatSent(env.Msg)
-			// TUI agents (Claude, Codex) submit on CR, not LF — writing
-			// "\n" left the typed text in the prompt without actually
-			// being entered, forcing users to switch to the Terminal
-			// tab and press Return manually.
-			_, _ = c.sess.Write([]byte(env.Msg + "\r"))
+			// Structured chat channel (chat_mode="stream-json", task
+			// #24): SendChat hands the message to the headless agent and
+			// returns true, so we skip the legacy PTY scrape path.
+			if !c.sess.SendChat(env.Msg) {
+				// Default TUI path. Prime the chat scraper to capture
+				// the agent's reply before the Write — drain may start
+				// producing reply bytes immediately.
+				c.sess.MarkUserChatSent(env.Msg)
+				// TUI agents (Claude, Codex) submit on CR, not LF —
+				// writing "\n" left the typed text in the prompt without
+				// being entered, forcing users to switch to the Terminal
+				// tab and press Return manually.
+				_, _ = c.sess.Write([]byte(env.Msg + "\r"))
+			}
 		}
 	case "rename_session":
 		// Protocol §3.3: validate against `^[A-Za-z0-9 _-]{1,32}$`,

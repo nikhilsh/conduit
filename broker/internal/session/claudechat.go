@@ -18,6 +18,25 @@ import (
 // tests.
 var claudeChatNow = time.Now
 
+// claudeStreamCommand builds the argv that runs the agent headless in
+// stream-json mode for the structured chat channel: the adapter's own
+// command + args, then the stream-json flags. `-p` + stream-json output
+// requires `--verbose` (verified against Claude Code 2.1.x); without it the
+// CLI refuses.
+func claudeStreamCommand(command, args []string) []string {
+	argv := make([]string, 0, len(command)+len(args)+6)
+	argv = append(argv, command...)
+	argv = append(argv, args...)
+	argv = append(argv,
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+	)
+	return argv
+}
+
 // encodeClaudeUserMessage builds one stream-json input line for the user's
 // composer message: the `{"type":"user", …}` envelope claude reads on stdin
 // in `--input-format stream-json`. A trailing newline terminates the line.
