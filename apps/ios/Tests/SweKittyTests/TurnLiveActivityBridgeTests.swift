@@ -80,6 +80,26 @@ struct TurnLiveActivityBridgeTests {
         #expect(intents == [.tick])
     }
 
+    @Test func emptyFirstFrameDoesNotStrandLaterItems() {
+        // Regression: a session usually appears with an empty conversation
+        // first (it's in statusBySession before its first tool item). The
+        // next frame's tool item must still emit `.observe` — previously a
+        // `lastSeenItemID = ""` seed caused the cursor-walk to skip every
+        // later item, so the Live Activity never started. See PR #151/#152.
+        var core = TurnLiveActivityBridgeCore(idleTimeout: 5)
+        let empty = TurnLiveActivityFrame(sessions: [session(items: [])])
+        _ = core.ingest(frame: empty, now: Date(timeIntervalSince1970: 100))
+
+        let withTool = TurnLiveActivityFrame(sessions: [
+            session(items: [item("i1", kind: .tool, toolName: "Bash", at: 101)])
+        ])
+        let intents = core.ingest(frame: withTool, now: Date(timeIntervalSince1970: 101))
+        #expect(intents.contains(where: {
+            if case let .observe(_, _, observed) = $0 { return observed.id == "i1" }
+            return false
+        }))
+    }
+
     // MARK: - Idempotent re-ingest
 
     @Test func sameFrameTwiceProducesNoSecondObserve() {

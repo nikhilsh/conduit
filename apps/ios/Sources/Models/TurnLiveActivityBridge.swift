@@ -139,11 +139,16 @@ public struct TurnLiveActivityBridgeCore {
                 }
                 lastSeenItemID[sid] = item.id
             }
-            // Seed the cursor when the very first frame arrives empty
-            // so we don't replay the prefix on the next frame.
-            if conversation.isEmpty, lastSeenItemID[sid] == nil {
-                lastSeenItemID[sid] = ""
-            }
+            // NOTE: we deliberately do NOT seed lastSeenItemID for an
+            // empty first frame. Seeding it to "" strands the session:
+            // the cursor-walk above skips every item up to and including
+            // `lastSeenItemID`, and since no real item has id "", a "" seed
+            // would skip all future items — so the activity never starts
+            // for a session whose first observed frame was empty (common,
+            // since a session appears in statusBySession before its first
+            // tool item). Leaving the cursor unset means the next non-empty
+            // frame is processed from the start. Matches the Android port
+            // in `TurnActivityBridgeCore` (PR #151).
         }
 
         // Idle-timeout sweep: any session that's past the window
