@@ -66,7 +66,21 @@ func startChatProcess(
 		// processClaudeStreamOutput returns at EOF (agent exit); the
 		// goroutine then ends. Reap the process so it doesn't zombie.
 		_ = processClaudeStreamOutput(stdout, publish)
-		_ = cmd.Wait()
+		werr := cmd.Wait()
+		// Surface an *unexpected* exit in the Chat tab so a dead
+		// stream-json agent isn't just silence (the original #6
+		// symptom). Stay quiet on an intentional Close() — that's the
+		// user ending the session, not a crash.
+		cp.mu.Lock()
+		intentional := cp.closed
+		cp.mu.Unlock()
+		if !intentional {
+			msg := "⚠️ The agent process ended. Start a new session to continue."
+			if werr != nil {
+				msg = "⚠️ The agent process exited (" + werr.Error() + "). Start a new session to continue."
+			}
+			publishChatSystem(publish, msg)
+		}
 	}()
 	return cp, nil
 }
