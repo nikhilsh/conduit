@@ -103,11 +103,11 @@ type Session struct {
 	// nil in stream-json mode (the PTY is a shell, not the agent).
 	scraper *chatScraper
 
-	// chat is the structured-chat subprocess. Non-nil only when the
-	// adapter sets chat_mode="stream-json" (B-i): the agent runs
-	// headless here while the PTY hosts a shell for the Terminal tab.
-	// See docs/PLAN-CHAT-CHANNEL.md (task #24).
-	chat *chatProcess
+	// chat is the structured-chat backend. Non-nil only when the adapter
+	// sets a structured chat_mode (claude stream-json or codex exec): the
+	// agent runs headless here while the PTY hosts a shell for the
+	// Terminal tab (B-i). See docs/PLAN-CHAT-CHANNEL.md (task #24).
+	chat chatBackend
 
 	// recorder writes PTY bytes + view_events to a per-session
 	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
@@ -142,10 +142,10 @@ func New(id string, adapter agents.Adapter) (*Session, error) {
 
 func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Session, error) {
 	var cmd *exec.Cmd
-	if adapter.ChatMode == "stream-json" {
-		// B-i: the agent runs headless in stream-json (started below as a
-		// chatProcess); the PTY hosts an interactive shell for the
-		// Terminal tab.
+	if structuredChatBackend(adapter.ChatMode) != "" {
+		// B-i: a structured chat_mode runs the agent headless (started
+		// below as a chatBackend); the PTY hosts an interactive shell
+		// for the Terminal tab.
 		cmd = exec.Command("bash")
 	} else {
 		cmd = exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
@@ -296,11 +296,11 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		}
 		return nil, err
 	}
-	if adapter.ChatMode == "stream-json" {
-		// Structured chat channel (B-i): run the agent headless in
-		// stream-json. It publishes clean chat events via the same path
-		// the scraper used, so no PTY scraping — scraper stays nil. The
-		// PTY (a shell) still drains to the Terminal tab below.
+	switch structuredChatBackend(adapter.ChatMode) {
+	case "claude":
+		// claude headless in stream-json. Publishes clean chat events via
+		// the same path the scraper used — no PTY scraping (scraper stays
+		// nil); the PTY (a shell) drains to the Terminal tab below.
 		chat, cerr := startChatProcess(
 			context.Background(),
 			claudeStreamCommand(adapter.Command, adapter.Args),
@@ -313,7 +313,11 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		} else {
 			s.chat = chat
 		}
-	} else {
+	case "codex":
+		// codex via per-turn exec/resume; constructed lazily (spawns on
+		// first Send). Same publish path; PTY is a shell.
+		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.PublishText)
+	default:
 		s.scraper = newChatScraper(s.PublishText)
 		go s.scraper.run(s.closed)
 	}
