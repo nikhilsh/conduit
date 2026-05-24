@@ -4,7 +4,7 @@ Entry point for new contributors. For full motivation, roadmap, and v1 scope, se
 
 ## One-paragraph summary
 
-A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) running on **`swe-kitty-broker`** — our own Go server that owns PTYs, git worktrees, and Docker-spawned agent containers. Each *project* is a tab in the app; *within* a project, the user switches between Terminal / Agent Chat / Browser-preview views. Agents are interchangeable mid-session via a structured HTML handoff document. The broker checkpoints session state every 60s; long-running sessions survive crashes, network blips, and agent swaps.
+A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) running on **`swe-kitty-broker`** — our own Go server that owns PTYs, git worktrees, and the agent CLI processes it spawns directly on the host. Each *project* is a tab in the app; *within* a project, the user switches between Terminal / Agent Chat / Browser-preview views. Agents are interchangeable mid-session via a structured HTML handoff document. The broker checkpoints session state every 60s; long-running sessions survive crashes, network blips, and agent swaps.
 
 ## Layers
 
@@ -18,11 +18,11 @@ A native iOS + Android client drives AI coding agents (Claude Code, Codex, …) 
 └────────────────────┬────────────────────────────┘
                      │ WebSocket
 ┌────────────────────┴────────────────────────────┐
-│  swe-kitty-broker (Go)                          │  ← PTY, worktrees, Docker, checkpoints
+│  swe-kitty-broker (Go)                          │  ← PTY, worktrees, agents, checkpoints
 └────────────────────┬────────────────────────────┘
-                     │ docker run
+                     │ spawn + PTY
 ┌────────────────────┴────────────────────────────┐
-│  Agent containers (claude, codex, …)             │  ← any CLI agent behind a TOML adapter
+│  Agent processes (claude, codex, …)              │  ← any CLI agent behind a TOML adapter
 └──────────────────────────────────────────────────┘
 ```
 
@@ -74,7 +74,7 @@ Renders directly in the in-app browser, machine-readable via `data-section` attr
 
 ## Why interchangeable agents
 
-The agent is just a CLI in a Docker container connected to a PTY. The broker doesn't know what's inside. The only contract is: read `HANDOFF.html` on start, trap `SIGUSR1` to write `HANDOFF-OUT.html`. Adding a new agent = one TOML + one Dockerfile.
+The agent is just a CLI process connected to a PTY. The broker doesn't know what's inside. The only contract is: read `HANDOFF.html` on start, trap `SIGUSR1` to write `HANDOFF-OUT.html`. Adding a new agent = one TOML adapter.
 
 ## Why long-running matters
 

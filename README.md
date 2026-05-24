@@ -17,7 +17,7 @@ swe-kitty is its own product — three layers (Rust core, Go broker, native shel
                 │ WebSocket
 ┌───────────────┴───────────────┐
 │  swe-kitty-broker (Go)       │
-│  PTY · worktrees · Docker     │
+│  PTY · worktrees · agents     │
 └───────────────────────────────┘
 ```
 
