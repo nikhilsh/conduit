@@ -137,3 +137,30 @@ My lean: **B-i** — it's the most useful and the cleanest separation.
 3. Terminal-tab reconciliation per the sub-decision above.
 4. Codex: spike `codex exec`/`mcp-server` structured output; add its adapter.
 5. Retire `chatScraper` once both agents are on the structured path.
+
+## Status (2026-05-25): shipped
+
+The structured channel is **implemented and the default for both agents**:
+
+- **claude** — `chat_mode="stream-json"` (embedded default). Runs headless
+  `claude -p --input-format stream-json --output-format stream-json
+  --include-partial-messages --verbose`; `chatProcess` pipes the composer to
+  stdin and maps stdout → chat `view_event`s (`claudestream.go` parser +
+  `claudechat.go` mappers). Device-verified (clean replies, shell terminal).
+- **codex** — `chat_mode="codex-exec"` (embedded default). `codexChatProcess`
+  runs `codex exec --json` (first turn, captures `thread_id`) then `codex
+  exec resume <thread_id> --json` per message (`codexstream.go` parser);
+  multi-turn context verified on codex-cli 0.132. Sandboxed for now.
+- **Backend selection** — a `chatBackend` interface + `structuredChatBackend()`
+  pick claude vs codex by `chat_mode`; the session spawns a **bash shell** on
+  the PTY (Terminal tab, B-i) and runs the backend headless. `chat_mode==""`
+  keeps the legacy PTY-agent + `chatScraper` path **as a fallback** (slice 5
+  = "scraper is fallback-only", not deleted).
+- **Tool cards** — `tool_use` blocks → `role:"tool"` `"Name: <summary>"`
+  events the client classifier renders as cards.
+- **Hardening** — an unexpected agent exit publishes a `role:"system"` chat
+  notice instead of going silent.
+
+Follow-ups (not blocking, need on-device confirmation of the codex path
+first): codex tool-item (`command_execution`) cards; codex
+approval/sandbox-bypass for chat; partial-message live typing.
