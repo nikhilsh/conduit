@@ -316,3 +316,20 @@ func TestSeedClaudeConfig_CorruptNotClobbered(t *testing.T) {
 		t.Fatalf("corrupt config was clobbered: got %q", string(data))
 	}
 }
+
+// TestCommandEnvSetsSandbox pins IS_SANDBOX=1 in the spawned agent env.
+// Claude Code refuses --dangerously-skip-permissions under root without
+// it, which crash-loops claude sessions on a root broker. Verified live:
+// `IS_SANDBOX=1 claude --dangerously-skip-permissions` runs as root.
+func TestCommandEnvSetsSandbox(t *testing.T) {
+	env := (&Session{ID: "s1", Assistant: "claude"}).commandEnv(nil)
+	found := false
+	for _, kv := range env {
+		if kv == "IS_SANDBOX=1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("commandEnv missing IS_SANDBOX=1; env=%v", env)
+	}
+}
