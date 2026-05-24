@@ -21,6 +21,7 @@ import (
 	"github.com/nikhilsh/swe-kitty/broker/internal/auth"
 	"github.com/nikhilsh/swe-kitty/broker/internal/credentials"
 	"github.com/nikhilsh/swe-kitty/broker/internal/oauth"
+	"github.com/nikhilsh/swe-kitty/broker/internal/push"
 	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 )
 
@@ -55,6 +56,13 @@ type Server struct {
 	// cancel_agent_login control messages are rejected with a chat-tool
 	// error and the wire stays open.
 	OAuth *oauth.Manager
+	// Push holds the per-device push-notification token registry
+	// (Package 5). Nil-safe: when nil, register_push_token /
+	// unregister_push_token control messages are ignored. The broker is
+	// single-operator today, so all tokens share one bucket
+	// (pushIdentity); per-identity keying in the registry is forward
+	// compat for a future multi-tenant broker.
+	Push *push.Registry
 }
 
 func New(a *auth.Store, m *session.Manager) *Server {
@@ -82,6 +90,18 @@ func (s *Server) WithOAuth(mgr *oauth.Manager) *Server {
 	s.OAuth = mgr
 	return s
 }
+
+// WithPush wires the push-token registry into the server (Package 5).
+// Fluent, nil-safe like the others: without it, register_push_token
+// control messages are ignored.
+func (s *Server) WithPush(reg *push.Registry) *Server {
+	s.Push = reg
+	return s
+}
+
+// pushIdentity is the single-operator bucket every device token is
+// registered under today. See the Server.Push field comment.
+const pushIdentity = "broker"
 
 // Handler returns the registered HTTP handler.
 func (s *Server) Handler() http.Handler {
@@ -491,6 +511,9 @@ func (c *client) handleText(payload []byte) {
 		// extensibility lets us add fields without a flag day.
 		SessionToken string `json:"session_token"`
 		QueryString  string `json:"query_string"`
+		// register_push_token / unregister_push_token (Package 5).
+		Platform string `json:"platform"`
+		Token    string `json:"token"`
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
@@ -623,8 +646,35 @@ func (c *client) handleText(payload []byte) {
 		// timeout). Kill the CLI subprocess so we don't leak a
 		// listening loopback. Silent no-op when the token is unknown.
 		c.handleCancelAgentLogin(env.SessionToken)
+	case "register_push_token":
+		// Package 5: the phone registers its APNs/FCM device token so
+		// the broker can wake it on turn-complete / pending-input. The
+		// WS is already bearer-authenticated; tokens land in the
+		// single-operator bucket. Bad input is dropped silently (the
+		// phone retries on next launch) — no socket-killing error.
+		c.handleRegisterPushToken(env.Platform, env.Token, true)
+	case "unregister_push_token":
+		// Phone logged out / disabled notifications.
+		c.handleRegisterPushToken(env.Platform, env.Token, false)
 	default:
 		// Per protocol §3.3: unknown types are logged and ignored.
+	}
+}
+
+// handleRegisterPushToken adds (register=true) or removes
+// (register=false) a device token from the push registry. No-op when no
+// registry is wired or the input is malformed — the phone re-registers
+// on its next launch, so a dropped registration is self-healing.
+func (c *client) handleRegisterPushToken(platform, token string, register bool) {
+	server := c.serverRef()
+	if server == nil || server.Push == nil {
+		return
+	}
+	dt := push.DeviceToken{Platform: push.Platform(platform), Token: token}
+	if register {
+		server.Push.Register(pushIdentity, dt)
+	} else {
+		server.Push.Unregister(pushIdentity, dt)
 	}
 }
 

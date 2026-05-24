@@ -31,6 +31,7 @@ import (
 	"github.com/nikhilsh/swe-kitty/broker/internal/credentials"
 	"github.com/nikhilsh/swe-kitty/broker/internal/discovery"
 	"github.com/nikhilsh/swe-kitty/broker/internal/oauth"
+	"github.com/nikhilsh/swe-kitty/broker/internal/push"
 	"github.com/nikhilsh/swe-kitty/broker/internal/replay"
 	"github.com/nikhilsh/swe-kitty/broker/internal/session"
 	"github.com/nikhilsh/swe-kitty/broker/internal/ws"
@@ -129,6 +130,10 @@ func runUp(args []string) int {
 	oauthMgr := oauth.NewManager()
 	srv.WithOAuth(oauthMgr)
 	log.Printf("oauth: server-side login manager wired (providers: openai, anthropic)")
+	// Package 5: device-token registry for push notifications. The
+	// register_push_token WS handler fills it; the APNs/FCM senders +
+	// event triggers land in follow-ups.
+	srv.WithPush(push.NewRegistry())
 	// Replay HTTP surface lives on the same mux as the WS server.
 	// Secret = bearer token: anyone who can already attach to the WS
 	// can mint a replay URL, but external observers cannot enumerate.
