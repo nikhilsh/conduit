@@ -2,7 +2,6 @@
 # Production adapter (consumed by swe-kitty-harness) lives at agents/codex.toml.
 
 name             = "codex"
-image            = "swekitty/codex:latest"
 command          = ["codex"]
 args             = ["--dangerously-bypass-approvals-and-sandbox"]
 env_passthrough  = ["OPENAI_API_KEY"]

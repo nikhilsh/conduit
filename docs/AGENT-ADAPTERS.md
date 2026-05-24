@@ -13,67 +13,69 @@ The TOML schema is the same; only the consumers differ.
 
 ```toml
 name             = "claude"                              # required; matches ?assistant=
-image            = "swekitty/claude:latest"              # required; Docker image tag
-command          = ["claude"]                            # required; ENTRYPOINT override
+command          = ["claude"]                            # required; the CLI to exec
 args             = ["--dangerously-skip-permissions"]    # optional; appended to command
 env_passthrough  = ["ANTHROPIC_API_KEY"]                 # env keys to forward from host
-workdir          = "/workspace"                          # cwd inside container; mount target
+workdir          = "/workspace"                          # required; fallback cwd (a per-session worktree is used when available)
 chat_event_port_env = "AGENT_CHAT_PORT"                  # optional MCP bridge port var
 
 [hooks]
-on_start = "swe-kitty memory render --session $SESSION_UUID > /workspace/.swe-kitty/HANDOFF.html"
+on_start = "swe-kitty memory render --session $SESSION_UUID > .swe-kitty/HANDOFF.html"
 on_exit  = "swe-kitty memory checkpoint --session $SESSION_UUID --reason 'exit'"
 on_swap  = "swe-kitty memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"
 ```
 
-Required fields: `name`, `image`, `command`, `workdir`. Everything else has a documented default.
+Required fields: `name`, `command`, `workdir`. Everything else has a documented default. (A legacy `image` field is still accepted but ignored — see §2.)
 
-## 2. Container model
+## 2. Process model
 
-**One container per broker, all agents pre-installed inside it.** This
-matches the pattern upstream `swe-swe` settled on after experimenting with
-per-agent containers: per-session isolation comes from per-session git
-worktrees and per-session PTY/process trees, not from per-session Docker
-containers. The broker binary runs as user `app` (uid 1000) inside the
-image — that's specifically what lets claude accept
-`--dangerously-skip-permissions`, which it refuses under root.
+**The broker runs directly on the host and spawns each agent as a child
+process** — no Docker, no containers. Per-session isolation comes from a
+per-session git **worktree**, a per-session ephemeral **`$HOME`**, and the
+per-session **PTY/process tree** — not from any container boundary.
 
-The canonical image is built from `broker/docker/Dockerfile` and tagged
-`swekitty/broker:latest`. See `docs/SELF-HOST.md` for the
-`docker compose up -d` flow.
+The broker may run as **root**: it sets `IS_SANDBOX=1` for the agents it
+spawns, which is what lets Claude Code accept
+`--dangerously-skip-permissions` under root (it otherwise refuses). See
+`docs/SELF-HOST.md` for install + run, and `PLAN-DEVICE-BUGS-2026-05-24.md`
+for why this replaced the old "run as a non-root container user" approach.
 
-### 2.1 What the image ships
-- `swe-kitty-broker` binary (the Go server), built from this repo.
-- Every agent CLI we ship a TOML adapter for (currently `claude`,
-  `codex`) — installed globally via `npm install -g`.
-- `git`, `bash`, `jq`, `curl`, `openssl`, `procps`, `tini`.
-- The production agent TOMLs from `agents/` mounted at
-  `/etc/swe-kitty/agents` and read on startup via `--agents-dir`.
+> A legacy `image` field may still appear in older TOMLs; it is parsed but
+> **ignored** (the broker `pty.Start`s `command`, it never `docker run`s).
 
-### 2.2 Mounts (set by `docker-compose.yml`)
-- `${WORKSPACE_DIR:-./workspace}:/workspace:rw` — the project root that
-  every spawned agent's cwd points into.
-- `swe-kitty-worktrees:/worktrees:rw` — per-session worktrees (named
-  volume so they survive container restarts; one of the three
-  persistence rails in `docs/SESSION-LIFECYCLE.md §1`).
-- `swe-kitty-home:/home/app:rw` — agent auth caches + npm globals
-  (claude logins, codex tokens, etc).
+### 2.1 What the host needs
+- `swe-kitty-broker` binary (the Go server), installed via `install.sh`.
+- Every agent CLI you ship a TOML adapter for (e.g. `claude`, `codex`) on
+  `PATH`. See `docs/SELF-HOST.md` for host install (Anthropic apt repo /
+  native installer for claude; `npm i -g @openai/codex` for codex).
+- `git`, `bash`, `jq`, `curl`, `openssl` on `PATH`.
+
+### 2.2 Per-session filesystem
+- **Working directory** — a per-session git worktree (or the adapter's
+  `workdir` / a requested `cwd`). One of the three persistence rails in
+  `docs/SESSION-LIFECYCLE.md §1`.
+- **Ephemeral `$HOME`** — each spawn gets a private `$HOME`
+  (`<workspace>/.swe-kitty/agent-home/<session-id>`) seeded with the host's
+  agent credentials, so concurrent agents don't race on OAuth refresh
+  (`broker/internal/session/lifecycle.go`).
 
 ### 2.3 Environment variables the broker sets per-session
-The broker spawns each agent as a child process inside the same
-container via `pty.Start(exec.Command(adapter.Command[0], …))` from
+The broker spawns each agent as a child process via
+`pty.Start(exec.Command(adapter.Command[0], …))` from
 `broker/internal/session/lifecycle.go`. Each spawn gets:
 
 | Var | Value |
 |---|---|
 | `SESSION_UUID` | session id |
+| `AGENT_NAME` | adapter name |
+| `IS_SANDBOX` | `1` — lets claude accept `--dangerously-skip-permissions` under root |
+| `HOME` | the per-session ephemeral agent home |
 | `PORT` | preview port (3000–3019) |
 | `AGENT_CHAT_PORT` | `PORT + 1000` — for MCP `view_event` bridge |
-| `WORKTREE_BRANCH` | git branch checked out in `/workspace` |
+| `KITTY_HANDOFF_PATH` | `<worktree>/.swe-kitty/HANDOFF.html` |
+| `KITTY_HANDOFF_OUT_PATH` | `<worktree>/.swe-kitty/HANDOFF-OUT.html` |
 | `FROM_AGENT` / `TO_AGENT` | only set inside `on_swap` |
-| `KITTY_HANDOFF_PATH` | `/workspace/.swe-kitty/HANDOFF.html` |
-| `KITTY_HANDOFF_OUT_PATH` | `/workspace/.swe-kitty/HANDOFF-OUT.html` |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | forwarded from `broker/docker/.env` |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | from the broker's env / `.swe-kitty/env` (empty values are stripped so they don't clobber OAuth fallback) |
 | ... | plus any KEY=VALUE from `.swe-kitty/env` with `$VAR` expansion |
 
 ### 2.4 Agent process expectations
@@ -88,13 +90,13 @@ Every adapter's `command` + `args` from `agents/*.toml`:
 
 ## 3. Hooks
 
-Hooks run on the **broker host** (not inside the container) so they have access to the persistence rails (scrollback ring, memory HTML, git worktree).
+Hooks run on the **broker host** so they have access to the persistence rails (scrollback ring, memory HTML, git worktree).
 
 | Hook | When | Available env |
 |---|---|---|
-| `on_start` | After container has booted, before PTY is exposed to clients | `SESSION_UUID`, `AGENT_NAME` |
-| `on_exit` | After container has stopped (any reason: clean, crash, SIGKILL) | `SESSION_UUID`, `AGENT_NAME`, `EXIT_CODE` |
-| `on_swap` | After old container has stopped, before new container starts | `SESSION_UUID`, `FROM_AGENT`, `TO_AGENT` |
+| `on_start` | After the agent process is spawned, before PTY is exposed to clients | `SESSION_UUID`, `AGENT_NAME` |
+| `on_exit` | After the agent process exits (any reason: clean, crash, SIGKILL) | `SESSION_UUID`, `AGENT_NAME`, `EXIT_CODE` |
+| `on_swap` | After the old agent process exits, before the new one starts | `SESSION_UUID`, `FROM_AGENT`, `TO_AGENT` |
 
 Hooks must be idempotent — recovery (`docs/SESSION-LIFECYCLE.md` §4) may invoke them again after a crash.
 
@@ -107,29 +109,24 @@ Triggered by `{"type":"switch_agent","assistant":"<new>"}` JSON control message.
 3. Sends `SIGTERM` (10s grace, then `SIGKILL`) to the old agent process.
 4. Runs `on_swap` hook.
 5. Renders fresh `HANDOFF.html` into the worktree.
-6. `pty.Start`s the new agent process inside the same container; PTY scrollback ring is preserved client-side via the standard reconnect snapshot.
+6. `pty.Start`s the new agent process in the same worktree; PTY scrollback ring is preserved client-side via the standard reconnect snapshot.
 7. Broadcasts `status` with `phase: "swapping"` then `phase: "running"`. On spawn failure the broker still flips back to `running` with `reason_code: "agent_switch_failed"` so the mobile UI doesn't get stuck (regression fixed 2026-05-20).
 
 The worktree, branch, and git state are **identical** across the swap.
 
-## 5. Image build & distribution
+## 5. Distribution
 
-The whole broker ships as one image: `swekitty/broker:latest`, built from
-`broker/docker/Dockerfile`. CI builds it on every release tag and attaches
-the tag-pinned variant (e.g. `swekitty/broker:v0.0.x`). Users pull and
-run via `broker/docker/docker-compose.yml`.
-
-There are **no per-agent images** any more. Adding a new agent means
-adding an `npm install -g` line in the Dockerfile and a new
-`agents/<name>.toml`, then rebuilding — no second Dockerfile to maintain.
+The broker ships as a single static Go binary (`swe-kitty-broker`), built
+per release and attached to the GitHub Release (linux/darwin × amd64/arm64).
+Install it with `install.sh` and run it on the host — there is no container
+image. See `docs/SELF-HOST.md`.
 
 ## 6. Adding a new agent
 
-1. Add a line to the `npm install -g` block in `broker/docker/Dockerfile`
-   (or an `apt-get install` line if the CLI distributes that way).
+1. Install the agent CLI on the broker host's `PATH`.
 2. Drop `agents/<name>.toml` with the right `command` / `args` / handoff flags.
-3. Rebuild the image: `docker compose -f broker/docker/docker-compose.yml build`.
-4. The agent CLI must support a system-prompt mechanism that can be fed
-   by file or stdin — required for handoff. If it doesn't, write a tiny
-   shim wrapper inside the image.
-4. No Go or Rust code changes. Registry auto-discovers.
+3. The agent CLI must support a system-prompt mechanism that can be fed by
+   file or stdin — required for handoff. If it doesn't, write a tiny shim
+   script on `PATH`.
+4. No Go or Rust code changes, and no rebuild. The registry auto-discovers
+   the TOML on the next broker start.

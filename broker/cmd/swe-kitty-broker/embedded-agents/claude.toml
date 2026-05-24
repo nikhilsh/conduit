@@ -1,5 +1,4 @@
 name                = "claude"
-image               = "swekitty/claude:latest"
 command             = ["claude"]
 args                = ["--dangerously-skip-permissions"]
 env_passthrough     = ["ANTHROPIC_API_KEY"]

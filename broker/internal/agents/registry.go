@@ -19,7 +19,11 @@ type Hooks struct {
 }
 
 type Adapter struct {
-	Name             string   `toml:"name"`
+	Name string `toml:"name"`
+	// Image is legacy/ignored: the broker runs agents as bare child
+	// processes (pty.Start of Command), not Docker containers. Kept so
+	// older TOMLs with an `image =` line still parse; no longer required
+	// or used. See docs/AGENT-ADAPTERS.md.
 	Image            string   `toml:"image"`
 	Command          []string `toml:"command"`
 	Args             []string `toml:"args"`
@@ -38,8 +42,6 @@ func (a Adapter) Validate() error {
 	switch {
 	case strings.TrimSpace(a.Name) == "":
 		return errors.New("adapter: name is required")
-	case strings.TrimSpace(a.Image) == "":
-		return fmt.Errorf("adapter %q: image is required", a.Name)
 	case len(a.Command) == 0:
 		return fmt.Errorf("adapter %q: command is required", a.Name)
 	case strings.TrimSpace(a.Workdir) == "":
