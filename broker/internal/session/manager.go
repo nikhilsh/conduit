@@ -229,6 +229,15 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 				fmt.Fprintf(os.Stderr, "session %s: mirrorHostCredentials(%s): %v (agent will prompt for login)\n", s.ID, provider, err)
 			}
 		}
+		// Seed a theme + onboarding marker so Claude Code's first-run
+		// interactive theme picker doesn't block the PTY. Non-fatal:
+		// worst case the agent shows the picker once. Anthropic-only —
+		// codex has no equivalent first-run prompt.
+		if provider == "anthropic" {
+			if err := seedClaudeConfig(ephemeral); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
+			}
+		}
 	}
 	cmd.Env = s.commandEnv(nil)
 	if len(opts.snapshot) > 0 {

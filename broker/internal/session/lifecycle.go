@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -252,6 +253,61 @@ func atomicWriteFileMode(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return nil
+}
+
+// defaultClaudeTheme is the theme seeded into a fresh ephemeral
+// ~/.claude.json. Matches the app's default dark surface.
+const defaultClaudeTheme = "dark"
+
+// seedClaudeConfig ensures the per-session ephemeral ~/.claude.json
+// carries a `theme` and a completed-onboarding marker so Claude Code's
+// first-run interactive theme picker never blocks the non-interactive
+// PTY session. credStore.Materialize only writes
+// `.claude/.credentials.json`, and mirrorHostCredentials may copy a
+// `.claude.json` that predates the theme being set — either way the
+// fresh agent can land on the "Choose the text style that looks best"
+// prompt and hang waiting for arrow-key input that never comes.
+//
+// It MERGES into any existing config rather than overwriting it: an
+// operator's real theme choice (copied from the host) is preserved; we
+// only fill in keys that are missing. A `.claude.json` that fails to
+// parse is left untouched (returns an error the caller logs) so we
+// never clobber a config we don't understand.
+func seedClaudeConfig(ephemeralHome string) error {
+	path := filepath.Join(ephemeralHome, ".claude.json")
+	cfg := map[string]any{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if len(bytes.TrimSpace(data)) > 0 {
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				return fmt.Errorf("parse %s: %w", path, err)
+			}
+		}
+	case errors.Is(err, os.ErrNotExist):
+		// No config yet — start from an empty object.
+	default:
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	changed := false
+	if _, ok := cfg["theme"]; !ok {
+		cfg["theme"] = defaultClaudeTheme
+		changed = true
+	}
+	if done, _ := cfg["hasCompletedOnboarding"].(bool); !done {
+		cfg["hasCompletedOnboarding"] = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", path, err)
+	}
+	return atomicWriteFileMode(path, out, 0o600)
 }
 
 func (s *Session) startBackgroundLoops() {

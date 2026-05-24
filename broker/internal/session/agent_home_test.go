@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -214,5 +215,104 @@ func TestSessionCloseRemovesAgentHome(t *testing.T) {
 
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("agent-home not removed on Close: %v", err)
+	}
+}
+
+// --- seedClaudeConfig ---------------------------------------------------
+
+// TestSeedClaudeConfig_FreshHome writes a brand-new ~/.claude.json with
+// the default theme + onboarding marker so the first-run theme picker
+// never blocks a non-interactive PTY session.
+func TestSeedClaudeConfig_FreshHome(t *testing.T) {
+	ephemeral := t.TempDir()
+	if err := seedClaudeConfig(ephemeral); err != nil {
+		t.Fatalf("seedClaudeConfig: %v", err)
+	}
+	path := filepath.Join(ephemeral, ".claude.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read seeded cfg: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal seeded cfg: %v", err)
+	}
+	if cfg["theme"] != defaultClaudeTheme {
+		t.Fatalf("theme = %v, want %q", cfg["theme"], defaultClaudeTheme)
+	}
+	if done, _ := cfg["hasCompletedOnboarding"].(bool); !done {
+		t.Fatalf("hasCompletedOnboarding = %v, want true", cfg["hasCompletedOnboarding"])
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat seeded cfg: %v", err)
+	}
+	if mode := st.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("seeded cfg mode = %#o, want 0600", mode)
+	}
+}
+
+// TestSeedClaudeConfig_PreservesExistingTheme confirms a theme copied
+// from the host (or set by the operator) is never overwritten, and that
+// unrelated keys survive the merge.
+func TestSeedClaudeConfig_PreservesExistingTheme(t *testing.T) {
+	ephemeral := t.TempDir()
+	path := filepath.Join(ephemeral, ".claude.json")
+	if err := os.WriteFile(path, []byte(`{"theme":"light","numStartups":7}`), 0o600); err != nil {
+		t.Fatalf("write existing cfg: %v", err)
+	}
+	if err := seedClaudeConfig(ephemeral); err != nil {
+		t.Fatalf("seedClaudeConfig: %v", err)
+	}
+	var cfg map[string]any
+	data, _ := os.ReadFile(path)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal cfg: %v", err)
+	}
+	if cfg["theme"] != "light" {
+		t.Fatalf("theme = %v, want light (must not overwrite)", cfg["theme"])
+	}
+	if done, _ := cfg["hasCompletedOnboarding"].(bool); !done {
+		t.Fatalf("hasCompletedOnboarding not added")
+	}
+	if n, _ := cfg["numStartups"].(float64); n != 7 {
+		t.Fatalf("numStartups = %v, want 7 (unrelated key dropped)", cfg["numStartups"])
+	}
+}
+
+// TestSeedClaudeConfig_Idempotent confirms a config that already carries
+// both keys is left byte-for-byte unchanged (no needless rewrite).
+func TestSeedClaudeConfig_Idempotent(t *testing.T) {
+	ephemeral := t.TempDir()
+	path := filepath.Join(ephemeral, ".claude.json")
+	orig := []byte(`{"hasCompletedOnboarding":true,"theme":"dark-daltonized"}`)
+	if err := os.WriteFile(path, orig, 0o600); err != nil {
+		t.Fatalf("write cfg: %v", err)
+	}
+	if err := seedClaudeConfig(ephemeral); err != nil {
+		t.Fatalf("seedClaudeConfig: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != string(orig) {
+		t.Fatalf("config rewritten unnecessarily:\n got %q\nwant %q", string(data), string(orig))
+	}
+}
+
+// TestSeedClaudeConfig_CorruptNotClobbered confirms an unparseable
+// config is reported as an error and left untouched — we never destroy
+// a config we don't understand.
+func TestSeedClaudeConfig_CorruptNotClobbered(t *testing.T) {
+	ephemeral := t.TempDir()
+	path := filepath.Join(ephemeral, ".claude.json")
+	junk := []byte(`{not valid json`)
+	if err := os.WriteFile(path, junk, 0o600); err != nil {
+		t.Fatalf("write junk: %v", err)
+	}
+	if err := seedClaudeConfig(ephemeral); err == nil {
+		t.Fatalf("expected parse error for corrupt config, got nil")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != string(junk) {
+		t.Fatalf("corrupt config was clobbered: got %q", string(data))
 	}
 }
