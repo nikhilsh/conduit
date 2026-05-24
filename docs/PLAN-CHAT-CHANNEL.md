@@ -77,3 +77,63 @@ keeps a PTY for those who want the raw TUI.
 (skip scraper hardening), or (c) Option A only for now. I'll implement once
 you pick. My lean: **(a)** — it gets you a working chat tab immediately
 without blocking on the bigger per-agent integration.
+
+## DECISION (2026-05-24): Option B — structured channel
+
+Maintainer picked **B**: skip scraper hardening, build the real structured
+channel.
+
+### Grounding (verified on the box, not docs)
+
+- **Claude Code 2.1.150** has a turnkey bidirectional protocol:
+  `claude -p --input-format stream-json --output-format stream-json
+  --include-partial-messages`. Verified event stream (NDJSON, one JSON
+  object per line, `type` field):
+  - `system`/`init` — session metadata (model, tools, mcp_servers,
+    session_id, cwd, permissionMode).
+  - `stream_event` — partial deltas (`--include-partial-messages`).
+  - `assistant` — `{message:{role,model,content:[{type:"text",text}|
+    {type:"tool_use",name,input}]}}`.
+  - `result` — terminal per turn: `{subtype,is_error,result,duration_ms,
+    total_cost_usd,session_id}`.
+  - Input: write `{"type":"user","message":{"role":"user","content":
+    [{"type":"text","text":"…"}]}}` to stdin.
+- **Codex 0.132.0** has `codex exec` (non-interactive) and `codex
+  mcp-server` (stdio MCP). Codex's structured streaming shape still needs a
+  short spike (slice 4).
+
+### Mechanism
+
+Per session, the broker runs the agent in **structured stream-json mode** as
+the source of truth for the Chat tab: it writes the user's composer messages
+to stdin as stream-json `user` events, reads `assistant`/`result`/partial
+events from stdout, and emits them as the existing
+`view_event{view:"chat", …}` (text → assistant bubbles; `tool_use` →
+the structured tool payload the conversation classifier already renders).
+No PTY scraping. `chatScraper` is retired for agents that support
+stream-json.
+
+### Open sub-decision (need your call before I wire the session)
+
+stream-json is **headless** — there's no TUI to attach the Terminal tab to.
+So what becomes of the Terminal tab?
+
+- **B-i (recommended):** the Terminal tab becomes a **real shell** (bash) in
+  the session's workspace — genuinely useful (git/ls/build), cleanly
+  separated from the agent. Agent = structured chat; terminal = shell.
+- **B-ii:** render a **plain-text transcript** of the structured stream in
+  the Terminal tab (read-only mirror of chat).
+- **B-iii:** **drop** the Terminal tab for stream-json agents.
+
+My lean: **B-i** — it's the most useful and the cleanest separation.
+
+### Slices
+
+1. Broker: `claude` stream-json parser → chat `view_event` (pure, unit-
+   tested against the captured fixtures). *(no rearchitecture)*
+2. Broker: structured-session mode — spawn claude in stream-json, pipe
+   composer messages to stdin, stream events out; feature-flag it per
+   adapter (`chat_mode = "stream-json"`).
+3. Terminal-tab reconciliation per the sub-decision above.
+4. Codex: spike `codex exec`/`mcp-server` structured output; add its adapter.
+5. Retire `chatScraper` once both agents are on the structured path.
