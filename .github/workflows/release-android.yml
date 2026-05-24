@@ -100,6 +100,10 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT_ANDROID: ${{ secrets.SENTRY_PROJECT_ANDROID }}
+          # Stamp release provenance into BuildConfig for Settings → About
+          # (device bug #7 — version never matched the release tag).
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GIT_SHA: ${{ github.sha }}
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Upload to GitHub Release

@@ -1,5 +1,6 @@
 package sh.nikhil.swekitty.ui
 
+import sh.nikhil.swekitty.BuildConfig
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -335,6 +336,14 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
             // About
             SettingsSection("About") {
                 KeyValueRow(label = "App", value = "SweKitty")
+                KeyValueRow(
+                    label = "Version",
+                    value = if (BuildConfig.RELEASE_TAG != "dev") {
+                        "${BuildConfig.RELEASE_TAG} (${BuildConfig.GIT_SHA})"
+                    } else {
+                        "${BuildConfig.VERSION_NAME} (dev)"
+                    },
+                )
             }
 
             // Experimental

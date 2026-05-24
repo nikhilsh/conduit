@@ -20,6 +20,11 @@ android {
         versionCode = 12
         versionName = "0.0.1"
         buildConfigField("String", "SENTRY_DSN", "\"${System.getenv("SENTRY_DSN_ANDROID") ?: ""}\"")
+        // Release provenance for Settings → About, mirroring iOS BuildInfo.
+        // release-android.yml sets RELEASE_TAG/GIT_SHA; local builds get "dev"
+        // so the About row falls back to versionName (device bug #7).
+        buildConfigField("String", "RELEASE_TAG", "\"${System.getenv("RELEASE_TAG") ?: "dev"}\"")
+        buildConfigField("String", "GIT_SHA", "\"${(System.getenv("GIT_SHA") ?: "dev").take(7)}\"")
 
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86") }
     }

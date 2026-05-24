@@ -346,8 +346,14 @@ extension LitterUI {
         }
 
         private var aboutVersion: String {
-            let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
-            return v
+            // Show the release tag the IPA was actually published under
+            // (stamped into BuildInfo by release-ios.yml), not the static
+            // MARKETING_VERSION — that was hardcoded "0.0.1", so Settings
+            // never matched the release (device bug #7, v0.0.30). Dev/CI
+            // builds aren't stamped, so fall back to the marketing version.
+            BuildInfo.isStamped
+                ? "\(BuildInfo.releaseTag) (\(BuildInfo.gitSHA))"
+                : "\(BuildInfo.marketingVersion) (dev)"
         }
 
         // MARK: Layout helpers
