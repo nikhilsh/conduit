@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -67,5 +68,36 @@ func TestChatProcessSendAndClose(t *testing.T) {
 	}
 	if err := cp.Send("again"); err != errChatProcessClosed {
 		t.Fatalf("Send after Close: got %v, want errChatProcessClosed", err)
+	}
+}
+
+// TestChatProcessExitNotice: when the agent exits on its own (not via
+// Close), the user should get a system chat event, not silence.
+func TestChatProcessExitNotice(t *testing.T) {
+	// Fake agent that emits nothing and exits non-zero immediately.
+	command := []string{"bash", "-c", "exit 3"}
+	events := make(chan []byte, 4)
+	cp, err := startChatProcess(context.Background(), command, nil, "", func(p []byte) { events <- p })
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer cp.Close()
+
+	select {
+	case p := <-events:
+		var ev struct {
+			Event struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"event"`
+		}
+		if err := json.Unmarshal(p, &ev); err != nil {
+			t.Fatalf("notice not json: %v", err)
+		}
+		if ev.Event.Role != "system" || !strings.Contains(ev.Event.Content, "agent process") {
+			t.Fatalf("expected a system agent-exit notice, got %s", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: expected an agent-exit chat notice")
 	}
 }

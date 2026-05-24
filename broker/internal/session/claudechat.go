@@ -106,6 +106,26 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte)) error {
 	return sc.Err()
 }
 
+// publishChatSystem emits a role:"system" chat view_event (e.g. an
+// agent-exit notice) through the same path as assistant events, so
+// out-of-band conditions surface in the Chat tab instead of as silence.
+func publishChatSystem(publish func([]byte), content string) {
+	payload, err := json.Marshal(map[string]any{
+		"type": "view_event",
+		"view": "chat",
+		"event": map[string]any{
+			"role":    "system",
+			"content": content,
+			"ts":      claudeChatNow().UTC().Format(time.RFC3339Nano),
+			"files":   []any{},
+		},
+	})
+	if err != nil {
+		return
+	}
+	publish(payload)
+}
+
 // toolCardContent formats a tool_use block as "Name: <summary>" — the shape
 // the client's conversation classifier (core/src/conversation.rs
 // extract_tool_name) turns into a tool card. The summary surfaces the most
