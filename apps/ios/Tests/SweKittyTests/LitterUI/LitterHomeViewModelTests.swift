@@ -49,6 +49,29 @@ struct LitterHomeViewModelTests {
         #expect(rows[1].isSelected == true)
     }
 
+    @Test func sessionRowRunStateIsIndependentOfSelection() {
+        // device bug #9: the status dot tracked selection, so a second
+        // *running* session looked stopped. Run state must come from the
+        // phase, not which row is attached — both running sessions show
+        // green even though only one is selected; an exited one is muted.
+        let snap = LitterUI.HomeSnapshot(
+            harness: .live,
+            sessions: [
+                LitterUI.HomeSnapshotSession(id: "a", displayName: "A", assistant: "claude", phase: "working"),
+                LitterUI.HomeSnapshotSession(id: "b", displayName: "B", assistant: "codex", phase: nil),
+                LitterUI.HomeSnapshotSession(id: "c", displayName: "C", assistant: "claude", phase: "exited(0)"),
+            ],
+            placeholders: [],
+            selectedSessionID: "b",
+            endpointDisplayHost: nil
+        )
+        let rows = LitterUI.HomeViewModel.rows(snap)
+        #expect(rows[0].isRunning == true)   // working, not selected
+        #expect(rows[1].isRunning == true)   // ready (nil), selected
+        #expect(rows[2].isRunning == false)  // exited
+        #expect(rows[0].isSelected == false) // running but not attached → still green
+    }
+
     @Test func subtitleFallsBackToLocalHostWhenEndpointMissing() {
         // The home subtitle has to print *something* even before the
         // user has paired a server — litter shows the local host name

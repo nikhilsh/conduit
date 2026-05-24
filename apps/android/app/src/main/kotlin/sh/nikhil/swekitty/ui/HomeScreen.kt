@@ -202,6 +202,10 @@ fun HomeScreen(
                 ) {
                     sessions.forEach { session ->
                         val isSelected = selectedId == session.id
+                        // device bug #9: the status dot tracked selection,
+                        // so a second running session looked stopped. Drive
+                        // it from run state — alive unless the agent exited.
+                        val isRunning = !(statuses[session.id]?.phase ?: "ready").startsWith("exited")
                         val rowTitle = displayNames[session.id] ?: session.name
                         // Active-row fill per audit §A.1.3 — litter
                         // selects by painting a 6dp rounded rect at
@@ -239,7 +243,7 @@ fun HomeScreen(
                                     modifier = Modifier
                                         .size(LitterHomeRowMetrics.indicatorSize.dp)
                                         .background(
-                                            color = if (isSelected) SweKittyTheme.accentStrong() else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            color = if (isRunning) SweKittyTheme.accentStrong() else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                                             shape = CircleShape,
                                         ),
                                 )

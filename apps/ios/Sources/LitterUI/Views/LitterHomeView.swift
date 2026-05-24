@@ -407,10 +407,13 @@ private struct HomeRowView: View {
             ProgressView()
                 .controlSize(.mini)
         case .session:
-            // 7pt filled circle per audit §A.1.7 — accent for live
-            // status (selected → pulse-able later), muted for idle.
+            // 7pt filled circle per audit §A.1.7 — accent when the agent
+            // is running, muted once it has exited. Driven by run state,
+            // not selection (device bug #9): every running session shows
+            // green, not just the attached one. Selection is conveyed by
+            // the row's background fill.
             Circle()
-                .fill(row.isSelected
+                .fill(row.isRunning
                       ? LitterUI.Palette.accentStrong.color
                       : LitterUI.Palette.textMuted.color.opacity(0.5))
         }

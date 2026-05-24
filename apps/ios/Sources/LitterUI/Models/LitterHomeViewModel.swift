@@ -24,6 +24,11 @@ extension LitterUI {
         /// e.g. "claude · ready · 192.168.4.30"
         var subtitle: String
         var isSelected: Bool
+        /// Whether the agent session is live (drives the status dot's
+        /// green vs muted). Independent of `isSelected` — device bug #9:
+        /// the dot used to track selection, so a second running session
+        /// looked stopped. Selection is shown by the row background.
+        var isRunning: Bool
 
         var id: String {
             switch kind {
@@ -94,7 +99,10 @@ extension LitterUI {
                     kind: .session(id: s.id),
                     title: s.displayName,
                     subtitle: "\(s.assistant) · \(phase) · \(host)",
-                    isSelected: snap.selectedSessionID == s.id
+                    isSelected: snap.selectedSessionID == s.id,
+                    // Alive unless the agent process has exited. Every
+                    // other phase (ready / working / swapping) is running.
+                    isRunning: !phase.hasPrefix("exited")
                 ))
             }
             for p in snap.placeholders {
@@ -102,7 +110,8 @@ extension LitterUI {
                     kind: .creatingPlaceholder(id: p.id),
                     title: "Starting session…",
                     subtitle: p.label,
-                    isSelected: false
+                    isSelected: false,
+                    isRunning: false
                 ))
             }
             return rows
