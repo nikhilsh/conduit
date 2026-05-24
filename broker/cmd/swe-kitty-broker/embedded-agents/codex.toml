@@ -5,6 +5,9 @@ env_passthrough     = ["OPENAI_API_KEY"]
 workdir             = "/workspace"
 chat_event_port_env = "AGENT_CHAT_PORT"
 reasoning_effort    = "medium"
+# Structured chat channel (task #24): codex exec/resume → clean Chat
+# events; the Terminal tab hosts a shell (B-i).
+chat_mode           = "codex-exec"
 
 [hooks]
 on_start = "swe-kitty memory render --session $SESSION_UUID > /workspace/.swe-kitty/HANDOFF.html"
