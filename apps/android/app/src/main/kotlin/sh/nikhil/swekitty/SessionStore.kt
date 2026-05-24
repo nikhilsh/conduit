@@ -381,6 +381,26 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         // a one-line change.
     }
 
+    // Agent OAuth login v2 (outbound) — forward the three control frames
+    // through the Rust client. Identity-scoped, carried over any live
+    // session WS. Throw if no client is connected so the coordinator
+    // surfaces a `.Failed`. Mirror of iOS SessionStore.sendAgentLogin*.
+
+    suspend fun sendAgentLoginStart(provider: String) {
+        val c = client ?: throw IllegalStateException("no active swe-kitty client")
+        c.startAgentLogin(provider)
+    }
+
+    suspend fun sendAgentLoginCallback(sessionToken: String, queryString: String) {
+        val c = client ?: throw IllegalStateException("no active swe-kitty client")
+        c.agentLoginCallback(sessionToken, queryString)
+    }
+
+    suspend fun sendAgentLoginCancel(sessionToken: String) {
+        val c = client ?: throw IllegalStateException("no active swe-kitty client")
+        c.cancelAgentLogin(sessionToken)
+    }
+
     /**
      * Local rename map — keyed by session id. Persisted to the same
      * EncryptedSharedPreferences blob as the endpoint. Display names are
