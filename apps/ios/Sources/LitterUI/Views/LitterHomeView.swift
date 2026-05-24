@@ -29,6 +29,10 @@ extension LitterUI {
         @State private var showSearch = false
         @State private var showAgentPicker = false
         @State private var showSessionsHistory = false
+        /// Voice dictation (bottom mic). On a transcript we stash it here
+        /// and open the agent picker seeded with it as the first prompt.
+        @State private var showVoiceDictation = false
+        @State private var voicePrompt: String?
         @State private var selectedSessionID: String?
         /// Confirmation alert state for the session-row swipe-to-delete.
         /// `.alert(item:)` needs an Identifiable, so we wrap the target
@@ -72,8 +76,18 @@ extension LitterUI {
                 .sheet(isPresented: $showAddServer) {
                     LitterUI.AddServerSheet()
                 }
-                .sheet(isPresented: $showAgentPicker) {
-                    LitterUI.AgentPickerSheet()
+                .sheet(isPresented: $showAgentPicker, onDismiss: { voicePrompt = nil }) {
+                    LitterUI.AgentPickerSheet(initialPrompt: voicePrompt)
+                }
+                .sheet(isPresented: $showVoiceDictation, onDismiss: {
+                    // Chain into the agent picker (seeded with the transcript)
+                    // only if we actually captured something.
+                    if voicePrompt?.isEmpty == false { showAgentPicker = true }
+                }) {
+                    VoiceDictationSheet(onTranscript: { text in
+                        voicePrompt = text
+                        showVoiceDictation = false
+                    })
                 }
                 .sheet(isPresented: $showSearch) {
                     // Search is a legacy view for now.
@@ -306,8 +320,7 @@ extension LitterUI {
             HStack(spacing: 14) {
                 LitterUI.GlassMorphContainer(spacing: 14) {
                     LitterUI.PillButton(systemImage: "mic.fill", size: 44) {
-                        // Voice is wired in a follow-up. Falls back to
-                        // the legacy in-chat voice path for now.
+                        showVoiceDictation = true
                     }
                 }
                 Spacer()
