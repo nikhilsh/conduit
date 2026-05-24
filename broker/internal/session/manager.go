@@ -9,6 +9,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,7 +100,14 @@ type Session struct {
 	// chatScraper turns PTY output back into structured chat_event
 	// JSON frames. Lives for the life of the session; capturing
 	// state is gated on the user actually sending a chat message.
+	// nil in stream-json mode (the PTY is a shell, not the agent).
 	scraper *chatScraper
+
+	// chat is the structured-chat subprocess. Non-nil only when the
+	// adapter sets chat_mode="stream-json" (B-i): the agent runs
+	// headless here while the PTY hosts a shell for the Terminal tab.
+	// See docs/PLAN-CHAT-CHANNEL.md (task #24).
+	chat *chatProcess
 
 	// recorder writes PTY bytes + view_events to a per-session
 	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
@@ -133,7 +141,15 @@ func New(id string, adapter agents.Adapter) (*Session, error) {
 }
 
 func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Session, error) {
-	cmd := exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
+	var cmd *exec.Cmd
+	if adapter.ChatMode == "stream-json" {
+		// B-i: the agent runs headless in stream-json (started below as a
+		// chatProcess); the PTY hosts an interactive shell for the
+		// Terminal tab.
+		cmd = exec.Command("bash")
+	} else {
+		cmd = exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
+	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
 	s := &Session{
 		ID:           id,
@@ -280,8 +296,27 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		}
 		return nil, err
 	}
-	s.scraper = newChatScraper(s.PublishText)
-	go s.scraper.run(s.closed)
+	if adapter.ChatMode == "stream-json" {
+		// Structured chat channel (B-i): run the agent headless in
+		// stream-json. It publishes clean chat events via the same path
+		// the scraper used, so no PTY scraping — scraper stays nil. The
+		// PTY (a shell) still drains to the Terminal tab below.
+		chat, cerr := startChatProcess(
+			context.Background(),
+			claudeStreamCommand(adapter.Command, adapter.Args),
+			s.commandEnv(nil),
+			s.workspaceDir,
+			s.PublishText,
+		)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
+		} else {
+			s.chat = chat
+		}
+	} else {
+		s.scraper = newChatScraper(s.PublishText)
+		go s.scraper.run(s.closed)
+	}
 	go s.drain(f)
 	s.startBackgroundLoops()
 	return s, nil
@@ -480,8 +515,28 @@ func (s *Session) MarkUserChatSent(msg string) {
 	}
 }
 
+// SendChat routes a composer message to the structured chat channel when
+// the session runs in stream-json mode (chat_mode="stream-json"). It
+// returns true when it handled the message, so the websocket handler skips
+// the legacy "write to PTY + scrape" path. Returns false for the default
+// TUI path (the caller then does MarkUserChatSent + the PTY write).
+func (s *Session) SendChat(msg string) bool {
+	if s.chat == nil {
+		return false
+	}
+	if err := s.chat.Send(msg); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: chat send: %v\n", s.ID, err)
+	}
+	return true
+}
+
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
+		if s.chat != nil {
+			// Stop the headless stream-json agent (closes stdin + kills
+			// the process) so it doesn't outlive the session.
+			_ = s.chat.Close()
+		}
 		if s.scraper != nil {
 			// One last flush in case a reply was in flight when the
 			// session ends, so the user still sees the assistant's

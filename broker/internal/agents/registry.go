@@ -30,6 +30,12 @@ type Adapter struct {
 	EnvPassthrough   []string `toml:"env_passthrough"`
 	Workdir          string   `toml:"workdir"`
 	ChatEventPortEnv string   `toml:"chat_event_port_env"`
+	// ChatMode selects how the Chat tab is sourced. "" (default) =
+	// scrape the agent's TUI from the PTY (legacy). "stream-json" =
+	// run the agent headless in stream-json as a structured chat
+	// channel; the PTY then hosts a shell for the Terminal tab (B-i).
+	// See docs/PLAN-CHAT-CHANNEL.md (task #24).
+	ChatMode string `toml:"chat_mode"`
 	// ReasoningEffort is a "low" / "medium" / "high" label surfaced
 	// on the iOS / Android agent pill. Optional; PR #16 hardcoded
 	// "medium" in the status frame as a placeholder, this carries

@@ -36,6 +36,26 @@ func TestEncodeClaudeUserMessage(t *testing.T) {
 	}
 }
 
+func TestClaudeStreamCommand(t *testing.T) {
+	argv := claudeStreamCommand([]string{"claude"}, []string{"--dangerously-skip-permissions"})
+	want := []string{
+		"claude", "--dangerously-skip-permissions",
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+	}
+	if len(argv) != len(want) {
+		t.Fatalf("argv = %v, want %v", argv, want)
+	}
+	for i := range want {
+		if argv[i] != want[i] {
+			t.Fatalf("argv[%d] = %q, want %q (full: %v)", i, argv[i], want[i], argv)
+		}
+	}
+}
+
 func TestProcessClaudeStreamOutput(t *testing.T) {
 	claudeChatNow = func() time.Time { return time.Unix(0, 0).UTC() }
 	defer func() { claudeChatNow = time.Now }()
