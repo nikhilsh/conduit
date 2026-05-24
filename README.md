@@ -43,15 +43,22 @@ swe-kitty is its own product — three layers (Rust core, Go broker, native shel
 - Static landing site scaffold: [`website/`](website)
 - Fyra deploy notes: [`website/DEPLOY.md`](website/DEPLOY.md)
 
-## Delivery Status (May 23, 2026)
+## Delivery Status (May 24, 2026)
 
-Latest release: **`v0.0.25`** (2026-05-23) — IPA + APK + cross-compiled broker binaries via `release.yml`.
+Latest release: **`v0.0.29`** (2026-05-24) — IPA + APK + cross-compiled broker binaries via `release.yml`.
+
+### Done (May 24 session)
+- **Docker dropped entirely — bare-box model.** The broker runs directly on the host and spawns each agent as a child process (`pty.Start`); per-session isolation is a git worktree + ephemeral `$HOME` + the PTY tree, not a container. Deleted `broker/docker/*`, removed the release GHCR image job, rewrote `remote-bootstrap.sh` to install + run the static binary, made the adapter `image` field legacy/ignored, and rewrote `SELF-HOST.md` / `AGENT-ADAPTERS.md` / `ARCHITECTURE.md` (PRs #161, #163, #164, #165).
+- **Agent OAuth v2 wired on both platforms** (broker-driven `start_agent_login` / `agent_login_callback` / `cancel_agent_login`; inbound `agent_login_*` view_events delivered through the Rust core and routed iOS + Android): #152 (iOS UDL bridge), #154 (inbound core delivery + routing — fixed a core bug that dropped `view:"status"` frames), #155 (Android `AgentLoginSheet` via Custom Tabs). Device end-to-end verification still pending.
+- **On-device bug fixes** from the first real device test: claude no longer crash-loops under root (`IS_SANDBOX=1`, #158); chat-send failures surface instead of being silently swallowed (#159); the blank Ghostty terminal no longer ships (gated behind Stage-5, always xterm, #160).
+- **Push scaffolding (Package 5, broker side):** per-identity device-token `Registry` → `Notifier` → `Sender` fan-out `Dispatcher` with dead-token pruning, plus `register_push_token` / `unregister_push_token` WS handlers (`broker/internal/push/`, #156, #157, #162). APNs/FCM senders + the device-side token registration are the remaining gap.
+- Releases `v0.0.26`–`v0.0.29` cut and verified green.
 
 ### Done
 - Broker runtime and pairing flow are live:
   - one-line installer: `install.sh`
   - `swe-kitty-broker up --local` prints token + pairing QR + `swekitty://` deep link
-  - `harness/` → `broker/` rename complete (PR #19); Dockerfile + docker-compose paths updated (PR #34)
+  - `harness/` → `broker/` rename complete (PR #19); deploys as a single static binary, no container (Docker dropped — see the May 24 session above)
   - `/healthz` endpoint with sidecar liveness probe (PR #26)
   - per-session HOME isolation (PR #126) so concurrent agents don't race on OAuth refresh; empty `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` env vars stripped before spawn (PR #135) so install-template placeholders can't clobber OAuth fallback.
 - Release pipeline is live:
@@ -70,7 +77,7 @@ Latest release: **`v0.0.25`** (2026-05-23) — IPA + APK + cross-compiled broker
   - Android: EncryptedSharedPreferences-backed saved servers; long-press dialog mirror (PR #136)
   - both go through `SessionStore.forgetServer` which sweeps the per-id displayName override
 - **iOS LitterUI cutover (PR #118 → #127)**: parallel litter-faithful view tree built clean-room, flipped from `experimentalLitterUI` flag to default, legacy tree deleted. iPad NavigationSplitView for regular size class (PR #122). Visual-parity gap audit in [`docs/PLAN-LITTER-VISUAL-PARITY.md`](docs/PLAN-LITTER-VISUAL-PARITY.md) sequences the next 5 per-screen rebuild PRs.
-- **iOS Ghostty terminal Stage 4 (PR #129, #131, #133, #134, #137)**: real libghostty App/Surface integration via Lakr233's `libghostty-spm` xcframework with full link path. `Terminal.isAvailable` returns true at runtime; experimental terminal flag exercises libghostty's parser.
+- **iOS Ghostty terminal Stage 4 (PR #129, #131, #133, #134, #137)**: real libghostty App/Surface integration via Lakr233's `libghostty-spm` xcframework with full link path. The terminal tab is xterm.js for now — Ghostty is gated behind Stage-5 and the user-facing toggle was removed in #160 (it rendered a blank screen because the renderer isn't wired yet).
 - Test discipline (today, 2026-05-23):
   - iOS `SweKittyTests` target with 20+ tests (PR #20) — adds `SessionStoreForgetServerTests` (PR #128)
   - Android JUnit harness + TerminalBridge tests (PR #21) — adds `SessionStoreForgetServerTest` (PR #136)
@@ -80,12 +87,12 @@ Latest release: **`v0.0.25`** (2026-05-23) — IPA + APK + cross-compiled broker
 ### In Progress
 - Package 1 (Rust-first refactor): `core/src/store/` `AppStore` with snapshots + subscriber callbacks; iOS/Android `SessionStore` to project from the Rust store. Slices 1 & 2 (typed conversation classifier + tool-card consumption) shipped; slice 3 (reducer to Rust) open. See [`docs/PLAN-2026-05-19.md`](docs/PLAN-2026-05-19.md) §8.
 - Litter visual parity: 5-PR per-screen rebuild plan in [`docs/PLAN-LITTER-VISUAL-PARITY.md`](docs/PLAN-LITTER-VISUAL-PARITY.md). PR 1 (foundation: typography, tokens, glass) is ready to start.
-- Agent OAuth v2: broker Stage 0 merged via #126; iOS + Anthropic + Android end-to-end stages still open in [`docs/PLAN-AGENT-OAUTH.md`](docs/PLAN-AGENT-OAUTH.md).
+- Agent OAuth v2: wired end-to-end on both platforms (see the May 24 session above); remaining work is device verification and deleting the v1 `OAuthClient` / `set_agent_credentials` path — [`docs/PLAN-AGENT-OAUTH.md`](docs/PLAN-AGENT-OAUTH.md).
 - Terminal Stage 3 (selection / copy / paste): iOS done, Android pending — see [`docs/PLAN-TERMINAL-REWRITE.md`](docs/PLAN-TERMINAL-REWRITE.md).
 
 ### Planned (not started or partial)
 - Discovery view (mDNS browser UI)
-- Push notifications + background wake/reconnect (Package 5; no `broker/internal/push/` yet, no APNs/FCM client)
+- Push notifications + background wake/reconnect (Package 5): broker-side registry + dispatcher landed (`broker/internal/push/`); APNs/FCM senders and the device-side token registration are still to do
 - Voice rail B (realtime WebRTC) — rail A (Whisper-style push-to-talk) shipped per `docs/PLAN-2026-05-19.md` §8
 - Deeper composer parity (attach sheet, context bar, expanded editor)
 
