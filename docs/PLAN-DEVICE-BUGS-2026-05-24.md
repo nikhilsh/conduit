@@ -92,3 +92,24 @@ This matches what the user actually wants and what bug #1's fix already
 enables. A follow-up should: (a) add the directory-picker to first-launch,
 (b) make the broker refuse to run agents as root *or* document the trust
 model explicitly, (c) keep Docker as a documented opt-in.
+
+## v0.0.30 re-test findings (2026-05-24, 22:35)
+
+### #5 — stale "connected" status: app shows green when broker is down (MEDIUM)
+
+After the broker was brought down, the app still rendered the saved server
+chip (`103.107.51.48:1977`) with the **green** connected dot — no listener
+was on the port at all. So the indicator is not driven by live WS health.
+
+**Hypothesis (to confirm in code):** the dot reflects "saved/selected
+server" or an optimistic/cached state rather than the transport's real
+connection state, and a WS close / TCP RST / failed reconnect attempt does
+not flip it to a disconnected colour. The auto-reconnect worker
+(`notify_network_change` + reconnect loop, shared core) may also be marking
+it green optimistically while retrying.
+
+**Fix direction:** drive the status colour from the actual transport state
+(`disconnected` / `connecting` / `connected`), detect dead sockets via a
+ping/pong heartbeat (or surface the WS close/error), and only show green
+once a frame round-trips. Must land on **iOS + Android** together. Tracked
+as task #23.
