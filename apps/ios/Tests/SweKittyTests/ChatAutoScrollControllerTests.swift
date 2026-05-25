@@ -57,7 +57,8 @@ struct ChatAutoScrollControllerTests {
         var c = ChatAutoScrollController(nearBottomThreshold: 80)
         c.userDragged()
         // Exactly at the threshold counts as near-bottom.
-        #expect(c.bottomProximityChanged(80))
+        let nearAt80 = c.bottomProximityChanged(80)
+        #expect(nearAt80)
         #expect(!c.userScrolledUp)
     }
 
@@ -87,7 +88,8 @@ struct ChatAutoScrollControllerTests {
         // huge distance.
         var c = ChatAutoScrollController(nearBottomThreshold: 80)
         c.userDragged()
-        #expect(c.bottomProximityChanged(-30))
+        let nearOverscroll = c.bottomProximityChanged(-30)
+        #expect(nearOverscroll)
         #expect(c.distanceFromBottom == 0)
         #expect(c.isNearBottom)
     }
@@ -96,10 +98,12 @@ struct ChatAutoScrollControllerTests {
         var c = ChatAutoScrollController(nearBottomThreshold: 20)
         c.userDragged()
         // 40pt is outside a 20pt band → stays scrolled up.
-        #expect(!c.bottomProximityChanged(40))
+        let near40 = c.bottomProximityChanged(40)
+        #expect(!near40)
         #expect(c.userScrolledUp)
         // 15pt is inside → re-arms.
-        #expect(c.bottomProximityChanged(15))
+        let near15 = c.bottomProximityChanged(15)
+        #expect(near15)
         #expect(!c.userScrolledUp)
     }
 }
