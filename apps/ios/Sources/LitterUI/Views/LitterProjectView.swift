@@ -80,9 +80,22 @@ extension LitterUI {
         }
 
         private func dismissKeyboard() {
-            UIApplication.shared.sendAction(
-                #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
-            )
+            // Force-resign via `endEditing(true)` rather than the
+            // `sendAction(resignFirstResponder)` broadcast: the Terminal
+            // tab's WKWebView (and the native GhosttyRenderView, a
+            // UIKeyInput) hold the keyboard with their own input views and
+            // do NOT reliably honour the responder-chain broadcast, so
+            // switching Terminal→Chat left their keyboard up and the chat
+            // composer rendered behind it (device bug #31, round 2).
+            // `endEditing(true)` walks the window and forces the current
+            // first responder + descendants to resign — the documented
+            // hammer for a stuck keyboard owned by a UIView.
+            for scene in UIApplication.shared.connectedScenes {
+                guard let windowScene = scene as? UIWindowScene else { continue }
+                for window in windowScene.windows {
+                    window.endEditing(true)
+                }
+            }
         }
 
         // MARK: Header rows
