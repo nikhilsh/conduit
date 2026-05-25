@@ -141,9 +141,12 @@ extension LitterUI {
                                    "can't ", "cannot ", "blocked", "permission denied"]) {
                 return ["Try again", "Show details", "Skip it"]
             }
-            // Completion → move forward.
-            if containsAny(lower, ["all done", "done.", "done!", "completed",
-                                   "finished", "fixed", "all set", "✅"]) {
+            // Completion → move forward. A leading "done" (e.g. "Done.",
+            // "Done — …", "Done!") is the most common sign-off, so match
+            // the prefix in addition to the inline keywords.
+            if lower.hasPrefix("done")
+                || containsAny(lower, ["all done", "done.", "done!", "completed",
+                                       "finished", "fixed", "all set", "✅"]) {
                 return ["What's next?", "Show me", "Thanks"]
             }
             // Explicit request for permission / a go-ahead.
