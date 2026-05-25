@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.PinnedContext
 import sh.nikhil.swekitty.SessionStore
 import kotlinx.coroutines.launch
+import uniffi.swe_kitty_core.ChatEvent
 import uniffi.swe_kitty_core.ConversationItem
 import uniffi.swe_kitty_core.ProjectSession
 import uniffi.swe_kitty_core.ViewEventFile
@@ -268,25 +269,21 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
     val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
     val typedLog by store.conversationLog.collectAsState()
     val fallbackLog by store.chatLog.collectAsState()
-    val events = typedLog[session.id]
-        ?: fallbackLog[session.id]?.mapIndexed { idx, ev ->
-            ConversationItem(
-                id = "${ev.ts}-$idx",
-                role = ev.role,
-                kind = if (ev.role.lowercase() == "tool") "tool" else "message",
-                status = "done",
-                content = ev.content,
-                ts = ev.ts,
-                files = ev.files,
-                toolName = null,
-                command = null,
-                exitCode = null,
-                durationMs = null,
-                diffSummary = null,
-                pendingOptions = emptyList(),
-            )
-        }
-        ?: emptyList()
+    // PR #111 + iOS ChatViewModel parity: render a SINGLE chronologically
+    // sorted list, merging the typed `conversationLog` with the broker's
+    // raw `chatLog`. Picking one source or the other (the prior
+    // `typedLog ?: fallbackLog`) dropped codex assistant replies — which
+    // arrive via `on_chat_event` into `chatLog` only — and, because
+    // server items were concatenated ahead of locally-echoed user turns,
+    // sank every user message to the bottom. `mergedConversation` dedupes
+    // by role+content and sorts by `ts`, interleaving user and assistant
+    // turns correctly. Mirror of iOS `LitterUI.ChatViewModel.mergedEvents`.
+    val events = remember(typedLog, fallbackLog, session.id) {
+        mergedConversation(
+            conversation = typedLog[session.id] ?: emptyList(),
+            chatLog = fallbackLog[session.id] ?: emptyList(),
+        )
+    }
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val pinnedContextsMap by store.pinnedContexts.collectAsState()
@@ -494,6 +491,64 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
 }
 
 /**
+ * Resolve the single chronologically-ordered event stream the chat
+ * surface renders, merging the typed [conversation] log with the
+ * broker's raw [chatLog]. Mirror of iOS
+ * `LitterUI.ChatViewModel.mergedEvents`.
+ *
+ * The typed `conversationLog` (built from the broker's structured
+ * `view_event` stream) is preferred, but for sessions where the broker
+ * emits the assistant reply through `on_chat_event` (codex today) the
+ * typed `listConversationItems` surface can lag — that reply lives only
+ * in [chatLog]. Without folding it in, the codex assistant reply showed
+ * up in the Terminal tab but never reached the chat tab.
+ *
+ * Every raw chat event missing from the typed log (matched by
+ * role+content, the only stable identity a [ChatEvent] carries) is
+ * synthesized into a [ConversationItem] and spliced in. The combined
+ * list is sorted by `ts` so user and assistant turns interleave in true
+ * chronological order rather than clumping by source/role.
+ *
+ * Top-level + internal so it's unit-testable without a composition.
+ */
+internal fun mergedConversation(
+    conversation: List<ConversationItem>,
+    chatLog: List<ChatEvent>,
+): List<ConversationItem> {
+    // Fast path: nothing raw to fold in.
+    if (chatLog.isEmpty()) return conversation
+
+    val typedFingerprints = conversation
+        .map { "${it.role.lowercase()}|${it.content}" }
+        .toSet()
+    val synthetic = chatLog.mapIndexedNotNull { idx, ev ->
+        val key = "${ev.role.lowercase()}|${ev.content}"
+        if (key in typedFingerprints) {
+            null
+        } else {
+            ConversationItem(
+                id = "chatlog-${ev.ts}-$idx",
+                role = ev.role,
+                kind = if (ev.role.lowercase() == "tool") "tool" else "message",
+                status = "done",
+                content = ev.content,
+                ts = ev.ts,
+                files = ev.files,
+                toolName = null,
+                command = null,
+                exitCode = null,
+                durationMs = null,
+                diffSummary = null,
+                pendingOptions = emptyList(),
+            )
+        }
+    }
+    if (synthetic.isEmpty()) return conversation
+    // Sort by ts (PR #111 contract — typed log is ts-sorted).
+    return (conversation + synthetic).sortedBy { it.ts }
+}
+
+/**
  * Folds the draft text + any pinned contexts + any pending
  * attachments into a single outgoing chat message. Mirror of iOS
  * `ChatTab.composeOutgoingMessage` — inlined here rather than on
@@ -574,7 +629,7 @@ private fun ConversationEventRow(
     }
     when (ConversationRole.from(ev.role)) {
         ConversationRole.User ->
-            ConversationBubble(ev, ConversationRole.User, agentAccent, Modifier, alignEnd = false)
+            ConversationBubble(ev, ConversationRole.User, agentAccent, Modifier, alignEnd = true)
         ConversationRole.Assistant ->
             ConversationBubble(ev, ConversationRole.Assistant, agentAccent, Modifier, alignEnd = false)
         ConversationRole.Tool -> ConversationToolCard(ev)
@@ -749,16 +804,43 @@ private fun ConversationBubble(
     modifier: Modifier,
     alignEnd: Boolean,
 ) {
-    // Litter pattern: subtle light-gray rounded rect for USER messages
-    // (right-aligned), assistant messages flow as plain text full
-    // width with no container at all.
-    when (role) {
-        ConversationRole.User -> Row(modifier = modifier.fillMaxWidth()) {
-            Spacer(Modifier.weight(0.18f))
+    // Mirror of iOS `LitterChatMessageRow`: a monospaced uppercase role
+    // label ("YOU" in the brand accent, "ASSISTANT" in secondary) above
+    // the body. USER messages right-align (trailing) and carry a subtle
+    // rounded surface; ASSISTANT messages flow full-width with no
+    // container. `alignEnd` drives the horizontal alignment so the
+    // dispatch site stays the source of truth for which role trails.
+    val roleLabel = when (role) {
+        ConversationRole.User -> "YOU"
+        ConversationRole.Assistant -> "ASSISTANT"
+        ConversationRole.Tool -> "TOOL"
+        ConversationRole.System -> "SYSTEM"
+    }
+    val labelColor = when (role) {
+        ConversationRole.User -> agentAccent
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            roleLabel,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = labelColor,
+        )
+        if (role == ConversationRole.User) {
+            // Right-aligned, content-sized surface. `fillMaxWidth(0.82f)`
+            // caps long turns at ~82% so they don't span edge-to-edge;
+            // `wrapContentWidth(End)` shrinks the surface to its content and
+            // pins it to the trailing edge so short turns hug the right.
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                modifier = Modifier.weight(0.82f, fill = false),
+                modifier = Modifier.fillMaxWidth(0.82f).wrapContentWidth(Alignment.End),
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -773,17 +855,14 @@ private fun ConversationBubble(
                     if (ev.files.isNotEmpty()) FileStrip(ev.files)
                 }
             }
-        }
-        else -> Column(
-            modifier = modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
+        } else {
             ConversationRenderer.blocks(ev.content).forEach { block ->
                 when (block) {
                     is ConversationBlock.Markdown -> MarkdownBlock(block.text, role)
                     is ConversationBlock.Code -> CodeBlock(block.language, block.content)
                 }
             }
+            if (ev.files.isNotEmpty()) FileStrip(ev.files)
         }
     }
 }
