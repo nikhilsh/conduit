@@ -100,6 +100,11 @@ struct SessionsScreen: View {
     /// alert for the swipe-to-delete affordance). Identifiable so the
     /// alert can key its presentation off the pending row.
     @State private var pendingDelete: PendingSavedSessionDelete?
+    /// Exited row whose persisted transcript should open read-only.
+    /// Drives a `navigationDestination(item:)` push into
+    /// `SavedTranscriptView`. Keyed by `compoundID` (not the bare
+    /// session id, which isn't unique across servers).
+    @State private var transcriptTarget: TranscriptTarget?
 
     private var savedStore: SavedSessionsStore { SavedSessionsStore.shared }
 
@@ -131,6 +136,9 @@ struct SessionsScreen: View {
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
         .tint(SweKittyTheme.accentStrong)
+        .navigationDestination(item: $transcriptTarget) { target in
+            SavedTranscriptView(session: target.session).environment(store)
+        }
         .alert(
             "Delete session?",
             isPresented: Binding(
@@ -310,23 +318,35 @@ struct SessionsScreen: View {
 
     // MARK: - Helpers
 
-    /// Resume flow. If the row belongs to the active endpoint and the
-    /// session is still in the live store, we just call `switchTo`. If
-    /// the row is on a different saved server, we switch endpoints
-    /// (which auto-reconnects); the underlying session may not exist on
-    /// the harness anymore — that's fine, the user lands in the home
-    /// view scoped to the right server and can pick from live sessions
-    /// there. (Forking the historical row into a fresh session is a
-    /// follow-up; A.8 is just the "list + jump" surface for v1.)
+    /// Open flow (build task #35). Two paths, keyed by whether the
+    /// session is still live on the broker:
+    ///
+    /// CASE A — LIVE (green dot): select the row's saved server (which
+    /// auto-reconnects if the endpoint changed), then attach to the
+    /// session by id. `attachLiveSession` `join_session`s the existing
+    /// id and navigates once the row materializes in the live list —
+    /// the old code only `switchTo`'d when the row was already in
+    /// `store.sessions`, so a broker-live-but-not-locally-tracked
+    /// session did nothing. We `dismiss()` so the home stack lands on
+    /// the freshly-attached session (driven by `selectedSessionID`).
+    ///
+    /// CASE B — EXITED (red dot): there's no WS to attach to; push a
+    /// read-only viewer that fetches the persisted transcript over
+    /// HTTP (`SavedTranscriptView` → `fetchConversation`). We stay on
+    /// the Sessions stack rather than dismissing so the push reads as a
+    /// drill-in.
     private func resume(_ row: SavedSession) {
-        if let server = store.savedServers.first(where: { $0.id == row.serverID }),
-           store.endpoint != server.endpoint {
-            store.selectSavedServer(server.id, autoConnect: true)
+        switch row.status {
+        case .exited:
+            transcriptTarget = TranscriptTarget(session: row)
+        case .live, .unknown:
+            if let server = store.savedServers.first(where: { $0.id == row.serverID }),
+               store.endpoint != server.endpoint {
+                store.selectSavedServer(server.id, autoConnect: true)
+            }
+            store.attachLiveSession(sessionID: row.id, assistant: row.agent)
+            dismiss()
         }
-        if store.sessions.contains(where: { $0.id == row.id }) {
-            store.switchTo(sessionID: row.id)
-        }
-        dismiss()
     }
 
     private func rowTitle(_ row: SavedSession) -> String {
@@ -366,4 +386,17 @@ struct SessionsScreen: View {
 private struct PendingSavedSessionDelete: Identifiable, Equatable {
     let id: String
     let title: String
+}
+
+/// Carrier for the read-only transcript push. Keyed by `compoundID`
+/// (server-scoped) so two rows that share a bare session id across
+/// paired harnesses don't collide in `navigationDestination(item:)`.
+private struct TranscriptTarget: Identifiable, Hashable {
+    let session: SavedSession
+    var id: String { session.compoundID }
+    // `navigationDestination(item:)` requires Hashable; key off the
+    // stable compound id rather than relying on SavedSession's
+    // synthesized conformances.
+    static func == (lhs: TranscriptTarget, rhs: TranscriptTarget) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }

@@ -134,6 +134,35 @@ struct RemoteDirectoryListing: Codable, Equatable {
     var entries: [RemoteDirectoryEntry]
 }
 
+/// Wire shape of `GET /api/session/conversation/<id>` (broker PR #196).
+/// The persisted transcript is a flat list of role/content/ts/files
+/// rows — the same `conversation.jsonl` the broker replays into a live
+/// WS, exposed read-only over HTTP for exited sessions.
+struct RemoteConversationFile: Codable, Equatable {
+    var path: String
+    var rev: String?
+}
+
+struct RemoteConversationItem: Codable, Equatable {
+    var role: String
+    var content: String
+    var ts: String?
+    var files: [RemoteConversationFile]?
+}
+
+struct RemoteConversation: Codable, Equatable {
+    var items: [RemoteConversationItem]
+}
+
+/// Raised by `fetchConversation` when the broker has no persisted
+/// transcript for the session — either the session predates the #196
+/// redeploy (the `conversation.jsonl` was never written) or the id is
+/// unknown. The viewer renders a friendly "no saved transcript" state
+/// for this case instead of a generic error.
+struct ConversationNotFoundError: LocalizedError {
+    var errorDescription: String? { "No saved transcript for this session." }
+}
+
 extension StoredEndpoint: Codable {}
 
 /// UI-level status for the SSH-bootstrap flow. Independent of `HarnessState`
@@ -443,6 +472,65 @@ final class SessionStore {
             throw NSError(domain: "SessionStore", code: 102, userInfo: [NSLocalizedDescriptionKey: "Directory listing failed"])
         }
         return try JSONDecoder().decode(RemoteDirectoryListing.self, from: data)
+    }
+
+    /// Fetch a session's persisted transcript read-only over HTTP
+    /// (`GET /api/session/conversation/<id>`, broker PR #196). Mirrors
+    /// `listDirectories`' direct-HTTP + bearer-auth pattern. Used by the
+    /// Sessions screen to open an *exited* session — there's no live WS
+    /// to replay from, so we read the broker's `conversation.jsonl`
+    /// instead.
+    ///
+    /// The persisted rows are role/content/ts/files only; we map them
+    /// into `ConversationItem` (kind `message` / `tool`, status `done`)
+    /// so the existing chat renderer can display them unchanged.
+    ///
+    /// Throws `ConversationNotFoundError` on 404 — sessions created
+    /// before the #196 redeploy never wrote a `conversation.jsonl`.
+    func fetchConversation(sessionID: String) async throws -> [ConversationItem] {
+        guard let base = endpoint.httpBaseURL else {
+            throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
+        }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/session/conversation/\(sessionID)"
+        guard let url = components?.url else {
+            throw NSError(domain: "SessionStore", code: 103, userInfo: [NSLocalizedDescriptionKey: "Failed to build conversation URL"])
+        }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw NSError(domain: "SessionStore", code: 104, userInfo: [NSLocalizedDescriptionKey: "Conversation fetch failed"])
+        }
+        if http.statusCode == 404 {
+            throw ConversationNotFoundError()
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw NSError(domain: "SessionStore", code: 104, userInfo: [NSLocalizedDescriptionKey: "Conversation fetch failed (\(http.statusCode))"])
+        }
+        let decoded = try JSONDecoder().decode(RemoteConversation.self, from: data)
+        return decoded.items.enumerated().map { index, raw in
+            let role = raw.role.lowercased()
+            let kind = role == "tool" ? "tool" : "message"
+            let files = (raw.files ?? []).map {
+                ViewEventFile(path: $0.path, rev: $0.rev ?? "")
+            }
+            return ConversationItem(
+                id: "saved-\(sessionID)-\(index)",
+                role: raw.role,
+                kind: kind,
+                status: "done",
+                content: raw.content,
+                ts: raw.ts ?? "",
+                files: files,
+                toolName: nil,
+                command: nil,
+                exitCode: nil,
+                durationMs: nil,
+                diffSummary: nil,
+                pendingOptions: []
+            )
+        }
     }
 
     /// Convenience flow: optionally switch endpoint, connect, then create a
@@ -1463,6 +1551,71 @@ final class SessionStore {
             return
         }
         selectedSessionID = sessionID
+    }
+
+    /// Attach to a session that's still LIVE on the broker but isn't in
+    /// our local live set yet — the "open a historical row" path from
+    /// `SessionsScreen`. The session list on a fresh client is empty
+    /// until status frames trickle back (see `refreshSessions`), so we
+    /// can't `switchTo` synchronously; instead we `join_session` (which
+    /// opens the WS for an existing id — the same `open_session` route
+    /// `create_session` takes) and then poll until the row materializes
+    /// before navigating.
+    ///
+    /// Idempotent: if the session is already live locally we just
+    /// `switchTo` and return. Assumes the caller has already selected
+    /// the right saved server.
+    func attachLiveSession(sessionID: String, assistant: String) {
+        if sessions.contains(where: { $0.id == sessionID }) {
+            switchTo(sessionID: sessionID)
+            return
+        }
+        Task { @MainActor in
+            do {
+                try await waitUntilCommandReady()
+                guard let client else { return }
+                // Mark creating so the home list shows the row as
+                // attaching rather than vanishing during the round-trip.
+                if sessionLifecycle[sessionID] == nil {
+                    sessionLifecycle[sessionID] = .creating
+                }
+                try await client.joinSession(sessionId: sessionID, assistant: assistant)
+                self.refreshSessions()
+                // Poll briefly for the joined session to surface in
+                // `list_sessions()` (it lands as soon as `open_session`
+                // inserts it, but status frames can lag). Once present,
+                // promote to live + navigate.
+                let pollNs: UInt64 = 100_000_000
+                var elapsedNs: UInt64 = 0
+                let timeoutNs: UInt64 = 6_000_000_000
+                while !self.sessions.contains(where: { $0.id == sessionID }),
+                      elapsedNs < timeoutNs {
+                    try await Task.sleep(nanoseconds: pollNs)
+                    elapsedNs += pollNs
+                    self.refreshSessions()
+                }
+                if self.sessions.contains(where: { $0.id == sessionID }) {
+                    if self.sessionLifecycle[sessionID] == .creating {
+                        self.sessionLifecycle[sessionID] = .live
+                    }
+                    self.selectedSessionID = sessionID
+                } else if self.sessionLifecycle[sessionID] == .creating {
+                    // Never showed up — clear the placeholder so the
+                    // list doesn't keep a stuck "attaching" row.
+                    self.sessionLifecycle[sessionID] = nil
+                }
+            } catch {
+                if self.sessionLifecycle[sessionID] == .creating {
+                    self.sessionLifecycle[sessionID] = nil
+                }
+                Telemetry.capture(
+                    error: error,
+                    message: "iOS attach live session failed",
+                    tags: ["surface": "ios", "phase": "attach_session"],
+                    extras: ["endpoint": self.endpoint.displayHost, "session_id": sessionID]
+                )
+            }
+        }
     }
 
     /// Locally rename a session — persisted to `UserDefaults`, no

@@ -30,9 +30,18 @@ extension LitterUI {
 
         let session: ProjectSession
 
+        /// When non-nil, the view renders these items read-only (an
+        /// exited session's persisted transcript fetched over HTTP) and
+        /// hides the composer + quick-reply bar. Live sessions pass nil
+        /// and read from the store's `conversationLog` / `chatLog` as
+        /// before.
+        var readOnlyItems: [ConversationItem]? = nil
+
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
         @FocusState private var composerFocused: Bool
+
+        private var isReadOnly: Bool { readOnlyItems != nil }
 
         // Task #39 — streaming auto-scroll that doesn't fight the user.
         // The controller is the pure state machine; the view feeds it
@@ -50,9 +59,14 @@ extension LitterUI {
             // stack let the keyboard cover it.
             messagesList
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 0) {
-                        suggestionBar
-                        composer
+                    // Exited sessions are a frozen transcript — no live
+                    // WS to send into — so the composer + suggestion bar
+                    // are suppressed entirely in read-only mode.
+                    if !isReadOnly {
+                        VStack(spacing: 0) {
+                            suggestionBar
+                            composer
+                        }
                     }
                 }
                 // In-chat voice dictation. Mirrors the home-screen mic
@@ -76,6 +90,10 @@ extension LitterUI {
         // MARK: Messages
 
         private var events: [ConversationItem] {
+            // Read-only mode (exited session): render the injected
+            // persisted transcript verbatim — nothing in the live store
+            // to merge.
+            if let readOnlyItems { return readOnlyItems }
             // PR #111 + legacy ChatTab parity: prefer the typed
             // `conversationLog`, but fall back to the broker's raw
             // `chatLog` for events that haven't surfaced through the
@@ -83,7 +101,7 @@ extension LitterUI {
             // assistant replies (delivered via `on_chat_event`) showed
             // up in the Terminal tab but never reached the chat tab —
             // the #119 cutover dropped the legacy mapIndexed fallback.
-            LitterUI.ChatViewModel.mergedEvents(
+            return LitterUI.ChatViewModel.mergedEvents(
                 conversation: store.conversationLog[session.id] ?? [],
                 chatLog: store.chatLog[session.id] ?? []
             )

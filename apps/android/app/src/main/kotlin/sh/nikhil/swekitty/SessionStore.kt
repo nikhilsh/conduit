@@ -39,6 +39,7 @@ import uniffi.swe_kitty_core.SshHostKeyDelegate
 import uniffi.swe_kitty_core.SweKittyClient
 import sh.nikhil.swekitty.auth.AgentLoginCoordinator
 import uniffi.swe_kitty_core.SweKittyDelegate
+import uniffi.swe_kitty_core.ViewEventFile
 import uniffi.swe_kitty_core.sshBootstrap as ffiSshBootstrap
 import java.util.concurrent.CountDownLatch
 
@@ -183,6 +184,15 @@ data class RemoteDirectoryListing(
     val parent: String,
     val entries: List<RemoteDirectoryEntry>,
 )
+
+/**
+ * Raised by [SessionStore.fetchConversation] when the broker has no
+ * persisted transcript for the session — either the session predates
+ * the #196 redeploy (no `conversation.jsonl` was written) or the id is
+ * unknown. The transcript viewer renders a friendly "no saved
+ * transcript" state for this case. Mirrors iOS `ConversationNotFoundError`.
+ */
+class ConversationNotFoundException : Exception("No saved transcript for this session.")
 
 /**
  * Kind of pinned context attached above the composer. Mirror of iOS
@@ -879,6 +889,69 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         _selectedId.value = sessionID
     }
 
+    /**
+     * Attach to a session still LIVE on the broker but not yet in our
+     * local live set — the "open a historical row" path from the
+     * Sessions screen. Mirrors iOS `attachLiveSession`.
+     *
+     * A fresh client's [listSessions] is empty until status frames
+     * arrive, so we can't [switchTo] synchronously. Instead we
+     * `joinSession` (which opens the WS for an existing id, the same
+     * `open_session` route `createSession` takes) and poll until the
+     * row materializes before navigating.
+     *
+     * Idempotent: if the session is already live locally we [switchTo]
+     * and return. Assumes the caller already selected the right server.
+     */
+    fun attachLiveSession(sessionID: String, assistant: String) {
+        if (_sessions.value.any { it.id == sessionID }) {
+            switchTo(sessionID)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                if (!waitUntilCommandReady()) return@launch
+                val c = client ?: return@launch
+                // Mark creating so the home list shows the row attaching
+                // rather than vanishing during the round-trip.
+                if (_sessionLifecycle.value[sessionID] == null) {
+                    updateLifecycle { it + (sessionID to SessionLifecycle.Creating) }
+                }
+                withContext(Dispatchers.IO) { c.joinSession(sessionID, assistant) }
+                refreshSessions()
+                // Poll briefly for the joined session to surface in
+                // listSessions(); status frames can lag the WS open.
+                val deadline = System.currentTimeMillis() + 6_000L
+                while (_sessions.value.none { it.id == sessionID } &&
+                    System.currentTimeMillis() < deadline
+                ) {
+                    delay(100)
+                    refreshSessions()
+                }
+                if (_sessions.value.any { it.id == sessionID }) {
+                    if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Creating) {
+                        updateLifecycle { it + (sessionID to SessionLifecycle.Live) }
+                    }
+                    _selectedId.value = sessionID
+                } else if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Creating) {
+                    // Never showed up — clear the placeholder so the list
+                    // doesn't keep a stuck "attaching" row.
+                    updateLifecycle { it - sessionID }
+                }
+            } catch (t: Throwable) {
+                if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Creating) {
+                    updateLifecycle { it - sessionID }
+                }
+                Telemetry.capture(
+                    error = t,
+                    message = "Android attach live session failed",
+                    tags = mapOf("surface" to "android", "phase" to "attach_session"),
+                    extras = mapOf("endpoint" to _endpoint.value.displayHost, "session_id" to sessionID),
+                )
+            }
+        }
+    }
+
     fun createSession(
         assistant: String,
         branch: String? = null,
@@ -1035,6 +1108,82 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 parent = obj.optString("parent", path ?: "~"),
                 entries = entries,
             )
+        }
+    }
+
+    /**
+     * Fetch a session's persisted transcript read-only over HTTP
+     * (`GET /api/session/conversation/<id>`, broker PR #196). Mirrors
+     * [listDirectories]' direct-HTTP + bearer-auth pattern, and iOS
+     * `fetchConversation`. Used by the Sessions screen to open an
+     * *exited* session: there's no live WS to replay from, so we read
+     * the broker's `conversation.jsonl` instead.
+     *
+     * The persisted rows are role/content/ts/files only; we map them
+     * into [ConversationItem] (kind `message` / `tool`, status `done`)
+     * so the existing chat renderer can display them unchanged.
+     *
+     * Throws [ConversationNotFoundException] on 404 — sessions created
+     * before the #196 redeploy never wrote a `conversation.jsonl`.
+     */
+    suspend fun fetchConversation(sessionID: String): List<ConversationItem> {
+        val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
+        val url = URL("$base/api/session/conversation/${java.net.URLEncoder.encode(sessionID, "UTF-8")}")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Authorization", "Bearer ${_endpoint.value.token}")
+            connectTimeout = 7_000
+            readTimeout = 7_000
+        }
+        val code = conn.responseCode
+        if (code == 404) {
+            conn.disconnect()
+            throw ConversationNotFoundException()
+        }
+        if (code !in 200..299) {
+            conn.disconnect()
+            error("Conversation fetch failed ($code)")
+        }
+        conn.inputStream.bufferedReader().use { reader ->
+            val raw = reader.readText()
+            val obj = JSONObject(raw)
+            val arr = obj.optJSONArray("items") ?: JSONArray()
+            return buildList {
+                for (i in 0 until arr.length()) {
+                    val e = arr.getJSONObject(i)
+                    val role = e.optString("role", "")
+                    val kind = if (role.lowercase() == "tool") "tool" else "message"
+                    val filesArr = e.optJSONArray("files") ?: JSONArray()
+                    val files = buildList {
+                        for (j in 0 until filesArr.length()) {
+                            val f = filesArr.getJSONObject(j)
+                            add(
+                                ViewEventFile(
+                                    path = f.optString("path", ""),
+                                    rev = f.optString("rev", ""),
+                                )
+                            )
+                        }
+                    }
+                    add(
+                        ConversationItem(
+                            id = "saved-$sessionID-$i",
+                            role = role,
+                            kind = kind,
+                            status = "done",
+                            content = e.optString("content", ""),
+                            ts = e.optString("ts", ""),
+                            files = files,
+                            toolName = null,
+                            command = null,
+                            exitCode = null,
+                            durationMs = null,
+                            diffSummary = null,
+                            pendingOptions = emptyList(),
+                        )
+                    )
+                }
+            }
         }
     }
 
