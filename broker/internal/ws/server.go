@@ -125,6 +125,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/fs/list", s.serveFSList)
 	// Trailing slash: path-prefix match so the session id is the tail.
 	mux.HandleFunc("/api/session/conversation/", s.serveSessionConversation)
+	// DELETE /api/session/<id> — terminate + archive a session. The more
+	// specific `/api/session/start` (exact) and `/api/session/conversation/`
+	// (longer prefix) patterns win under ServeMux longest-match, so this
+	// prefix only catches the bare `/api/session/<id>` delete path.
+	mux.HandleFunc("/api/session/", s.serveSessionDelete)
 	return mux
 }
 

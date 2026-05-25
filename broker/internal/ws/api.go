@@ -204,6 +204,41 @@ func (s *Server) serveSessionConversation(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, sessionConversationResponse{Items: items})
 }
 
+// serveSessionDelete terminates and archives a session by id. It is the
+// server side of the app's swipe-to-delete: it stops the agent process +
+// PTY, kills the per-session tmux session, drops the session from the
+// live Manager map, and archives the on-disk session dir out of the
+// active set (conversation.jsonl + work/ are preserved under
+// `archived-sessions/<id>`, reachable via GET
+// /api/session/conversation/<id>).
+//
+// Idempotent: deleting an already-gone session returns 200. Only DELETE
+// is accepted; the WS `exit` control still merely kills the process and
+// leaves the session recoverable, which is why the broker accumulated
+// stale sessions — this is the endpoint that actually removes them.
+func (s *Server) serveSessionDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "DELETE required")
+		return
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/session/"))
+	if id == "" || strings.Contains(id, "/") {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing or invalid session id")
+		return
+	}
+	if err := s.Sessions.DeleteSession(id); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "session_delete_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": id,
+		"deleted":    true,
+	})
+}
+
 func newSessionID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

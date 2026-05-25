@@ -937,11 +937,23 @@ func (m *Manager) AssistantNames() []string {
 // Works for both live and exited sessions — both append to the same
 // on-disk log, which survives reap — so the app can reopen a past
 // session read-only. Returns an error only when no log exists for the id.
+//
+// Falls back to `<kittyRoot>/archived-sessions/<id>/conversation.jsonl`
+// when the active dir has none, so a session deleted (archived) via
+// DeleteSession stays reachable read-only — the delete preserves the
+// transcript, it just takes the session out of the active set.
 func (m *Manager) ConversationLog(id string) ([]ConvEntry, error) {
 	if id == "" {
 		return nil, os.ErrNotExist
 	}
-	return readConvLog(filepath.Join(m.kittyRoot, "sessions", id, "conversation.jsonl"))
+	entries, err := readConvLog(filepath.Join(m.kittyRoot, "sessions", id, "conversation.jsonl"))
+	if err == nil {
+		return entries, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return readConvLog(filepath.Join(m.kittyRoot, archivedSessionsDirName, id, "conversation.jsonl"))
 }
 
 // GetOrCreate returns the existing session for id, or starts a new one

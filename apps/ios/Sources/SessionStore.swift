@@ -533,6 +533,40 @@ final class SessionStore {
         }
     }
 
+    /// Terminate AND remove a session on the broker over HTTP
+    /// (`DELETE /api/session/<id>`). Mirrors `fetchConversation`'s
+    /// direct-HTTP + bearer-auth pattern.
+    ///
+    /// Unlike the WS `exit` control (which only kills the agent process
+    /// and leaves the session recoverable on disk — the bug that made
+    /// broker sessions accumulate), this endpoint stops the process, kills
+    /// the per-session tmux session, drops the session from the broker's
+    /// live set, and archives the on-disk dir out of the active list.
+    /// Idempotent server-side: a 200 also covers already-gone sessions.
+    ///
+    /// Works for exited sessions too — there's no live WS handle required,
+    /// just the endpoint + bearer token. The conversation transcript stays
+    /// reachable via `fetchConversation` (the broker preserves it under
+    /// `archived-sessions/<id>`).
+    func deleteSession(sessionID: String) async throws {
+        guard let base = endpoint.httpBaseURL else {
+            throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
+        }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/session/\(sessionID)"
+        guard let url = components?.url else {
+            throw NSError(domain: "SessionStore", code: 105, userInfo: [NSLocalizedDescriptionKey: "Failed to build delete URL"])
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            throw NSError(domain: "SessionStore", code: 106, userInfo: [NSLocalizedDescriptionKey: "Session delete failed (\(code))"])
+        }
+    }
+
     /// Convenience flow: optionally switch endpoint, connect, then create a
     /// new session and move it into `cwd`.
     func connectAndStart(endpoint nextEndpoint: StoredEndpoint? = nil, assistant: String, cwd: String) {
@@ -844,7 +878,6 @@ final class SessionStore {
     }
 
     func exit(sessionID: String) {
-        guard let client else { return }
         // Optimistic removal so the row disappears immediately. Previously
         // we cleared local state only *after* the async `exitSession` +
         // `refreshSessions` round-trip, so the row lingered until the
@@ -856,7 +889,26 @@ final class SessionStore {
         if selectedSessionID == sessionID { selectedSessionID = nil }
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
         Task {
-            try? await client.exitSession(sessionId: sessionID)
+            // WS `exit` closes the live socket + flushes a checkpoint when
+            // a session is attached. Best-effort: an exited session has no
+            // live handle, and the HTTP DELETE below is the authoritative
+            // teardown either way.
+            if let client { try? await client.exitSession(sessionId: sessionID) }
+            // Authoritative broker-side delete: kills the agent process +
+            // tmux, removes the session from the broker's active set, and
+            // archives its dir. Without this the broker kept recovering the
+            // session on disk and the row reappeared / sessions piled up.
+            // No live WS handle required, so it also works for exited rows.
+            do {
+                try await self.deleteSession(sessionID: sessionID)
+            } catch {
+                Telemetry.capture(
+                    error: error,
+                    message: "iOS session delete failed",
+                    tags: ["surface": "ios", "phase": "session_delete"],
+                    extras: ["endpoint": self.endpoint.displayHost, "session_id": sessionID]
+                )
+            }
             self.refreshSessions()
         }
     }

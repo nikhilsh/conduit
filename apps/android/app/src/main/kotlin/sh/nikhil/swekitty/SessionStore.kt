@@ -1021,7 +1021,6 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     fun exit(sessionId: String) {
-        val c = client ?: return
         // Optimistic removal so the row disappears immediately. Previously
         // we cleared state only *after* the async exitSession +
         // refreshSessions round-trip, so the row lingered until the call
@@ -1031,7 +1030,23 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         updateLifecycle { it - sessionId }
         if (_selectedId.value == sessionId) _selectedId.value = null
         viewModelScope.launch {
-            runCatching { withContext(Dispatchers.IO) { c.exitSession(sessionId) } }
+            // WS `exit` closes the live socket + flushes a checkpoint when a
+            // session is attached. Best-effort: an exited session has no live
+            // handle, and the HTTP DELETE below is the authoritative teardown.
+            client?.let { c -> runCatching { withContext(Dispatchers.IO) { c.exitSession(sessionId) } } }
+            // Authoritative broker-side delete: kills the agent process +
+            // tmux, removes the session from the broker's active set, and
+            // archives its dir. Without this the broker kept recovering the
+            // session on disk and the row reappeared / sessions piled up.
+            // No live WS handle required, so it also works for exited rows.
+            runCatching { deleteSession(sessionId) }.onFailure { t ->
+                Telemetry.capture(
+                    error = t,
+                    message = "Android session delete failed",
+                    tags = mapOf("surface" to "android", "phase" to "session_delete"),
+                    extras = mapOf("endpoint" to _endpoint.value.displayHost, "session_id" to sessionId),
+                )
+            }
             refreshSessions()
         }
     }
@@ -1183,6 +1198,42 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                         )
                     )
                 }
+            }
+        }
+    }
+
+    /**
+     * Terminate AND remove a session on the broker over HTTP
+     * (`DELETE /api/session/<id>`). Mirrors [fetchConversation]'s
+     * direct-HTTP + bearer-auth pattern, and iOS `deleteSession`.
+     *
+     * Unlike the WS `exit` control (which only kills the agent process and
+     * leaves the session recoverable on disk — the bug that made broker
+     * sessions accumulate), this endpoint stops the process, kills the
+     * per-session tmux session, drops the session from the broker's live
+     * set, and archives the on-disk dir out of the active list. Idempotent
+     * server-side: a 200 also covers already-gone sessions.
+     *
+     * Works for exited sessions too — no live WS handle required, just the
+     * endpoint + bearer token. The transcript stays reachable via
+     * [fetchConversation] (the broker preserves it under
+     * `archived-sessions/<id>`).
+     */
+    suspend fun deleteSession(sessionId: String) {
+        val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
+        val url = URL("$base/api/session/${java.net.URLEncoder.encode(sessionId, "UTF-8")}")
+        withContext(Dispatchers.IO) {
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "DELETE"
+                setRequestProperty("Authorization", "Bearer ${_endpoint.value.token}")
+                connectTimeout = 7_000
+                readTimeout = 7_000
+            }
+            try {
+                val code = conn.responseCode
+                if (code !in 200..299) error("Session delete failed ($code)")
+            } finally {
+                conn.disconnect()
             }
         }
     }

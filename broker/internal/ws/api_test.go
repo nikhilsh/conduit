@@ -59,6 +59,72 @@ func TestSessionStartEndpoint(t *testing.T) {
 	}
 }
 
+func TestSessionDeleteEndpoint(t *testing.T) {
+	srv, tok := newTestServer(t)
+
+	// Create a session so there's something to delete.
+	startBody := `{"assistant":"claude"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/session/start?token="+url.QueryEscape(tok), strings.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST session start: %v", err)
+	}
+	var start struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	_ = resp.Body.Close()
+	if start.SessionID == "" {
+		t.Fatal("no session id returned")
+	}
+
+	// DELETE the session.
+	delReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/session/"+start.SessionID+"?token="+url.QueryEscape(tok), nil)
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("DELETE session: %v", err)
+	}
+	defer delResp.Body.Close()
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status=%d", delResp.StatusCode)
+	}
+	var delOut struct {
+		SessionID string `json:"session_id"`
+		Deleted   bool   `json:"deleted"`
+	}
+	if err := json.NewDecoder(delResp.Body).Decode(&delOut); err != nil {
+		t.Fatalf("decode delete: %v", err)
+	}
+	if !delOut.Deleted || delOut.SessionID != start.SessionID {
+		t.Fatalf("unexpected delete payload: %+v", delOut)
+	}
+
+	// Idempotent: deleting again still returns 200.
+	delReq2, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/session/"+start.SessionID+"?token="+url.QueryEscape(tok), nil)
+	delResp2, err := http.DefaultClient.Do(delReq2)
+	if err != nil {
+		t.Fatalf("second DELETE session: %v", err)
+	}
+	defer delResp2.Body.Close()
+	if delResp2.StatusCode != http.StatusOK {
+		t.Fatalf("second delete status=%d", delResp2.StatusCode)
+	}
+
+	// Wrong method on the same path is rejected.
+	getReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/session/"+start.SessionID+"?token="+url.QueryEscape(tok), nil)
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET session: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for GET on delete path, got %d", getResp.StatusCode)
+	}
+}
+
 func TestFSListMetadataAndPagination(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"beta", "alpha", ".hidden"} {
