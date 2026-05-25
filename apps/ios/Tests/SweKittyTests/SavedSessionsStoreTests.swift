@@ -157,6 +157,78 @@ struct SavedSessionsStoreTests {
         #expect(row?.serverID == "srv-a")
     }
 
+    // MARK: - Tombstone (delete-is-terminal across broker re-reports)
+
+    @Test func removeTombstonesAndSuppressesReUpsert() {
+        // The deployed broker keeps tmux-backed PTYs alive (#199), so a
+        // just-deleted session can still surface on the next status/list
+        // delta and feed back into `upsert`. The tombstone must block it.
+        let store = makeStore()
+        let session = makeSession(id: "s-zombie")
+        store.upsert(session: session, serverID: "srv-a", status: nil,
+                     firstUserMessage: "hi", messageCount: 1, isExited: false)
+        #expect(store.recent().count == 1)
+
+        store.remove(id: "s-zombie")
+        #expect(store.recent().isEmpty)
+        #expect(store.isTombstoned(id: "s-zombie"))
+
+        // Broker re-reports the still-alive session → must NOT reappear.
+        store.upsert(session: session, serverID: "srv-a", status: nil,
+                     firstUserMessage: "hi", messageCount: 2, isExited: false)
+        #expect(store.recent().isEmpty)
+        #expect(store.isTombstoned(id: "s-zombie"))
+    }
+
+    @Test func tombstonePersistsAcrossLaunches() {
+        let url = tmpURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        do {
+            let store = SavedSessionsStore(storeURL: url)
+            store.upsert(session: makeSession(id: "s-gone"), serverID: "srv-a",
+                         status: nil, firstUserMessage: "bye", messageCount: 1,
+                         isExited: false)
+            store.remove(id: "s-gone")
+        }
+        // Relaunch: the tombstone must survive so a broker re-report on
+        // the next session-refresh still can't resurrect the row.
+        let restored = SavedSessionsStore(storeURL: url)
+        #expect(restored.isTombstoned(id: "s-gone"))
+        #expect(restored.recent().isEmpty)
+        restored.upsert(session: makeSession(id: "s-gone"), serverID: "srv-a",
+                        status: nil, firstUserMessage: "bye", messageCount: 1,
+                        isExited: false)
+        #expect(restored.recent().isEmpty)
+    }
+
+    @Test func resetClearsTombstones() {
+        let store = makeStore()
+        store.remove(id: "s-x")
+        #expect(store.isTombstoned(id: "s-x"))
+        store.reset()
+        #expect(!store.isTombstoned(id: "s-x"))
+    }
+
+    @Test func deletedIDsFieldUsesRustSnakeCaseAndOmitsWhenEmpty() {
+        let url = tmpURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = SavedSessionsStore(storeURL: url)
+
+        // Empty tombstone set → field omitted so the Rust core
+        // round-trips the file untouched.
+        store.upsert(session: makeSession(id: "s-1"), serverID: "srv-a",
+                     status: nil, firstUserMessage: "x", messageCount: 1,
+                     isExited: false)
+        let emptyRaw = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        #expect(!emptyRaw.contains("deleted_ids"))
+
+        // After a delete → snake_case key present.
+        store.remove(id: "s-1")
+        let raw = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        #expect(raw.contains("\"deleted_ids\""))
+    }
+
     // MARK: - Helpers
 
     private func makeStore() -> SavedSessionsStore {

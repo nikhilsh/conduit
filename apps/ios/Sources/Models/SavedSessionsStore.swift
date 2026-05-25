@@ -72,24 +72,61 @@ final class SavedSessionsStore {
     /// in sync with disk; reads in the UI go through `recent`.
     private(set) var sessions: [SavedSession] = []
 
+    /// Persisted set of session ids the user has explicitly deleted.
+    /// A tombstoned id is permanently suppressed from `upsert` (so a
+    /// status/list refresh can't re-add it) and excluded from `recent`
+    /// (so the history screen never shows it). Keyed by bare session id
+    /// — the harness mints UUIDs unique per session, and a delete is
+    /// terminal across servers, matching `remove(id:)`. We cap the set
+    /// at `tombstoneCap` newest-first so it can't grow unbounded; an
+    /// id evicted from the cap can theoretically reappear, but only
+    /// after `tombstoneCap` *other* sessions have been deleted, by
+    /// which point the broker has long since reaped the original.
+    private(set) var deletedIDs: Set<String> = []
+
+    /// Insertion-ordered companion to `deletedIDs` so we can evict the
+    /// oldest tombstone when the cap is exceeded. Newest at the end.
+    private var deletedOrder: [String] = []
+
+    /// Upper bound on retained tombstones. Generous — the on-disk cost
+    /// is one short string per entry.
+    private let tombstoneCap = 500
+
     /// Resolved persistence path, exposed for tests + diagnostics.
     let storeURL: URL
 
     init(storeURL: URL? = nil) {
         self.storeURL = storeURL ?? SavedSessionsStore.defaultStoreURL()
-        self.sessions = Self.loadFromDisk(at: self.storeURL)
+        let loaded = Self.loadFromDisk(at: self.storeURL)
+        self.sessions = loaded.sessions
+        self.deletedOrder = loaded.deletedOrder
+        self.deletedIDs = Set(loaded.deletedOrder)
     }
 
     /// Latest-first slice clamped to `limit`. Ties broken by id so
     /// snapshot tests stay deterministic — mirrors the Rust
     /// `list_recent` ordering rule.
     func recent(limit: Int = 200) -> [SavedSession] {
-        let sorted = sessions.sorted { lhs, rhs in
-            if lhs.lastSeen != rhs.lastSeen { return lhs.lastSeen > rhs.lastSeen }
-            return lhs.id < rhs.id
-        }
+        // Belt-and-braces: a tombstoned row is normally already absent
+        // from `sessions` (delete removes it), but filter here too so a
+        // race (status frame in flight during delete) can never leak a
+        // deleted session into the history screen.
+        let sorted = sessions
+            .filter { !deletedIDs.contains($0.id) }
+            .sorted { lhs, rhs in
+                if lhs.lastSeen != rhs.lastSeen { return lhs.lastSeen > rhs.lastSeen }
+                return lhs.id < rhs.id
+            }
         if sorted.count <= limit { return sorted }
         return Array(sorted.prefix(limit))
+    }
+
+    /// True when the id has been explicitly deleted by the user. Call
+    /// sites (e.g. `SessionStore.refreshSessions`) consult this to keep
+    /// a tombstoned session out of the *live* list as well, since the
+    /// broker can keep reporting a deleted session whose tmux lingers.
+    func isTombstoned(id: String) -> Bool {
+        deletedIDs.contains(id)
     }
 
     /// Fold a live `ProjectSession` + `SessionStatus` snapshot into the
@@ -105,6 +142,13 @@ final class SavedSessionsStore {
         messageCount: Int,
         isExited: Bool
     ) {
+        // A deleted session must STAY deleted. The deployed broker keeps
+        // tmux-backed PTYs alive (#199), so a just-deleted session can
+        // still surface on the next listSessions/status delta and feed
+        // back into here. Without this guard it would be re-added and
+        // reappear in history (reading as live → interactive). The
+        // tombstone is the client-side guarantee.
+        if deletedIDs.contains(session.id) { return }
         let now = status?.lastActivityAt
             ?? status?.startedAt
             ?? session.lastActivityAt
@@ -149,24 +193,44 @@ final class SavedSessionsStore {
         }
     }
 
-    /// Drop every row. Test-only convenience — the production app has
-    /// no "clear history" affordance yet.
+    /// Drop every row + tombstone. Test-only convenience — the
+    /// production app has no "clear history" affordance yet.
     func reset() {
         sessions = []
+        deletedIDs = []
+        deletedOrder = []
         persist()
     }
 
-    /// Remove every saved-session row whose session-id equals `id`.
-    /// Idempotent — no-op when the id is unknown. Used by the Sessions
-    /// history screen's swipe-to-delete: the user already deleted the
-    /// live row via `store.exit(...)`, this clears the persistent
-    /// `Resume` entry so the row doesn't reappear on next launch.
-    /// Matches across servers because the harness mints UUIDs unique
-    /// per session and the user expects "delete" to be terminal.
+    /// Tombstone + remove every saved-session row whose session-id
+    /// equals `id`. Idempotent. Used by every delete path
+    /// (`SessionStore.exit`): the live row is already gone, this records
+    /// the tombstone so a subsequent `upsert` (from a status/list
+    /// refresh while the broker's tmux lingers) can NEVER re-add it, and
+    /// clears the persistent `Resume` entry so the row doesn't reappear
+    /// on next launch. Matches across servers because the harness mints
+    /// UUIDs unique per session and the user expects delete to be
+    /// terminal.
     func remove(id: String) {
-        let before = sessions.count
+        let removedRow = sessions.contains { $0.id == id }
         sessions.removeAll { $0.id == id }
-        if sessions.count != before {
+        let newTombstone = deletedIDs.insert(id).inserted
+        if newTombstone {
+            deletedOrder.append(id)
+            // Cap the tombstone set so it can't grow forever. Evict the
+            // oldest ids; by the time we've deleted `tombstoneCap`
+            // sessions the broker has long reaped the early ones, so an
+            // evicted tombstone is harmless.
+            if deletedOrder.count > tombstoneCap {
+                let overflow = deletedOrder.count - tombstoneCap
+                let evicted = deletedOrder.prefix(overflow)
+                deletedOrder.removeFirst(overflow)
+                for id in evicted where !deletedOrder.contains(id) {
+                    deletedIDs.remove(id)
+                }
+            }
+        }
+        if removedRow || newTombstone {
             persist()
         }
     }
@@ -175,7 +239,7 @@ final class SavedSessionsStore {
 
     private func persist() {
         do {
-            try Self.write(sessions: sessions, to: storeURL)
+            try Self.write(sessions: sessions, deletedOrder: deletedOrder, to: storeURL)
         } catch {
             // Persistence failure is logged but never propagated — the
             // saved store is best-effort. The in-memory state is still
@@ -199,18 +263,30 @@ final class SavedSessionsStore {
             .appendingPathComponent("saved-sessions.json", isDirectory: false)
     }
 
-    nonisolated private static func loadFromDisk(at url: URL) -> [SavedSession] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
+    nonisolated private static func loadFromDisk(
+        at url: URL
+    ) -> (sessions: [SavedSession], deletedOrder: [String]) {
+        guard let data = try? Data(contentsOf: url) else { return ([], []) }
         let decoder = JSONDecoder()
         if let envelope = try? decoder.decode(StoreEnvelope.self, from: data) {
-            return Array(envelope.sessions.values)
+            // De-dup the persisted tombstone list while preserving order.
+            var seen = Set<String>()
+            let order = (envelope.deletedIDs ?? []).filter { seen.insert($0).inserted }
+            return (Array(envelope.sessions.values), order)
         }
         // Belt-and-braces: also accept a bare top-level array in case a
         // future Rust revision flattens the envelope.
-        return (try? decoder.decode([SavedSession].self, from: data)) ?? []
+        if let bare = try? decoder.decode([SavedSession].self, from: data) {
+            return (bare, [])
+        }
+        return ([], [])
     }
 
-    nonisolated private static func write(sessions: [SavedSession], to url: URL) throws {
+    nonisolated private static func write(
+        sessions: [SavedSession],
+        deletedOrder: [String],
+        to url: URL
+    ) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -218,7 +294,8 @@ final class SavedSessionsStore {
         let envelope = StoreEnvelope(
             sessions: Dictionary(
                 uniqueKeysWithValues: sessions.map { ($0.compoundID, $0) }
-            )
+            ),
+            deletedIDs: deletedOrder.isEmpty ? nil : deletedOrder
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -226,10 +303,21 @@ final class SavedSessionsStore {
         try data.write(to: url, options: .atomic)
     }
 
-    /// Matches the Rust serde wrapper:
-    /// `struct SavedSessionStore { sessions: HashMap<String, SavedSession> }`.
+    /// Matches the Rust serde wrapper
+    /// `struct SavedSessionStore { sessions: HashMap<String, SavedSession> }`,
+    /// extended with an optional `deleted_ids` tombstone list. The field
+    /// is optional + omitted-when-empty so the Rust core (which does not
+    /// yet model it) round-trips the file untouched — serde ignores
+    /// unknown fields by default, and an absent field decodes to nil
+    /// here. Ordered newest-last for cap eviction.
     private struct StoreEnvelope: Codable {
         var sessions: [String: SavedSession]
+        var deletedIDs: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case sessions
+            case deletedIDs = "deleted_ids"
+        }
     }
 
     // MARK: - Helpers

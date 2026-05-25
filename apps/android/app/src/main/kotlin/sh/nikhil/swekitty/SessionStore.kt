@@ -285,6 +285,20 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     private val _sessionLifecycle = MutableStateFlow<Map<String, SessionLifecycle>>(emptyMap())
     val sessionLifecycle: StateFlow<Map<String, SessionLifecycle>> = _sessionLifecycle.asStateFlow()
 
+    /**
+     * Persisted tombstones for sessions the user has explicitly deleted.
+     * Android's lists are driven directly by the broker's [listSessions],
+     * and the deployed broker keeps tmux-backed PTYs alive (#199), so a
+     * just-deleted session keeps getting reported and would reappear
+     * (reading as live → interactive). [refreshSessions] filters
+     * [listSessions] against this set so a deleted id NEVER shows again,
+     * even across relaunches, regardless of broker state. Ordered
+     * newest-last so we can cap the set and evict the oldest. Mirror of
+     * iOS `SavedSessionsStore.deletedIDs`.
+     */
+    private val _deletedIds = MutableStateFlow<List<String>>(emptyList())
+    val deletedIds: StateFlow<List<String>> = _deletedIds.asStateFlow()
+
     /** Banner-style error for the most recent session-creation failure. */
     private val _sessionCreationError = MutableStateFlow<String?>(null)
     val sessionCreationError: StateFlow<String?> = _sessionCreationError.asStateFlow()
@@ -543,6 +557,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             )
             _savedServers.value = decodeSavedServers(p.getString(KEY_SAVED_SERVERS, null))
             _displayNames.value = decodeDisplayNames(p.getString(KEY_DISPLAY_NAMES, null))
+            _deletedIds.value = decodeDeletedIds(p.getString(KEY_DELETED_IDS, null))
             refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
@@ -1106,6 +1121,15 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     fun exit(sessionId: String) {
+        // Tombstone first: delete is terminal. The deployed broker keeps
+        // tmux-backed PTYs alive (#199), so a just-deleted session keeps
+        // getting reported by listSessions and would reappear (reading as
+        // live → interactive). Recording the tombstone here — on every
+        // delete path (HomeScreen + drawer both funnel through `exit`) —
+        // lets refreshSessions filter it out permanently, even across
+        // relaunches. The broker DELETE below is the authoritative
+        // teardown; the tombstone is the client-side guarantee regardless.
+        tombstone(sessionId)
         // Optimistic removal so the row disappears immediately. Previously
         // we cleared state only *after* the async exitSession +
         // refreshSessions round-trip, so the row lingered until the call
@@ -1134,6 +1158,32 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             }
             refreshSessions()
         }
+    }
+
+    /**
+     * Record a delete tombstone for [sessionId] and persist it.
+     * Idempotent. Capped at [TOMBSTONE_CAP] newest-first so the set
+     * can't grow forever; by the time that many sessions have been
+     * deleted the broker has long reaped the early ones, so evicting an
+     * old tombstone is harmless. Mirror of iOS
+     * `SavedSessionsStore.remove(id:)`.
+     *
+     * `internal` (not `private`) so `SessionStoreTombstoneTest` can
+     * drive the tombstone contract directly without going through
+     * [exit] — `exit` launches a best-effort network coroutine on
+     * `viewModelScope`, which needs `Dispatchers.Main` (absent on the
+     * JVM unit-test classpath). Same testability rationale as the
+     * `internal` ingest entry points.
+     */
+    internal fun tombstone(sessionId: String) {
+        val current = _deletedIds.value
+        if (sessionId in current) return
+        var next = current + sessionId
+        if (next.size > TOMBSTONE_CAP) {
+            next = next.takeLast(TOMBSTONE_CAP)
+        }
+        _deletedIds.value = next
+        prefs?.edit()?.putString(KEY_DELETED_IDS, encodeDeletedIds(next))?.apply()
     }
 
     fun sendInput(sessionId: String, data: ByteArray) {
@@ -1346,7 +1396,13 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     private fun refreshSessions() {
         val c = client ?: return
-        val list = c.listSessions()
+        // Drop any session the user has explicitly deleted. The deployed
+        // broker keeps tmux-backed PTYs alive (#199) and keeps reporting a
+        // just-deleted session; without this filter it would reappear in
+        // the list and (because its tmux is live) read as interactive. The
+        // tombstone set is the guarantee that delete stays terminal.
+        val deleted = _deletedIds.value.toSet()
+        val list = c.listSessions().filterNot { it.id in deleted }
         _sessions.value = list
         for (s in list) {
             // Do NOT blanket-default listed sessions to `Live`.
@@ -1622,6 +1678,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         private const val KEY_SAVED_SERVERS = "swekitty.saved_servers"
         private const val KEY_RECENT_DIRS = "swekitty.recent_dirs_by_server"
         private const val KEY_DISPLAY_NAMES = "swekitty.session_display_names"
+        private const val KEY_DELETED_IDS = "swekitty.deleted_session_ids"
+
+        /** Upper bound on retained delete tombstones. */
+        private const val TOMBSTONE_CAP = 500
 
         /**
          * Classify a broker `SessionStatus.phase` as live/running vs
@@ -1661,6 +1721,24 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             if (open < 0 || close < 0 || open >= close) return null
             return fromPhase.substring(open + 1, close).trim().toIntOrNull()
         }
+    }
+
+    private fun encodeDeletedIds(ids: List<String>): String {
+        val arr = JSONArray()
+        ids.forEach { arr.put(it) }
+        return arr.toString()
+    }
+
+    private fun decodeDeletedIds(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            val seen = LinkedHashSet<String>()
+            for (i in 0 until arr.length()) {
+                arr.optString(i, "").takeIf { it.isNotEmpty() }?.let { seen.add(it) }
+            }
+            seen.toList()
+        }.getOrDefault(emptyList())
     }
 
     private fun encodeDisplayNames(names: Map<String, String>): String {

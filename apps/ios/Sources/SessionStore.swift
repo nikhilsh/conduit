@@ -1209,7 +1209,14 @@ final class SessionStore {
 
     fileprivate func refreshSessions() {
         guard let client else { return }
+        // Drop any session the user has explicitly deleted. The deployed
+        // broker keeps tmux-backed PTYs alive (#199), so `listSessions`
+        // can keep reporting a just-deleted session — without this filter
+        // it would reappear in the home list and (because its tmux is
+        // live) read as interactive. The client-side tombstone is the
+        // guarantee that delete is terminal regardless of broker state.
         let listed = client.listSessions()
+            .filter { !SavedSessionsStore.shared.isTombstoned(id: $0.id) }
         // Bug #1 follow-up: a fresh client returns `[]` until the
         // first `SessionStatus` delta lands, so blindly assigning
         // `self.sessions = listed` would briefly hide the existing
