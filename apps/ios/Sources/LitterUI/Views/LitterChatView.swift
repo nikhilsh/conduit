@@ -29,9 +29,18 @@ extension LitterUI {
 
         let session: ProjectSession
 
+        /// When non-nil, the view renders these items read-only (an
+        /// exited session's persisted transcript fetched over HTTP) and
+        /// hides the composer + quick-reply bar. Live sessions pass nil
+        /// and read from the store's `conversationLog` / `chatLog` as
+        /// before.
+        var readOnlyItems: [ConversationItem]? = nil
+
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
         @FocusState private var composerFocused: Bool
+
+        private var isReadOnly: Bool { readOnlyItems != nil }
 
         var body: some View {
             // Composer is hosted via `.safeAreaInset(edge: .bottom)` so
@@ -43,9 +52,14 @@ extension LitterUI {
             // stack let the keyboard cover it.
             messagesList
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 0) {
-                        suggestionBar
-                        composer
+                    // Exited sessions are a frozen transcript — no live
+                    // WS to send into — so the composer + suggestion bar
+                    // are suppressed entirely in read-only mode.
+                    if !isReadOnly {
+                        VStack(spacing: 0) {
+                            suggestionBar
+                            composer
+                        }
                     }
                 }
                 // In-chat voice dictation. Mirrors the home-screen mic
@@ -69,6 +83,10 @@ extension LitterUI {
         // MARK: Messages
 
         private var events: [ConversationItem] {
+            // Read-only mode (exited session): render the injected
+            // persisted transcript verbatim — nothing in the live store
+            // to merge.
+            if let readOnlyItems { return readOnlyItems }
             // PR #111 + legacy ChatTab parity: prefer the typed
             // `conversationLog`, but fall back to the broker's raw
             // `chatLog` for events that haven't surfaced through the
