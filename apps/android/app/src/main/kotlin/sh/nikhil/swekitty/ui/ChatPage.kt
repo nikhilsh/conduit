@@ -265,7 +265,7 @@ private object ConversationRenderer {
 }
 
 @Composable
-fun ChatPage(store: SessionStore, session: ProjectSession) {
+fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = false) {
     val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
     val typedLog by store.conversationLog.collectAsState()
     val fallbackLog by store.chatLog.collectAsState()
@@ -445,27 +445,32 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
             }
         }
 
-        HorizontalDivider()
-        ConversationComposer(
-            draft = draft,
-            quickReplies = remember(events) { QuickReplyDetector.suggestions(events) },
-            agentAccent = agentAccent,
-            currentAssistant = session.assistant,
-            pinnedContexts = pinnedContexts,
-            pendingAttachments = pendingAttachments,
-            onRemovePinned = { id -> store.unpinContext(id, session.id) },
-            onRemoveAttachment = { id ->
-                pendingAttachments = pendingAttachments.filterNot { it.id == id }
-            },
-            onAttachClick = { showAttachSheet = true },
-            onExpandClick = { showExpandedComposer = true },
-            onSwitchAgent = { next -> store.switchAgent(session.id, next) },
-            onDraftChange = { draft = it },
-            onQuickReply = { reply ->
-                draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
-            },
-            onSend = dispatchSend,
-        )
+        // Read-only (exited/archived) sessions are a frozen transcript —
+        // no live WS to send into — so the composer + quick-reply bar are
+        // suppressed entirely (mirrors iOS `LitterChatView` read-only mode).
+        if (!readOnly) {
+            HorizontalDivider()
+            ConversationComposer(
+                draft = draft,
+                quickReplies = remember(events) { QuickReplyDetector.suggestions(events) },
+                agentAccent = agentAccent,
+                currentAssistant = session.assistant,
+                pinnedContexts = pinnedContexts,
+                pendingAttachments = pendingAttachments,
+                onRemovePinned = { id -> store.unpinContext(id, session.id) },
+                onRemoveAttachment = { id ->
+                    pendingAttachments = pendingAttachments.filterNot { it.id == id }
+                },
+                onAttachClick = { showAttachSheet = true },
+                onExpandClick = { showExpandedComposer = true },
+                onSwitchAgent = { next -> store.switchAgent(session.id, next) },
+                onDraftChange = { draft = it },
+                onQuickReply = { reply ->
+                    draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
+                },
+                onSend = dispatchSend,
+            )
+        }
     }
     }
 

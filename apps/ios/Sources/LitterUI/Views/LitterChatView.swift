@@ -37,11 +37,19 @@ extension LitterUI {
         /// before.
         var readOnlyItems: [ConversationItem]? = nil
 
+        /// Force read-only without injecting a transcript: a live-tracked
+        /// session that has EXITED/been archived still has its events in
+        /// the store's `conversationLog`/`chatLog`, so we render those (via
+        /// the normal `events` path) but suppress the composer + quick-reply
+        /// bar. `ProjectView` sets this for exited sessions; `readOnlyItems`
+        /// stays the path for never-tracked rows that fetch over HTTP.
+        var forceReadOnly: Bool = false
+
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
         @FocusState private var composerFocused: Bool
 
-        private var isReadOnly: Bool { readOnlyItems != nil }
+        private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
         // Task #39 — streaming auto-scroll that doesn't fight the user.
         // The controller is the pure state machine; the view feeds it

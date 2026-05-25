@@ -52,10 +52,20 @@ extension LitterUI {
         @State private var tab: ProjectTab = .chat
         @State private var showInfo = false
 
+        /// A session whose agent has exited / been archived is read-only:
+        /// there's no live WS to interact with, so we collapse the detail
+        /// to the chat log alone — hide the Terminal/Chat/Browser tab strip
+        /// and render `ChatView` with no composer (per the user's request:
+        /// "clicking on archived session should just show me the chat log").
+        /// Live sessions keep the full tab strip + interactive surfaces.
+        private var isReadOnly: Bool { store.isReadOnly(sessionID: session.id) }
+
         var body: some View {
             VStack(spacing: 0) {
                 header
-                tabStrip
+                if !isReadOnly {
+                    tabStrip
+                }
                 Divider().background(LitterUI.Palette.separator.color)
                 content
             }
@@ -218,6 +228,20 @@ extension LitterUI {
 
         @ViewBuilder
         private var content: some View {
+            // Read-only (exited/archived): force the chat log, no composer.
+            // The tab strip is hidden above, so `tab` can never leave
+            // `.chat` here, but we branch on `isReadOnly` first so a
+            // session that exits *while* the Terminal/Browser tab is open
+            // collapses straight to the transcript.
+            if isReadOnly {
+                LitterUI.ChatView(session: session, forceReadOnly: true)
+            } else {
+                liveContent
+            }
+        }
+
+        @ViewBuilder
+        private var liveContent: some View {
             switch tab {
             case .chat:
                 LitterUI.ChatView(session: session)

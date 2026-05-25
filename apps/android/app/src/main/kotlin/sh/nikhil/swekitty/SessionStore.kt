@@ -890,6 +890,26 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     /**
+     * Whether a session is read-only — the agent has exited / been
+     * archived and there's no live WS to interact with. Drives the
+     * `ProjectScreen` collapse to a chat-only, composer-less transcript
+     * (hide the Terminal/Chat/Browser tab strip + the in-session dock).
+     * Mirrors iOS `SessionStore.isReadOnly(sessionID:)`.
+     *
+     * Detected from either source of truth: the local [sessionLifecycle]
+     * (set to [SessionLifecycle.Exited] by the exit ingest, the app-delete
+     * archive flow, and the broker DELETE in #206) or the status phase
+     * (`exited(N)` from a status delta — a session that exited on another
+     * viewer before this client tracked the lifecycle). Either terminal
+     * signal is enough.
+     */
+    fun isReadOnly(sessionID: String): Boolean {
+        if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Exited) return true
+        val phase = _statusBySession.value[sessionID]?.phase
+        return phase != null && phase.startsWith("exited")
+    }
+
+    /**
      * Attach to a session still LIVE on the broker but not yet in our
      * local live set — the "open a historical row" path from the
      * Sessions screen. Mirrors iOS `attachLiveSession`.

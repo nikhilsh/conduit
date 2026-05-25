@@ -1584,6 +1584,26 @@ final class SessionStore {
         displayNames[session.id] ?? session.name
     }
 
+    /// Whether a session is read-only — the agent has exited/been
+    /// archived and there's no live WS to interact with. Drives the
+    /// `ProjectView` collapse to a chat-only, composer-less transcript
+    /// (the user can read the log but can't type, switch tabs, etc.).
+    ///
+    /// Detected from either source of truth: the local `sessionLifecycle`
+    /// (set to `.exited` by `ingestExit`, the app-delete archive flow,
+    /// and the broker DELETE in #206) or the status phase (`exited(N)`
+    /// from a status delta, e.g. a session that exited on another viewer
+    /// before this client tracked the lifecycle). Either being terminal
+    /// is enough.
+    func isReadOnly(sessionID: String) -> Bool {
+        if case .exited = sessionLifecycle[sessionID] { return true }
+        if let phase = statusBySession[sessionID]?.phase,
+           phase.hasPrefix("exited") {
+            return true
+        }
+        return false
+    }
+
     /// Switch the active session — drives the iPhone `NavigationStack`
     /// destination + the iPad detail pane. No reducer / Rust-core call;
     /// the existing `onChange(of: store.selectedSessionID)` in

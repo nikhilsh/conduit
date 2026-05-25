@@ -63,6 +63,17 @@ fun ProjectScreen(
     val lifecycleMap by store.sessionLifecycle.collectAsState()
     val status = statuses[session.id]
     val lifecycle = lifecycleMap[session.id]
+    // A session whose agent has exited / been archived is read-only:
+    // there's no live WS to interact with, so we collapse the detail to
+    // the chat log alone — hide the Terminal/Chat/Browser tab strip, the
+    // terminal extra-keys row, and the in-session dock, and render
+    // `ChatPage` with no composer (per the user's request: "clicking on
+    // archived session should just show me the chat log"). Live sessions
+    // keep the full tab strip + interactive surfaces. Recomputed from the
+    // same lifecycle/status flows so a session that exits *while* open
+    // collapses live. Mirrors iOS `ProjectView.isReadOnly`.
+    val isReadOnly = lifecycle is SessionLifecycle.Exited ||
+        (status?.phase?.startsWith("exited") == true)
     var menuExpanded by remember { mutableStateOf(false) }
     var browserMode by remember { mutableStateOf(BrowserMode.Preview) }
     var showInfo by remember { mutableStateOf(false) }
@@ -114,10 +125,12 @@ fun ProjectScreen(
 
             PathRow(model = headerModel)
 
-            TabPickerRow(
-                selected = pagerState.currentPage,
-                onSelect = { i -> scope.launch { pagerState.animateScrollToPage(i) } },
-            )
+            if (!isReadOnly) {
+                TabPickerRow(
+                    selected = pagerState.currentPage,
+                    onSelect = { i -> scope.launch { pagerState.animateScrollToPage(i) } },
+                )
+            }
         }
 
         Spacer(Modifier.height(10.dp))
@@ -127,75 +140,86 @@ fun ProjectScreen(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-            ) { page ->
-                when (ProjectTab.entries[page]) {
-                    ProjectTab.Terminal -> {
-                        // Stage 0 of the Android terminal-renderer
-                        // rewrite: flag-on = Termux native View
-                        // scaffold; flag-off = production xterm.js.
-                        // Off by default. See
-                        // docs/PLAN-TERMINAL-REWRITE.md (Android).
-                        if (experimentalNativeTerminal) {
-                            TermuxTerminalView(store, session)
-                        } else {
-                            TerminalPage(store, session)
+            if (isReadOnly) {
+                // Read-only: skip the pager (no tab strip to drive it) and
+                // render the chat log alone, composer suppressed.
+                ChatPage(store, session, readOnly = true)
+            } else {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                ) { page ->
+                    when (ProjectTab.entries[page]) {
+                        ProjectTab.Terminal -> {
+                            // Stage 0 of the Android terminal-renderer
+                            // rewrite: flag-on = Termux native View
+                            // scaffold; flag-off = production xterm.js.
+                            // Off by default. See
+                            // docs/PLAN-TERMINAL-REWRITE.md (Android).
+                            if (experimentalNativeTerminal) {
+                                TermuxTerminalView(store, session)
+                            } else {
+                                TerminalPage(store, session)
+                            }
                         }
+                        ProjectTab.Chat     -> ChatPage(store, session)
+                        ProjectTab.Browser  -> BrowserPage(store, session, browserMode)
                     }
-                    ProjectTab.Chat     -> ChatPage(store, session)
-                    ProjectTab.Browser  -> BrowserPage(store, session, browserMode)
                 }
             }
         }
 
-        // Terminal extra-keys row — Android mirror of iOS
-        // `TerminalAccessoryBar` (which iOS hosts via
-        // `inputAccessoryView`). Android has no input-accessory hook,
-        // so we float the same scrollable key row above the keyboard
-        // ourselves, only on the Terminal tab. It sits directly above
-        // the in-session dock in the Column, and the dock's own
-        // `imePadding()` lifts this whole bottom region above the soft
-        // keyboard — so this row needs no `imePadding` of its own (that
-        // would double-count the inset). Bytes route through the same
-        // `store.sendInput` path as keyboard input.
-        if (activeContext == InSessionContext.Terminal) {
-            TerminalAccessoryBar(
-                onSend = { bytes -> store.sendInput(session.id, bytes) },
-                modifier = Modifier.fillMaxWidth(),
+        // Interactive bottom region (terminal extra-keys + in-session
+        // dock) is suppressed for read-only/archived sessions — there's
+        // nothing to type into or switch between.
+        if (!isReadOnly) {
+            // Terminal extra-keys row — Android mirror of iOS
+            // `TerminalAccessoryBar` (which iOS hosts via
+            // `inputAccessoryView`). Android has no input-accessory hook,
+            // so we float the same scrollable key row above the keyboard
+            // ourselves, only on the Terminal tab. It sits directly above
+            // the in-session dock in the Column, and the dock's own
+            // `imePadding()` lifts this whole bottom region above the soft
+            // keyboard — so this row needs no `imePadding` of its own (that
+            // would double-count the inset). Bytes route through the same
+            // `store.sendInput` path as keyboard input.
+            if (activeContext == InSessionContext.Terminal) {
+                TerminalAccessoryBar(
+                    onSend = { bytes -> store.sendInput(session.id, bytes) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            // Persistent in-session dock — mirrors iOS PR #42's
+            // `InSessionBottomBar`. `imePadding()` keeps it above the
+            // soft keyboard the same way the iOS `safeAreaInset(.bottom)`
+            // floats above the keyboard guide.
+            InSessionBottomBar(
+                context = activeContext,
+                onThreads = { showThreadSwitcher = true },
+                onVoice = {
+                    // v1: chat-only voice; other tabs surface a toast via
+                    // the dock's own inline note + a system toast as
+                    // backup so the cue is visible even with reduced
+                    // motion / animations off.
+                    if (activeContext == InSessionContext.Chat) {
+                        showVoice = true
+                    } else {
+                        Toast.makeText(
+                            ctx,
+                            InSessionBottomBarModel.voiceUnsupportedMessage(activeContext),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
+                onNewSession = { showAgentPicker = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(bottom = 4.dp),
             )
         }
-
-        // Persistent in-session dock — mirrors iOS PR #42's
-        // `InSessionBottomBar`. `imePadding()` keeps it above the
-        // soft keyboard the same way the iOS `safeAreaInset(.bottom)`
-        // floats above the keyboard guide.
-        InSessionBottomBar(
-            context = activeContext,
-            onThreads = { showThreadSwitcher = true },
-            onVoice = {
-                // v1: chat-only voice; other tabs surface a toast via
-                // the dock's own inline note + a system toast as
-                // backup so the cue is visible even with reduced
-                // motion / animations off.
-                if (activeContext == InSessionContext.Chat) {
-                    showVoice = true
-                } else {
-                    Toast.makeText(
-                        ctx,
-                        InSessionBottomBarModel.voiceUnsupportedMessage(activeContext),
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                }
-            },
-            onNewSession = { showAgentPicker = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .imePadding()
-                .navigationBarsPadding()
-                .padding(bottom = 4.dp),
-        )
     }
 
     if (showInfo) {
