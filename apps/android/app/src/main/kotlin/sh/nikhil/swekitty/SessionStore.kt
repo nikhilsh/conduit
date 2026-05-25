@@ -1224,12 +1224,24 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         val c = client ?: return
         runCatching { c.listConversationItems(sessionId) }
             .onSuccess { items ->
+                // Preserve locally-echoed `local-*` items not yet reflected
+                // by the server (matched by role+content). Once the harness
+                // mirrors the same text back under a server id, the local
+                // copy drops.
+                //
+                // The broker doesn't loop user messages back as
+                // `on_chat_event`, so the user's `local-*` echo lives
+                // forever in `stillPending`. Appending it *after* `items`
+                // would render the assistant's reply above the user's
+                // prompt — confusing. Splice by timestamp so the order stays
+                // chronological. Mirror of iOS `SessionStore.refreshConversation`.
                 val existing = _conversationLog.value[sessionId] ?: emptyList()
                 val serverFingerprints = items.map { "${it.role}|${it.content}" }.toSet()
                 val stillPending = existing.filter {
                     it.id.startsWith("local-") && "${it.role}|${it.content}" !in serverFingerprints
                 }
-                _conversationLog.value = _conversationLog.value + (sessionId to (items + stillPending))
+                val merged = (items + stillPending).sortedBy { it.ts }
+                _conversationLog.value = _conversationLog.value + (sessionId to merged)
             }
     }
 
