@@ -150,6 +150,23 @@ fun ProjectScreen(
             }
         }
 
+        // Terminal extra-keys row — Android mirror of iOS
+        // `TerminalAccessoryBar` (which iOS hosts via
+        // `inputAccessoryView`). Android has no input-accessory hook,
+        // so we float the same scrollable key row above the keyboard
+        // ourselves, only on the Terminal tab. It sits directly above
+        // the in-session dock in the Column, and the dock's own
+        // `imePadding()` lifts this whole bottom region above the soft
+        // keyboard — so this row needs no `imePadding` of its own (that
+        // would double-count the inset). Bytes route through the same
+        // `store.sendInput` path as keyboard input.
+        if (activeContext == InSessionContext.Terminal) {
+            TerminalAccessoryBar(
+                onSend = { bytes -> store.sendInput(session.id, bytes) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
         // Persistent in-session dock — mirrors iOS PR #42's
         // `InSessionBottomBar`. `imePadding()` keeps it above the
         // soft keyboard the same way the iOS `safeAreaInset(.bottom)`
