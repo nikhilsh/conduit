@@ -200,27 +200,34 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     #endif
 
-    /// Back this view with a `CAMetalLayer` instead of the default
-    /// `CALayer`. The geistty reference iOS Ghostty app does the same
-    /// (`SurfaceView`) and is the working integration we're porting:
-    /// the hypothesis behind this PR is that libghostty's 1.1.5 iOS
-    /// renderer only initializes / attaches its render target when the
-    /// host UIView is already metal-backed. A `CAMetalLayer`-backed
-    /// view *cannot* draw via `draw(_:)`/CoreText, which is why the
-    /// CoreText fallback path is gated off below.
-    override class var layerClass: AnyClass { CAMetalLayer.self }
+    /// IMPORTANT: we deliberately do NOT override `layerClass`. The host
+    /// view must be backed by a plain `CALayer`. Both working references
+    /// confirm this:
+    ///   * clauntty (`TerminalSurfaceView`): *"We do NOT override
+    ///     layerClass to CAMetalLayer because Ghostty adds its own
+    ///     IOSurfaceLayer as a sublayer. Using default CALayer."*
+    ///   * geistty (`SurfaceView`): no `layerClass` override at all — its
+    ///     `metalLayer` accessor is dead code; every real use is a
+    ///     `layer as? CAMetalLayer` that simply no-ops on the plain layer,
+    ///     and its resize path iterates `layer.sublayers` to size the
+    ///     IOSurfaceLayer libghostty parents there.
+    ///
+    /// The prior `CAMetalLayer` `layerClass` (PR #205) was the bug behind
+    /// the blank screen: libghostty's iOS renderer builds its OWN
+    /// `IOSurfaceLayer` (a Metal-backed layer, verified via the pinned
+    /// binary's `IOSurfaceLayer` / `CAIOSurfaceLayer` symbols) and attaches
+    /// it to the host view via the `addSublayer:` selector (the view-level
+    /// `@objc(addSublayer:)` hook below intercepts it and re-parents it onto
+    /// our layer). It never renders into a host-supplied `CAMetalLayer`. A
+    /// `CAMetalLayer`-backed host view violated that assumption, so the
+    /// renderer never attached its layer (`addSublayer:0`, `render:0` on the
+    /// device readout) and nothing painted.
 
-    /// Convenience accessor for the metal-backed root layer.
-    private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
-
-    /// libghostty's render layer. Its Metal renderer *may* attach its own
-    /// IOSurfaceLayer as a *sublayer* of this view by sending
-    /// `addSublayer:` to the `uiview` pointer in the surface config (see
-    /// `addSublayer(_:)`); we hold the ref so we can keep its frame synced
-    /// to our bounds. With the `CAMetalLayer` `layerClass` above libghostty
-    /// may instead render directly into our root layer — we handle both:
-    /// if a sublayer arrives we size it, otherwise our metal layer is the
-    /// render target. nil until/unless libghostty attaches one.
+    /// libghostty's render layer: the `IOSurfaceLayer` its Metal renderer
+    /// builds and hands us through `addSublayer(_:)`. We hold the ref so
+    /// `sizeGhosttyLayer()` can keep its frame + `contentsScale` synced to
+    /// our bounds (libghostty attaches it at a zero frame, so it paints
+    /// nothing until we size it). nil until libghostty attaches one.
     private var ghosttySublayer: CALayer?
 
     /// On-screen diagnostic overlay (top-left, tiny mono text). Surfaces
@@ -451,36 +458,33 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     // MARK: - Setup
 
     private func configure() {
-        // Metal-backed setup. The view's `layerClass` is `CAMetalLayer`
-        // (see above); configure it opaque + black so libghostty's first
-        // frame doesn't flash a white/grey curtain. Wrap in a no-implicit-
-        // animation CATransaction exactly like geistty's `SurfaceView.init`
-        // — without `setDisableActions` the colour change animates and
-        // flashes on attach. libghostty owns the Metal pipeline once the
-        // surface is created; we only set the background colour.
+        // Plain-`CALayer` setup (NO `CAMetalLayer` layerClass — see the
+        // note on `ghosttySublayer`). Configure the layer opaque + black so
+        // libghostty's first frame doesn't flash a white/grey curtain.
+        // Wrap in a no-implicit-animation CATransaction exactly like
+        // geistty's + clauntty's `init` — without `setDisableActions` the
+        // colour change animates and flashes on attach. libghostty builds
+        // and owns its own IOSurface/Metal pipeline once the surface is
+        // created; we only set the host background colour.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         isOpaque = true
         backgroundColor = .black
         layer.isOpaque = true
+        layer.backgroundColor = UIColor.black.cgColor
         layer.contentsScale = UIScreen.main.scale
-        if let metalLayer = metalLayer {
-            metalLayer.isOpaque = true
-            metalLayer.backgroundColor = UIColor.black.cgColor
-            metalLayer.contentsScale = UIScreen.main.scale
-        }
         CATransaction.commit()
 
-        // libghostty's 1.1.5 iOS renderer reads the host layer bounds at
+        // libghostty's iOS renderer reads the host view's bounds + scale at
         // surface-creation time; if we're created at `.zero` (the
-        // representable's `makeUIView` passes `frame: .zero`) the metal
-        // layer has zero bounds and the renderer can fail to initialize.
-        // geistty sidesteps this by initializing its `SurfaceView` at a
-        // fixed 800x600 "so layer bounds are non-zero" *before*
-        // `ghostty_surface_new`. Mirror that: give ourselves a non-zero
-        // frame here so the surface init below sees real bounds. UIKit
-        // overwrites this on the first real `layoutSubviews`, which then
-        // pushes the true pixel size through `sizeGhosttyLayer`.
+        // representable's `makeUIView` passes `frame: .zero`) the renderer
+        // can fail to attach its layer. geistty sidesteps this by
+        // initializing its `SurfaceView` at a fixed 800x600 "so layer
+        // bounds are non-zero" *before* `ghostty_surface_new`. Mirror that:
+        // give ourselves a non-zero frame here so the surface init below
+        // sees real bounds. UIKit overwrites this on the first real
+        // `layoutSubviews`, which then pushes the true pixel size through
+        // `sizeGhosttyLayer`.
         if bounds.width <= 0 || bounds.height <= 0 {
             frame = CGRect(x: 0, y: 0, width: 800, height: 600)
         }
@@ -535,9 +539,13 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             // harness PTY — analog of clauntty's set_pty_input_callback.
             term.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
             // Attach with the real (now non-zero) pixel size so the
-            // renderer initializes against a sized layer. `sizeGhosttyLayer`
-            // re-pushes the true size on every `layoutSubviews`.
-            let scale = UIScreen.main.scale
+            // renderer initializes against a sized view. `sizeGhosttyLayer`
+            // re-pushes the true size on every `layoutSubviews`. Use the
+            // view's own `contentScaleFactor` (geistty passes
+            // `view.contentScaleFactor` as `scale_factor`); it's the backing
+            // scale UIKit will actually render at and matches what libghostty
+            // reads off the view at attach time.
+            let scale = contentScaleFactor > 0 ? contentScaleFactor : UIScreen.main.scale
             term.attach(
                 hostView: self,
                 pixelWidth: UInt32(bounds.width * scale),
@@ -786,16 +794,16 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         refreshDiagnosticOverlay()
     }
 
-    /// Keep both possible render targets working. With the `CAMetalLayer`
-    /// `layerClass`, libghostty's 1.1.5 iOS renderer may render directly
-    /// into our root layer — but it may *also* still attach its own layer
-    /// as a sublayer by sending `addSublayer:` to the host `uiview`
-    /// pointer in the surface config (the mechanism PR #198 relied on;
-    /// `UIView` doesn't implement that selector, so without this hook the
-    /// sublayer is never parented). We don't know which path 1.1.5 takes
-    /// on-device, so we support both: capture the sublayer, parent it,
-    /// size it. The per-frame `CADisplayLink` pumps `ghostty_surface_draw`
-    /// regardless of which layer ends up holding the pixels.
+    /// libghostty's iOS renderer builds its own `IOSurfaceLayer` and parents
+    /// it on the host by sending `addSublayer:` to the `uiview` pointer from
+    /// the surface config. `UIView` does NOT implement that selector
+    /// natively (it's a `CALayer` method), so without this `@objc` hook the
+    /// message is unhandled and the layer is never parented — exactly the
+    /// failure both clauntty (`TerminalSurfaceView.addSublayer`) and geistty
+    /// guard against. We capture the layer, parent it on our (plain
+    /// `CALayer`) root, and size it immediately — libghostty hands it over at
+    /// a zero frame. The per-frame `CADisplayLink` then pumps
+    /// `ghostty_surface_draw` and the IOSurfaceLayer presents.
     @objc(addSublayer:)
     func addSublayer(_ sublayer: CALayer) {
         #if canImport(GhosttyVT)
@@ -808,11 +816,14 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     }
 
     /// Keep libghostty's render target sized to our bounds at the real
-    /// backing scale, and push the pixel size into the surface. Handles
-    /// both render paths: if libghostty attached a sublayer we size that;
-    /// our root `CAMetalLayer`'s `drawableSize` is always kept in sync so
-    /// a direct-into-root render isn't mis-scaled. libghostty adds any
-    /// sublayer at a zero frame, so it paints nothing until we size it.
+    /// backing scale, and push the pixel size into the surface. libghostty
+    /// attaches its IOSurfaceLayer at a zero frame, so it paints nothing
+    /// until we size it — geistty + clauntty both resize the attached
+    /// sublayer to `bounds` on every layout. We size the captured
+    /// `ghosttySublayer` directly; as a belt-and-suspenders we also size any
+    /// other sublayer libghostty parented straight on our root layer (it can
+    /// attach via `[[uiview layer] addSublayer:]` instead of the view-level
+    /// hook), matching geistty's `layer.sublayers` resize loop.
     private func sizeGhosttyLayer() {
         guard bounds.width > 0, bounds.height > 0 else { return }
         #if canImport(GhosttyVT)
@@ -826,12 +837,15 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             sub.frame = bounds
             sub.contentsScale = scale
         }
-        if let metalLayer = metalLayer {
-            metalLayer.drawableSize = CGSize(
-                width: bounds.width * scale,
-                height: bounds.height * scale
-            )
-            metalLayer.contentsScale = scale
+        // Catch any IOSurfaceLayer libghostty parented directly on our root
+        // layer (not via the view-level hook). Skip the diagnostic overlay's
+        // backing layer — it's a UIView subview positioned in layoutSubviews.
+        if let sublayers = layer.sublayers {
+            let overlayLayer = diagnosticLabel.layer
+            for sub in sublayers where sub !== overlayLayer && sub !== ghosttySublayer {
+                sub.frame = bounds
+                sub.contentsScale = scale
+            }
         }
         CATransaction.commit()
         #if canImport(GhosttyVT)
@@ -992,16 +1006,14 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     // MARK: - Drawing
 
-    // No `draw(_:)` / CoreText path. This view is backed by a
-    // `CAMetalLayer` (`layerClass` above), and a metal-backed UIView
-    // cannot legally draw through `drawRect`/CoreText — the metal
-    // layer owns its drawable. libghostty's renderer paints the grid
-    // (into our metal layer, or into a sublayer it attaches via
-    // `addSublayer:`); the per-frame `CADisplayLink` -> `Terminal.draw()`
-    // pumps it. The old CoreText snapshot/cursor/status fallback was
-    // only there because libghostty wasn't painting; with the
-    // geistty-faithful metal integration it would fight the metal layer,
-    // so it's removed. `cachedSnapshot` / `selectionRange` are still
+    // No `draw(_:)` / CoreText path. libghostty's renderer owns the pixels:
+    // it builds its own `IOSurfaceLayer` and parents it on our (plain
+    // `CALayer`) root view via `addSublayer:`, then presents into it; the
+    // per-frame `CADisplayLink` -> `Terminal.draw()` pumps `ghostty_surface_draw`.
+    // We must NOT also paint through `drawRect`/CoreText — it would fight
+    // libghostty's sublayer for the same on-screen region. The old CoreText
+    // snapshot/cursor/status fallback was only there for the pre-libghostty
+    // builds, so it's removed. `cachedSnapshot` / `selectionRange` are still
     // maintained for the copy/selection text path (`copy(_:)` reads the
     // snapshot); they just aren't repainted here.
 }
