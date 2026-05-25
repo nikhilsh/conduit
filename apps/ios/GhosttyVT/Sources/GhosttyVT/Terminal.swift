@@ -463,6 +463,18 @@ public final class GhosttySurface {
     /// escape sequences and bracketed-paste framing.
     public var onReceiveInput: ((Data) -> Void)?
 
+    /// Strips libghostty's duplicate terminal-query RESPONSES (DA1/DA2/DA3,
+    /// XTVERSION, DSR, CPR, DECRPM, XTGETTCAP) out of the `receive_buffer`
+    /// stream before they reach `onReceiveInput`. The broker runs the agent
+    /// in a REAL kernel PTY + tmux that already answers these queries; the
+    /// raw stream is then re-emulated by libghostty here, which auto-replies
+    /// a SECOND time. That duplicate would otherwise be routed back to the
+    /// broker PTY input and echo as literal `^[[?62;22;52c` /
+    /// `ghostty 1.3.1` text at the idle bash prompt. See
+    /// `QueryResponseFilter` for the full topology writeup. Per-surface so
+    /// sequences split across callbacks are reassembled correctly.
+    private let queryResponseFilter = QueryResponseFilter()
+
     public var debugDescription: String {
         guard let s = _surface else { return "GhosttySurface(nil)" }
         return "GhosttySurface(0x\(String(UInt(bitPattern: s), radix: 16)))"
@@ -511,7 +523,18 @@ public final class GhosttySurface {
             guard let userdata = userdata, let bytes = bytes, len > 0 else { return }
             let surface = Unmanaged<GhosttySurface>.fromOpaque(userdata).takeUnretainedValue()
             let data = Data(bytes: bytes, count: Int(len))
-            DispatchQueue.main.async { surface.onReceiveInput?(data) }
+            // Drop libghostty's duplicate query RESPONSES (DA/XTVERSION/DSR/…)
+            // before they hit the broker PTY: the broker's real PTY + tmux
+            // already answered every query, so this copy is spurious and
+            // would otherwise echo as literal text at the bash prompt. The
+            // filter is stateful (handles sequences split across callbacks)
+            // so it must run on the same actor it's mutated on — hop to main
+            // first, filter there, then deliver.
+            DispatchQueue.main.async {
+                let forwarded = surface.queryResponseFilter.filter(data)
+                guard !forwarded.isEmpty else { return }
+                surface.onReceiveInput?(forwarded)
+            }
         }
         config.receive_resize = { _, _, _, _, _ in }
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
