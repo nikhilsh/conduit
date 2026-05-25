@@ -890,23 +890,67 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     /**
-     * Whether a session is read-only — the agent has exited / been
-     * archived and there's no live WS to interact with. Drives the
-     * `ProjectScreen` collapse to a chat-only, composer-less transcript
-     * (hide the Terminal/Chat/Browser tab strip + the in-session dock).
-     * Mirrors iOS `SessionStore.isReadOnly(sessionID:)`.
+     * Whether a session is read-only — there's no live WS to interact
+     * with, so the `ProjectScreen` collapses to a chat-only,
+     * composer-less transcript (hide the Terminal/Chat/Browser tab strip
+     * + the in-session dock). Mirrors iOS `SessionStore.isReadOnly`.
      *
-     * Detected from either source of truth: the local [sessionLifecycle]
-     * (set to [SessionLifecycle.Exited] by the exit ingest, the app-delete
-     * archive flow, and the broker DELETE in #206) or the status phase
-     * (`exited(N)` from a status delta — a session that exited on another
-     * viewer before this client tracked the lifecycle). Either terminal
-     * signal is enough.
+     * READ-ONLY IS THE DEFAULT. A session opens interactive only when we
+     * can positively confirm it is *currently live on the broker* — i.e.
+     * [isConfirmedLive]. Everything else (exited, failed,
+     * recovered-but-not-running, archived, or a stale row we merely
+     * listed without a fresh running status) is read-only.
+     *
+     * This inversion fixes the "History still interactive" bug (iOS
+     * PR #214): the old logic defaulted to interactive and only flipped
+     * read-only on a *confirmed-exited* signal (lifecycle [Exited] or a
+     * status phase of `exited…`). But [refreshSessions] / [onStatus]
+     * blanket-marked every listed or status-bearing session [Live], so a
+     * dead session the broker never explicitly reported as exited (app
+     * disconnected when it died, a recovered session, a non-running
+     * phase) stayed interactive forever. We now require proof of
+     * liveness rather than proof of death.
      */
-    fun isReadOnly(sessionID: String): Boolean {
-        if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Exited) return true
-        val phase = _statusBySession.value[sessionID]?.phase
-        return phase != null && phase.startsWith("exited")
+    fun isReadOnly(sessionID: String): Boolean = !isConfirmedLive(sessionID)
+
+    /**
+     * True only when the session is positively known to be running on
+     * the broker *right now*. Requires BOTH:
+     *   1. a non-terminal local lifecycle ([SessionLifecycle.Live] /
+     *      [SessionLifecycle.Creating] — never [SessionLifecycle.Exited]
+     *      / [SessionLifecycle.FailedToStart]), and
+     *   2. a current broker status whose `phase` is a live/running phase
+     *      (see [isLivePhase]). A session with no status at all is
+     *      treated as not-confirmed-live: we listed it but the broker
+     *      hasn't told us it's running.
+     *
+     * [SessionLifecycle.Creating] is honored without a status because a
+     * brand-new session we just spun up locally has no broker status yet
+     * but is genuinely on its way live — the create round-trip owns that
+     * state. A confirmed-exited phase (raced ahead) still wins.
+     */
+    fun isConfirmedLive(sessionID: String): Boolean {
+        return when (_sessionLifecycle.value[sessionID]) {
+            is SessionLifecycle.Exited,
+            is SessionLifecycle.FailedToStart,
+            null -> false
+            is SessionLifecycle.Creating -> {
+                // Newly-created session mid-handshake: interactive, even
+                // before the first status frame. A confirmed-exited phase
+                // (raced ahead) still demotes.
+                val phase = _statusBySession.value[sessionID]?.phase
+                phase == null || isLivePhase(phase)
+            }
+            is SessionLifecycle.Live -> {
+                // `Live` is necessary but not sufficient — it can be a
+                // stale default. Demand a current running phase if we
+                // have a status; if we somehow have a `Live` lifecycle
+                // with no status (e.g. a freshly-created session promoted
+                // by the create path) trust the lifecycle.
+                val phase = _statusBySession.value[sessionID]?.phase ?: return true
+                isLivePhase(phase)
+            }
+        }
     }
 
     /**
@@ -949,8 +993,29 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                     refreshSessions()
                 }
                 if (_sessions.value.any { it.id == sessionID }) {
+                    // Promote the placeholder using the broker's reported
+                    // phase, not a blanket `Live` (iOS PR #214). Joining an
+                    // existing id can resolve to a session that already
+                    // exited; in that case [onStatus] has set `Exited` (so
+                    // we're no longer `Creating` and skip this), or — if no
+                    // status landed yet but the cached phase is terminal —
+                    // we lock it read-only here. Otherwise promote to live
+                    // and the destination opens interactive. Either way
+                    // navigate so the user lands on the (correctly read-only
+                    // or live) session rather than a dead-end.
                     if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Creating) {
-                        updateLifecycle { it + (sessionID to SessionLifecycle.Live) }
+                        val phase = _statusBySession.value[sessionID]?.phase
+                        if (phase != null && phase.lowercase().startsWith("exited")) {
+                            val code = exitCode(phase) ?: 0
+                            updateLifecycle { it + (sessionID to SessionLifecycle.Exited(code)) }
+                        } else if (phase == null || isLivePhase(phase)) {
+                            // Live phase, or no status yet (a join we
+                            // initiated — trust it as live until a status
+                            // frame says otherwise).
+                            updateLifecycle { it + (sessionID to SessionLifecycle.Live) }
+                        }
+                        // A non-live, non-exited phase leaves `Creating` in
+                        // place; the next status frame resolves it.
                     }
                     _selectedId.value = sessionID
                 } else if (_sessionLifecycle.value[sessionID] is SessionLifecycle.Creating) {
@@ -1284,8 +1349,22 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         val list = c.listSessions()
         _sessions.value = list
         for (s in list) {
+            // Do NOT blanket-default listed sessions to `Live`.
+            // `listSessions` can include recovered / exited /
+            // not-currently-running rows, and a default of `Live` made
+            // every one of them open interactive (the "History still
+            // interactive" bug, iOS PR #214). Liveness is now proven by a
+            // live-phase status delta ([onStatus]) or the create/attach
+            // round-trip — never by mere presence in the list. We seed a
+            // terminal lifecycle from the listed phase when we can already
+            // see the session is dead, so [isReadOnly] is correct on first
+            // paint even before a fresh status frame arrives.
             if (_sessionLifecycle.value[s.id] == null) {
-                updateLifecycle { it + (s.id to SessionLifecycle.Live) }
+                val phase = _statusBySession.value[s.id]?.phase
+                if (phase != null && phase.lowercase().startsWith("exited")) {
+                    val code = exitCode(phase) ?: 0
+                    updateLifecycle { it + (s.id to SessionLifecycle.Exited(code)) }
+                }
             }
             refreshConversation(s.id)
         }
@@ -1382,9 +1461,35 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     override fun onStatus(status: SessionStatus) {
         _statusBySession.value = _statusBySession.value + (status.session to status)
         status.preview?.let { _previews.value = _previews.value + (status.session to it) }
-        if (_sessionLifecycle.value[status.session] == null ||
-            _sessionLifecycle.value[status.session] is SessionLifecycle.Creating) {
-            updateLifecycle { it + (status.session to SessionLifecycle.Live) }
+        // Promote lifecycle from the phase the broker actually reported —
+        // NOT a blanket `Live` (iOS PR #214). A status frame for a
+        // recovered/exited session carries `phase: "exited…"`; that must
+        // lock the row read-only, not resurrect it as interactive.
+        // [SessionLifecycle.Exited] / [SessionLifecycle.FailedToStart] are
+        // terminal and never downgraded here.
+        when (_sessionLifecycle.value[status.session]) {
+            null, is SessionLifecycle.Creating -> {
+                if (isLivePhase(status.phase)) {
+                    updateLifecycle { it + (status.session to SessionLifecycle.Live) }
+                } else if (status.phase.lowercase().startsWith("exited")) {
+                    // Surface an explicit exit even if we never saw an
+                    // `exit` frame — e.g. joining an already-dead session.
+                    val code = exitCode(status.phase) ?: 0
+                    updateLifecycle { it + (status.session to SessionLifecycle.Exited(code)) }
+                }
+                // A non-live, non-exited phase (empty / unknown) leaves the
+                // lifecycle unset → [isReadOnly] returns true (fail closed).
+            }
+            is SessionLifecycle.Live -> {
+                // Already live: a later exited phase still demotes to terminal.
+                if (status.phase.lowercase().startsWith("exited")) {
+                    val code = exitCode(status.phase) ?: 0
+                    updateLifecycle { it + (status.session to SessionLifecycle.Exited(code)) }
+                }
+            }
+            is SessionLifecycle.Exited, is SessionLifecycle.FailedToStart -> {
+                // terminal — never revived by a status delta
+            }
         }
         // Fold a broker-supplied display label (`rename_session` per
         // protocol §3.3) into the local displayNames map so every
@@ -1517,6 +1622,45 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         private const val KEY_SAVED_SERVERS = "swekitty.saved_servers"
         private const val KEY_RECENT_DIRS = "swekitty.recent_dirs_by_server"
         private const val KEY_DISPLAY_NAMES = "swekitty.session_display_names"
+
+        /**
+         * Classify a broker `SessionStatus.phase` as live/running vs
+         * terminal/unknown. The broker reports `running` for an active
+         * agent and `exited` (optionally `exited(N)` after our own
+         * [onExit] rewrites it) for a dead one; recovered sessions
+         * restore whatever phase was persisted. We treat anything that
+         * isn't an affirmatively-running phase as NOT live so an
+         * unfamiliar or empty phase fails closed (read-only) rather than
+         * open. Mirror of iOS `SessionStore.isLivePhase`.
+         */
+        fun isLivePhase(phase: String): Boolean {
+            val p = phase.trim().lowercase()
+            if (p.isEmpty()) return false
+            if (p.startsWith("exited") || p.startsWith("failed") || p.startsWith("dead")) {
+                return false
+            }
+            // Known running/active phases emitted by the broker + adapters.
+            return p in LIVE_PHASES
+        }
+
+        private val LIVE_PHASES = setOf(
+            "running", "ready", "idle", "thinking", "working",
+            "starting", "booting", "swapping",
+        )
+
+        /**
+         * Pull the exit code out of an `exited(N)` phase string. The
+         * broker emits a bare `exited`; our own [onExit] rewrites the
+         * cached status to `exited(<code>)`. Returns null when there's no
+         * parseable code (caller defaults to 0). Mirror of iOS
+         * `SessionStore.exitCode(fromPhase:)`.
+         */
+        fun exitCode(fromPhase: String): Int? {
+            val open = fromPhase.indexOf('(')
+            val close = fromPhase.indexOf(')')
+            if (open < 0 || close < 0 || open >= close) return null
+            return fromPhase.substring(open + 1, close).trim().toIntOrNull()
+        }
     }
 
     private fun encodeDisplayNames(names: Map<String, String>): String {

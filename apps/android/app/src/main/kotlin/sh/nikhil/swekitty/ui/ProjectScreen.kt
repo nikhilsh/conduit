@@ -63,17 +63,26 @@ fun ProjectScreen(
     val lifecycleMap by store.sessionLifecycle.collectAsState()
     val status = statuses[session.id]
     val lifecycle = lifecycleMap[session.id]
-    // A session whose agent has exited / been archived is read-only:
-    // there's no live WS to interact with, so we collapse the detail to
-    // the chat log alone — hide the Terminal/Chat/Browser tab strip, the
-    // terminal extra-keys row, and the in-session dock, and render
-    // `ChatPage` with no composer (per the user's request: "clicking on
-    // archived session should just show me the chat log"). Live sessions
-    // keep the full tab strip + interactive surfaces. Recomputed from the
-    // same lifecycle/status flows so a session that exits *while* open
-    // collapses live. Mirrors iOS `ProjectView.isReadOnly`.
-    val isReadOnly = lifecycle is SessionLifecycle.Exited ||
-        (status?.phase?.startsWith("exited") == true)
+    // READ-ONLY IS THE DEFAULT: a session is interactive only when the
+    // store can positively confirm it is *currently live on the broker*
+    // (a non-terminal lifecycle AND a running status phase). Everything
+    // else — exited, failed, recovered-but-not-running, archived, or a
+    // stale row we merely listed without a fresh running status — is
+    // read-only, so we collapse the detail to the chat log alone: hide
+    // the Terminal/Chat/Browser tab strip, the terminal extra-keys row,
+    // and the in-session dock, and render `ChatPage` with no composer
+    // (per the user's request: "clicking on archived session should just
+    // show me the chat log"). Live sessions keep the full tab strip +
+    // interactive surfaces. Reading `lifecycle`/`status` above keeps this
+    // recomposing on the same flows, so a session that exits *while* open
+    // collapses live. Mirrors iOS `ProjectView.isReadOnly` /
+    // `SessionStore.isReadOnly` after PR #214.
+    val isReadOnly = run {
+        // Touch the observed values so recomposition tracks them; the
+        // authoritative decision lives in the store's classifier.
+        lifecycle; status
+        store.isReadOnly(session.id)
+    }
     var menuExpanded by remember { mutableStateOf(false) }
     var browserMode by remember { mutableStateOf(BrowserMode.Preview) }
     var showInfo by remember { mutableStateOf(false) }
