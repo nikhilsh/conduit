@@ -1,6 +1,6 @@
 import SwiftUI
 import UIKit
-import CoreText
+import QuartzCore
 
 #if canImport(GhosttyVT)
 import GhosttyVT
@@ -181,9 +181,10 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     private var rows: Int = 24
 
     /// Last grid snapshot read from libghostty. `nil` until the first
-    /// `feed(_:)` call lands. Rendered by `draw(_:)`. Internal so unit
-    /// tests can verify the snapshot↔selection coupling without
-    /// re-implementing it.
+    /// `feed(_:)` call lands. No longer painted (libghostty's metal
+    /// renderer owns the pixels); retained only so the selection / copy
+    /// path can extract text. Internal so unit tests can verify the
+    /// snapshot↔selection coupling without re-implementing it.
     var cachedSnapshot: TerminalSnapshotShim?
 
     /// Stage 3 selection state. `nil` when nothing is selected; set by
@@ -199,14 +200,58 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     #endif
 
-    /// libghostty's render layer. Its Metal renderer attaches its own
+    /// Back this view with a `CAMetalLayer` instead of the default
+    /// `CALayer`. The geistty reference iOS Ghostty app does the same
+    /// (`SurfaceView`) and is the working integration we're porting:
+    /// the hypothesis behind this PR is that libghostty's 1.1.5 iOS
+    /// renderer only initializes / attaches its render target when the
+    /// host UIView is already metal-backed. A `CAMetalLayer`-backed
+    /// view *cannot* draw via `draw(_:)`/CoreText, which is why the
+    /// CoreText fallback path is gated off below.
+    override class var layerClass: AnyClass { CAMetalLayer.self }
+
+    /// Convenience accessor for the metal-backed root layer.
+    private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
+
+    /// libghostty's render layer. Its Metal renderer *may* attach its own
     /// IOSurfaceLayer as a *sublayer* of this view by sending
     /// `addSublayer:` to the `uiview` pointer in the surface config (see
     /// `addSublayer(_:)`); we hold the ref so we can keep its frame synced
-    /// to our bounds. nil until libghostty attaches it. libghostty drives
-    /// its own render loop once the layer is parented + sized — we never
-    /// call `ghostty_surface_draw` ourselves (pattern: eriklangille/clauntty).
+    /// to our bounds. With the `CAMetalLayer` `layerClass` above libghostty
+    /// may instead render directly into our root layer — we handle both:
+    /// if a sublayer arrives we size it, otherwise our metal layer is the
+    /// render target. nil until/unless libghostty attaches one.
     private var ghosttySublayer: CALayer?
+
+    /// Frame pacing. A `CADisplayLink` drives `Terminal.draw()` (→
+    /// `ghostty_surface_draw`) once per frame while the view is on a
+    /// window. geistty pumps the renderer the same way (its
+    /// `FrameDisplayLinkProxy` → `ghostty_surface_draw_now`); our pinned
+    /// 1.1.5 lib exposes `ghostty_surface_draw`, not `draw_now`, so we
+    /// call that. Started in `didMoveToWindow`, stopped when we leave the
+    /// window. The proxy is a weak indirection because `CADisplayLink`
+    /// strongly retains its target — pointing it at `self` directly would
+    /// leak the view (self → link → self).
+    private var frameDisplayLink: CADisplayLink?
+    private var frameDisplayLinkProxy: FrameDisplayLinkProxy?
+
+    /// Weak-target indirection for `frameDisplayLink`. Mirrors geistty's
+    /// `FrameDisplayLinkProxy`: the link retains this proxy, the proxy
+    /// holds the view weakly, so the view can deallocate and the proxy's
+    /// tick self-invalidates the link.
+    private final class FrameDisplayLinkProxy {
+        weak var view: GhosttyRenderView?
+        init(_ view: GhosttyRenderView) { self.view = view }
+        @objc func tick(_ link: CADisplayLink) {
+            guard let view = view else {
+                link.invalidate()
+                return
+            }
+            #if canImport(GhosttyVT)
+            view.terminal?.draw()
+            #endif
+        }
+    }
 
     /// Custom accessory bar shared shape with `WKTerminalView`. Held
     /// strong so `inputAccessoryView` doesn't return a dangling ref.
@@ -316,16 +361,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         }
     }
 
-    /// Theme-resolved palette for the current draw pass. Re-evaluates
-    /// the trait collection every call so `.system` mode picks the
-    /// right variant for the live UI style.
-    private var resolvedPalette: TerminalPalette {
-        TerminalPalette.palette(
-            for: themeMode,
-            systemStyle: traitCollection.userInterfaceStyle
-        )
-    }
-
     // MARK: - First responder / accessory bar
 
     /// `UIKeyInput` needs the view to be first-responder for hardware
@@ -391,14 +426,39 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     // MARK: - Setup
 
     private func configure() {
-        // Start at dark-palette black so the first frame doesn't flash
-        // a UIView-default grey. `draw(_:)` paints the resolved palette
-        // background underneath every cell, so this colour only shows
-        // through if `cachedSnapshot` is nil during initial layout.
-        backgroundColor = TerminalPalette.dark.defaultBackground
+        // Metal-backed setup. The view's `layerClass` is `CAMetalLayer`
+        // (see above); configure it opaque + black so libghostty's first
+        // frame doesn't flash a white/grey curtain. Wrap in a no-implicit-
+        // animation CATransaction exactly like geistty's `SurfaceView.init`
+        // — without `setDisableActions` the colour change animates and
+        // flashes on attach. libghostty owns the Metal pipeline once the
+        // surface is created; we only set the background colour.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         isOpaque = true
-        contentMode = .redraw
+        backgroundColor = .black
+        layer.isOpaque = true
         layer.contentsScale = UIScreen.main.scale
+        if let metalLayer = metalLayer {
+            metalLayer.isOpaque = true
+            metalLayer.backgroundColor = UIColor.black.cgColor
+            metalLayer.contentsScale = UIScreen.main.scale
+        }
+        CATransaction.commit()
+
+        // libghostty's 1.1.5 iOS renderer reads the host layer bounds at
+        // surface-creation time; if we're created at `.zero` (the
+        // representable's `makeUIView` passes `frame: .zero`) the metal
+        // layer has zero bounds and the renderer can fail to initialize.
+        // geistty sidesteps this by initializing its `SurfaceView` at a
+        // fixed 800x600 "so layer bounds are non-zero" *before*
+        // `ghostty_surface_new`. Mirror that: give ourselves a non-zero
+        // frame here so the surface init below sees real bounds. UIKit
+        // overwrites this on the first real `layoutSubviews`, which then
+        // pushes the true pixel size through `sizeGhosttyLayer`.
+        if bounds.width <= 0 || bounds.height <= 0 {
+            frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        }
 
         // Stage 3 gesture stack. Order matters for `require(toFail:)`
         // — a single tap mustn't fire while a double / triple tap is
@@ -437,14 +497,16 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // can target our layer when the Metal renderer lands.
         if Terminal.isAvailable {
             let term = Terminal(cols: UInt(cols), rows: UInt(rows))
-            // The host-view attach uses zero pixel dims here; the
-            // first `layoutSubviews` pass will call `attach(...)`
-            // again with the real bounds once UIKit has measured us.
+            // Attach with the real (now non-zero) pixel size so
+            // libghostty's 1.1.5 renderer initializes against a sized
+            // metal layer. `sizeGhosttyLayer` re-pushes the true size on
+            // every `layoutSubviews` once UIKit measures us for real.
+            let scale = UIScreen.main.scale
             term.attach(
                 hostView: self,
-                pixelWidth: 0,
-                pixelHeight: 0,
-                scaleFactor: Double(UIScreen.main.scale)
+                pixelWidth: UInt32(bounds.width * scale),
+                pixelHeight: UInt32(bounds.height * scale),
+                scaleFactor: Double(scale)
             )
             terminal = term
         }
@@ -661,39 +723,47 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         sizeGhosttyLayer()
     }
 
-    /// libghostty's Metal renderer attaches its own `IOSurfaceLayer` to
-    /// this view by sending `addSublayer:` to the `uiview` pointer in the
-    /// surface config. `UIView` doesn't implement that selector, so
-    /// without this hook libghostty's render layer was never parented —
-    /// the v0.0.36 blank screen (all you saw was our CoreText cursor).
-    /// Capture it, parent it to our layer, and size it. We do NOT override
-    /// `layerClass` (libghostty manages its own layer) and we never call
-    /// `ghostty_surface_draw` (libghostty self-drives once the layer is in
-    /// place). Pattern proven by eriklangille/clauntty.
+    /// Keep both possible render targets working. With the `CAMetalLayer`
+    /// `layerClass`, libghostty's 1.1.5 iOS renderer may render directly
+    /// into our root layer — but it may *also* still attach its own layer
+    /// as a sublayer by sending `addSublayer:` to the host `uiview`
+    /// pointer in the surface config (the mechanism PR #198 relied on;
+    /// `UIView` doesn't implement that selector, so without this hook the
+    /// sublayer is never parented). We don't know which path 1.1.5 takes
+    /// on-device, so we support both: capture the sublayer, parent it,
+    /// size it. The per-frame `CADisplayLink` pumps `ghostty_surface_draw`
+    /// regardless of which layer ends up holding the pixels.
     @objc(addSublayer:)
     func addSublayer(_ sublayer: CALayer) {
         ghosttySublayer = sublayer
         layer.addSublayer(sublayer)
         sizeGhosttyLayer()
-        // Drop the CoreText status/cursor overlay now that libghostty
-        // owns the pixels (see `draw(_:)`).
-        setNeedsDisplay()
     }
 
-    /// Keep libghostty's render layer + surface sized to our bounds at the
-    /// real backing scale. libghostty adds its layer at a zero frame, so
-    /// it paints nothing until we size it.
+    /// Keep libghostty's render target sized to our bounds at the real
+    /// backing scale, and push the pixel size into the surface. Handles
+    /// both render paths: if libghostty attached a sublayer we size that;
+    /// our root `CAMetalLayer`'s `drawableSize` is always kept in sync so
+    /// a direct-into-root render isn't mis-scaled. libghostty adds any
+    /// sublayer at a zero frame, so it paints nothing until we size it.
     private func sizeGhosttyLayer() {
         guard bounds.width > 0, bounds.height > 0 else { return }
         let scale = contentScaleFactor > 0 ? contentScaleFactor : UIScreen.main.scale
+        // No implicit animation on the resize — terminals must snap.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         if let sub = ghosttySublayer {
-            // No implicit animation on the resize — terminals must snap.
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
             sub.frame = bounds
             sub.contentsScale = scale
-            CATransaction.commit()
         }
+        if let metalLayer = metalLayer {
+            metalLayer.drawableSize = CGSize(
+                width: bounds.width * scale,
+                height: bounds.height * scale
+            )
+            metalLayer.contentsScale = scale
+        }
+        CATransaction.commit()
         #if canImport(GhosttyVT)
         terminal?.setPixelSize(
             width: UInt32(bounds.width * scale),
@@ -705,14 +775,46 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        // libghostty drives its own render loop once its layer is attached;
-        // we only toggle visibility/focus so it starts/stops painting and
-        // shows a live cursor.
-        #if canImport(GhosttyVT)
+        // Toggle visibility/focus so libghostty paints (and shows a live
+        // cursor), and start/stop the per-frame draw pump. Unlike PR #198
+        // (which assumed libghostty self-drives once its layer is
+        // parented), we explicitly drive `ghostty_surface_draw` from a
+        // CADisplayLink — geistty pumps `ghostty_surface_draw_now` the
+        // same way, and that working app is what we're matching.
         let visible = window != nil
+        #if canImport(GhosttyVT)
         terminal?.setVisible(visible)
         terminal?.setFocus(visible)
         #endif
+        if visible {
+            startFrameDisplayLink()
+        } else {
+            stopFrameDisplayLink()
+        }
+    }
+
+    /// Start the per-frame draw pump. The link drives `Terminal.draw()`
+    /// (→ `ghostty_surface_draw`) each vsync; ProMotion devices run up to
+    /// 120Hz. Weak-proxy target avoids the link↔view retain cycle.
+    private func startFrameDisplayLink() {
+        guard frameDisplayLink == nil else { return }
+        let proxy = FrameDisplayLinkProxy(self)
+        frameDisplayLinkProxy = proxy
+        let link = CADisplayLink(target: proxy, selector: #selector(FrameDisplayLinkProxy.tick(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        frameDisplayLink = link
+    }
+
+    /// Stop + tear down the per-frame draw pump (off-window / dealloc).
+    private func stopFrameDisplayLink() {
+        frameDisplayLink?.invalidate()
+        frameDisplayLink = nil
+        frameDisplayLinkProxy = nil
+    }
+
+    deinit {
+        frameDisplayLink?.invalidate()
     }
 
     private func recomputeGridFromBounds() {
@@ -795,230 +897,18 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     // MARK: - Drawing
 
-    override func draw(_ rect: CGRect) {
-        guard let ctx = UIGraphicsGetCurrentContext() else { return }
-        // Resolve theme + font here so the draw pass reads the same
-        // values the per-cell layout math already used in
-        // `recomputeTypography`.
-        let palette = resolvedPalette
-        ctx.setFillColor(palette.defaultBackground.cgColor)
-        ctx.fill(bounds)
-
-        // Once libghostty has attached its render sublayer it owns the
-        // pixels (its layer sits above this one) — skip the CoreText
-        // status/cursor overlay so it doesn't bleed through. Background
-        // fill above stays so there's no white flash before the first
-        // libghostty frame.
-        if ghosttySublayer != nil { return }
-
-        guard let snap = cachedSnapshot, snap.cols > 0, snap.rows > 0 else {
-            // No snapshot yet (framework unavailable, or first frame
-            // race). Draw a status line so the user isn't staring
-            // at a black void if the SPM resolve degraded.
-            drawStatus(in: ctx)
-            return
-        }
-
-        // Stage 3 per-cell background fill. Loop the styled grid and
-        // paint each non-default background as a single cell rect.
-        // Wide cells (width == 2) extend the fill across two cell
-        // widths; the continuation cell (width == 0) is skipped. The
-        // reverse attribute swaps fg/bg before the fill so a reversed
-        // `.default` row paints the default foreground as background.
-        if let styled = snap.styledCells {
-            for (r, row) in styled.enumerated() {
-                var c = 0
-                while c < row.count {
-                    let cell = row[c]
-                    if cell.width == 0 {
-                        c += 1
-                        continue
-                    }
-                    let spanWidth = max(1, cell.width)
-                    let effectiveBg = cell.attrs.contains(.reverse) ? cell.fg : cell.bg
-                    if effectiveBg != .default {
-                        let bgColor = renderColor(effectiveBg, fg: false, palette: palette)
-                        let rect = CGRect(
-                            x: CGFloat(c) * cellWidth,
-                            y: CGFloat(r) * cellHeight,
-                            width: CGFloat(spanWidth) * cellWidth,
-                            height: cellHeight
-                        )
-                        ctx.setFillColor(bgColor.cgColor)
-                        ctx.fill(rect)
-                    }
-                    c += spanWidth
-                }
-            }
-        }
-
-        // Selection highlight — paint *after* per-cell background but
-        // *before* glyphs so text stays readable. Walks the same
-        // normalized rectangle the text extractor reads.
-        if let selection = selectionRange {
-            let (s, e) = selection.normalized
-            let r0 = max(0, min(snap.rows - 1, s.row))
-            let r1 = max(0, min(snap.rows - 1, e.row))
-            let c0 = max(0, min(snap.cols - 1, s.col))
-            let c1 = max(0, min(snap.cols - 1, e.col))
-            let highlight = UIColor(SweKittyTheme.warning).withAlphaComponent(0.25).cgColor
-            ctx.setFillColor(highlight)
-            if r0 == r1 {
-                let rect = CGRect(
-                    x: CGFloat(c0) * cellWidth,
-                    y: CGFloat(r0) * cellHeight,
-                    width: CGFloat(c1 - c0 + 1) * cellWidth,
-                    height: cellHeight
-                )
-                ctx.fill(rect)
-            } else {
-                // First row: c0..lastCol
-                let first = CGRect(
-                    x: CGFloat(c0) * cellWidth,
-                    y: CGFloat(r0) * cellHeight,
-                    width: CGFloat(snap.cols - c0) * cellWidth,
-                    height: cellHeight
-                )
-                ctx.fill(first)
-                if r1 - r0 > 1 {
-                    let mid = CGRect(
-                        x: 0,
-                        y: CGFloat(r0 + 1) * cellHeight,
-                        width: CGFloat(snap.cols) * cellWidth,
-                        height: CGFloat(r1 - r0 - 1) * cellHeight
-                    )
-                    ctx.fill(mid)
-                }
-                // Last row: 0..c1
-                let last = CGRect(
-                    x: 0,
-                    y: CGFloat(r1) * cellHeight,
-                    width: CGFloat(c1 + 1) * cellWidth,
-                    height: cellHeight
-                )
-                ctx.fill(last)
-            }
-        }
-
-        // CoreText draws with the y-axis flipped (CG default); flip the
-        // context once so we can iterate rows top-down with familiar
-        // coordinates.
-        ctx.saveGState()
-        ctx.translateBy(x: 0, y: bounds.height)
-        ctx.scaleBy(x: 1, y: -1)
-
-        let regularFont = font
-        let boldFont = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-        let italicDescriptor = regularFont.fontDescriptor.withSymbolicTraits(.traitItalic)
-        let italicFont = italicDescriptor.flatMap { UIFont(descriptor: $0, size: fontSize) } ?? regularFont
-        let boldItalicDescriptor = boldFont.fontDescriptor.withSymbolicTraits(.traitItalic)
-        let boldItalicFont = boldItalicDescriptor.flatMap { UIFont(descriptor: $0, size: fontSize) } ?? boldFont
-
-        // Per-cell glyph paint. We could batch contiguous same-style
-        // runs into one `CFAttributedString`, but the snapshot is
-        // small (cols * rows ≤ 200 * 100 in practice) and the
-        // per-cell path keeps the code inspectable. Stage 3+ moves
-        // to run-coalescing when render-state's dirty iterator lands.
-        for r in 0..<snap.rows {
-            let yFromBottom = bounds.height - CGFloat(r + 1) * cellHeight
-            let baseline = yFromBottom + abs(font.descender)
-            if let styled = snap.styledCells, r < styled.count {
-                let row = styled[r]
-                var c = 0
-                while c < row.count {
-                    let cell = row[c]
-                    if cell.width == 0 {
-                        c += 1
-                        continue
-                    }
-                    let spanWidth = max(1, cell.width)
-                    let glyph = cell.character.isEmpty ? " " : cell.character
-                    let effectiveFg = cell.attrs.contains(.reverse) ? cell.bg : cell.fg
-                    let fgColor = renderColor(effectiveFg, fg: true, palette: palette)
-                    let pickFont: UIFont
-                    switch (cell.attrs.contains(.bold), cell.attrs.contains(.italic)) {
-                    case (true, true):   pickFont = boldItalicFont
-                    case (true, false):  pickFont = boldFont
-                    case (false, true):  pickFont = italicFont
-                    case (false, false): pickFont = regularFont
-                    }
-                    var attrs: [NSAttributedString.Key: Any] = [
-                        .font: pickFont,
-                        .foregroundColor: fgColor,
-                    ]
-                    if cell.attrs.contains(.underline) {
-                        attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                    }
-                    if cell.attrs.contains(.strikethrough) {
-                        attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
-                    }
-                    let attr = NSAttributedString(string: glyph, attributes: attrs)
-                    ctx.textPosition = CGPoint(x: CGFloat(c) * cellWidth, y: baseline)
-                    CTLineDraw(CTLineCreateWithAttributedString(attr), ctx)
-                    c += spanWidth
-                }
-            } else {
-                // Fallback: legacy grapheme-only row (no styled data).
-                let line = snap.cells[r].map { $0.isEmpty ? " " : $0 }.joined()
-                let attr = NSAttributedString(string: line, attributes: [
-                    .font: regularFont,
-                    .foregroundColor: palette.defaultForeground,
-                ])
-                ctx.textPosition = CGPoint(x: 0, y: baseline)
-                CTLineDraw(CTLineCreateWithAttributedString(attr), ctx)
-            }
-        }
-        ctx.restoreGState()
-
-        // Cursor — block style at the current row/col. White
-        // background under whatever glyph already drew so the
-        // contrast inverts the way a real terminal does. Stage 3
-        // will read DECSCUSR style + blink state from
-        // `vt/render.h`'s cursor field.
-        let cursorRect = CGRect(
-            x: CGFloat(snap.cursorCol) * cellWidth,
-            y: CGFloat(snap.cursorRow) * cellHeight,
-            width: cellWidth,
-            height: cellHeight
-        )
-        ctx.setStrokeColor(palette.defaultForeground.cgColor)
-        ctx.setLineWidth(1.0)
-        ctx.stroke(cursorRect)
-    }
-
-    private func drawStatus(in ctx: CGContext) {
-        // Stage 4 (ghostty-bridge-app-surface-v3): the status banner
-        // surfaces whether libghostty's App/Surface pipeline came up.
-        // Before this PR the message was always "module unavailable"
-        // because `Terminal.isAvailable` returned `false` (the
-        // wrapper's `canImport(GhosttyVt)` gate evaluated false
-        // against Lakr233's `libghostty` module name). Now the gate
-        // is `canImport(libghostty)` inside the wrapper, so a
-        // successful boot reads
-        // "libghostty alive — GhosttyApp(0x…)" right on the empty
-        // grid — proves libghostty actually loaded at runtime.
-        // The CoreText renderer is still the fallback (the Metal
-        // renderer lands in Stage 5); the user sees this banner as
-        // an empty-grid status until then.
-        let text: String
-        #if canImport(GhosttyVT)
-        text = Terminal.statusDescription()
-        #else
-        text = "GhosttyVT not linked — see PLAN-TERMINAL-REWRITE Stage 4"
-        #endif
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: resolvedPalette.defaultForeground,
-        ]
-        let attr = NSAttributedString(string: text, attributes: attrs)
-        let size = attr.size()
-        let origin = CGPoint(
-            x: (bounds.width - size.width) / 2,
-            y: (bounds.height - size.height) / 2
-        )
-        attr.draw(at: origin)
-        _ = ctx // silence unused-var warning when canImport branch elided
-    }
+    // No `draw(_:)` / CoreText path. This view is backed by a
+    // `CAMetalLayer` (`layerClass` above), and a metal-backed UIView
+    // cannot legally draw through `drawRect`/CoreText — the metal
+    // layer owns its drawable. libghostty's renderer paints the grid
+    // (into our metal layer, or into a sublayer it attaches via
+    // `addSublayer:`); the per-frame `CADisplayLink` -> `Terminal.draw()`
+    // pumps it. The old CoreText snapshot/cursor/status fallback was
+    // only there because libghostty wasn't painting; with the
+    // geistty-faithful metal integration it would fight the metal layer,
+    // so it's removed. `cachedSnapshot` / `selectionRange` are still
+    // maintained for the copy/selection text path (`copy(_:)` reads the
+    // snapshot); they just aren't repainted here.
 }
 
 /// Pure-Swift mirror of `TerminalSnapshot` shaped for the renderer's

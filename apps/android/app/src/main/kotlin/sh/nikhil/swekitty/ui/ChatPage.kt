@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,21 +40,26 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.PinnedContext
 import sh.nikhil.swekitty.SessionStore
+import kotlinx.coroutines.launch
 import uniffi.swe_kitty_core.ConversationItem
 import uniffi.swe_kitty_core.ProjectSession
 import uniffi.swe_kitty_core.ViewEventFile
@@ -284,7 +288,6 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
         }
         ?: emptyList()
     var draft by remember { mutableStateOf("") }
-    var autoFollow by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
     val pinnedContextsMap by store.pinnedContexts.collectAsState()
     val pinnedContexts = pinnedContextsMap[session.id] ?: emptyList()
@@ -292,10 +295,82 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
     var showAttachSheet by remember { mutableStateOf(false) }
     var showExpandedComposer by remember { mutableStateOf(false) }
 
-    LaunchedEffect(events.size, autoFollow) {
-        if (autoFollow && events.isNotEmpty()) {
+    // Task #38: hoist the parsed-markdown LRU above the LazyColumn so
+    // recycled rows render from cache instead of re-parsing. One cache
+    // per chat surface, kept across recompositions (and session swaps,
+    // since the content-hash key is session-agnostic and identical text
+    // legitimately shares an entry).
+    val markdownCache = remember { ParsedMarkdownCache() }
+
+    // Task #39: streaming auto-scroll that doesn't fight the user.
+    var autoScroll by remember { mutableStateOf(ChatAutoScrollModel()) }
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    // 80dp near-bottom band, in px for the LazyListState geometry.
+    val thresholdPx = with(density) { 80.dp.toPx() }
+    LaunchedEffect(thresholdPx) {
+        autoScroll = autoScroll.copy(nearBottomThresholdPx = thresholdPx)
+    }
+
+    // Track distance-from-bottom off the LazyListState so the model can
+    // tell "pinned to bottom" from "scrolled up". When the last item is
+    // visible we approximate the remaining distance from the viewport
+    // end offset minus the last item's bottom; otherwise we're far from
+    // the bottom and report a large distance.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()
+            val totalCount = info.totalItemsCount
+            when {
+                totalCount == 0 -> 0f
+                lastVisible == null -> Float.MAX_VALUE
+                lastVisible.index < totalCount - 1 -> Float.MAX_VALUE
+                else -> {
+                    // Last item is visible: distance = how far its bottom
+                    // sits past the viewport end (0 when fully pinned).
+                    val itemBottom = lastVisible.offset + lastVisible.size
+                    (itemBottom - info.viewportEndOffset).toFloat().coerceAtLeast(0f)
+                }
+            }
+        }
+            .collect { distance -> autoScroll = autoScroll.onBottomProximityChanged(distance) }
+    }
+
+    // Follow the stream + new messages. The last event's content length
+    // changes on every streamed token (broker appends to the same item);
+    // `events.size` changes on a new turn. Either, while not scrolled up,
+    // re-pins the bottom.
+    val streamingSignature = events.size to (events.lastOrNull()?.content?.length ?: 0)
+    LaunchedEffect(streamingSignature, autoScroll.shouldFollow) {
+        if (autoScroll.shouldFollow && events.isNotEmpty()) {
             listState.animateScrollToItem(events.size)
         }
+    }
+
+    // ~300ms settle after the stream goes quiet: the final layout pass
+    // can change the last row's height once code/diff blocks finish, so
+    // re-pin once content stops growing (unless the user scrolled away).
+    val lastContentLength = events.lastOrNull()?.content?.length ?: 0
+    LaunchedEffect(lastContentLength) {
+        kotlinx.coroutines.delay(300)
+        if (autoScroll.shouldFollow && events.isNotEmpty()) {
+            listState.animateScrollToItem(events.size)
+        }
+    }
+
+    // Android IME handling (task #39): on sdk35 `WindowInsets.isImeVisible`
+    // is unreliable, so detect the keyboard via the LazyColumn's
+    // `viewportEndOffset` shrinking. When the viewport shrinks (keyboard
+    // came up) while we're following, keep the latest message above the
+    // input by re-pinning the bottom.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo.viewportEndOffset }
+            .collect {
+                if (autoScroll.shouldFollow && events.isNotEmpty()) {
+                    listState.scrollToItem(events.size)
+                }
+            }
     }
 
     // Hoisted out of the Column scope so the showExpandedComposer
@@ -311,10 +386,13 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
             store.sendChat(session.id, msg)
             draft = ""
             pendingAttachments = emptyList()
-            autoFollow = true
+            // Sending is explicit intent to see the reply — re-arm follow
+            // even if the user had scrolled up.
+            autoScroll = autoScroll.onScrollToBottomRequested()
         }
     }
 
+    CompositionLocalProvider(LocalParsedMarkdownCache provides markdownCache) {
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
@@ -322,8 +400,22 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 12.dp, vertical = 10.dp)
+                    // Finger-down is the user taking manual control — latch
+                    // `userScrolledUp` so the stream stops yanking them back.
+                    // The proximity observer clears it once they return near
+                    // the bottom. `Initial` pass so we see the drag even
+                    // though the LazyColumn consumes it for scrolling.
                     .pointerInput(Unit) {
-                        detectDragGestures { _, _ -> autoFollow = false }
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent(
+                                    androidx.compose.ui.input.pointer.PointerEventPass.Initial,
+                                )
+                                if (event.changes.any { it.pressed }) {
+                                    autoScroll = autoScroll.onUserDragged()
+                                }
+                            }
+                        }
                     },
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -340,13 +432,16 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
             }
 
             androidx.compose.animation.AnimatedVisibility(
-                visible = !autoFollow && events.isNotEmpty(),
+                visible = autoScroll.showScrollToBottomButton && events.isNotEmpty(),
                 modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically(),
             ) {
                 AssistChip(
-                    onClick = { autoFollow = true },
+                    onClick = {
+                        autoScroll = autoScroll.onScrollToBottomRequested()
+                        scope.launch { listState.animateScrollToItem(events.size) }
+                    },
                     label = { Text("Latest") },
                     leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null) },
                 )
@@ -374,6 +469,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession) {
             },
             onSend = dispatchSend,
         )
+    }
     }
 
     if (showAttachSheet) {
@@ -419,6 +515,23 @@ internal fun composeOutgoingMessage(
     if (trimmed.isNotEmpty()) pieces += trimmed
     pendingAttachments.forEach { pieces += it.inlineBlock }
     return pieces.joinToString("\n\n")
+}
+
+/**
+ * Folds everything that affects parsed-markdown output into a single
+ * cache revision: the content, the body point size, and the font
+ * choice. Same inputs ⇒ same revision ⇒ a [ParsedMarkdownCache] hit.
+ * Top-level + internal so it's unit-testable without a composition.
+ */
+internal fun markdownRevision(
+    text: String,
+    bodyPointSize: Float,
+    fontChoice: sh.nikhil.swekitty.AppearanceStore.FontFamily,
+): Int {
+    var result = text.hashCode()
+    result = 31 * result + bodyPointSize.toRawBits()
+    result = 31 * result + fontChoice.ordinal
+    return result
 }
 
 @Composable
@@ -702,8 +815,23 @@ private fun MarkdownBlock(text: String, role: ConversationRole) {
     // Compose Text path doesn't compose markdown into runs the way
     // SwiftUI does, so we render the per-heading scale as an
     // `AnnotatedString` with per-line `SpanStyle`.
-    val annotated = remember(text, bodyPointSize) {
-        LitterMarkdownHeadingScaler.scaledAnnotated(text, basePointSize = bodyPointSize)
+    //
+    // Task #38: the parse goes through the hoisted LRU
+    // `ParsedMarkdownCache` so a recycled LazyColumn row whose
+    // `remember` key changed renders from cache instead of re-parsing
+    // (0px → final height) and judder. The cache key folds content +
+    // body size + font (everything that changes the output) into a
+    // revision; the id is the content hash so identical text shares one
+    // entry. `remember` still short-circuits the steady state; the
+    // cache catches the recycle path where `remember` recomputes.
+    val cache = LocalParsedMarkdownCache.current
+    val revision = remember(text, bodyPointSize, fontChoice) {
+        markdownRevision(text, bodyPointSize, fontChoice)
+    }
+    val annotated = remember(text, revision) {
+        cache.getOrPut(id = text.hashCode().toString(), revision = revision) {
+            LitterMarkdownHeadingScaler.scaledAnnotated(text, basePointSize = bodyPointSize)
+        }
     }
     SelectionContainer {
         Text(

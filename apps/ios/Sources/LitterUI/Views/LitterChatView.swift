@@ -26,6 +26,7 @@ extension LitterUI {
     struct ChatView: View {
         @Environment(SessionStore.self) private var store
         @Environment(AppearanceStore.self) private var appearance
+        @Environment(StreamingRendererCoordinator.self) private var coordinator
 
         let session: ProjectSession
 
@@ -41,6 +42,12 @@ extension LitterUI {
         @FocusState private var composerFocused: Bool
 
         private var isReadOnly: Bool { readOnlyItems != nil }
+
+        // Task #39 — streaming auto-scroll that doesn't fight the user.
+        // The controller is the pure state machine; the view feeds it
+        // drag + bottom-proximity + streaming signals and reads back
+        // `shouldFollow…` / `showScrollToBottomButton`.
+        @State private var autoScroll = ChatAutoScrollController()
 
         var body: some View {
             // Composer is hosted via `.safeAreaInset(edge: .bottom)` so
@@ -100,6 +107,26 @@ extension LitterUI {
             )
         }
 
+        /// Total length of all currently-streaming buffers. Changes on
+        /// every token while the agent streams, so observing it drives
+        /// "follow the stream" without re-reading the whole event list.
+        private var streamingContentLength: Int {
+            events.reduce(0) { acc, event in
+                if case .streaming(let buffer) = coordinator.renderState(for: event.id) {
+                    return acc + buffer.count
+                }
+                return acc
+            }
+        }
+
+        /// `true` while at least one event is mid-stream.
+        private var isStreaming: Bool {
+            events.contains { event in
+                if case .streaming = coordinator.renderState(for: event.id) { return true }
+                return false
+            }
+        }
+
         private var messagesList: some View {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -115,14 +142,87 @@ extension LitterUI {
                     .padding(.vertical, 14)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // Measure distance from the bottom edge so the controller
+                // can decide when the user has scrolled up vs. is pinned
+                // to the latest. `contentOffset.y + bounds.height` is the
+                // bottom of the visible viewport; subtracting from content
+                // height gives the remaining scroll distance.
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentSize.height
+                        - (geo.contentOffset.y + geo.bounds.height)
+                        + geo.contentInsets.bottom
+                } action: { _, distance in
+                    autoScroll.bottomProximityChanged(distance)
+                }
+                // A finger-down drag is the user taking manual control —
+                // latch `userScrolledUp` so streaming stops yanking them
+                // back. The proximity observer above clears the latch once
+                // they return near the bottom.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { _ in autoScroll.userDragged() }
+                )
+                // Follow the stream: re-scroll on each token, but only
+                // while the user hasn't scrolled up.
+                .onChange(of: streamingContentLength) { _, _ in
+                    guard autoScroll.shouldFollowStreaming, let id = events.last?.id else { return }
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+                // A brand-new message (user send / fresh assistant turn).
                 .onChange(of: events.last?.id) { _, newID in
-                    if let newID {
-                        withAnimation(.easeOut(duration: 0.22)) {
-                            proxy.scrollTo(newID, anchor: .bottom)
+                    guard autoScroll.shouldFollowNewMessage, let newID else { return }
+                    withAnimation(.easeOut(duration: 0.22)) {
+                        proxy.scrollTo(newID, anchor: .bottom)
+                    }
+                }
+                // ~300ms settle after the stream ends: the final layout
+                // pass can change the last row's height once code blocks /
+                // diffs finish parsing, so re-pin the bottom once things
+                // are quiet (unless the user has scrolled away).
+                .onChange(of: isStreaming) { wasStreaming, nowStreaming in
+                    guard wasStreaming, !nowStreaming else { return }
+                    guard autoScroll.shouldFollowStreaming, let id = events.last?.id else { return }
+                    Task {
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        guard autoScroll.shouldFollowStreaming else { return }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(id, anchor: .bottom)
                         }
                     }
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    if autoScroll.showScrollToBottomButton {
+                        scrollToBottomButton(proxy: proxy)
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 12)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .animation(.easeOut(duration: 0.18), value: autoScroll.showScrollToBottomButton)
             }
+        }
+
+        /// Scroll-to-latest affordance shown when the user has scrolled
+        /// up. Tapping clears the latch and jumps to the newest message.
+        private func scrollToBottomButton(proxy: ScrollViewProxy) -> some View {
+            Button {
+                autoScroll.scrollToBottomRequested()
+                if let id = events.last?.id {
+                    withAnimation(.easeOut(duration: 0.22)) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(LitterUI.Palette.brand.color)
+                    .frame(width: 40, height: 40)
+                    .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Scroll to latest message")
         }
 
         // MARK: Suggested quick-replies
@@ -246,6 +346,9 @@ extension LitterUI {
             guard !text.isEmpty else { return }
             store.sendChat(sessionID: session.id, message: text)
             draft = ""
+            // Sending is an explicit intent to see the reply — re-arm
+            // auto-follow even if the user had scrolled up to read back.
+            autoScroll.scrollToBottomRequested()
         }
     }
 }
@@ -343,10 +446,17 @@ private struct LitterBlockStack: View {
             ForEach(Array(blocks.enumerated()), id: \.offset) { idx, block in
                 switch block {
                 case .markdown(let text):
+                    // Cache *every* markdown block, not just the first.
+                    // Earlier only `idx == 0` carried an itemID, so a
+                    // message with an intro + a fenced block + a trailing
+                    // paragraph re-parsed the trailing paragraph on every
+                    // recycle. Suffix the block index so the blocks share
+                    // the item identity but never collide in the cache.
                     LitterMarkdownBlock(
                         text: text,
                         role: role,
-                        itemID: idx == 0 ? itemID : nil
+                        itemID: itemID.map { "\($0)#md\(idx)" },
+                        streamItemID: idx == 0 ? itemID : nil
                     )
                 case .code(let language, let content):
                     LitterCodeBlock(language: language, content: content)
@@ -361,10 +471,27 @@ private struct LitterBlockStack: View {
 private struct LitterMarkdownBlock: View {
     let text: String
     let role: LitterRole
+    /// Per-block cache key (item id + block index). `nil` for blocks
+    /// that shouldn't be cached (e.g. inline cards built from raw text).
     var itemID: String? = nil
+    /// Original message id, used only to look up streaming state. Only
+    /// the first markdown block of a message streams; later blocks are
+    /// stable text once the turn finalises.
+    var streamItemID: String? = nil
 
     @Environment(AppearanceStore.self) private var appearance
     @Environment(StreamingRendererCoordinator.self) private var coordinator
+
+    // Compute-once-into-@State (task #38 / claude-code-ios
+    // EnhancedMessageView pattern). Parsing markdown into an
+    // `AttributedString` is the hot allocator on the chat list; doing it
+    // inside `body` re-parsed on every recycle. Instead we parse once in
+    // `.task(id:)` and store the result, so a recycled row's `body`
+    // renders straight from `@State` (or the shared LRU cache) with no
+    // re-parse. The render key folds content + appearance so the parse
+    // re-fires only when something that affects the output changes.
+    @State private var formatted: AttributedString = AttributedString("")
+    @State private var renderedKey: Int? = nil
 
     private func revision(for content: String) -> Int {
         // Re-render when the user changes their body-size slider — the
@@ -377,17 +504,20 @@ private struct LitterMarkdownBlock: View {
         return hasher.finalize()
     }
 
-    private func attributed(for content: String) -> AttributedString {
-        if let id = itemID {
-            let rev = revision(for: content)
-            if let hit = MessageRenderCache.shared.get(itemID: id, revision: rev) {
-                return hit
-            }
-            let parsed = parseAndScale(content)
-            MessageRenderCache.shared.set(itemID: id, revision: rev, value: parsed)
-            return parsed
+    /// Resolve the formatted string for `content` at the current
+    /// appearance — cache hit first, parse-and-store on miss. Returns
+    /// the value so the `.task` can also assign it to `@State`.
+    @discardableResult
+    private func resolve(_ content: String) -> AttributedString {
+        let rev = revision(for: content)
+        if let id = itemID, let hit = MessageRenderCache.shared.get(itemID: id, revision: rev) {
+            return hit
         }
-        return parseAndScale(content)
+        let parsed = parseAndScale(content)
+        if let id = itemID {
+            MessageRenderCache.shared.set(itemID: id, revision: rev, value: parsed)
+        }
+        return parsed
     }
 
     private func parseAndScale(_ content: String) -> AttributedString {
@@ -404,7 +534,7 @@ private struct LitterMarkdownBlock: View {
     }
 
     private var displayedText: String {
-        guard let id = itemID else { return text }
+        guard let id = streamItemID else { return text }
         switch coordinator.renderState(for: id) {
         case .streaming(let buffer):
             return buffer
@@ -414,28 +544,54 @@ private struct LitterMarkdownBlock: View {
     }
 
     private var isStreaming: Bool {
-        guard let id = itemID else { return false }
+        guard let id = streamItemID else { return false }
         if case .streaming = coordinator.renderState(for: id) {
             return true
         }
         return false
     }
 
+    /// Identity for the parse `.task`: re-run only when the displayed
+    /// text or the appearance-derived revision changes. While streaming
+    /// this fires per buffer update (each is a distinct revision); once
+    /// the turn settles it stops firing and recycled rows reuse `@State`.
+    private var renderKey: Int { revision(for: displayedText) }
+
     var body: some View {
-        let content = displayedText
-        // Outer `.font` now picks up `bodyPointSize` (PR 1 slider) via
+        // Outer `.font` picks up `bodyPointSize` (PR 1 slider) via
         // `SweKittyTypography.body(appearance)`. The attributed string
         // itself carries per-run overrides for headings via
         // `LitterMarkdownHeadingScaler`, so this base only applies to
         // body / paragraph runs and the larger header sizes win.
-        return Text(attributed(for: content))
+        Text(formatted)
             .font(SweKittyTypography.body(appearance))
             .foregroundStyle(foregroundForRole)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: role == .user ? nil : .infinity, alignment: role == .user ? .trailing : .leading)
             .transition(isStreaming ? .opacity : .identity)
-            .animation(isStreaming ? .easeOut(duration: 0.05) : nil, value: content)
+            .animation(isStreaming ? .easeOut(duration: 0.05) : nil, value: formatted)
+            // Parse once per key into @State. `.task(id:)` cancels +
+            // re-runs when `renderKey` changes; the synchronous seed
+            // below covers the very first frame (and recycled rows that
+            // already match) so the row never flashes empty at 0px.
+            .task(id: renderKey) {
+                if renderedKey != renderKey {
+                    let resolved = resolve(displayedText)
+                    formatted = resolved
+                    renderedKey = renderKey
+                }
+            }
+            .onAppear {
+                // First appearance (or recycle into a row whose key
+                // differs from the last assignment): seed synchronously
+                // so we don't draw an empty row for one frame while the
+                // `.task` schedules. A cache hit makes this near-free.
+                if renderedKey != renderKey {
+                    formatted = resolve(displayedText)
+                    renderedKey = renderKey
+                }
+            }
     }
 
     private var foregroundForRole: Color {
