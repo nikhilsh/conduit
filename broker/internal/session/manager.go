@@ -153,7 +153,16 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		// B-i: a structured chat_mode runs the agent headless (started
 		// below as a chatBackend); the PTY hosts an interactive shell
 		// for the Terminal tab.
-		cmd = exec.Command("bash")
+		//
+		// Back the Terminal-tab shell with a per-session tmux session
+		// keyed by the session ID so the terminal — and its scrollback —
+		// survives a disconnect or app-background: the PTY's shell can
+		// die and re-attach, but tmux keeps the real shell alive between
+		// attaches. When tmux isn't on PATH we fall back to plain bash
+		// with no behaviour change (terminalShellArgv handles both).
+		tmuxPath, _ := exec.LookPath("tmux")
+		argv := terminalShellArgv(tmuxPath, sanitizeTmuxName(id))
+		cmd = exec.Command(argv[0], argv[1:]...)
 	} else {
 		cmd = exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
 	}
