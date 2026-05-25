@@ -43,7 +43,10 @@ extension LitterUI {
             // stack let the keyboard cover it.
             messagesList
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    composer
+                    VStack(spacing: 0) {
+                        suggestionBar
+                        composer
+                    }
                 }
                 // In-chat voice dictation. Mirrors the home-screen mic
                 // (device bug #26) — same VoiceDictationSheet — and brings
@@ -100,6 +103,56 @@ extension LitterUI {
                             proxy.scrollTo(newID, anchor: .bottom)
                         }
                     }
+                }
+            }
+        }
+
+        // MARK: Suggested quick-replies
+
+        /// Up to 3 contextual chips inferred from the agent's latest
+        /// message — only when the agent just spoke (it's the user's
+        /// turn). Distinct from the agent's explicit pending-input
+        /// options (`LitterPendingInputCard` owns those), so we bail
+        /// when the last event carries `pendingOptions`.
+        private var suggestedReplies: [String] {
+            guard let last = events.last,
+                  last.role.lowercased() == "assistant",
+                  last.pendingOptions.isEmpty else { return [] }
+            let kind = last.kind.lowercased()
+            guard kind == "message" || kind.isEmpty else { return [] }
+            // Don't suggest mid-stream — wait for the turn to settle.
+            let status = last.status.lowercased()
+            guard !["streaming", "working", "thinking", "pending"].contains(status) else { return [] }
+            return LitterUI.ChatViewModel.suggestedReplies(forLastAssistant: last.content)
+        }
+
+        @ViewBuilder
+        private var suggestionBar: some View {
+            let suggestions = suggestedReplies
+            if !suggestions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(suggestions, id: \.self) { reply in
+                            Button {
+                                store.sendChat(sessionID: session.id, message: reply)
+                            } label: {
+                                Text(reply)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .foregroundStyle(LitterUI.Palette.brand.color)
+                                    .litterGlassCapsule(
+                                        tint: LitterUI.Palette.brand.color.opacity(0.18),
+                                        config: .pill
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Send suggested reply")
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+                    .padding(.bottom, 6)
                 }
             }
         }

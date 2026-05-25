@@ -118,6 +118,58 @@ extension LitterUI {
             default:    return .leading
             }
         }
+
+        /// Infer up to 3 contextual quick replies from the agent's most
+        /// recent message. Returns `[]` when nothing is confident — we'd
+        /// rather show no chips than noisy ones.
+        ///
+        /// This is deliberately distinct from the *pending-input* option
+        /// chips (`LitterPendingInputCard`), which come from the agent's
+        /// own explicit options. These are inferred client-side so the
+        /// user can keep a fast back-and-forth going by tapping instead
+        /// of typing — the highest-signal categories are: a blocked /
+        /// error turn, a completed turn, an explicit go-ahead request, a
+        /// stated next-step, and a plain trailing question.
+        static func suggestedReplies(forLastAssistant text: String) -> [String] {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count >= 2 else { return [] }
+            let lower = trimmed.lowercased()
+            let asksQuestion = trimmed.hasSuffix("?")
+
+            // Error / blocked → recovery actions.
+            if containsAny(lower, ["error", "failed", "couldn't", "could not",
+                                   "can't ", "cannot ", "blocked", "permission denied"]) {
+                return ["Try again", "Show details", "Skip it"]
+            }
+            // Completion → move forward. A leading "done" (e.g. "Done.",
+            // "Done — …", "Done!") is the most common sign-off, so match
+            // the prefix in addition to the inline keywords.
+            if lower.hasPrefix("done")
+                || containsAny(lower, ["all done", "done.", "done!", "completed",
+                                       "finished", "fixed", "all set", "✅"]) {
+                return ["What's next?", "Show me", "Thanks"]
+            }
+            // Explicit request for permission / a go-ahead.
+            if containsAny(lower, ["should i", "shall i", "want me to", "do you want",
+                                   "would you like", "ok to ", "okay to ",
+                                   "proceed?", "go ahead?"]) {
+                return ["Yes, go ahead", "No", "Explain"]
+            }
+            // Agent stated a plan / next step (frequently no question mark).
+            if containsAny(lower, ["i'll ", "i will ", "let me ", "next, i",
+                                   "i'm going to", "i am going to", "i can "]) {
+                return ["Go ahead", "Wait", "Explain"]
+            }
+            // Generic open question.
+            if asksQuestion {
+                return ["Yes", "No", "Tell me more"]
+            }
+            return []
+        }
+
+        private static func containsAny(_ haystack: String, _ needles: [String]) -> Bool {
+            needles.contains { haystack.contains($0) }
+        }
     }
 
     enum ChatMessageAlignment: Equatable { case leading, trailing }
