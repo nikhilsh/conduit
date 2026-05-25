@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - LitterProjectView
 //
@@ -67,9 +68,21 @@ extension LitterUI {
             .background(LitterUI.Palette.surface.color.ignoresSafeArea(.container, edges: .all))
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .navigationBar)
+            // Dismiss the keyboard on every tab switch. The Terminal tab's
+            // WKWebView owns a custom inputAccessoryView (the terminal key
+            // bar); without this, switching Terminal→Chat left that
+            // keyboard up and the chat composer inherited the dirty state
+            // and disappeared (device bug #31). A clean slate per tab.
+            .onChange(of: tab) { _, _ in dismissKeyboard() }
             .sheet(isPresented: $showInfo) {
                 LitterUI.SessionInfoView(session: session)
             }
+        }
+
+        private func dismissKeyboard() {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+            )
         }
 
         // MARK: Header rows
