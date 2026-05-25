@@ -94,7 +94,7 @@ extension LitterUI {
             // assistant replies (delivered via `on_chat_event`) showed
             // up in the Terminal tab but never reached the chat tab —
             // the #119 cutover dropped the legacy mapIndexed fallback.
-            LitterUI.ChatViewModel.mergedEvents(
+            return LitterUI.ChatViewModel.mergedEvents(
                 conversation: store.conversationLog[session.id] ?? [],
                 chatLog: store.chatLog[session.id] ?? []
             )
