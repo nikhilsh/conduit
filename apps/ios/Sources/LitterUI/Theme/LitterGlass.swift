@@ -62,24 +62,36 @@ extension LitterUI {
             let stroke = (tint ?? LitterUI.Palette.border.color).opacity(config.borderOpacity)
             let glow = (tint ?? LitterUI.Palette.brand.color).opacity(config.highlightOpacity)
 
-            content
+            let base = content
                 .modifier(LitterGlassBackdrop(shape: shape, config: config, glow: glow, tint: tint))
-                .overlay {
-                    shape.stroke(stroke, lineWidth: 1)
-                }
-                .clipShape(shape)
-                // Shadow halved (radius 12→8, y 6→4) in PLAN-LITTER-
-                // VISUAL-PARITY PR 2 to match SweKittyTheme/Glass.swift
-                // PR 1. Card / pill / floating shadowOpacity values
-                // were already in the right band; only radius + offset
+
+            if #available(iOS 26.0, *) {
+                // iOS 26's native Liquid Glass already renders its own
+                // specular edge highlight and ambient shadow. Stacking our
+                // manual 1px stroke + drop shadow on top of it doubled the
+                // edge and made the buttons read "too heavy" on device
+                // (#28 — confirmed against device feedback). On 26 we let
+                // the glass own its edge/shadow and keep only the clip.
+                base.clipShape(shape)
+            } else {
+                // Pre-26 material fallback has no built-in edge or shadow,
+                // so we draw them ourselves. Shadow halved (radius 12→8,
+                // y 6→4) in PLAN-LITTER-VISUAL-PARITY PR 2 to match
+                // SweKittyTheme/Glass.swift PR 1 — only radius + offset
                 // needed the trim so settings cards stop dropping a
                 // "magazine" shadow over flat content.
-                .shadow(
-                    color: LitterUI.Palette.textPrimary.color.opacity(config.shadowOpacity),
-                    radius: 8,
-                    x: 0,
-                    y: 4
-                )
+                base
+                    .overlay {
+                        shape.stroke(stroke, lineWidth: 1)
+                    }
+                    .clipShape(shape)
+                    .shadow(
+                        color: LitterUI.Palette.textPrimary.color.opacity(config.shadowOpacity),
+                        radius: 8,
+                        x: 0,
+                        y: 4
+                    )
+            }
         }
     }
 
