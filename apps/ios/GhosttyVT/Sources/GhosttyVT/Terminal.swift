@@ -111,6 +111,126 @@ public struct SGRAttributes: OptionSet, Equatable, Sendable, Hashable {
     public static let strikethrough = SGRAttributes(rawValue: 1 << 6)
 }
 
+// MARK: - Font + color theme config
+//
+// libghostty's font size and color theme are driven through a
+// `ghostty_config_t` (key/value entries like `font-size = 13`,
+// `foreground = #rrggbb`, `palette = N=#rrggbb`). Our pinned 1.1.5 ABI
+// does NOT expose `ghostty_config_load_string`, so the config is
+// generated as a string, written to a temp `.conf` file, and loaded via
+// `ghostty_config_load_file` — then applied to the live surface with
+// `ghostty_surface_update_config` (geistty's reload path). The themes
+// below ship EXPLICIT colors rather than libghostty's named `theme =`
+// key because the iOS xcframework does not bundle the `themes/` resource
+// directory the named lookup reads from; inline colors are self-contained.
+
+/// Curated terminal color theme. Each case carries an explicit 16-color
+/// ANSI palette + foreground/background/cursor so it renders identically
+/// regardless of whether libghostty's bundled `themes/` directory is
+/// present. Stored as a `String` rawValue so `AppearanceStore` can
+/// persist the selection to `UserDefaults` and round-trip it.
+public enum GhosttyTheme: String, CaseIterable, Sendable {
+    case ghosttyDark
+    case solarizedDark
+    case nord
+    case dracula
+    case gruvboxDark
+
+    /// Human-facing label for the Settings picker.
+    public var label: String {
+        switch self {
+        case .ghosttyDark:   return "Ghostty Dark"
+        case .solarizedDark: return "Solarized Dark"
+        case .nord:          return "Nord"
+        case .dracula:       return "Dracula"
+        case .gruvboxDark:   return "Gruvbox Dark"
+        }
+    }
+
+    /// `#rrggbb` background color.
+    var background: String {
+        switch self {
+        case .ghosttyDark:   return "#1d1f21"
+        case .solarizedDark: return "#002b36"
+        case .nord:          return "#2e3440"
+        case .dracula:       return "#282a36"
+        case .gruvboxDark:   return "#282828"
+        }
+    }
+
+    /// `#rrggbb` foreground color.
+    var foreground: String {
+        switch self {
+        case .ghosttyDark:   return "#c5c8c6"
+        case .solarizedDark: return "#839496"
+        case .nord:          return "#d8dee9"
+        case .dracula:       return "#f8f8f2"
+        case .gruvboxDark:   return "#ebdbb2"
+        }
+    }
+
+    /// `#rrggbb` cursor color.
+    var cursor: String {
+        switch self {
+        case .ghosttyDark:   return "#c5c8c6"
+        case .solarizedDark: return "#93a1a1"
+        case .nord:          return "#d8dee9"
+        case .dracula:       return "#f8f8f2"
+        case .gruvboxDark:   return "#ebdbb2"
+        }
+    }
+
+    /// 16-color ANSI palette (`#rrggbb`), index 0..15 (8 normal + 8 bright).
+    var palette: [String] {
+        switch self {
+        case .ghosttyDark:
+            return ["#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
+                    "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
+                    "#666666", "#d54e53", "#b9ca4a", "#e7c547",
+                    "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea"]
+        case .solarizedDark:
+            return ["#073642", "#dc322f", "#859900", "#b58900",
+                    "#268bd2", "#d33682", "#2aa198", "#eee8d5",
+                    "#002b36", "#cb4b16", "#586e75", "#657b83",
+                    "#839496", "#6c71c4", "#93a1a1", "#fdf6e3"]
+        case .nord:
+            return ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
+                    "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+                    "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b",
+                    "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4"]
+        case .dracula:
+            return ["#21222c", "#ff5555", "#50fa7b", "#f1fa8c",
+                    "#bd93f9", "#ff79c6", "#8be9fd", "#f8f8f2",
+                    "#6272a4", "#ff6e6e", "#69ff94", "#ffffa5",
+                    "#d6acff", "#ff92df", "#a4ffff", "#ffffff"]
+        case .gruvboxDark:
+            return ["#282828", "#cc241d", "#98971a", "#d79921",
+                    "#458588", "#b16286", "#689d6a", "#a89984",
+                    "#928374", "#fb4934", "#b8bb26", "#fabd2f",
+                    "#83a598", "#d3869b", "#8ec07c", "#ebdbb2"]
+        }
+    }
+
+    /// Build the libghostty config body for this theme + the given font
+    /// size. Line-based `key = value` syntax (verified against the
+    /// reference repos' generated `ghostty.conf`). The font size is
+    /// folded in here so a single config-update call carries both.
+    func configString(fontSize: Float) -> String {
+        var lines: [String] = []
+        // Clamp to a sane terminal range so a corrupted default can't
+        // hand libghostty a zero / negative point size.
+        let clamped = min(max(fontSize, 6), 32)
+        lines.append("font-size = \(Int(clamped.rounded()))")
+        lines.append("background = \(background)")
+        lines.append("foreground = \(foreground)")
+        lines.append("cursor-color = \(cursor)")
+        for (index, color) in palette.enumerated() {
+            lines.append("palette = \(index)=\(color)")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+}
+
 /// Pure-Swift mirror of a single cell in the terminal grid.
 public struct TerminalCell: Equatable, Sendable {
     public var character: String
@@ -488,7 +608,8 @@ public final class GhosttySurface {
         pixelWidth: UInt32 = 0,
         pixelHeight: UInt32 = 0,
         scaleFactor: Double = 2.0,
-        fontSize: Float = 13.0
+        fontSize: Float = 13.0,
+        theme: GhosttyTheme = .ghosttyDark
     ) {
         guard let appHandle = app.appHandle else {
             GhosttyDiagnostics.shared.setSurface(created: false)
@@ -546,6 +667,14 @@ public final class GhosttySurface {
         self._surface = surface
         GhosttyDiagnostics.shared.setSurface(created: true)
 
+        // Apply the user's color theme (and re-assert the font size) via
+        // a config update. `config.font_size` above already seeds the
+        // glyph size, but COLORS can only be set through a
+        // `ghostty_config_t`, so push the full theme here. Done before the
+        // first size below so the renderer's first frame paints the right
+        // palette.
+        applyConfig(fontSize: fontSize, theme: theme)
+
         // Push the initial size + scale BEFORE the first draw so the
         // renderer initializes against a non-zero render target. geistty
         // + clauntty both size the surface immediately on creation.
@@ -554,6 +683,51 @@ public final class GhosttySurface {
             ghostty_surface_set_size(surface, pixelWidth, pixelHeight)
             lastSizePx = (pixelWidth, pixelHeight)
         }
+    }
+
+    /// Apply a font size + color theme to the LIVE surface. Builds a
+    /// fresh `ghostty_config_t` from a generated config file
+    /// (`ghostty_config_new` → `ghostty_config_load_file` →
+    /// `ghostty_config_finalize`) and pushes it with
+    /// `ghostty_surface_update_config` — the same reload path geistty
+    /// uses. Our pinned 1.1.5 ABI has no `ghostty_config_load_string`, so
+    /// the config string is written to a temp `.conf` file first.
+    ///
+    /// IMPORTANT (caller contract): a font-size change shifts libghostty's
+    /// cell pixel dimensions, which re-derives the grid (cols/rows) for a
+    /// fixed view bounds. After this returns, the host MUST re-push the
+    /// pixel size (so libghostty reflows) and re-read `ghostty_surface_size`
+    /// to drive the broker PTY to the new grid — otherwise the broker PTY
+    /// and libghostty's render grid disagree. `Terminal.applyConfig` and
+    /// the host view wire that up.
+    public func applyConfig(fontSize: Float, theme: GhosttyTheme) {
+        guard let surface = _surface else { return }
+
+        guard let cfg: UnsafeMutableRawPointer = ghostty_config_new() else { return }
+        defer { ghostty_config_free(cfg) }
+
+        let body = theme.configString(fontSize: fontSize)
+        // A few-hundred-byte temp `.conf`, unique per call and removed via
+        // the defer below. A failed write just skips the update (config
+        // keeps its prior state).
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swekitty-ghostty-\(UUID().uuidString).conf")
+        do {
+            try body.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        url.path.withCString { ghostty_config_load_file(cfg, $0) }
+        ghostty_config_finalize(cfg)
+        // libghostty copies the config; safe to free (via the defer) after
+        // this returns.
+        ghostty_surface_update_config(surface, cfg)
+        // Nudge a redraw so the palette swap shows without waiting for the
+        // next PTY byte.
+        ghostty_surface_refresh(surface)
+        GhosttyApp.shared.tick()
     }
 
     deinit {
@@ -683,6 +857,13 @@ public final class Terminal {
     private var cols: UInt
     private var rows: UInt
 
+    /// Font size + color theme applied to the libghostty surface. Set via
+    /// `init(cols:rows:fontSize:theme:)` and updated live with
+    /// `applyConfig(fontSize:theme:)`. Held on the façade so a surface
+    /// rebuild (`attach` / `resetAndFeed`) re-applies the user's choice.
+    public private(set) var fontSize: Float
+    public private(set) var theme: GhosttyTheme
+
     #if canImport(libghostty)
     private var surface: GhosttySurface?
     #endif
@@ -697,11 +878,19 @@ public final class Terminal {
         }
     }
 
-    public init(cols: UInt, rows: UInt, maxScrollback: UInt = 10_000) {
+    public init(
+        cols: UInt,
+        rows: UInt,
+        maxScrollback: UInt = 10_000,
+        fontSize: Float = 13.0,
+        theme: GhosttyTheme = .ghosttyDark
+    ) {
         precondition(cols > 0 && cols <= UInt(UInt16.max), "cols out of range")
         precondition(rows > 0 && rows <= UInt(UInt16.max), "rows out of range")
         self.cols = cols
         self.rows = rows
+        self.fontSize = fontSize
+        self.theme = theme
         // Surface is created lazily in `attach(...)` with the real host
         // view + non-zero pixel size. Creating a hostless surface here
         // (as the skeleton did) starves the renderer of a layer to
@@ -719,7 +908,9 @@ public final class Terminal {
             hostView: hostView,
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
-            scaleFactor: scaleFactor
+            scaleFactor: scaleFactor,
+            fontSize: fontSize,
+            theme: theme
         )
         s.onReceiveInput = onReceiveInput
         surface = s
@@ -762,6 +953,19 @@ public final class Terminal {
         surface?.resize(pixelWidth: width, pixelHeight: height, scale: scale)
         #else
         _ = (width, height, scale)
+        #endif
+    }
+
+    /// Apply a new font size + color theme to the live surface. Mirrors
+    /// geistty's config-reload path (`ghostty_surface_update_config`). The
+    /// host MUST re-push the pixel size + re-read `gridSize()` afterwards
+    /// (a font-size change shifts libghostty's cell px → grid), which the
+    /// `GhosttyRenderView` does via `sizeGhosttyLayer` → `syncPtyToGhosttyGrid`.
+    public func applyConfig(fontSize: Float, theme: GhosttyTheme) {
+        self.fontSize = fontSize
+        self.theme = theme
+        #if canImport(libghostty)
+        surface?.applyConfig(fontSize: fontSize, theme: theme)
         #endif
     }
 

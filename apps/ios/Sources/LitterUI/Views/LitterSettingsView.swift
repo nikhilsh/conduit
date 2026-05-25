@@ -336,12 +336,86 @@ extension LitterUI {
         private var experimentalSection: some View {
             @Bindable var appearance = appearance
             return sectionCard(title: "Experimental") {
-                LitterUI.toggleRow(
-                    icon: "apple.terminal",
-                    title: "Native Terminal (Ghostty)",
-                    subtitle: "libghostty renderer — falls back to the web terminal if off",
-                    isOn: $appearance.experimentalNativeTerminal
+                VStack(spacing: 0) {
+                    LitterUI.toggleRow(
+                        icon: "apple.terminal",
+                        title: "Native Terminal (Ghostty)",
+                        subtitle: "libghostty renderer — falls back to the web terminal if off",
+                        isOn: $appearance.experimentalNativeTerminal
+                    )
+                    // Font-size + color-theme controls only matter for the
+                    // native libghostty terminal, so they appear only when
+                    // that path is enabled. xterm.js ignores them.
+                    if appearance.experimentalNativeTerminal {
+                        Divider()
+                            .background(LitterUI.Palette.separator.color)
+                            .padding(.leading, 46)
+                        ghosttyFontSizeRow
+                        Divider()
+                            .background(LitterUI.Palette.separator.color)
+                            .padding(.leading, 46)
+                        ghosttyThemeRows
+                    }
+                }
+            }
+        }
+
+        /// Native-terminal font-size slider. Drives
+        /// `AppearanceStore.ghosttyFontSize` → libghostty's `font-size`
+        /// config key. Range / clamp live in `AppearanceStore`.
+        private var ghosttyFontSizeRow: some View {
+            @Bindable var appearance = appearance
+            return VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Image(systemName: "textformat.size")
+                        .font(.body)
+                        .frame(width: 20)
+                        .foregroundStyle(LitterUI.Palette.brand.color)
+                    Text("Terminal Font Size")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                    Spacer(minLength: 6)
+                    Text("\(Int(appearance.ghosttyFontSize))pt")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                }
+                Slider(
+                    value: $appearance.ghosttyFontSize,
+                    in: AppearanceStore.ghosttyFontSizeRange,
+                    step: 1
                 )
+                .tint(LitterUI.Palette.brand.color)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+
+        /// Native-terminal color-theme picker. Drives
+        /// `AppearanceStore.ghosttyTerminalTheme` → libghostty's
+        /// foreground/background/cursor/palette config keys.
+        private var ghosttyThemeRows: some View {
+            @Bindable var appearance = appearance
+            return VStack(spacing: 0) {
+                ForEach(AppearanceStore.GhosttyTerminalTheme.allCases) { theme in
+                    Button {
+                        appearance.ghosttyTerminalTheme = theme
+                    } label: {
+                        LitterUI.ListRow(
+                            icon: "paintpalette.fill",
+                            title: theme.label,
+                            subtitle: nil,
+                            iconTint: LitterUI.Palette.brand.color
+                        ) {
+                            if appearance.ghosttyTerminalTheme == theme {
+                                Image(systemName: "checkmark")
+                                    .font(.footnote.weight(.bold))
+                                    .foregroundStyle(LitterUI.Palette.brand.color)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    rowDivider(after: theme, in: AppearanceStore.GhosttyTerminalTheme.allCases)
+                }
             }
         }
 

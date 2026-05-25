@@ -135,6 +135,55 @@ struct AppearanceStoreTests {
         #expect(store.bodyPointSize == AppearanceStore.bodyPointSizeRange.upperBound)
     }
 
+    // MARK: - Ghostty native-terminal font size + theme
+
+    @Test func freshInstallGhosttyFontSizeIsDefault() {
+        let store = AppearanceStore(defaults: freshDefaults())
+        #expect(store.ghosttyFontSize == AppearanceStore.defaultGhosttyFontSize)
+    }
+
+    @Test func persistsGhosttyFontSize() {
+        let defaults = freshDefaults()
+        let first = AppearanceStore(defaults: defaults)
+        first.ghosttyFontSize = 16
+
+        let second = AppearanceStore(defaults: defaults)
+        #expect(second.ghosttyFontSize == 16)
+    }
+
+    @Test func ghosttyFontSizeClampsAboveRange() {
+        let store = AppearanceStore(defaults: freshDefaults())
+        store.ghosttyFontSize = 99
+        #expect(store.ghosttyFontSize == AppearanceStore.ghosttyFontSizeRange.upperBound)
+    }
+
+    @Test func ghosttyFontSizeClampsBelowRange() {
+        let store = AppearanceStore(defaults: freshDefaults())
+        store.ghosttyFontSize = 1
+        #expect(store.ghosttyFontSize == AppearanceStore.ghosttyFontSizeRange.lowerBound)
+    }
+
+    @Test func corruptedGhosttyFontSizeFallsBackToClamp() {
+        let defaults = freshDefaults()
+        defaults.set(999.0, forKey: "swekitty.appearance.ghosttyFontSize")
+        let store = AppearanceStore(defaults: defaults)
+        #expect(store.ghosttyFontSize == AppearanceStore.ghosttyFontSizeRange.upperBound)
+    }
+
+    @Test func freshInstallGhosttyThemeIsGhosttyDark() {
+        let store = AppearanceStore(defaults: freshDefaults())
+        #expect(store.ghosttyTerminalTheme == .ghosttyDark)
+    }
+
+    @Test func persistsGhosttyTerminalTheme() {
+        let defaults = freshDefaults()
+        let first = AppearanceStore(defaults: defaults)
+        first.ghosttyTerminalTheme = .dracula
+
+        let second = AppearanceStore(defaults: defaults)
+        #expect(second.ghosttyTerminalTheme == .dracula)
+    }
+
     // MARK: - Backwards-compat for existing installs
 
     @Test func legacyMonospacedPreferenceSurvives() {

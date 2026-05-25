@@ -27,6 +27,31 @@ final class AppearanceStore {
         }
     }
 
+    /// Color theme for the experimental native (libghostty) terminal.
+    /// Self-contained mirror of `GhosttyVT.GhosttyTheme` — same rawValues
+    /// so `GhosttyTerminalView` can map across the module boundary with a
+    /// plain `init(rawValue:)`. Kept here (rather than re-exporting the
+    /// GhosttyVT enum) so the model layer + its tests don't have to link
+    /// libghostty. Only applies on the `experimentalNativeTerminal` path.
+    enum GhosttyTerminalTheme: String, CaseIterable, Identifiable {
+        case ghosttyDark
+        case solarizedDark
+        case nord
+        case dracula
+        case gruvboxDark
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .ghosttyDark:   return "Ghostty Dark"
+            case .solarizedDark: return "Solarized Dark"
+            case .nord:          return "Nord"
+            case .dracula:       return "Dracula"
+            case .gruvboxDark:   return "Gruvbox Dark"
+            }
+        }
+    }
+
     enum ThemeMode: String, CaseIterable, Identifiable {
         case system
         case light
@@ -68,7 +93,22 @@ final class AppearanceStore {
         /// (`SweKittyTypography`). User-tunable within
         /// [bodyPointSizeRange]; everything in the ramp scales off this.
         static let bodyPointSize = "swekitty.appearance.bodyPointSize"
+        /// Font size (points) libghostty renders the native terminal grid
+        /// at. Only consumed on the `experimentalNativeTerminal` path.
+        static let ghosttyFontSize = "swekitty.appearance.ghosttyFontSize"
+        /// Color theme rawValue for the native (libghostty) terminal.
+        /// Only consumed on the `experimentalNativeTerminal` path.
+        static let ghosttyTerminalTheme = "swekitty.appearance.ghosttyTerminalTheme"
     }
+
+    /// Clamp range for the native-terminal font size. Lower bound keeps a
+    /// dense grid legible on iPhone; upper bound stops the grid collapsing
+    /// to a few columns. Stepper steps by 1.
+    static let ghosttyFontSizeRange: ClosedRange<Double> = 8...24
+    /// Default native-terminal font size. Smaller than the old hard-coded
+    /// 13pt-after-Dynamic-Type bloat — 13pt is the canonical terminal
+    /// default the reference apps ship and reads compact on iPhone.
+    static let defaultGhosttyFontSize: Double = 13
 
     /// Clamp range for [bodyPointSize]. Lower bound keeps captions
     /// readable; upper bound prevents headings from blowing out the
@@ -109,6 +149,28 @@ final class AppearanceStore {
     /// `docs/PLAN-LITTER-UI.md`.
     var experimentalLitterUI: Bool {
         didSet { defaults.set(experimentalLitterUI, forKey: Keys.experimentalLitterUI) }
+    }
+
+    /// Font size libghostty renders the native terminal at. Setter
+    /// clamps into [ghosttyFontSizeRange] and persists. A change here is
+    /// picked up live by `GhosttyTerminalView` (config update + PTY-grid
+    /// resync). Only applies on the `experimentalNativeTerminal` path.
+    var ghosttyFontSize: Double = AppearanceStore.defaultGhosttyFontSize {
+        didSet {
+            let clamped = ghosttyFontSize.clamped(to: Self.ghosttyFontSizeRange)
+            if clamped != ghosttyFontSize {
+                ghosttyFontSize = clamped
+                return
+            }
+            defaults.set(ghosttyFontSize, forKey: Keys.ghosttyFontSize)
+        }
+    }
+
+    /// Color theme for the native (libghostty) terminal. Persisted by
+    /// rawValue; applied live by `GhosttyTerminalView`. Only applies on
+    /// the `experimentalNativeTerminal` path.
+    var ghosttyTerminalTheme: GhosttyTerminalTheme {
+        didSet { defaults.set(ghosttyTerminalTheme.rawValue, forKey: Keys.ghosttyTerminalTheme) }
     }
 
     /// Base point size the typography ramp (`SweKittyTypography`)
@@ -153,6 +215,11 @@ final class AppearanceStore {
         let storedBody = defaults.object(forKey: Keys.bodyPointSize) as? Double
         self.bodyPointSize = CGFloat(storedBody ?? Double(Self.defaultBodyPointSize))
             .clamped(to: Self.bodyPointSizeRange)
+        let storedGhosttySize = defaults.object(forKey: Keys.ghosttyFontSize) as? Double
+        self.ghosttyFontSize = (storedGhosttySize ?? Self.defaultGhosttyFontSize)
+            .clamped(to: Self.ghosttyFontSizeRange)
+        self.ghosttyTerminalTheme = (defaults.string(forKey: Keys.ghosttyTerminalTheme)
+            .flatMap(GhosttyTerminalTheme.init(rawValue:))) ?? .ghosttyDark
     }
 
     /// SwiftUI `.font` value to use for chat body text.

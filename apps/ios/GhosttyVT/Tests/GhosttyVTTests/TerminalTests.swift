@@ -70,3 +70,42 @@ final class TerminalTests: XCTestCase {
 
     #endif
 }
+
+/// Pure-Swift coverage for the libghostty color-theme config generation.
+/// Independent of `canImport(libghostty)` — `GhosttyTheme` and its
+/// `configString` are plain Swift so they run on every build.
+final class GhosttyThemeTests: XCTestCase {
+
+    func testConfigStringCarriesFontSizeForegroundBackgroundCursor() {
+        let body = GhosttyTheme.dracula.configString(fontSize: 15)
+        XCTAssertTrue(body.contains("font-size = 15"))
+        XCTAssertTrue(body.contains("background = \(GhosttyTheme.dracula.background)"))
+        XCTAssertTrue(body.contains("foreground = \(GhosttyTheme.dracula.foreground)"))
+        XCTAssertTrue(body.contains("cursor-color = \(GhosttyTheme.dracula.cursor)"))
+    }
+
+    func testConfigStringEmitsAll16PaletteEntries() {
+        let body = GhosttyTheme.nord.configString(fontSize: 13)
+        for index in 0..<16 {
+            XCTAssertTrue(
+                body.contains("palette = \(index)="),
+                "expected palette entry \(index) in config body"
+            )
+        }
+    }
+
+    func testFontSizeClampedToSaneRange() {
+        // A wild font size must not produce a zero / negative point size.
+        let tiny = GhosttyTheme.ghosttyDark.configString(fontSize: 1)
+        XCTAssertTrue(tiny.contains("font-size = 6"))
+        let huge = GhosttyTheme.ghosttyDark.configString(fontSize: 999)
+        XCTAssertTrue(huge.contains("font-size = 32"))
+    }
+
+    func testEveryThemeHasComplete16ColorPalette() {
+        for theme in GhosttyTheme.allCases {
+            XCTAssertEqual(theme.palette.count, 16, "\(theme) palette must be 16 colors")
+            XCTAssertFalse(theme.label.isEmpty)
+        }
+    }
+}

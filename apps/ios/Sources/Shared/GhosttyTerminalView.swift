@@ -52,6 +52,8 @@ struct GhosttyTerminalTab: View {
             bufferRevision: store.terminalBuffer[session.id]?.count ?? 0,
             themeMode: appearance.themeMode,
             fontFamily: appearance.fontFamily,
+            ghosttyFontSize: appearance.ghosttyFontSize,
+            ghosttyTheme: appearance.ghosttyTerminalTheme,
             onInput: { bytes in
                 store.sendInput(sessionID: session.id, bytes: bytes)
             },
@@ -85,6 +87,14 @@ struct GhosttyTerminalView: UIViewRepresentable {
     /// monospaced, system → monospaced system font, monospaced →
     /// explicitly monospaced).
     let fontFamily: AppearanceStore.FontFamily
+    /// Native-terminal font size from `AppearanceStore`. Drives
+    /// libghostty's `font-size` config key. A change re-applies the
+    /// config to the live surface and re-syncs the broker PTY grid (a
+    /// font-size change shifts libghostty's cell px → grid).
+    let ghosttyFontSize: Double
+    /// Native-terminal color theme from `AppearanceStore`. Drives
+    /// libghostty's foreground/background/cursor/palette config keys.
+    let ghosttyTheme: AppearanceStore.GhosttyTerminalTheme
     let onInput: (Data) -> Void
     let onResize: (Int, Int) -> Void
 
@@ -92,6 +102,9 @@ struct GhosttyTerminalView: UIViewRepresentable {
         let view = GhosttyRenderView(frame: .zero)
         view.onInput = onInput
         view.onResize = onResize
+        // Seed the libghostty font size + theme BEFORE the surface is
+        // built so the first frame paints at the right size/palette.
+        view.configureGhosttyAppearance(fontSize: ghosttyFontSize, theme: ghosttyTheme)
         view.applyAppearance(themeMode: themeMode, fontFamily: fontFamily)
         // First update: feed whatever the buffer already holds so a
         // tab-switch-back reattach doesn't show an empty grid.
@@ -107,6 +120,10 @@ struct GhosttyTerminalView: UIViewRepresentable {
         // live view without a remount. `applyAppearance` is a no-op
         // when the values didn't actually change, so this is cheap.
         view.applyAppearance(themeMode: themeMode, fontFamily: fontFamily)
+        // Same for the libghostty font size + theme — `configureGhosttyAppearance`
+        // is a no-op when nothing changed; otherwise it rebuilds the
+        // surface config and re-syncs the PTY grid.
+        view.configureGhosttyAppearance(fontSize: ghosttyFontSize, theme: ghosttyTheme)
         let buf = bufferProvider()
         let last = view.lastFedByteCount
         if buf.count > last {
@@ -150,6 +167,16 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// (monospaced font, dark palette).
     private var themeMode: AppearanceStore.ThemeMode = .system
     private var fontFamily: AppearanceStore.FontFamily = .monospaced
+
+    /// libghostty font size + color theme chosen by the user
+    /// (`AppearanceStore.ghosttyFontSize` / `.ghosttyTerminalTheme`).
+    /// These drive libghostty's OWN renderer (config keys `font-size`,
+    /// `foreground`, `background`, `cursor-color`, `palette`) — distinct
+    /// from `fontSize`/`fontFamily` above, which fed the old CoreText
+    /// fallback path. Seeded before the surface is created so the first
+    /// frame is correct; updated live via `configureGhosttyAppearance`.
+    private var ghosttyFontSize: Double = AppearanceStore.defaultGhosttyFontSize
+    private var ghosttyTheme: AppearanceStore.GhosttyTerminalTheme = .ghosttyDark
 
     /// Scaled point size — recomputed every time `applyAppearance` runs
     /// off `UIFontMetrics.default.scaledValue(for:)` so larger Dynamic
@@ -336,6 +363,52 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         }
         setNeedsDisplay()
     }
+
+    /// Apply the user's libghostty font size + color theme. Called from
+    /// the representable before the surface is built (seed) and on every
+    /// update (live re-apply). No-op when nothing changed.
+    ///
+    /// On a real change we push a fresh config to the live surface
+    /// (`Terminal.applyConfig` → `ghostty_surface_update_config`). Because
+    /// a font-size change shifts libghostty's cell pixel dimensions — and
+    /// therefore the grid (cols/rows) for our fixed bounds — we then
+    /// re-push the pixel size and re-read `ghostty_surface_size` so the
+    /// broker PTY converges to libghostty's NEW grid. Treating a font-size
+    /// change like a bounds change is mandatory (see Terminal.swift /
+    /// PLAN-TERMINAL-REWRITE): otherwise the broker PTY grid and
+    /// libghostty's render grid disagree (oversized/duplicated tmux bars,
+    /// gaps, stray echo). `sizeGhosttyLayer` already does both steps, so
+    /// we just call it.
+    func configureGhosttyAppearance(
+        fontSize: Double,
+        theme: AppearanceStore.GhosttyTerminalTheme
+    ) {
+        let changed = fontSize != ghosttyFontSize || theme != ghosttyTheme
+        ghosttyFontSize = fontSize
+        ghosttyTheme = theme
+        guard changed else { return }
+        #if canImport(GhosttyVT)
+        terminal?.applyConfig(
+            fontSize: Float(fontSize),
+            theme: Self.mapTheme(theme)
+        )
+        // Re-drive the grid: a font change re-derives libghostty's cell px,
+        // so the surface must reflow at the current bounds and the broker
+        // PTY must be re-sized to the new grid. `sizeGhosttyLayer` re-pushes
+        // the pixel size and runs `syncPtyToGhosttyGrid`.
+        sizeGhosttyLayer()
+        #endif
+    }
+
+    #if canImport(GhosttyVT)
+    /// Bridge `AppearanceStore.GhosttyTerminalTheme` → `GhosttyVT.GhosttyTheme`.
+    /// The two enums share rawValues by construction (the model enum is a
+    /// deliberate mirror so the model layer needn't link libghostty), so
+    /// this is a total `init(rawValue:)` with a safe fallback.
+    static func mapTheme(_ theme: AppearanceStore.GhosttyTerminalTheme) -> GhosttyVT.GhosttyTheme {
+        GhosttyVT.GhosttyTheme(rawValue: theme.rawValue) ?? .ghosttyDark
+    }
+    #endif
 
     /// Re-derive `fontSize`, `font`, `cellWidth`, `cellHeight` from
     /// the current `fontFamily` choice and the user's Dynamic Type
@@ -540,7 +613,12 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // (`ghostty_platform_ios_s.uiview`) targets our layer and its
         // renderer attaches its IOSurface sublayer here.
         if Terminal.isAvailable {
-            let term = Terminal(cols: UInt(cols), rows: UInt(rows))
+            let term = Terminal(
+                cols: UInt(cols),
+                rows: UInt(rows),
+                fontSize: Float(ghosttyFontSize),
+                theme: Self.mapTheme(ghosttyTheme)
+            )
             // Forward user input libghostty emits from its HOST_MANAGED
             // backend (mouse-reporting, bracketed-paste framing) to the
             // harness PTY — analog of clauntty's set_pty_input_callback.
@@ -1000,7 +1078,12 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // `configure()` attach so the renderer keeps a layer to paint
         // into across a buffer-shrink reset.
         if Terminal.isAvailable {
-            let term = Terminal(cols: UInt(cols), rows: UInt(rows))
+            let term = Terminal(
+                cols: UInt(cols),
+                rows: UInt(rows),
+                fontSize: Float(ghosttyFontSize),
+                theme: Self.mapTheme(ghosttyTheme)
+            )
             term.onReceiveInput = { [weak self] inBytes in self?.onInput(inBytes) }
             let scale = contentScaleFactor > 0 ? contentScaleFactor : UIScreen.main.scale
             term.attach(
