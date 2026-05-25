@@ -209,19 +209,22 @@ extension LitterUI {
             case .chat:
                 LitterUI.ChatView(session: session)
             case .terminal:
-                // Always render the xterm.js terminal. LitterUI's rebuild
-                // scope was the chat / nav surfaces, not the terminal
-                // engine. The native `GhosttyTerminalTab` (libghostty) is
-                // a Stage-4 skeleton that renders BLANK on device — no
-                // Metal renderer / cell readback yet (Stage 5; see
-                // docs/PLAN-TERMINAL-REWRITE.md and
-                // docs/PLAN-DEVICE-BUGS-2026-05-24.md). Gating it on the
-                // `experimentalNativeTerminal` toggle shipped a blank
-                // screen to anyone who flipped it — including users who
-                // can't flip it back. So it's gated on Stage-5 completion
-                // (a code change), not a user flag; restore the
-                // GhosttyTerminalTab branch here when it actually paints.
-                TerminalTabXterm(session: session)
+                // Default engine is the xterm.js terminal (shipping,
+                // proven). Stage 5 wires the native `GhosttyTerminalTab`
+                // to libghostty's *own* Metal renderer — we pass our
+                // UIView via `ghostty_platform_ios_s.uiview`, push the
+                // real pixel size, and drive `ghostty_surface_draw` from
+                // a CADisplayLink (the Stage-4 skeleton fed bytes but
+                // never sized the surface or asked it to paint, hence the
+                // blank screen). It's gated behind the
+                // `experimentalNativeTerminal` flag for on-device
+                // verification; default users stay on xterm.js until the
+                // native path is confirmed painting on real hardware.
+                if appearance.experimentalNativeTerminal {
+                    GhosttyTerminalTab(session: session)
+                } else {
+                    TerminalTabXterm(session: session)
+                }
             case .browser:
                 BrowserTab(session: session, mode: .preview)
             }

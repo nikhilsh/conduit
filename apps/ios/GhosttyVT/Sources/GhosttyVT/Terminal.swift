@@ -464,6 +464,37 @@ public final class GhosttySurface {
         ghostty_surface_set_size(surface, pixelWidth, pixelHeight)
         lastSizePx = (pixelWidth, pixelHeight)
     }
+
+    /// Render one frame. libghostty owns the Metal renderer + the
+    /// `CAMetalLayer` it created on the attached `uiview`; this just
+    /// asks it to paint the current grid state. Must run on the main
+    /// thread. This is the call Stage 4 was missing — bytes were fed
+    /// but no frame was ever drawn, so the surface stayed blank.
+    public func draw() {
+        guard let surface = _surface else { return }
+        ghostty_surface_draw(surface)
+    }
+
+    /// libghostty only renders an active surface; tell it we're
+    /// focused so it paints (and shows a live cursor).
+    public func setFocus(_ focused: Bool) {
+        guard let surface = _surface else { return }
+        ghostty_surface_set_focus(surface, focused)
+    }
+
+    /// Backing-store scale (UIScreen.scale). Drives libghostty's
+    /// glyph rasterization DPI so text isn't blurry on Retina.
+    public func setContentScale(_ x: Double, _ y: Double) {
+        guard let surface = _surface else { return }
+        ghostty_surface_set_content_scale(surface, x, y)
+    }
+
+    /// Pause rendering when the view is off-screen (tab switch /
+    /// backgrounding) so libghostty stops its draw work.
+    public func setOcclusion(_ visible: Bool) {
+        guard let surface = _surface else { return }
+        ghostty_surface_set_occlusion(surface, visible)
+    }
 }
 
 #endif // canImport(libghostty)
@@ -619,6 +650,45 @@ public final class Terminal {
         surface?.resize(pixelWidth: pxW, pixelHeight: pxH)
         #else
         _ = (cellWidthPx, cellHeightPx)
+        #endif
+    }
+
+    /// Push the *real* backing-store pixel size + scale to libghostty.
+    /// The `resize(cols:rows:)` overload above derives a fake 8×16
+    /// raster; Stage 5's renderer needs the true layer size so
+    /// libghostty's `CAMetalLayer` matches the host view and glyphs
+    /// aren't mis-scaled. Call from `layoutSubviews` with
+    /// `bounds.size * contentScaleFactor`.
+    public func setPixelSize(width: UInt32, height: UInt32, scale: Double) {
+        #if canImport(libghostty)
+        surface?.setContentScale(scale, scale)
+        surface?.resize(pixelWidth: width, pixelHeight: height)
+        #else
+        _ = (width, height, scale)
+        #endif
+    }
+
+    /// Render one frame via libghostty's own Metal renderer. Driven by
+    /// the host view's `CADisplayLink` (Stage 5). No-op off libghostty.
+    public func draw() {
+        #if canImport(libghostty)
+        surface?.draw()
+        #endif
+    }
+
+    /// Focus state — libghostty only paints an active surface, and the
+    /// cursor blink follows focus.
+    public func setFocus(_ focused: Bool) {
+        #if canImport(libghostty)
+        surface?.setFocus(focused)
+        #endif
+    }
+
+    /// Visibility — pause libghostty's render work when the view is
+    /// off-screen (tab switch / backgrounding).
+    public func setVisible(_ visible: Bool) {
+        #if canImport(libghostty)
+        surface?.setOcclusion(visible)
         #endif
     }
 

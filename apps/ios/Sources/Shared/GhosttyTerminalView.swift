@@ -196,6 +196,12 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     #if canImport(GhosttyVT)
     private var terminal: Terminal?
+
+    /// Drives libghostty's render loop. libghostty owns the Metal
+    /// renderer + the `CAMetalLayer` it created on this view; we just
+    /// have to ask it to paint each display refresh. Started/stopped
+    /// with window membership so we don't burn cycles off-screen.
+    private var displayLink: CADisplayLink?
     #endif
 
     /// Custom accessory bar shared shape with `WKTerminalView`. Held
@@ -648,6 +654,67 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     override func layoutSubviews() {
         super.layoutSubviews()
         recomputeGridFromBounds()
+        pushPixelSize()
+    }
+
+    /// Hand libghostty the *real* backing-store size every layout pass.
+    /// `recomputeGridFromBounds` only fires when the cols/rows change,
+    /// but libghostty's `CAMetalLayer` must track the exact view size
+    /// (and Retina scale) or the surface stays 0×0 and paints nothing —
+    /// the Stage-4 blank-screen bug.
+    private func pushPixelSize() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        #if canImport(GhosttyVT)
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : UIScreen.main.scale
+        terminal?.setPixelSize(
+            width: UInt32(bounds.width * scale),
+            height: UInt32(bounds.height * scale),
+            scale: Double(scale)
+        )
+        #endif
+    }
+
+    // MARK: - libghostty render loop
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            #if canImport(GhosttyVT)
+            terminal?.setVisible(true)
+            terminal?.setFocus(true)
+            #endif
+            startDisplayLink()
+        } else {
+            #if canImport(GhosttyVT)
+            terminal?.setVisible(false)
+            terminal?.setFocus(false)
+            #endif
+            stopDisplayLink()
+        }
+    }
+
+    private func startDisplayLink() {
+        #if canImport(GhosttyVT)
+        guard displayLink == nil, Terminal.isAvailable else { return }
+        let link = CADisplayLink(target: self, selector: #selector(renderFrame))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+        #endif
+    }
+
+    private func stopDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func renderFrame() {
+        #if canImport(GhosttyVT)
+        terminal?.draw()
+        #endif
+    }
+
+    deinit {
+        displayLink?.invalidate()
     }
 
     private func recomputeGridFromBounds() {
