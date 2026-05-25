@@ -30,6 +30,7 @@ extension LitterUI {
         let session: ProjectSession
 
         @State private var draft: String = ""
+        @State private var showVoiceDictation = false
         @FocusState private var composerFocused: Bool
 
         var body: some View {
@@ -43,6 +44,22 @@ extension LitterUI {
             messagesList
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     composer
+                }
+                // In-chat voice dictation. Mirrors the home-screen mic
+                // (device bug #26) — same VoiceDictationSheet — and brings
+                // the composer mic to parity with Android, which already
+                // wires inline voice. The transcript lands in the draft so
+                // the user reviews/edits before sending (we don't auto-fire
+                // a half-heard prompt at the agent).
+                .sheet(isPresented: $showVoiceDictation) {
+                    VoiceDictationSheet(onTranscript: { text in
+                        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !t.isEmpty {
+                            draft = draft.isEmpty ? t : draft + " " + t
+                        }
+                        showVoiceDictation = false
+                        composerFocused = true
+                    })
                 }
         }
 
@@ -127,7 +144,7 @@ extension LitterUI {
                     .accessibilityLabel("Send")
                 } else {
                     Button {
-                        // mic — wired in follow-up.
+                        showVoiceDictation = true
                     } label: {
                         Image(systemName: "mic.fill")
                             .font(.system(size: 18, weight: .semibold))
