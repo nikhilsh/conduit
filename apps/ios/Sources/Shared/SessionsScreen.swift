@@ -148,12 +148,11 @@ struct SessionsScreen: View {
             presenting: pendingDelete
         ) { target in
             Button("Delete", role: .destructive) {
-                // Exit on the harness if the session is still live;
-                // SavedSessionsStore.remove sweeps the historical
-                // index regardless. The exit() call is a no-op when
-                // the row is already terminal so this stays idempotent.
+                // `store.exit` is the single delete path: it terminates
+                // the session on the harness (no-op / idempotent when the
+                // row is already terminal) AND sweeps the persistent
+                // "Resume" index so the row leaves history everywhere.
                 store.exit(sessionID: target.id)
-                SavedSessionsStore.shared.remove(id: target.id)
                 pendingDelete = nil
             }
             Button("Cancel", role: .cancel) {
@@ -330,16 +329,19 @@ struct SessionsScreen: View {
     /// session did nothing. We `dismiss()` so the home stack lands on
     /// the freshly-attached session (driven by `selectedSessionID`).
     ///
-    /// CASE B — EXITED (red dot): there's no WS to attach to; push a
-    /// read-only viewer that fetches the persisted transcript over
-    /// HTTP (`SavedTranscriptView` → `fetchConversation`). We stay on
-    /// the Sessions stack rather than dismissing so the push reads as a
-    /// drill-in.
+    /// CASE B — NOT CONFIRMED LIVE (.exited red dot OR .unknown): there's
+    /// no live WS we can trust, so opening from history must be READ-ONLY.
+    /// Push a viewer that fetches the persisted transcript over HTTP
+    /// (`SavedTranscriptView` → `fetchConversation`). We stay on the
+    /// Sessions stack rather than dismissing so the push reads as a
+    /// drill-in. `.unknown` covers a deleted/archived session whose row
+    /// still carries a stale status — opening it must not re-attach a
+    /// live interactive surface.
     private func resume(_ row: SavedSession) {
         switch row.status {
-        case .exited:
+        case .exited, .unknown:
             transcriptTarget = TranscriptTarget(session: row)
-        case .live, .unknown:
+        case .live:
             if let server = store.savedServers.first(where: { $0.id == row.serverID }),
                store.endpoint != server.endpoint {
                 store.selectSavedServer(server.id, autoConnect: true)

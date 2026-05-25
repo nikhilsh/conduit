@@ -888,6 +888,15 @@ final class SessionStore {
         sessionLifecycle[sessionID] = nil
         if selectedSessionID == sessionID { selectedSessionID = nil }
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // Delete is terminal: also sweep the persistent "Resume" index so
+        // the row doesn't linger in the Sessions/history list (with a
+        // stale .live/.unknown status) after being deleted from the live
+        // list. The broker DELETE (#206) archives the dir server-side;
+        // the app's history should not keep showing a deleted session.
+        // Every delete path funnels through `exit`, so centralizing the
+        // sweep here covers the home list, the Sessions screen, and any
+        // future call site.
+        SavedSessionsStore.shared.remove(id: sessionID)
         Task {
             // WS `exit` closes the live socket + flushes a checkpoint when
             // a session is attached. Best-effort: an exited session has no
