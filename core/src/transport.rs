@@ -53,6 +53,12 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const PONG_DEADLINE: Duration = Duration::from_secs(60);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_MAX_ATTEMPTS: u32 = 5;
+/// After the fast reconnect burst is exhausted, the worker doesn't die —
+/// it parks and re-attempts on this slow cadence (or immediately on a
+/// network-change nudge), so the app auto-recovers when the broker/network
+/// returns instead of staying dead until a manual reconnect (device bug
+/// #29). Battery-safe: hosts suspend the worker while backgrounded.
+const RECONNECT_IDLE_RETRY: Duration = Duration::from_secs(20);
 const WS_REDIRECT_MAX_HOPS: usize = 3;
 
 /// Observable per-session connection state surfaced via
@@ -258,16 +264,23 @@ async fn session_worker(mut args: WorkerArgs) {
                         return;
                     }
                     ReconnectOutcome::Exhausted => {
-                        let reason =
-                            format!("reconnect failed after {RECONNECT_MAX_ATTEMPTS} attempts");
+                        // Fast burst exhausted — but don't kill the worker
+                        // (device bug #29). Surface Disconnected, then park
+                        // and revive on a network-change nudge or the slow
+                        // retry tick, so the app auto-recovers when the
+                        // broker/network returns instead of staying dead.
                         args.delegate.on_connection_health(
                             args.session_id.clone(),
                             ConnectionHealth::Disconnected {
-                                reason: reason.clone(),
+                                reason: format!(
+                                    "reconnect failed after {RECONNECT_MAX_ATTEMPTS} attempts; retrying"
+                                ),
                                 auth: false,
                             },
                         );
-                        args.delegate.on_disconnected(reason);
+                        if park_until_revive(&mut shutdown_rx, &args.nudge).await {
+                            continue;
+                        }
                         return;
                     }
                     ReconnectOutcome::ShutdownRequested => {
@@ -355,6 +368,20 @@ async fn reconnect(
         }
     }
     ReconnectOutcome::Exhausted
+}
+
+/// Park after the reconnect burst gives up (device bug #29). Returns `true`
+/// to retry — woken by a network-change nudge or the slow-retry tick — and
+/// `false` on shutdown. Keeping the worker alive here is what lets the app
+/// auto-recover when the broker/network comes back.
+async fn park_until_revive(shutdown_rx: &mut oneshot::Receiver<()>, nudge: &Arc<Notify>) -> bool {
+    let sleep = tokio::time::sleep(RECONNECT_IDLE_RETRY);
+    tokio::pin!(sleep);
+    tokio::select! {
+        _ = &mut *shutdown_rx => false,
+        _ = nudge.notified() => true,
+        _ = &mut sleep => true,
+    }
 }
 
 enum DriveOutcome {
