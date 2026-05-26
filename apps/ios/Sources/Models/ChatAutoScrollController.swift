@@ -55,6 +55,11 @@ struct ChatAutoScrollController: Equatable {
     /// pinned to the bottom.
     private(set) var distanceFromBottom: CGFloat = .greatestFiniteMagnitude
 
+    /// Whether the view has reported a real distance-from-bottom yet.
+    /// Until it has, `distanceFromBottom` is the synthetic large seed,
+    /// which would otherwise make the button show on a fresh/empty chat.
+    private(set) var hasMeasuredProximity: Bool = false
+
     init(nearBottomThreshold: CGFloat = 80, buttonVisibleThreshold: CGFloat = 160) {
         self.nearBottomThreshold = nearBottomThreshold
         self.buttonVisibleThreshold = buttonVisibleThreshold
@@ -64,12 +69,21 @@ struct ChatAutoScrollController: Equatable {
     var isNearBottom: Bool { distanceFromBottom <= nearBottomThreshold }
 
     /// `true` when the scroll-to-bottom affordance should show. BUG 2:
-    /// driven by *distance from the bottom*, not the `userScrolledUp`
-    /// latch — the button fades out as soon as the user is practically
-    /// at the bottom (within `buttonVisibleThreshold`), and a tiny
-    /// overscroll past the bottom keeps it hidden. It only appears once
-    /// the user has scrolled up a meaningful amount.
-    var showScrollToBottomButton: Bool { distanceFromBottom > buttonVisibleThreshold }
+    /// once we have a real measurement this is driven by *distance from
+    /// the bottom*, not the `userScrolledUp` latch — the button fades out
+    /// as soon as the user is practically at the bottom (within
+    /// `buttonVisibleThreshold`), and a tiny overscroll past the bottom
+    /// keeps it hidden. It only appears once the user has scrolled up a
+    /// meaningful amount.
+    ///
+    /// Before the view has measured anything (`distanceFromBottom` is
+    /// still the synthetic large seed) we fall back to the drag latch, so
+    /// a fresh/unmeasured controller shows no button and a deliberate
+    /// drag still surfaces it immediately.
+    var showScrollToBottomButton: Bool {
+        guard hasMeasuredProximity else { return userScrolledUp }
+        return distanceFromBottom > buttonVisibleThreshold
+    }
 
     // MARK: - Signals
 
@@ -89,6 +103,7 @@ struct ChatAutoScrollController: Equatable {
     @discardableResult
     mutating func bottomProximityChanged(_ distance: CGFloat) -> Bool {
         distanceFromBottom = max(0, distance)
+        hasMeasuredProximity = true
         if userScrolledUp && isNearBottom {
             userScrolledUp = false
             return true
@@ -101,6 +116,7 @@ struct ChatAutoScrollController: Equatable {
     mutating func scrollToBottomRequested() {
         userScrolledUp = false
         distanceFromBottom = 0
+        hasMeasuredProximity = true
     }
 
     // MARK: - Queries
