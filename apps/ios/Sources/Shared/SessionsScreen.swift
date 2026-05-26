@@ -466,6 +466,15 @@ struct SessionsScreen: View {
     /// trimmed to a short single line; with no summary we fall back to
     /// `"<agent> · <relative start time>"`. NEVER the raw UUID.
     private func rowTitle(_ row: SavedSession) -> String {
+        if let custom = store.displayNames[row.id],
+           !SessionNaming.looksLikeRawID(custom, sessionID: row.id) {
+            return custom
+        }
+        if let aiTitle = store.brokerTitles[row.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !aiTitle.isEmpty,
+           !SessionNaming.looksLikeRawID(aiTitle, sessionID: row.id) {
+            return aiTitle
+        }
         if let title = SessionNaming.titleFromMessage(row.summary) {
             return title
         }

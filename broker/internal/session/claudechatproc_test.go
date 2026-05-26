@@ -22,7 +22,7 @@ func TestChatProcessRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cp, err := startChatProcess(ctx, command, nil, "", func(p []byte) { events <- p }, nil)
+	cp, err := startChatProcess(ctx, command, nil, "", func(p []byte) { events <- p }, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestChatProcessRoundTrip(t *testing.T) {
 func TestChatProcessSendAndClose(t *testing.T) {
 	// `cat` reads stdin forever so Send has a live pipe to write to.
 	command := []string{"bash", "-c", "cat >/dev/null"}
-	cp, err := startChatProcess(context.Background(), command, nil, "", func([]byte) {}, nil)
+	cp, err := startChatProcess(context.Background(), command, nil, "", func([]byte) {}, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestChatProcessExitNotice(t *testing.T) {
 	// Fake agent that emits nothing and exits non-zero immediately.
 	command := []string{"bash", "-c", "exit 3"}
 	events := make(chan []byte, 4)
-	cp, err := startChatProcess(context.Background(), command, nil, "", func(p []byte) { events <- p }, nil)
+	cp, err := startChatProcess(context.Background(), command, nil, "", func(p []byte) { events <- p }, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

@@ -221,4 +221,74 @@ class SessionNamingTest {
     fun emptyInputProducesNoGroups() {
         assertTrue(SessionRecencyGrouping.group(emptyList<Row>(), nowMs, utc) { null }.isEmpty())
     }
+
+    // ---------- AI session titles (task: ai-session-titles) ----------
+
+    @Test
+    fun aiTitleBeatsFirstMessageAndServerLabel() {
+        val name = SessionNaming.friendly(
+            sessionId = rawUuid,
+            rawName = rawUuid,
+            agent = "claude",
+            custom = null,
+            firstUserMessage = "fix the login bug",
+            serverLabel = "server label",
+            startedAt = "2026-05-25T17:58:00Z",
+            aiTitle = "Debug Broker Session Limit",
+            nowMs = nowMs,
+            zone = utc,
+        )
+        assertEquals("Debug Broker Session Limit", name)
+    }
+
+    @Test
+    fun manualRenameBeatsAiTitle() {
+        val name = SessionNaming.friendly(
+            sessionId = rawUuid,
+            rawName = rawUuid,
+            agent = "claude",
+            custom = "My Session",
+            firstUserMessage = "fix the login bug",
+            serverLabel = null,
+            startedAt = null,
+            aiTitle = "Debug Broker Session Limit",
+            nowMs = nowMs,
+            zone = utc,
+        )
+        assertEquals("My Session", name)
+    }
+
+    @Test
+    fun blankAiTitleFallsThroughToFirstMessage() {
+        val name = SessionNaming.friendly(
+            sessionId = rawUuid,
+            rawName = rawUuid,
+            agent = "claude",
+            custom = null,
+            firstUserMessage = "fix the login bug",
+            serverLabel = null,
+            startedAt = null,
+            aiTitle = "   ",
+            nowMs = nowMs,
+            zone = utc,
+        )
+        assertEquals("fix the login bug", name)
+    }
+
+    @Test
+    fun uuidShapedAiTitleIsRejected() {
+        val name = SessionNaming.friendly(
+            sessionId = rawUuid,
+            rawName = rawUuid,
+            agent = "claude",
+            custom = null,
+            firstUserMessage = "fix the login bug",
+            serverLabel = null,
+            startedAt = null,
+            aiTitle = rawUuid,
+            nowMs = nowMs,
+            zone = utc,
+        )
+        assertEquals("fix the login bug", name)
+    }
 }

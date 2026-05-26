@@ -414,3 +414,102 @@ struct SessionStoreArchiveDeleteTests {
         #expect(SavedSessionsStore.shared.isTombstoned(id: id))
     }
 }
+
+/// AI session titles (task: ai-session-titles): the broker-minted title
+/// flows in via a `view:"session_title"` view_event and slots into the
+/// display-name priority BELOW a manual rename and ABOVE the first user
+/// message. These pin that ordering and the ingest guard so a refine
+/// updates live and a blank title never clobbers a good name.
+@Suite("SessionStore — AI session titles")
+@MainActor
+struct SessionStoreAITitleTests {
+    private func session(_ id: String, assistant: String = "claude") -> ProjectSession {
+        ProjectSession(
+            id: id,
+            name: id,
+            assistant: assistant,
+            branch: nil,
+            preview: nil,
+            reasoningEffort: nil,
+            cwd: nil,
+            startedAt: "2026-05-21T08:00:00Z",
+            lastActivityAt: nil,
+            displayName: nil
+        )
+    }
+
+    @Test func aiTitleBeatsFirstMessageAndFallback() {
+        let store = SessionStore()
+        let id = "ai-title-\(UUID().uuidString)"
+        let s = session(id)
+        store.sessions = [s]
+
+        // First user message is the priority-3 fallback.
+        store.ingestChat(id, ChatEvent(role: "user", content: "please help me debug the broker", ts: "1", files: []))
+        #expect(store.displayName(for: s) == "please help me debug the broker")
+
+        // Broker AI title arrives → wins over the first message.
+        store.ingestSessionTitle(id, payload: ["title": "Debug Broker Session Limit"])
+        #expect(store.displayName(for: s) == "Debug Broker Session Limit")
+    }
+
+    @Test func manualRenameBeatsAITitle() {
+        let store = SessionStore()
+        let id = "ai-title-rename-\(UUID().uuidString)"
+        let s = session(id)
+        store.sessions = [s]
+
+        store.ingestSessionTitle(id, payload: ["title": "Debug Broker Session Limit"])
+        #expect(store.displayName(for: s) == "Debug Broker Session Limit")
+
+        // A manual rename always wins.
+        store.renameSession(sessionID: id, to: "My Session")
+        #expect(store.displayName(for: s) == "My Session")
+    }
+
+    @Test func refineUpdatesLive() {
+        let store = SessionStore()
+        let id = "ai-title-refine-\(UUID().uuidString)"
+        let s = session(id)
+        store.sessions = [s]
+
+        store.ingestSessionTitle(id, payload: ["title": "Initial Title"])
+        #expect(store.displayName(for: s) == "Initial Title")
+
+        store.ingestSessionTitle(id, payload: ["title": "Refined Better Title"])
+        #expect(store.displayName(for: s) == "Refined Better Title")
+    }
+
+    @Test func blankTitleIsIgnored() {
+        let store = SessionStore()
+        let id = "ai-title-blank-\(UUID().uuidString)"
+        let s = session(id)
+        store.sessions = [s]
+        store.ingestChat(id, ChatEvent(role: "user", content: "do the thing", ts: "1", files: []))
+
+        // Good title, then a blank one must NOT clobber it.
+        store.ingestSessionTitle(id, payload: ["title": "Real Title"])
+        store.ingestSessionTitle(id, payload: ["title": "   "])
+        #expect(store.displayName(for: s) == "Real Title")
+
+        // And a session that only ever sees a blank title falls through to
+        // the first user message.
+        let id2 = "ai-title-blank2-\(UUID().uuidString)"
+        let s2 = session(id2)
+        store.sessions.append(s2)
+        store.ingestChat(id2, ChatEvent(role: "user", content: "another ask", ts: "1", files: []))
+        store.ingestSessionTitle(id2, payload: ["title": ""])
+        #expect(store.displayName(for: s2) == "another ask")
+    }
+
+    @Test func uuidShapedTitleIsRejected() {
+        // A model that echoed the bare id must not re-pollute the title.
+        let store = SessionStore()
+        let id = "11111111-2222-3333-4444-555555555555"
+        let s = session(id)
+        store.sessions = [s]
+        store.ingestChat(id, ChatEvent(role: "user", content: "first ask", ts: "1", files: []))
+        store.ingestSessionTitle(id, payload: ["title": id])
+        #expect(store.displayName(for: s) == "first ask")
+    }
+}

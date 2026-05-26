@@ -93,6 +93,27 @@ type Session struct {
 	// rename lands; persists for the lifetime of the in-memory session.
 	displayName string
 
+	// aiTitle is the broker AI-generated session title (task:
+	// ai-session-titles) — a short human label minted from the first
+	// meaningful exchange. SEPARATE from displayName: a manual rename
+	// always wins over the AI title in the apps' display-name priority, so
+	// the two never share a field. Emitted to the apps as a
+	// `view:"session_title"` view_event, persisted into meta, and
+	// re-emitted to a freshly attached client so a relisted session keeps
+	// it. Empty until the first generation lands.
+	aiTitle string
+
+	// firstUserPrompt is the composer text that opened the conversation —
+	// captured on the first SendChat/MarkUserChatSent so the title
+	// generator can summarize the conversation's purpose. Set once; later
+	// prompts don't overwrite it.
+	firstUserPrompt string
+
+	// titleGen mints aiTitle off the stream reader at turn-end. nil when
+	// titling is off, there's no ephemeral HOME, or the backend isn't
+	// claude. Methods tolerate the nil receiver.
+	titleGen *titleGenerator
+
 	// termgrid is the optional headless xterm.js sidecar handle. nil
 	// when node isn't installed; callers must treat it as best-effort.
 	termgrid *termgrid.Manager
@@ -341,6 +362,18 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.commandEnv(nil),
 			s.PublishText,
 		)
+		// AI session titles (task: ai-session-titles): after the first
+		// meaningful exchange the generator mints a short human title from
+		// the conversation and emits a `view:"session_title"` view_event;
+		// the apps slot it BELOW a manual rename in the display name. nil
+		// when titling is off / no ephemeral HOME — turn-end then no-ops.
+		s.titleGen = newTitleGenerator(
+			s.ID,
+			adapter.Command[0],
+			s.agentHomeDir,
+			s.firstPrompt,
+			s.applyAITitle,
+		)
 		chat, cerr := startChatProcess(
 			context.Background(),
 			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)),
@@ -348,6 +381,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.workspaceDir,
 			s.PublishText,
 			gen,
+			s.titleGen,
 		)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
@@ -597,6 +631,9 @@ func (s *Session) SendChat(msg string) bool {
 	// publish stream only carries the agent's side, so without this the
 	// reopened transcript would show replies with no questions.
 	s.convLog.appendUser(msg)
+	// Capture the opening prompt (once) so the AI title generator can
+	// summarize the conversation's purpose at the next turn-end.
+	s.captureFirstUserPrompt(msg)
 	if err := s.chat.Send(msg); err != nil {
 		fmt.Fprintf(os.Stderr, "session %s: chat send: %v\n", s.ID, err)
 	}
@@ -728,6 +765,78 @@ func (s *Session) SetDisplayName(name string) bool {
 	s.displayName = name
 	s.mu.Unlock()
 	return true
+}
+
+// AITitle returns the broker AI-generated session title, or "" when none
+// has been generated. Distinct from DisplayName (manual rename) — the
+// apps prefer a manual rename over this title.
+func (s *Session) AITitle() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.aiTitle
+}
+
+// applyAITitle stores the generated title, persists it to meta (so a
+// relisted session survives a restart without re-generating), and emits a
+// `view:"session_title"` view_event to every viewer so the apps update
+// live. Called by the title generator on a successful generation. No-ops
+// when the title is empty or unchanged so a refine that lands the same
+// label doesn't spam viewers.
+func (s *Session) applyAITitle(title string) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.aiTitle == title {
+		s.mu.Unlock()
+		return
+	}
+	s.aiTitle = title
+	s.mu.Unlock()
+	_ = s.persistMetadata()
+	s.publishAITitle(title)
+}
+
+// publishAITitle emits the `view:"session_title"` view_event carrying
+// {session_id, title}. Mirrors the quick_replies shape so core
+// transport.rs routes it through on_view_event to the apps.
+func (s *Session) publishAITitle(title string) {
+	payload, err := json.Marshal(map[string]any{
+		"type": "view_event",
+		"view": "session_title",
+		"event": map[string]any{
+			"session_id": s.ID,
+			"title":      title,
+		},
+	})
+	if err != nil {
+		return
+	}
+	s.PublishText(payload)
+}
+
+// captureFirstUserPrompt records the conversation's opening composer text
+// (once) so the title generator has something to summarize. Idempotent:
+// later prompts don't overwrite the first.
+func (s *Session) captureFirstUserPrompt(msg string) {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.firstUserPrompt == "" {
+		s.firstUserPrompt = msg
+	}
+	s.mu.Unlock()
+}
+
+// firstPrompt reads the captured opening user prompt (for the title
+// generator's closure).
+func (s *Session) firstPrompt() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.firstUserPrompt
 }
 
 func (s *Session) SwitchAdapter(assistant string) error {
@@ -1156,6 +1265,10 @@ type sessionMetadata struct {
 	ReasonCode     string `json:"reason_code,omitempty"`
 	ExitCode       int    `json:"exit_code,omitempty"`
 	LastCheckpoint string `json:"last_checkpoint,omitempty"`
+	// AITitle is the broker AI-generated title (task: ai-session-titles),
+	// persisted so a reopened/relisted session keeps it without
+	// re-generating. omitempty: pre-feature sessions simply have no title.
+	AITitle string `json:"ai_title,omitempty"`
 }
 
 func (s *Session) applyPaths() {
@@ -1180,6 +1293,7 @@ func (s *Session) persistMetadata() error {
 		Health:     s.health,
 		ReasonCode: s.reasonCode,
 		ExitCode:   s.exitCode,
+		AITitle:    s.aiTitle,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

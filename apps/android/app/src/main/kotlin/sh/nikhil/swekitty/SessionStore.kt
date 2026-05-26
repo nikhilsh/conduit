@@ -488,6 +488,18 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     val displayNames: StateFlow<Map<String, String>> = _displayNames.asStateFlow()
 
     /**
+     * Broker AI-generated session titles (task: ai-session-titles), keyed
+     * by session id. Delivered as a `view:"session_title"` view_event and
+     * folded in by [ingestSessionTitle]. SEPARATE from [_displayNames] so a
+     * manual rename always wins; the AI title sits just below it, above the
+     * first-message fallback. Persisted so a history row shows the AI name
+     * even before the broker re-emits it on attach. Mirror of iOS
+     * `SessionStore.brokerTitles`.
+     */
+    private val _brokerTitles = MutableStateFlow<Map<String, String>>(emptyMap())
+    val brokerTitles: StateFlow<Map<String, String>> = _brokerTitles.asStateFlow()
+
+    /**
      * Manually pinned context per session — rendered above the
      * composer as removable chips. Mirror of iOS
      * `SessionStore.pinnedContexts`. In-memory only; the iOS ref also
@@ -531,6 +543,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             session = session,
             custom = _displayNames.value[session.id],
             firstUserMessage = firstUserMessageOf(_conversationLog.value[session.id]),
+            aiTitle = _brokerTitles.value[session.id],
         )
 
     /** Friendly label resolved from loose fields — used where the caller
@@ -550,6 +563,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             firstUserMessage = firstUserMessageOf(_conversationLog.value[sessionId]),
             serverLabel = serverLabel,
             startedAt = startedAt,
+            aiTitle = _brokerTitles.value[sessionId],
         )
 
     fun renameSession(sessionId: String, newName: String) {
@@ -655,6 +669,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             )
             _savedServers.value = decodeSavedServers(p.getString(KEY_SAVED_SERVERS, null))
             _displayNames.value = decodeDisplayNames(p.getString(KEY_DISPLAY_NAMES, null))
+            _brokerTitles.value = decodeDisplayNames(p.getString(KEY_BROKER_TITLES, null))
             _deletedIds.value = decodeDeletedIds(p.getString(KEY_DELETED_IDS, null))
             _savedSessions.value = SavedSessionsReducer.decode(p.getString(KEY_SAVED_SESSIONS, null))
             refreshRecentDirectories()
@@ -1751,11 +1766,26 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     override fun onViewEvent(sessionId: String, kind: String, payload: Map<String, String>) {
-        if (kind == "quick_replies") {
-            ingestQuickReplies(sessionId, payload)
-        } else {
-            routeAgentLoginViewEvent(kind, payload)
+        when (kind) {
+            "quick_replies" -> ingestQuickReplies(sessionId, payload)
+            "session_title" -> ingestSessionTitle(sessionId, payload)
+            else -> routeAgentLoginViewEvent(kind, payload)
         }
+    }
+
+    /**
+     * Ingest a broker AI session title (task: ai-session-titles). Stores
+     * the title so every title surface picks it up live; a blank/empty
+     * title is ignored so we never clobber a good name. Persisted so a
+     * history row keeps the AI name across relaunch. Mirror of iOS
+     * `SessionStore.ingestSessionTitle`.
+     */
+    fun ingestSessionTitle(sessionId: String, payload: Map<String, String>) {
+        val title = payload["title"]?.trim()
+        if (title.isNullOrEmpty()) return
+        val next = _brokerTitles.value.toMutableMap().also { it[sessionId] = title }
+        _brokerTitles.value = next
+        prefs?.edit()?.putString(KEY_BROKER_TITLES, encodeDisplayNames(next))?.apply()
     }
 
     /**
@@ -1955,6 +1985,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         private const val KEY_SAVED_SERVERS = "swekitty.saved_servers"
         private const val KEY_RECENT_DIRS = "swekitty.recent_dirs_by_server"
         private const val KEY_DISPLAY_NAMES = "swekitty.session_display_names"
+        private const val KEY_BROKER_TITLES = "swekitty.session_broker_titles"
         private const val KEY_DELETED_IDS = "swekitty.deleted_session_ids"
         private const val KEY_SAVED_SESSIONS = "swekitty.saved_sessions"
 

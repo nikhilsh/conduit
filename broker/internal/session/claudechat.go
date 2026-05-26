@@ -69,9 +69,11 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // point of the structured channel (device bug #6).
 //
 // The `result` envelope (turn end) fires the AI quick-reply generator
-// (task #233) with the turn's last assistant text. gen may be nil
-// (feature disabled / non-claude), in which case turn-end is a no-op.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator) error {
+// (task #233) with the turn's last assistant text, and the AI title
+// generator (task: ai-session-titles) which mints/refines the session
+// name from the conversation. gen / titleGen may be nil (feature disabled
+// / non-claude), in which case turn-end is a no-op for that one.
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -84,8 +86,11 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 		line := sc.Bytes()
 		if claudeStreamLineIsTurnEnd(line) {
 			// Turn complete: kick off best-effort AI quick replies for the
-			// turn's final assistant message, then reset for the next turn.
+			// turn's final assistant message, give the title generator the
+			// turn's prose so it can mint/refine the session name, then
+			// reset for the next turn.
 			gen.kickoff(lastAssistantText, lastAssistantTS)
+			titleGen.onTurnEnd(lastAssistantText)
 			lastAssistantText, lastAssistantTS = "", ""
 			continue
 		}

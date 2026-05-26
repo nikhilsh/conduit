@@ -67,6 +67,9 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		s.reasonCode = meta.ReasonCode
 	}
 	s.exitCode = meta.ExitCode
+	// Restore the AI title (task: ai-session-titles) so a recovered
+	// session keeps its name without re-generating.
+	s.aiTitle = meta.AITitle
 	s.mu.Unlock()
 	s.switchFn = func(next string) error {
 		nextAdapter, err := m.registry.Get(next)

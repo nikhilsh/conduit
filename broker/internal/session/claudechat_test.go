@@ -84,7 +84,7 @@ func TestProcessClaudeStreamOutput(t *testing.T) {
 		if json.Unmarshal(p, &ev) == nil {
 			got = append(got, ev)
 		}
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}

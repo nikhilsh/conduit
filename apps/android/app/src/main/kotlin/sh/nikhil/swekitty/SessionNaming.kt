@@ -24,10 +24,12 @@ internal object SessionNaming {
     /**
      * Friendly default name for a session, in priority order:
      *  1. `custom` (a user-set rename) — wins, returned verbatim.
-     *  2. First user chat message — trimmed, single-lined, ellipsized.
-     *  3. `serverLabel` (a broker-supplied `displayName`/`sessionName`),
+     *  2. `aiTitle` (the broker AI-generated title, task: ai-session-titles)
      *     when it isn't itself the raw UUID.
-     *  4. Fallback: "<agent> · <relative start time>" from `startedAt`.
+     *  3. First user chat message — trimmed, single-lined, ellipsized.
+     *  4. `serverLabel` (a broker-supplied `displayName`/`sessionName`),
+     *     when it isn't itself the raw UUID.
+     *  5. Fallback: "<agent> · <relative start time>" from `startedAt`.
      *
      * NEVER returns the raw session id / UUID `name`. The UUID is only for
      * Session Info, never a user-facing label.
@@ -40,10 +42,18 @@ internal object SessionNaming {
         firstUserMessage: String?,
         serverLabel: String?,
         startedAt: String?,
+        aiTitle: String? = null,
         nowMs: Long = System.currentTimeMillis(),
         zone: ZoneId = ZoneId.systemDefault(),
     ): String {
         custom?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+
+        // Broker AI title sits just below a manual rename and above the
+        // first message. Reject a UUID-shaped echo so we never re-spill the
+        // id as a label.
+        aiTitle?.trim()
+            ?.takeIf { it.isNotEmpty() && !looksLikeRawId(it, sessionId, rawName) }
+            ?.let { return it }
 
         firstUserMessage?.let { msg ->
             condense(msg)?.let { return it }
@@ -155,6 +165,7 @@ internal object SessionNaming {
         session: ProjectSession,
         custom: String?,
         firstUserMessage: String?,
+        aiTitle: String? = null,
         nowMs: Long = System.currentTimeMillis(),
     ): String = friendly(
         sessionId = session.id,
@@ -164,6 +175,7 @@ internal object SessionNaming {
         firstUserMessage = firstUserMessage,
         serverLabel = session.displayName,
         startedAt = session.startedAt,
+        aiTitle = aiTitle,
         nowMs = nowMs,
     )
 

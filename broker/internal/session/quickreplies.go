@@ -1,14 +1,11 @@
 package session
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -20,21 +17,12 @@ import (
 // emitted as a `view:"quick_replies"` view_event the apps render as the
 // composer chips, replacing the old client-side heuristic.
 //
-// Generation mechanism (task: broker-fast-quickreply-gen). The original
-// implementation (#234) shelled out to a one-shot headless
-// `claude -p --model haiku`. That ALWAYS timed out: the `claude` CLI
-// cold-start (process spawn + OAuth handshake + model load) blows past
-// any sane budget, so the feature was effectively dead and every turn
-// fell back to the apps' generic heuristic.
-//
-// Instead we now make a DIRECT Anthropic Messages API call from Go using
-// the session's existing Claude Code OAuth access token (read from the
-// ephemeral HOME's `.claude/.credentials.json`). Claude Code OAuth tokens
-// authorize the raw `POST https://api.anthropic.com/v1/messages` endpoint
-// when sent as `Authorization: Bearer <accessToken>` alongside the
-// `anthropic-beta: oauth-2025-04-20` and `anthropic-version` headers and
-// the Claude Code system prompt. A direct call returns in ~1-2s — fast
-// enough to deliver chips shortly after each turn.
+// Generation mechanism (task: broker-fast-quickreply-gen, #237). We make
+// a DIRECT Anthropic Messages API call from Go using the session's
+// existing Claude Code OAuth access token via the shared
+// `anthropicMessages` helper (see aigen.go). A direct call returns in
+// ~1-2s — fast enough to deliver chips shortly after each turn, where the
+// old `claude -p` cold-start always timed out.
 //
 // Design invariants:
 //   - Non-blocking: generation runs in its own goroutine off the
@@ -44,16 +32,7 @@ import (
 //     heuristic found nothing.
 //   - Config-gated: SWE_KITTY_AI_QUICKREPLIES=0 disables it entirely
 //     (default ON).
-//   - Credential-race safe: we only READ the access token out of the
-//     session's `.claude/.credentials.json`; we never spawn a process
-//     that could rotate it, and we never write it back. An expired token
-//     is a clean no-op (best-effort skip) — the live session owns its own
-//     refresh.
-
-// quickReplyModel is the cheap/fast model the generation uses. Haiku is
-// the cheapest Claude tier and more than capable of "suggest 4 short
-// replies"; the call is read-only context with a tiny output budget.
-const quickReplyModel = "claude-haiku-4-5"
+//   - Credential-race safe: see aigen.go.
 
 // quickReplyTimeout caps the HTTP call. The chips are a nicety, not the
 // turn, so we bail rather than let a slow request linger; on timeout we
@@ -69,28 +48,17 @@ const quickReplyMaxTokens = 256
 // budget. We trim anything the model over-produces.
 const maxQuickReplies = 4
 
-// anthropicMessagesURL is the raw Messages API endpoint the OAuth token
-// authorizes.
-const anthropicMessagesURL = "https://api.anthropic.com/v1/messages"
-
-// anthropicVersion / oauthBeta are the headers the Claude Code OAuth flow
-// requires on a direct Messages API call. Without the oauth beta the API
-// rejects a Bearer-token request.
-const (
-	anthropicVersion = "2023-06-01"
-	oauthBeta        = "oauth-2025-04-20"
-)
-
-// claudeCodeSystemPrompt mirrors the system prompt Claude Code sends.
-// OAuth-token requests are scoped to the Claude Code product; pinning the
-// identity keeps the request shape consistent with what the token was
-// issued for.
-const claudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
-
 // quickRepliesEnabled reports whether AI quick-reply generation is on.
 // Default ON; SWE_KITTY_AI_QUICKREPLIES=0 (or "false"/"off") disables it.
 func quickRepliesEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SWE_KITTY_AI_QUICKREPLIES"))) {
+	return aiFeatureEnabled("SWE_KITTY_AI_QUICKREPLIES")
+}
+
+// aiFeatureEnabled reports whether a boolean AI-feature env flag is on.
+// Default ON; "0"/"false"/"off"/"no" disable it. Shared by the
+// quick-reply and title generators so the gating semantics stay identical.
+func aiFeatureEnabled(envVar string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envVar))) {
 	case "0", "false", "off", "no":
 		return false
 	default:
@@ -113,7 +81,7 @@ type quickReplyGenerator struct {
 	publish      func([]byte)
 	// httpDo issues the Messages API request. Defaults to a real HTTP
 	// client; tests inject a stub so CI never touches the network.
-	httpDo func(*http.Request) (*http.Response, error)
+	httpDo httpDoFunc
 }
 
 // newQuickReplyGenerator builds a generator for a claude stream-json
@@ -178,56 +146,10 @@ func (g *quickReplyGenerator) kickoff(lastText, forMessageID string) {
 	go g.Generate(lastText, forMessageID)
 }
 
-// invoke reads the session's OAuth access token, makes a direct Anthropic
-// Messages API call against a fast model, and returns the parsed replies.
-// It never spawns a process and never writes the token, so it can't race
-// the live session's credential refresh.
+// invoke makes a direct Anthropic Messages API call against a fast model
+// and returns the parsed replies.
 func (g *quickReplyGenerator) invoke(ctx context.Context, lastText string) ([]string, error) {
-	token, err := readClaudeOAuthToken(g.agentHomeDir)
-	if err != nil {
-		return nil, err
-	}
-
-	body, err := json.Marshal(map[string]any{
-		"model":      quickReplyModel,
-		"max_tokens": quickReplyMaxTokens,
-		"system":     claudeCodeSystemPrompt,
-		"messages": []map[string]any{
-			{"role": "user", "content": quickReplyPrompt(lastText)},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicMessagesURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("authorization", "Bearer "+token)
-	req.Header.Set("anthropic-version", anthropicVersion)
-	req.Header.Set("anthropic-beta", oauthBeta)
-
-	resp, err := g.httpDo(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("timeout after %s", quickReplyTimeout)
-		}
-		return nil, fmt.Errorf("messages api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Cap the read: a quick-reply response is tiny; this guards against a
-	// pathological body without pulling in the whole stream.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("messages api: status %d (%s)", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	text, err := extractMessageText(raw)
+	text, err := anthropicMessages(ctx, g.httpDo, g.agentHomeDir, quickReplyPrompt(lastText), quickReplyMaxTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -249,67 +171,6 @@ func (g *quickReplyGenerator) publishReplies(replies []string, forMessageID stri
 		return
 	}
 	g.publish(payload)
-}
-
-// readClaudeOAuthToken reads the OAuth access token out of the session's
-// ephemeral HOME `.claude/.credentials.json`. It returns an error (a
-// clean best-effort skip) when the file is missing, malformed, the token
-// is empty, or the token has expired — in the expiry case we don't try to
-// refresh: the live session owns its own refresh and a stale chip is not
-// worth touching the shared credential.
-func readClaudeOAuthToken(agentHomeDir string) (string, error) {
-	path := filepath.Join(agentHomeDir, ".claude", ".credentials.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read credentials: %w", err)
-	}
-	var creds struct {
-		ClaudeAiOauth struct {
-			AccessToken string `json:"accessToken"`
-			ExpiresAt   int64  `json:"expiresAt"`
-		} `json:"claudeAiOauth"`
-	}
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return "", fmt.Errorf("parse credentials: %w", err)
-	}
-	tok := strings.TrimSpace(creds.ClaudeAiOauth.AccessToken)
-	if tok == "" {
-		return "", fmt.Errorf("no oauth access token in credentials")
-	}
-	// expiresAt is epoch milliseconds. Treat a token within 30s of expiry
-	// as expired so we don't fire a request that races the boundary.
-	if exp := creds.ClaudeAiOauth.ExpiresAt; exp > 0 {
-		if time.Now().Add(30*time.Second).UnixMilli() >= exp {
-			return "", fmt.Errorf("oauth access token expired")
-		}
-	}
-	return tok, nil
-}
-
-// extractMessageText pulls the assistant text out of a Messages API
-// response: it concatenates every `text` block in `content`. Returns an
-// error when the body isn't a parseable message or carries no text.
-func extractMessageText(raw []byte) (string, error) {
-	var msg struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		return "", fmt.Errorf("parse messages response: %w", err)
-	}
-	var b strings.Builder
-	for _, c := range msg.Content {
-		if c.Type == "text" {
-			b.WriteString(c.Text)
-		}
-	}
-	out := b.String()
-	if strings.TrimSpace(out) == "" {
-		return "", fmt.Errorf("empty message content")
-	}
-	return out, nil
 }
 
 // quickReplyPrompt is the tight instruction handed to the model. It asks

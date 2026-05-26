@@ -336,6 +336,18 @@ final class SessionStore {
         didSet { SessionStore.persistDisplayNames(displayNames) }
     }
 
+    /// Broker AI-generated session titles (task: ai-session-titles) — keyed
+    /// by session id, value is the short title the broker minted from the
+    /// conversation's purpose, delivered as a `view:"session_title"`
+    /// view_event. SEPARATE from `displayNames` (manual rename) so a manual
+    /// rename always wins in `displayName(for:)`; the AI title sits just
+    /// below it, above the first-message fallback. Persisted in
+    /// `UserDefaults` so a history row shows the AI name even before the
+    /// broker re-emits it on attach.
+    var brokerTitles: [String: String] = SessionStore.loadBrokerTitles() {
+        didSet { SessionStore.persistBrokerTitles(brokerTitles) }
+    }
+
     private var client: SweKittyClient?
     private var delegate: StoreDelegate?
     private var foregroundObserver: NSObjectProtocol?
@@ -1744,19 +1756,57 @@ final class SessionStore {
         }
     }
 
+    private static let brokerTitlesKey = "swekitty.session.brokerTitles"
+
+    static func loadBrokerTitles() -> [String: String] {
+        guard let raw = UserDefaults.standard.data(forKey: brokerTitlesKey),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: raw) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    static func persistBrokerTitles(_ titles: [String: String]) {
+        if titles.isEmpty {
+            UserDefaults.standard.removeObject(forKey: brokerTitlesKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(titles) {
+            UserDefaults.standard.set(data, forKey: brokerTitlesKey)
+        }
+    }
+
+    /// Ingest a broker AI session title (task: ai-session-titles). Stores
+    /// the title for the session so every title surface (home list,
+    /// history, session header) picks it up live. A blank/empty title is
+    /// ignored so we never clobber a good name. Mirrored on Android in
+    /// `ingestSessionTitle`.
+    func ingestSessionTitle(_ sessionID: String, payload: [String: String]) {
+        guard let title = payload["title"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else { return }
+        brokerTitles[sessionID] = title
+    }
+
     /// Friendly, user-facing name for a session. NEVER returns the raw
     /// UUID. Priority (see `SessionNaming`):
     ///   1. A genuine user-set custom name — one the user typed, never a
     ///      UUID. We screen `displayNames[id]` because the broker also
     ///      mirrors its `sessionName`/`displayName` label here, and that
     ///      label is frequently the bare session id.
-    ///   2. The first user chat message (live: scanned from
+    ///   2. The broker AI-generated title (`brokerTitles[id]`), once the
+    ///      broker has minted one from the conversation's purpose.
+    ///   3. The first user chat message (live: scanned from
     ///      `conversationLog`), trimmed to a short single line.
-    ///   3. Fallback: `"<agent> · <relative start time>"`.
+    ///   4. Fallback: `"<agent> · <relative start time>"`.
     func displayName(for session: ProjectSession) -> String {
         if let custom = displayNames[session.id],
            !SessionNaming.looksLikeRawID(custom, sessionID: session.id) {
             return custom
+        }
+        if let aiTitle = brokerTitles[session.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !aiTitle.isEmpty,
+           !SessionNaming.looksLikeRawID(aiTitle, sessionID: session.id) {
+            return aiTitle
         }
         if let message = firstUserMessage(in: session.id),
            let title = SessionNaming.titleFromMessage(message) {
@@ -2383,6 +2433,8 @@ private final class StoreDelegate: SweKittyDelegate {
         Task { @MainActor in
             if kind == "quick_replies" {
                 self.store?.ingestQuickReplies(sessionId, payload: payload)
+            } else if kind == "session_title" {
+                self.store?.ingestSessionTitle(sessionId, payload: payload)
             } else {
                 self.store?.routeAgentLoginViewEvent(kind: kind, payload: payload)
             }

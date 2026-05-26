@@ -809,6 +809,24 @@ async fn handle_text(
                             payload,
                         );
                     }
+                    // AI-generated session title (task: ai-session-titles).
+                    // The broker emits view:"session_title" with an object
+                    // payload {session_id, title} once the first meaningful
+                    // exchange completes (and on attach for a persisted
+                    // title). Flatten to the typed on_view_event string-map
+                    // — same minimal passthrough as quick_replies — so the
+                    // apps slot the title into their display-name priority
+                    // (below a manual rename, above the first message).
+                    "session_title" => {
+                        let payload = flatten_session_title(&ev);
+                        if payload.contains_key("title") {
+                            delegate.on_view_event(
+                                session_id.to_string(),
+                                "session_title".to_string(),
+                                payload,
+                            );
+                        }
+                    }
                     // view:"status" carries typed sub-events keyed by name,
                     // e.g. {"agent_login_url": {"url": ..., "loopback_port": 8080, ...}}.
                     // Flatten each sub-event's inner object to string values and
@@ -957,6 +975,24 @@ fn flatten_quick_replies(ev: &serde_json::Value) -> HashMap<String, String> {
     payload
 }
 
+/// Flatten a broker `view:"session_title"` event into the string-map the
+/// typed `on_view_event` delegate carries (task: ai-session-titles). The
+/// broker payload is `{session_id, title}`; only a non-empty `title`
+/// passes through. The caller drops the event entirely when `title` is
+/// absent/blank, so the apps never overwrite a good name with an empty one.
+fn flatten_session_title(ev: &serde_json::Value) -> HashMap<String, String> {
+    let mut payload = HashMap::new();
+    if let Some(obj) = ev.as_object() {
+        if let Some(title) = obj.get("title").and_then(|v| v.as_str()) {
+            let title = title.trim();
+            if !title.is_empty() {
+                payload.insert("title".to_string(), title.to_string());
+            }
+        }
+    }
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,6 +1023,28 @@ mod tests {
         // Non-object event → empty map, no panic.
         let p2 = flatten_quick_replies(&serde_json::json!("nope"));
         assert!(p2.is_empty());
+    }
+
+    #[test]
+    fn flatten_session_title_passes_title() {
+        let ev = serde_json::json!({"session_id": "s1", "title": "Debug Broker Session Limit"});
+        let p = flatten_session_title(&ev);
+        assert_eq!(
+            p.get("title").map(String::as_str),
+            Some("Debug Broker Session Limit")
+        );
+    }
+
+    #[test]
+    fn flatten_session_title_drops_blank_and_missing() {
+        // Missing title → no key (caller drops the event).
+        assert!(
+            !flatten_session_title(&serde_json::json!({"session_id": "s1"})).contains_key("title")
+        );
+        // Blank title → trimmed away, no key.
+        assert!(!flatten_session_title(&serde_json::json!({"title": "   "})).contains_key("title"));
+        // Non-object → empty, no panic.
+        assert!(flatten_session_title(&serde_json::json!("nope")).is_empty());
     }
 
     #[test]

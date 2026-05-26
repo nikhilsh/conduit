@@ -247,6 +247,13 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	// own writeLoop will forward this view_event back through textSub.
 	emitViewerStatus(sess)
 
+	// Re-emit any persisted AI session title (task: ai-session-titles) so
+	// a reopened/relisted session shows its name immediately, without
+	// waiting to re-generate. Published through the same text-sub path the
+	// live generator uses, so this fresh client picks it up via its
+	// writeLoop. Best-effort: no-op when the session has no title yet.
+	emitSessionTitle(sess)
+
 	go c.readLoop()
 	c.writeLoop(sub, textSub, sess.Done())
 }
@@ -272,6 +279,32 @@ func emitViewerStatus(sess *session.Session) {
 		"view":    "status",
 		"event":   event,
 		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	sess.PublishText(payload)
+}
+
+// emitSessionTitle re-broadcasts the session's persisted AI title (task:
+// ai-session-titles) as a `view:"session_title"` view_event, so a freshly
+// attached client renders the AI-generated name immediately instead of
+// the verbatim first message. No-op when the session has no title yet.
+// Mirrors the live generator's wire shape exactly.
+func emitSessionTitle(sess *session.Session) {
+	title := sess.AITitle()
+	if title == "" {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": sess.ID,
+		"view":    "session_title",
+		"event": map[string]any{
+			"session_id": sess.ID,
+			"title":      title,
+		},
+		"ts": time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		return

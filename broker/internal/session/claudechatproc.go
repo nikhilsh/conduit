@@ -42,6 +42,7 @@ func startChatProcess(
 	dir string,
 	publish func([]byte),
 	gen *quickReplyGenerator,
+	titleGen *titleGenerator,
 ) (*chatProcess, error) {
 	if len(command) == 0 {
 		return nil, errors.New("chat process: empty command")
@@ -66,7 +67,7 @@ func startChatProcess(
 	go func() {
 		// processClaudeStreamOutput returns at EOF (agent exit); the
 		// goroutine then ends. Reap the process so it doesn't zombie.
-		_ = processClaudeStreamOutput(stdout, publish, gen)
+		_ = processClaudeStreamOutput(stdout, publish, gen, titleGen)
 		werr := cmd.Wait()
 		// Surface an *unexpected* exit in the Chat tab so a dead
 		// stream-json agent isn't just silence (the original #6
