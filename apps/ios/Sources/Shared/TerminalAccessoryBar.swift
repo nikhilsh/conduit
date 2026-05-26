@@ -18,8 +18,9 @@ import UIKit
 ///
 /// Bytes emitted match the standard xterm sequences so the agent on the
 /// other end of the PTY sees the same input it would from a real
-/// terminal (Esc 0x1B, Tab 0x09, Return 0x0D, arrows ESC[A..D, and the
-/// C0 control codes for the Ctrl chords).
+/// terminal (Esc 0x1B, Tab 0x09, Return 0x0D, arrows ESC[A..D, the
+/// document-navigation keys Home ESC[H / End ESC[F / PgUp ESC[5~ /
+/// PgDn ESC[6~, and the C0 control codes for the Ctrl chords).
 ///
 /// Navigation keys that a user wants to *hold* — backspace and the four
 /// arrows — auto-repeat: an initial delay (~0.4s) then a steady cadence
@@ -63,6 +64,13 @@ final class TerminalAccessoryBar: UIInputView {
         Key(label: "↓", bytes: [0x1B, 0x5B, 0x42], repeats: true),
         Key(label: "←", bytes: [0x1B, 0x5B, 0x44], repeats: true),
         Key(label: "→", bytes: [0x1B, 0x5B, 0x43], repeats: true),
+        // Document navigation — standard xterm sequences: Home ESC[H,
+        // End ESC[F, PgUp ESC[5~, PgDn ESC[6~. Wide caps for the
+        // multi-glyph labels.
+        Key(label: "home", bytes: [0x1B, 0x5B, 0x48], wide: true),
+        Key(label: "end", bytes: [0x1B, 0x5B, 0x46], wide: true),
+        Key(label: "pgup", bytes: [0x1B, 0x5B, 0x35, 0x7E], wide: true),
+        Key(label: "pgdn", bytes: [0x1B, 0x5B, 0x36, 0x7E], wide: true),
         Key(label: "^C", bytes: [0x03]),
         Key(label: "^D", bytes: [0x04]),
         Key(label: "^Z", bytes: [0x1A]),
@@ -143,9 +151,13 @@ final class TerminalAccessoryBar: UIInputView {
         config.cornerStyle = .medium
         config.baseForegroundColor = .label
         config.background.backgroundColor = UIColor.label.withAlphaComponent(0.10)
+        // Uniform horizontal padding for every cap. The wide keys earn
+        // their extra room from a larger minimum width below, not from
+        // fatter insets — over-padding multi-glyph labels (esc/tab) was
+        // what squeezed their titles and clipped the leading/trailing
+        // characters of the first two caps.
         config.contentInsets = NSDirectionalEdgeInsets(
-            top: 6, leading: key.wide ? 14 : 11,
-            bottom: 6, trailing: key.wide ? 14 : 11
+            top: 6, leading: 12, bottom: 6, trailing: 12
         )
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var out = incoming
@@ -156,6 +168,14 @@ final class TerminalAccessoryBar: UIInputView {
         let bytes = key.bytes
         let button = UIButton(configuration: config)
         button.accessibilityLabel = key.label
+        // Never let the scroll view's stack squeeze a cap below its
+        // intrinsic title+inset width — that truncation was clipping the
+        // first two (wide) keys to a stray mid-glyph. Hug the content and
+        // resist compression on both axes so every cap is fully legible.
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.titleLabel?.lineBreakMode = .byClipping
+        button.titleLabel?.adjustsFontSizeToFitWidth = false
 
         if key.repeats {
             // Press-and-hold auto-repeat. `.touchDown` fires the first
@@ -178,7 +198,11 @@ final class TerminalAccessoryBar: UIInputView {
                 self?.emit(bytes: bytes)
             }, for: .touchUpInside)
         }
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: key.wide ? 44 : 38).isActive = true
+        // Minimum cap width — single-glyph keys get a square-ish 40pt,
+        // multi-glyph (esc/tab/home/end/pgup/pgdn) get room for a 4-char
+        // monospace label plus insets. The content-hugging above means a
+        // longer title still grows the cap past this floor.
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: key.wide ? 56 : 40).isActive = true
         return button
     }
 

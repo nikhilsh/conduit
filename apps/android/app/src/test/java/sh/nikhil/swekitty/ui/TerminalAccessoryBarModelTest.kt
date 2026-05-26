@@ -21,6 +21,7 @@ class TerminalAccessoryBarModelTest {
         assertEquals(
             listOf(
                 "esc", "tab", "⌫", "↑", "↓", "←", "→",
+                "home", "end", "pgup", "pgdn",
                 "^C", "^D", "^Z", "^L", "^R", "^U", "^W", "^A", "^E",
                 "|", "/", "\\", "~", "-",
             ),
@@ -58,6 +59,18 @@ class TerminalAccessoryBarModelTest {
     }
 
     @Test
+    fun navigationKeysEmitXtermSequences() {
+        fun bytesFor(label: String): ByteArray =
+            TerminalAccessoryBarModel.keys.first { it.label == label }.bytes
+
+        // Home ESC[H, End ESC[F, PgUp ESC[5~, PgDn ESC[6~ — must match iOS.
+        assertArrayEquals(byteArrayOf(0x1B, 0x5B, 0x48), bytesFor("home"))
+        assertArrayEquals(byteArrayOf(0x1B, 0x5B, 0x46), bytesFor("end"))
+        assertArrayEquals(byteArrayOf(0x1B, 0x5B, 0x35, 0x7E), bytesFor("pgup"))
+        assertArrayEquals(byteArrayOf(0x1B, 0x5B, 0x36, 0x7E), bytesFor("pgdn"))
+    }
+
+    @Test
     fun onlyBackspaceAndArrowsAutoRepeat() {
         val repeating = TerminalAccessoryBarModel.keys.filter { it.repeats }.map { it.label }.toSet()
         assertEquals(setOf("⌫", "↑", "↓", "←", "→"), repeating)
@@ -77,7 +90,7 @@ class TerminalAccessoryBarModelTest {
     @Test
     fun multiGlyphLabelsAreWide() {
         val wide = TerminalAccessoryBarModel.keys.filter { it.wide }.map { it.label }.toSet()
-        assertEquals(setOf("esc", "tab"), wide)
+        assertEquals(setOf("esc", "tab", "home", "end", "pgup", "pgdn"), wide)
         assertTrue(TerminalAccessoryBarModel.keys.first { it.label == "^C" }.wide.not())
     }
 }

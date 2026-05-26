@@ -27,8 +27,9 @@ import kotlinx.coroutines.isActive
 /**
  * Android mirror of iOS `TerminalAccessoryBar`. A horizontally
  * scrollable row of rounded key caps that sits above the soft keyboard
- * on the Terminal tab, giving TUIs the Esc/Tab/arrows/Ctrl chords the
- * Android soft keyboard doesn't provide. Bytes emitted match the iOS
+ * on the Terminal tab, giving TUIs the Esc/Tab/arrows/Ctrl chords and
+ * the Home/End/PgUp/PgDn navigation keys the Android soft keyboard
+ * doesn't provide. Bytes emitted match the iOS
  * bar exactly (and the standard xterm sequences) so the agent on the
  * other end of the PTY can't tell the source apart — see
  * `apps/ios/Sources/Shared/TerminalAccessoryBar.swift`.
@@ -57,6 +58,13 @@ object TerminalAccessoryBarModel {
         TerminalAccessoryKey("↓", byteArrayOf(0x1B, 0x5B, 0x42), repeats = true),
         TerminalAccessoryKey("←", byteArrayOf(0x1B, 0x5B, 0x44), repeats = true),
         TerminalAccessoryKey("→", byteArrayOf(0x1B, 0x5B, 0x43), repeats = true),
+        // Document navigation — standard xterm sequences, wide caps for
+        // the multi-glyph labels: Home ESC[H, End ESC[F, PgUp ESC[5~,
+        // PgDn ESC[6~. Must stay byte-for-byte in step with iOS.
+        TerminalAccessoryKey("home", byteArrayOf(0x1B, 0x5B, 0x48), wide = true),
+        TerminalAccessoryKey("end", byteArrayOf(0x1B, 0x5B, 0x46), wide = true),
+        TerminalAccessoryKey("pgup", byteArrayOf(0x1B, 0x5B, 0x35, 0x7E), wide = true),
+        TerminalAccessoryKey("pgdn", byteArrayOf(0x1B, 0x5B, 0x36, 0x7E), wide = true),
         TerminalAccessoryKey("^C", byteArrayOf(0x03)),
         TerminalAccessoryKey("^D", byteArrayOf(0x04)),
         TerminalAccessoryKey("^Z", byteArrayOf(0x1A)),
@@ -136,9 +144,14 @@ private fun KeyCap(
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .defaultMinSize(minWidth = if (key.wide) 44.dp else 38.dp, minHeight = 36.dp)
+            // Multi-glyph caps (esc/tab/home/end/pgup/pgdn) get a wider
+            // floor so a 4-char monospace label is never squeezed; the
+            // single-glyph keys are square-ish. Uniform horizontal
+            // padding for all caps — over-padding the wide labels was
+            // what clipped the first two keys.
+            .defaultMinSize(minWidth = if (key.wide) 56.dp else 40.dp, minHeight = 36.dp)
             .glassCapsule(interactive = true)
-            .padding(horizontal = if (key.wide) 14.dp else 11.dp, vertical = 6.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
             .semantics { contentDescription = key.label }
             .then(
                 if (key.repeats) {
@@ -179,6 +192,10 @@ private fun KeyCap(
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Medium,
             color = SweKittyTheme.textPrimary(),
+            // Caps are single-line; never wrap or clip the label so the
+            // first two (wide) keys stay fully legible.
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
