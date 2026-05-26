@@ -3,12 +3,15 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseQuickReplies(t *testing.T) {
@@ -114,6 +117,16 @@ func TestNewQuickReplyGeneratorNilCases(t *testing.T) {
 	}
 }
 
+func TestNewQuickReplyGeneratorWiresHTTPDoer(t *testing.T) {
+	g := newQuickReplyGenerator("s", "claude", "/home", "/d", nil, func([]byte) {})
+	if g == nil {
+		t.Fatal("expected non-nil generator")
+	}
+	if g.httpDo == nil {
+		t.Fatal("expected httpDo to default to a real HTTP doer")
+	}
+}
+
 func TestQuickReplyGeneratorNilSafe(t *testing.T) {
 	var g *quickReplyGenerator
 	// Must not panic on the nil receiver — this is the "feature off"
@@ -122,91 +135,104 @@ func TestQuickReplyGeneratorNilSafe(t *testing.T) {
 	g.Generate("hello", "ts-1")
 }
 
-func TestWithHomeOverride(t *testing.T) {
-	env := []string{"PATH=/bin", "HOME=/old/home", "FOO=bar"}
-	out := withHomeOverride(env, "/new/home")
-	var homeCount int
-	var home string
-	for _, kv := range out {
-		if strings.HasPrefix(kv, "HOME=") {
-			homeCount++
-			home = strings.TrimPrefix(kv, "HOME=")
-		}
-	}
-	if homeCount != 1 {
-		t.Fatalf("expected exactly 1 HOME entry, got %d (%v)", homeCount, out)
-	}
-	if home != "/new/home" {
-		t.Fatalf("HOME = %q, want /new/home", home)
-	}
-}
-
-func TestCopyClaudeCreds(t *testing.T) {
-	srcHome := t.TempDir()
-	dstHome := t.TempDir()
-	credPath := filepath.Join(srcHome, ".claude", ".credentials.json")
-	if err := os.MkdirAll(filepath.Dir(credPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(credPath, []byte(`{"token":"abc"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := copyClaudeCreds(srcHome, dstHome); err != nil {
-		t.Fatalf("copyClaudeCreds: %v", err)
-	}
-	got, err := os.ReadFile(filepath.Join(dstHome, ".claude", ".credentials.json"))
-	if err != nil {
-		t.Fatalf("copied creds missing: %v", err)
-	}
-	if string(got) != `{"token":"abc"}` {
-		t.Fatalf("copied creds = %q", got)
-	}
-
-	// No creds at all → error (so the one-shot is skipped cleanly).
-	if err := copyClaudeCreds(t.TempDir(), t.TempDir()); err == nil {
-		t.Fatal("expected error when no creds to copy")
-	}
-}
-
-// fakeClaudeBin writes an executable shell script that mimics `claude -p`
-// for the one-shot: it ignores its args/stdin and prints the given stdout
-// body. Returns the script path to use as the generator binary.
-func fakeClaudeBin(t *testing.T, stdout string, exitCode int) string {
+// writeCreds drops a `.claude/.credentials.json` into home with the given
+// access token and expiry (epoch ms; 0 = omit), returning home.
+func writeCreds(t *testing.T, accessToken string, expiresAt int64) string {
 	t.Helper()
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "claude")
-	script := "#!/bin/sh\ncat >/dev/null\n" +
-		"printf '%s' " + shellQuote(stdout) + "\n" +
-		"exit " + strconv.Itoa(exitCode) + "\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return bin
-}
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-
-// TestQuickReplyGeneratorInvoke proves the end-to-end one-shot path with a
-// FAKE claude binary (no real model): it copies creds into a throwaway
-// home, runs the binary, and parses its JSON output.
-func TestQuickReplyGeneratorInvoke(t *testing.T) {
-	srcHome := t.TempDir()
-	credPath := filepath.Join(srcHome, ".claude", ".credentials.json")
+	home := t.TempDir()
+	credPath := filepath.Join(home, ".claude", ".credentials.json")
 	if err := os.MkdirAll(filepath.Dir(credPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(credPath, []byte(`{"token":"abc"}`), 0o600); err != nil {
+	oauth := map[string]any{"accessToken": accessToken}
+	if expiresAt != 0 {
+		oauth["expiresAt"] = expiresAt
+	}
+	blob, _ := json.Marshal(map[string]any{"claudeAiOauth": oauth})
+	if err := os.WriteFile(credPath, blob, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return home
+}
 
-	bin := fakeClaudeBin(t, `["Yes","No","Explain"]`, 0)
+func TestReadClaudeOAuthToken(t *testing.T) {
+	future := time.Now().Add(time.Hour).UnixMilli()
+	home := writeCreds(t, "tok-abc", future)
+	tok, err := readClaudeOAuthToken(home)
+	if err != nil {
+		t.Fatalf("readClaudeOAuthToken: %v", err)
+	}
+	if tok != "tok-abc" {
+		t.Fatalf("token = %q, want tok-abc", tok)
+	}
+
+	// Missing file → error.
+	if _, err := readClaudeOAuthToken(t.TempDir()); err == nil {
+		t.Fatal("expected error when credentials missing")
+	}
+
+	// Empty token → error.
+	if _, err := readClaudeOAuthToken(writeCreds(t, "", future)); err == nil {
+		t.Fatal("expected error on empty token")
+	}
+
+	// Expired token → error (best-effort skip).
+	past := time.Now().Add(-time.Hour).UnixMilli()
+	if _, err := readClaudeOAuthToken(writeCreds(t, "tok-old", past)); err == nil {
+		t.Fatal("expected error on expired token")
+	}
+
+	// expiresAt omitted (0) → accepted (no expiry check).
+	if _, err := readClaudeOAuthToken(writeCreds(t, "tok-noexp", 0)); err != nil {
+		t.Fatalf("expected no error when expiresAt omitted: %v", err)
+	}
+}
+
+func TestExtractMessageText(t *testing.T) {
+	raw := []byte(`{"content":[{"type":"text","text":"hello "},{"type":"thinking","text":"ignored"},{"type":"text","text":"world"}]}`)
+	got, err := extractMessageText(raw)
+	if err != nil {
+		t.Fatalf("extractMessageText: %v", err)
+	}
+	if got != "hello world" {
+		t.Fatalf("text = %q, want %q", got, "hello world")
+	}
+
+	if _, err := extractMessageText([]byte(`{"content":[]}`)); err == nil {
+		t.Fatal("expected error on empty content")
+	}
+	if _, err := extractMessageText([]byte(`not json`)); err == nil {
+		t.Fatal("expected error on malformed body")
+	}
+}
+
+// fakeDoer returns an httpDo func that asserts the request shape and
+// replies with the given status + body, without touching the network.
+func fakeDoer(t *testing.T, status int, body string, gotReq *http.Request) func(*http.Request) (*http.Response, error) {
+	t.Helper()
+	return func(req *http.Request) (*http.Response, error) {
+		if gotReq != nil {
+			*gotReq = *req
+		}
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+		}, nil
+	}
+}
+
+// TestQuickReplyGeneratorInvoke proves the direct-API path end to end with
+// a stubbed HTTP doer (no network): it reads the OAuth token, sets the
+// required headers, posts the prompt, and parses the model's JSON.
+func TestQuickReplyGeneratorInvoke(t *testing.T) {
+	home := writeCreds(t, "tok-xyz", time.Now().Add(time.Hour).UnixMilli())
+	var gotReq http.Request
 	g := &quickReplyGenerator{
 		sessionID:    "sess-1",
-		binary:       bin,
-		agentHomeDir: srcHome,
-		env:          []string{"PATH=" + os.Getenv("PATH")},
-		dir:          t.TempDir(),
+		agentHomeDir: home,
 		publish:      func([]byte) {},
+		httpDo:       fakeDoer(t, 200, `{"content":[{"type":"text","text":"[\"Yes\",\"No\",\"Explain\"]"}]}`, &gotReq),
 	}
 	replies, err := g.invoke(context.Background(), "Should I proceed?")
 	if err != nil {
@@ -216,25 +242,64 @@ func TestQuickReplyGeneratorInvoke(t *testing.T) {
 	if !reflect.DeepEqual(replies, want) {
 		t.Fatalf("replies = %#v, want %#v", replies, want)
 	}
+
+	// Required OAuth headers.
+	if got := gotReq.Header.Get("authorization"); got != "Bearer tok-xyz" {
+		t.Fatalf("authorization = %q, want Bearer tok-xyz", got)
+	}
+	if got := gotReq.Header.Get("anthropic-beta"); got != oauthBeta {
+		t.Fatalf("anthropic-beta = %q, want %q", got, oauthBeta)
+	}
+	if got := gotReq.Header.Get("anthropic-version"); got != anthropicVersion {
+		t.Fatalf("anthropic-version = %q, want %q", got, anthropicVersion)
+	}
+	if gotReq.URL.String() != anthropicMessagesURL {
+		t.Fatalf("url = %q, want %q", gotReq.URL.String(), anthropicMessagesURL)
+	}
+}
+
+func TestQuickReplyGeneratorInvokeNoCreds(t *testing.T) {
+	called := false
+	g := &quickReplyGenerator{
+		sessionID:    "sess-nocred",
+		agentHomeDir: t.TempDir(), // no .claude/.credentials.json
+		publish:      func([]byte) {},
+		httpDo: func(*http.Request) (*http.Response, error) {
+			called = true
+			return nil, fmt.Errorf("should not be called")
+		},
+	}
+	if _, err := g.invoke(context.Background(), "hi"); err == nil {
+		t.Fatal("expected error when no credentials present")
+	}
+	if called {
+		t.Fatal("httpDo must not be called when token is unavailable")
+	}
+}
+
+func TestQuickReplyGeneratorInvokeNon200(t *testing.T) {
+	home := writeCreds(t, "tok", time.Now().Add(time.Hour).UnixMilli())
+	g := &quickReplyGenerator{
+		sessionID:    "sess-401",
+		agentHomeDir: home,
+		publish:      func([]byte) {},
+		httpDo:       fakeDoer(t, 401, `{"error":"unauthorized"}`, nil),
+	}
+	if _, err := g.invoke(context.Background(), "hi"); err == nil {
+		t.Fatal("expected error on non-200 status")
+	}
 }
 
 // TestQuickReplyGeneratorGeneratePublishes proves Generate emits a clean
-// view:"quick_replies" view_event when the one-shot succeeds.
+// view:"quick_replies" view_event when the API call succeeds.
 func TestQuickReplyGeneratorGeneratePublishes(t *testing.T) {
-	srcHome := t.TempDir()
-	credPath := filepath.Join(srcHome, ".claude", ".credentials.json")
-	_ = os.MkdirAll(filepath.Dir(credPath), 0o700)
-	_ = os.WriteFile(credPath, []byte(`{"token":"abc"}`), 0o600)
-
-	bin := fakeClaudeBin(t, `["Run it","Cancel"]`, 0)
+	home := writeCreds(t, "tok", time.Now().Add(time.Hour).UnixMilli())
 	got := make(chan []byte, 1)
 	g := &quickReplyGenerator{
 		sessionID:    "sess-9",
-		binary:       bin,
-		agentHomeDir: srcHome,
-		env:          []string{"PATH=" + os.Getenv("PATH")},
-		dir:          t.TempDir(),
+		agentHomeDir: home,
 		publish:      func(p []byte) { got <- p },
+		httpDo:       fakeDoer(t, 200, `{"content":[{"type":"text","text":"[\"Run it\",\"Cancel\"]"}]}`, nil),
 	}
 	g.Generate("Ready to run the migration?", "msg-42")
 
@@ -267,23 +332,15 @@ func TestQuickReplyGeneratorGeneratePublishes(t *testing.T) {
 }
 
 // TestQuickReplyGeneratorGenerateSilentOnEmpty: a model that returns no
-// usable replies (or fails) must publish nothing — best-effort no-op.
+// usable replies (or a blank assistant message) must publish nothing.
 func TestQuickReplyGeneratorGenerateSilentOnEmpty(t *testing.T) {
-	srcHome := t.TempDir()
-	credPath := filepath.Join(srcHome, ".claude", ".credentials.json")
-	_ = os.MkdirAll(filepath.Dir(credPath), 0o700)
-	_ = os.WriteFile(credPath, []byte(`{"token":"abc"}`), 0o600)
-
-	// Model returns an empty array → no chips.
-	bin := fakeClaudeBin(t, `[]`, 0)
+	home := writeCreds(t, "tok", time.Now().Add(time.Hour).UnixMilli())
 	published := false
 	g := &quickReplyGenerator{
 		sessionID:    "sess-empty",
-		binary:       bin,
-		agentHomeDir: srcHome,
-		env:          []string{"PATH=" + os.Getenv("PATH")},
-		dir:          t.TempDir(),
+		agentHomeDir: home,
 		publish:      func([]byte) { published = true },
+		httpDo:       fakeDoer(t, 200, `{"content":[{"type":"text","text":"[]"}]}`, nil),
 	}
 	g.Generate("Anything else?", "msg-1")
 	if published {
@@ -297,27 +354,20 @@ func TestQuickReplyGeneratorGenerateSilentOnEmpty(t *testing.T) {
 	}
 }
 
-// TestQuickReplyGeneratorGenerateSilentOnExitError: a non-zero claude exit
+// TestQuickReplyGeneratorGenerateSilentOnAPIError: a non-200 API response
 // (e.g. auth failure) emits nothing.
-func TestQuickReplyGeneratorGenerateSilentOnExitError(t *testing.T) {
-	srcHome := t.TempDir()
-	credPath := filepath.Join(srcHome, ".claude", ".credentials.json")
-	_ = os.MkdirAll(filepath.Dir(credPath), 0o700)
-	_ = os.WriteFile(credPath, []byte(`{"token":"abc"}`), 0o600)
-
-	bin := fakeClaudeBin(t, `error: not logged in`, 1)
+func TestQuickReplyGeneratorGenerateSilentOnAPIError(t *testing.T) {
+	home := writeCreds(t, "tok", time.Now().Add(time.Hour).UnixMilli())
 	published := false
 	g := &quickReplyGenerator{
 		sessionID:    "sess-err",
-		binary:       bin,
-		agentHomeDir: srcHome,
-		env:          []string{"PATH=" + os.Getenv("PATH")},
-		dir:          t.TempDir(),
+		agentHomeDir: home,
 		publish:      func([]byte) { published = true },
+		httpDo:       fakeDoer(t, 500, `{"error":"boom"}`, nil),
 	}
 	g.Generate("Should I retry?", "msg-1")
 	if published {
-		t.Fatal("expected no publish when claude exits non-zero")
+		t.Fatal("expected no publish when the API errors")
 	}
 }
 
