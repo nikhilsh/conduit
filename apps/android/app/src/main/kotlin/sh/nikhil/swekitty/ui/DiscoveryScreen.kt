@@ -257,7 +257,7 @@ private fun Header() {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "Browsing for _swe-kitty._tcp advertisers. The harness must be running with --local on the same Wi-Fi.",
+                "Browsing for _swe-kitty._tcp advertisers. The broker must be running with --local on the same Wi-Fi.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -345,7 +345,7 @@ private fun NearbyEmptyState(
                 )
             }
             Text(
-                "mDNS doesn't cross subnets — phone and harness must share the LAN. If you've just started the harness, give it a few seconds.",
+                "mDNS doesn't cross subnets — phone and broker must share the LAN. If you've just started the broker, give it a few seconds.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

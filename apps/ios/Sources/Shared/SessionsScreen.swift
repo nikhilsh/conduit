@@ -205,7 +205,7 @@ struct SessionsScreen: View {
                 pendingDelete = nil
             }
         } message: { target in
-            Text("Removes the saved entry and ends the session on the harness if it's still running.\n\n\(target.title)")
+            Text("Permanently deletes this session and its saved transcript from the server.\n\n\(target.title)")
         }
     }
 

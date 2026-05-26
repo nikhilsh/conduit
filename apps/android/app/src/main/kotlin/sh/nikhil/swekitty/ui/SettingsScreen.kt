@@ -275,7 +275,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
 
             // Harness (only when paired)
             if (endpoint.isComplete) {
-                SettingsSection("Harness") {
+                SettingsSection("Server") {
                     ListItem(
                         leadingContent = {
                             Icon(
@@ -312,7 +312,7 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                     SettingsDivider()
                     SettingsRow(
                         icon = Icons.Filled.Delete,
-                        title = "Forget harness",
+                        title = "Forget server",
                         subtitle = endpoint.displayHost,
                         iconTint = MaterialTheme.colorScheme.error,
                         titleColor = MaterialTheme.colorScheme.error,

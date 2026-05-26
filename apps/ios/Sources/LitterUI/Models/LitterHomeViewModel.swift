@@ -128,14 +128,14 @@ extension LitterUI {
 
         /// Title shown in the empty-state when there are no rows.
         static func emptyTitle(_ snap: HomeSnapshot) -> String {
-            snap.harness.canIssueCommands ? "No sessions yet" : "Waiting for harness"
+            snap.harness.canIssueCommands ? "No sessions yet" : "Waiting for server"
         }
 
         /// Body shown in the empty-state when there are no rows.
         static func emptyBody(_ snap: HomeSnapshot) -> String {
             snap.harness.canIssueCommands
                 ? "Tap + to spin up a new conversation."
-                : "Once we can reach the harness, your sessions appear here."
+                : "Once we can reach the server, your sessions appear here."
         }
 
         /// SF Symbol shown in the empty-state hero.

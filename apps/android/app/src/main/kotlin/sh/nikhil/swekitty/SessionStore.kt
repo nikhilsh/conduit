@@ -755,7 +755,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         viewModelScope.launch {
             val preToken = java.util.UUID.randomUUID().toString()
             try {
-                _sshBootstrap.value = SshBootstrapState.Running("Starting harness on $host…")
+                _sshBootstrap.value = SshBootstrapState.Running("Starting server on $host…")
                 val result = withContext(Dispatchers.IO) {
                     ffiSshBootstrap(
                         credentials,
@@ -839,7 +839,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         is SshException.DockerMissing       -> "Docker is not installed on the server: ${e.message}"
         is SshException.DockerPermission    -> "User can't reach Docker: ${e.message}"
         is SshException.PortConflict        -> "Server port is already in use: ${e.message}"
-        is SshException.HarnessStartTimeout -> "Harness took too long to come up: ${e.message}"
+        is SshException.HarnessStartTimeout -> "Server took too long to come up: ${e.message}"
         is SshException.BootstrapExitCode   -> "Bootstrap script failed: ${e.message}"
         is SshException.BootstrapParse      -> "Couldn't parse bootstrap output: ${e.message}"
         is SshException.PortForward         -> "Port forward failed: ${e.message}"
@@ -871,7 +871,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         viewModelScope.launch {
             val ready = waitUntilCommandReady()
             if (!ready) {
-                _harness.value = HarnessState.Failed("Connect/start failed: harness did not become ready in time.")
+                _harness.value = HarnessState.Failed("Connect/start failed: server did not become ready in time.")
                 return@launch
             }
             createSession(assistant = assistant, startupCwd = cwd)
@@ -1082,7 +1082,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 updateLifecycle { it + (pendingId to SessionLifecycle.FailedToStart(reason)) }
                 _sessionCreationError.value = reason
                 if (isAuth(t)) {
-                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the harness.")
+                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
                 }
                 Telemetry.capture(
                     error = t,
@@ -1108,7 +1108,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 val detail = describe(t)
                 _sessionCreationError.value = "switch_agent: $detail"
                 if (isAuth(t)) {
-                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the harness.")
+                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
                 }
                 Telemetry.capture(
                     error = t,
@@ -1593,7 +1593,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         _harness.value = if (
             lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized")
         ) {
-            HarnessState.Failed("Pairing expired. Scan a new QR code from the harness.")
+            HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
         } else {
             HarnessState.Failed("Disconnected: $reason")
         }
@@ -1627,7 +1627,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             }
             is ConnectionHealth.Disconnected -> {
                 if (health.auth) {
-                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the harness.")
+                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
                     Telemetry.capture(
                         error = IllegalStateException(health.reason),
                         message = "Android connection health auth failure",
@@ -1651,7 +1651,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
 
     private fun describe(t: Throwable): String {
         if (isAuth(t)) {
-            return "Authentication failed. This pairing token has expired; scan a fresh QR code from the harness."
+            return "Authentication failed. This pairing token has expired; scan a fresh QR code from the server."
         }
         return t.message ?: t.toString()
     }

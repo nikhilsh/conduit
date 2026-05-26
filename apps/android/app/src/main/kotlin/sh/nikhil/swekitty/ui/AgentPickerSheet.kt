@@ -136,7 +136,7 @@ private fun AgentStep(
         )
         if (!canIssue) {
             Text(
-                "Connect to a harness first — open Settings to pair.",
+                "Connect to a server first — open Settings to pair.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -212,7 +212,7 @@ fun SSHLoginSheet(
                 color = MaterialTheme.colorScheme.primary,
             )
             Text(
-                "Forwarded into the harness container so first launch can sign in without you SSHing in.",
+                "Forwarded into the broker container so first launch can sign in without you SSHing in.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

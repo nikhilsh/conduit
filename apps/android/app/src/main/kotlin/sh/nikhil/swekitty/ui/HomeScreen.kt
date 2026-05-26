@@ -105,7 +105,7 @@ fun HomeScreen(
             ) {
                 Text("SweKitty", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    if (endpoint.isComplete) endpoint.displayHost else "no harness",
+                    if (endpoint.isComplete) endpoint.displayHost else "no server",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -188,7 +188,7 @@ fun HomeScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        if (canIssueCommands(harness)) "No sessions yet" else "Waiting for harness",
+                        if (canIssueCommands(harness)) "No sessions yet" else "Waiting for server",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -197,7 +197,7 @@ fun HomeScreen(
                         if (canIssueCommands(harness))
                             "Tap + below to spin up a new conversation."
                         else
-                            "Once we can reach the harness, your sessions appear here.",
+                            "Once we can reach the server, your sessions appear here.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -323,7 +323,7 @@ fun HomeScreen(
             title = { Text("Delete session?") },
             text = {
                 Text(
-                    "This ends ${target.title} on the harness. The conversation history stays available under Sessions.",
+                    "This permanently deletes ${target.title} from the server, including its history.",
                 )
             },
             confirmButton = {

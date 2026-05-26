@@ -168,7 +168,7 @@ struct LitterManualPairSheet: View {
                 LitterUI.Palette.surface.color.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("HARNESS URL")
+                        Text("SERVER URL")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .tracking(0.6)
                             .foregroundStyle(LitterUI.Palette.textMuted.color)
