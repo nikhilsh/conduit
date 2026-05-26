@@ -165,6 +165,81 @@ struct SessionsScreenModelTests {
         #expect(model.totalRows == 0)
     }
 
+    // MARK: - Resume decision (read-only unless confirmed live)
+
+    // Read-only is the default. The interactive attach branch fires ONLY
+    // when the row is `.live`, we're connected to its server, the id is in
+    // the live list, AND the store does not consider it read-only.
+
+    @Test func resumeAttachesLiveOnlyWhenAllConditionsHold() {
+        let d = ResumeDecision.decide(
+            status: .live,
+            connectedToRowServer: true,
+            sessionIsListed: true,
+            storeSaysReadOnly: false
+        )
+        #expect(d == .attachLive)
+    }
+
+    @Test func resumeStaleLiveRowNotInLiveListIsReadOnly() {
+        // The reported bug: a removed/ended session whose persisted status
+        // is still `.live` but which the broker no longer lists must open
+        // read-only, not interactive.
+        let d = ResumeDecision.decide(
+            status: .live,
+            connectedToRowServer: true,
+            sessionIsListed: false,
+            storeSaysReadOnly: true
+        )
+        #expect(d == .readOnlyTranscript)
+    }
+
+    @Test func resumeLiveRowListedButStoreSaysReadOnlyIsReadOnly() {
+        // Listed but the store positively marked it read-only (exited/failed
+        // phase) → the persisted `.live` is stale → read-only.
+        let d = ResumeDecision.decide(
+            status: .live,
+            connectedToRowServer: true,
+            sessionIsListed: true,
+            storeSaysReadOnly: true
+        )
+        #expect(d == .readOnlyTranscript)
+    }
+
+    @Test func resumeLiveRowOnDifferentServerIsReadOnly() {
+        // Not connected to the row's server: we'd have to switch + reconnect
+        // to even learn if it's live (racy) → fail closed to read-only.
+        let d = ResumeDecision.decide(
+            status: .live,
+            connectedToRowServer: false,
+            sessionIsListed: false,
+            storeSaysReadOnly: true
+        )
+        #expect(d == .readOnlyTranscript)
+    }
+
+    @Test func resumeExitedRowIsAlwaysReadOnly() {
+        // Even if (impossibly) listed + not-read-only, a non-live status
+        // never resumes interactive.
+        let d = ResumeDecision.decide(
+            status: .exited,
+            connectedToRowServer: true,
+            sessionIsListed: true,
+            storeSaysReadOnly: false
+        )
+        #expect(d == .readOnlyTranscript)
+    }
+
+    @Test func resumeUnknownRowIsAlwaysReadOnly() {
+        let d = ResumeDecision.decide(
+            status: .unknown,
+            connectedToRowServer: true,
+            sessionIsListed: true,
+            storeSaysReadOnly: false
+        )
+        #expect(d == .readOnlyTranscript)
+    }
+
     // MARK: - Helpers
 
     private func row(

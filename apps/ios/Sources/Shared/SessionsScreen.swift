@@ -80,6 +80,51 @@ struct SessionsScreenModel: Equatable {
     }
 }
 
+/// Outcome of tapping/resuming a row on the History screen. Read-only is
+/// the DEFAULT — we only attach the interactive live session when the row
+/// is POSITIVELY confirmed currently-live on the connected broker.
+enum ResumeDecision: Equatable {
+    /// Open the read-only persisted transcript (`SavedTranscriptView`).
+    case readOnlyTranscript
+    /// Attach to the genuinely-live session on the broker (interactive).
+    case attachLive
+}
+
+extension ResumeDecision {
+    /// Pure decision for `SessionsScreen.resume(_:)`, hoisted out of the
+    /// view so it can be pinned by `SessionsScreenModelTests` without a
+    /// live store.
+    ///
+    /// We attach the interactive session ONLY when ALL hold:
+    ///   1. the row is persisted `.live` (a non-`.live` row never resumes
+    ///      interactive — exited/unknown always go read-only),
+    ///   2. we are connected to the row's server (`connectedToRowServer`),
+    ///   3. the session id is present in the live list (`sessionIsListed`),
+    ///   4. the store does NOT consider it read-only
+    ///      (`storeSaysReadOnly == false`, i.e. confirmed-live).
+    ///
+    /// Every other case — `.exited`, `.unknown`, a stale `.live` not in the
+    /// live list, a `.live` on a different server we'd have to switch to,
+    /// or a `.live` the store has positively marked read-only — resolves to
+    /// the read-only transcript. The user strongly prefers a read-only open
+    /// over a wrong interactive one, so we fail closed.
+    static func decide(
+        status: SavedSessionStatus,
+        connectedToRowServer: Bool,
+        sessionIsListed: Bool,
+        storeSaysReadOnly: Bool
+    ) -> ResumeDecision {
+        guard status == .live,
+              connectedToRowServer,
+              sessionIsListed,
+              !storeSaysReadOnly
+        else {
+            return .readOnlyTranscript
+        }
+        return .attachLive
+    }
+}
+
 /// "Resume an old thread" — top-level screen pushed from the Home tab's
 /// `clock.arrow.circlepath` toolbar button. Shows every session the
 /// client has ever seen, grouped by server, with a search bar at top
@@ -100,10 +145,11 @@ struct SessionsScreen: View {
     /// alert for the swipe-to-delete affordance). Identifiable so the
     /// alert can key its presentation off the pending row.
     @State private var pendingDelete: PendingSavedSessionDelete?
-    /// Exited row whose persisted transcript should open read-only.
-    /// Drives a `navigationDestination(item:)` push into
-    /// `SavedTranscriptView`. Keyed by `compoundID` (not the bare
-    /// session id, which isn't unique across servers).
+    /// Row whose persisted transcript should open read-only (the default
+    /// for history opens — any row not confirmed currently-live). Drives a
+    /// `navigationDestination(item:)` push into `SavedTranscriptView`.
+    /// Keyed by `compoundID` (not the bare session id, which isn't unique
+    /// across servers).
     @State private var transcriptTarget: TranscriptTarget?
 
     private var savedStore: SavedSessionsStore { SavedSessionsStore.shared }
@@ -317,56 +363,51 @@ struct SessionsScreen: View {
 
     // MARK: - Helpers
 
-    /// Open flow (build task #35). Two paths, keyed by whether the
-    /// session is still live on the broker:
+    /// Open flow (build task #35). READ-ONLY IS THE DEFAULT — opening a
+    /// row from history pushes the read-only persisted transcript
+    /// (`SavedTranscriptView` → `fetchConversation`) UNLESS the session is
+    /// POSITIVELY confirmed currently-live on the connected broker, in
+    /// which case we attach the interactive live surface.
     ///
-    /// CASE A — LIVE (green dot): select the row's saved server (which
-    /// auto-reconnects if the endpoint changed), then attach to the
-    /// session by id. `attachLiveSession` `join_session`s the existing
-    /// id and navigates once the row materializes in the live list —
-    /// the old code only `switchTo`'d when the row was already in
-    /// `store.sessions`, so a broker-live-but-not-locally-tracked
-    /// session did nothing. We `dismiss()` so the home stack lands on
-    /// the freshly-attached session (driven by `selectedSessionID`).
+    /// The interactive `attachLiveSession` branch fires only when ALL of:
+    ///   1. the row's persisted status is `.live`,
+    ///   2. we are already connected to the row's server,
+    ///   3. the session id is present in `store.sessions` (the live list),
+    ///   4. `!store.isReadOnly(id)` — the store positively considers it
+    ///      live/running right now.
+    /// See `ResumeDecision.decide` for the pure rule.
     ///
-    /// CASE B — NOT CONFIRMED LIVE (.exited red dot OR .unknown): there's
-    /// no live WS we can trust, so opening from history must be READ-ONLY.
-    /// Push a viewer that fetches the persisted transcript over HTTP
-    /// (`SavedTranscriptView` → `fetchConversation`). We stay on the
-    /// Sessions stack rather than dismissing so the push reads as a
-    /// drill-in. `.unknown` covers a deleted/archived session whose row
-    /// still carries a stale status — opening it must not re-attach a
-    /// live interactive surface.
+    /// Why this inversion: the persisted `SavedSession.status` lags reality
+    /// — a session that died while the app was disconnected, or one the
+    /// broker no longer truly runs (removed/ended), keeps a stale `.live`.
+    /// The old code fell through to `attachLiveSession` whenever it wasn't
+    /// *positively* known dead, so those stale-`.live` rows opened
+    /// interactive (the bug). We now require proof of liveness.
     ///
-    /// Note on stale `.live`: the persisted `SavedSession.status` can lag
-    /// reality — a session that died while the app was disconnected never
-    /// recorded its exit, so the row stays `.live`. We therefore only take
-    /// the interactive attach branch when the row is `.live` AND, if we're
-    /// already connected to its server, the store does NOT positively know
-    /// the session is dead. The destination is also self-correcting:
-    /// `attachLiveSession` joins by id and `ProjectView.isReadOnly` now
-    /// flips to read-only the moment the broker's status reports the
-    /// session as exited, so a stale-`.live` row that turns out dead opens
-    /// as a transcript rather than a dead interactive surface.
+    /// Cross-server: if the row is on a different server we'd have to
+    /// switch + reconnect to even learn whether it's live — that's racy and
+    /// `connectedToRowServer` is false, so we deliberately open the
+    /// read-only transcript rather than blind-attach an unconfirmed
+    /// session. A genuinely-live session is still reachable interactively
+    /// from the Home list once that server is connected.
     private func resume(_ row: SavedSession) {
-        switch row.status {
-        case .exited, .unknown:
+        let server = store.savedServers.first(where: { $0.id == row.serverID })
+        // No saved server entry → treat as the current server (single-server
+        // setups don't have a saved-server row). A mismatched endpoint means
+        // the row lives on a different, not-currently-connected server.
+        let connectedToRowServer = server.map { store.endpoint == $0.endpoint } ?? true
+
+        let decision = ResumeDecision.decide(
+            status: row.status,
+            connectedToRowServer: connectedToRowServer,
+            sessionIsListed: store.sessions.contains(where: { $0.id == row.id }),
+            storeSaysReadOnly: store.isReadOnly(sessionID: row.id)
+        )
+
+        switch decision {
+        case .readOnlyTranscript:
             transcriptTarget = TranscriptTarget(session: row)
-        case .live:
-            let server = store.savedServers.first(where: { $0.id == row.serverID })
-            let connectedToRowServer = server.map { store.endpoint == $0.endpoint } ?? true
-            // If we're already on the row's server and the store has
-            // positively marked this session read-only (exited/failed),
-            // the persisted `.live` is stale — open the transcript.
-            if connectedToRowServer,
-               store.sessions.contains(where: { $0.id == row.id }),
-               store.isReadOnly(sessionID: row.id) {
-                transcriptTarget = TranscriptTarget(session: row)
-                return
-            }
-            if let server, !connectedToRowServer {
-                store.selectSavedServer(server.id, autoConnect: true)
-            }
+        case .attachLive:
             store.attachLiveSession(sessionID: row.id, assistant: row.agent)
             dismiss()
         }
