@@ -219,7 +219,7 @@ struct SessionsScreen: View {
             SavedTranscriptView(session: target.session).environment(store)
         }
         .alert(
-            "Delete session?",
+            "Delete permanently?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }
@@ -227,18 +227,18 @@ struct SessionsScreen: View {
             presenting: pendingDelete
         ) { target in
             Button("Delete", role: .destructive) {
-                // `store.exit` is the single delete path: it terminates
-                // the session on the harness (no-op / idempotent when the
-                // row is already terminal) AND sweeps the persistent
-                // "Resume" index so the row leaves history everywhere.
-                store.exit(sessionID: target.id)
+                // History is the ONLY place permanent delete lives (two-tier
+                // model): this tombstones the row (`SavedSessionsStore.remove`)
+                // so it leaves History forever, and ends it on the broker
+                // (idempotent for already-archived/exited rows).
+                store.permanentlyDelete(sessionID: target.id)
                 pendingDelete = nil
             }
             Button("Cancel", role: .cancel) {
                 pendingDelete = nil
             }
         } message: { target in
-            Text("Permanently deletes this session and its saved transcript from the server.\n\n\(target.title)")
+            Text("Removes this session from History. This can't be undone.\n\n\(target.title)")
         }
     }
 
@@ -285,6 +285,7 @@ struct SessionsScreen: View {
                                     )
                                 } label: {
                                     Label("Delete", systemImage: "trash")
+                                        .accessibilityLabel("Delete permanently")
                                 }
                                 Button {
                                     resume(row)

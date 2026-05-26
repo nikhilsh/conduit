@@ -877,26 +877,63 @@ final class SessionStore {
         }
     }
 
-    func exit(sessionID: String) {
+    /// Archive a session: END it on the broker (free server resources) but
+    /// KEEP it in history as a read-only transcript. This is the home-list
+    /// swipe action.
+    ///
+    /// Two-tier delete model (vs `permanentlyDelete`): archiving drops the
+    /// row from the *live* `sessions` list and issues the authoritative
+    /// broker DELETE (kills agent + tmux, archives the on-disk dir under
+    /// `archived-sessions/<id>`), but it does NOT tombstone the session.
+    /// Because the row stays in `SavedSessionsStore`, it keeps appearing in
+    /// History — now no longer live, so `isReadOnly` is true and it opens
+    /// read-only (#223); the broker preserves `conversation.jsonl`, so
+    /// `fetchConversation` still serves the transcript.
+    func archive(sessionID: String) {
         // Optimistic removal so the row disappears immediately. Previously
         // we cleared local state only *after* the async `exitSession` +
         // `refreshSessions` round-trip, so the row lingered until the
         // network call returned — it read as laggy/broken. Prune locally
         // first; `refreshSessions` re-pulls the live list afterward, so a
-        // failed exit self-corrects (the row reappears).
+        // failed teardown self-corrects (the row reappears).
         sessions.removeAll { $0.id == sessionID }
         sessionLifecycle[sessionID] = nil
         if selectedSessionID == sessionID { selectedSessionID = nil }
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
-        // Delete is terminal: also sweep the persistent "Resume" index so
-        // the row doesn't linger in the Sessions/history list (with a
-        // stale .live/.unknown status) after being deleted from the live
-        // list. The broker DELETE (#206) archives the dir server-side;
-        // the app's history should not keep showing a deleted session.
-        // Every delete path funnels through `exit`, so centralizing the
-        // sweep here covers the home list, the Sessions screen, and any
-        // future call site.
+        // NOTE: deliberately NO `SavedSessionsStore.shared.remove(...)` here.
+        // Archiving must leave the history row intact so it stays viewable
+        // as a read-only transcript. Permanent removal lives in
+        // `permanentlyDelete(sessionID:)`, invoked only from History.
+        tearDownOnBroker(sessionID: sessionID, phase: "session_archive")
+    }
+
+    /// Permanently delete a session from the app's History. Tombstones the
+    /// row (`SavedSessionsStore.remove` → `deletedIDs`) so it leaves
+    /// History forever and a later broker re-report can never resurrect it,
+    /// and also ends it on the broker (idempotent for already-archived /
+    /// exited rows). This is the History-only "Delete permanently" action.
+    ///
+    /// NOTE: the broker's archived dir on disk is NOT purged here — the
+    /// tombstone is purely app-side. Reaping `archived-sessions/<id>` on the
+    /// server is a separate future enhancement (no broker endpoint yet).
+    func permanentlyDelete(sessionID: String) {
+        sessions.removeAll { $0.id == sessionID }
+        sessionLifecycle[sessionID] = nil
+        if selectedSessionID == sessionID { selectedSessionID = nil }
+        if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // Delete is terminal: sweep the persistent "Resume" index AND record
+        // the tombstone so a status/list refresh (the broker's tmux can
+        // linger, #199) can never re-add the row to History.
         SavedSessionsStore.shared.remove(id: sessionID)
+        tearDownOnBroker(sessionID: sessionID, phase: "session_delete")
+    }
+
+    /// Shared broker teardown for both archive + permanent-delete: closes
+    /// the live WS handle (best-effort checkpoint flush) then issues the
+    /// authoritative HTTP DELETE that kills the agent + tmux, drops the
+    /// session from the broker's active set, and archives its on-disk dir.
+    /// No live WS handle is required, so it also works for exited rows.
+    private func tearDownOnBroker(sessionID: String, phase: String) {
         Task {
             // WS `exit` closes the live socket + flushes a checkpoint when
             // a session is attached. Best-effort: an exited session has no
@@ -907,14 +944,13 @@ final class SessionStore {
             // tmux, removes the session from the broker's active set, and
             // archives its dir. Without this the broker kept recovering the
             // session on disk and the row reappeared / sessions piled up.
-            // No live WS handle required, so it also works for exited rows.
             do {
                 try await self.deleteSession(sessionID: sessionID)
             } catch {
                 Telemetry.capture(
                     error: error,
-                    message: "iOS session delete failed",
-                    tags: ["surface": "ios", "phase": "session_delete"],
+                    message: "iOS session teardown failed",
+                    tags: ["surface": "ios", "phase": phase],
                     extras: ["endpoint": self.endpoint.displayHost, "session_id": sessionID]
                 )
             }

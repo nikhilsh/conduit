@@ -94,22 +94,22 @@ extension LitterUI {
                     SessionSearchView().environment(store)
                 }
                 .alert(
-                    "Delete session?",
+                    "Archive session?",
                     isPresented: Binding(
                         get: { pendingDelete != nil },
                         set: { if !$0 { pendingDelete = nil } }
                     ),
                     presenting: pendingDelete
                 ) { target in
-                    Button("Delete", role: .destructive) {
-                        store.exit(sessionID: target.id)
+                    Button("Archive") {
+                        store.archive(sessionID: target.id)
                         pendingDelete = nil
                     }
                     Button("Cancel", role: .cancel) {
                         pendingDelete = nil
                     }
                 } message: { target in
-                    Text("This permanently deletes \(target.title) from the server, including its history.")
+                    Text("Ends \(target.title) on the server and keeps it in History (read-only). Delete it permanently from History.")
                 }
                 .onChange(of: store.selectedSessionID) { _, new in
                     selectedSessionID = new
@@ -302,7 +302,12 @@ extension LitterUI {
                         HomeRowView(row: row)
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14))
+                            .listRowInsets(EdgeInsets(
+                                top: HomeRowMetrics.interRowSpacing / 2,
+                                leading: 14,
+                                bottom: HomeRowMetrics.interRowSpacing / 2,
+                                trailing: 14
+                            ))
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 if case .session(let id) = row.kind {
@@ -312,19 +317,26 @@ extension LitterUI {
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if case .session(let id) = row.kind {
-                                    Button(role: .destructive) {
+                                    // Swipe = ARCHIVE (two-tier delete model):
+                                    // ends the live session on the broker but
+                                    // keeps it in History as a read-only
+                                    // transcript. Permanent delete lives in
+                                    // History. Non-destructive tint so it reads
+                                    // as a light, recoverable action.
+                                    Button {
                                         pendingDelete = PendingSessionDelete(id: id, title: row.title)
                                     } label: {
-                                        Label("Delete", systemImage: "trash")
+                                        Label("Archive", systemImage: "archivebox")
                                     }
+                                    .tint(LitterUI.Palette.textSecondary.color)
                                 }
                             }
                             .contextMenu {
                                 if case .session(let id) = row.kind {
-                                    Button(role: .destructive) {
+                                    Button {
                                         pendingDelete = PendingSessionDelete(id: id, title: row.title)
                                     } label: {
-                                        Label("Delete", systemImage: "trash")
+                                        Label("Archive", systemImage: "archivebox")
                                     }
                                 }
                             }
@@ -388,27 +400,40 @@ private struct PendingSessionDelete: Identifiable, Equatable {
 /// Row metrics extracted as named constants so `LitterHomeRowGeometry
 /// Tests` can pin them. Changing any of these silently re-grows / re-
 /// shrinks the home list, which is exactly the drift the rebuild PR
-/// is trying to stop. Values are taken from litter's
-/// `SessionCanvasLine.swift` (audit §A.1.1 / §A.1.2 / §A.1.7).
+/// is trying to stop. Typography (title/subtitle) stays litter-faithful
+/// (audit §A.1.1); the row chrome is a contained glass card (styling
+/// polish — the prior flat row left the status dot floating outside the
+/// row's content to the left and read as tall/empty).
 enum HomeRowMetrics {
     static let titlePointSize: CGFloat = 13
     static let subtitlePointSize: CGFloat = 11
-    static let leadingPadding: CGFloat = 1
-    static let trailingPadding: CGFloat = 8
-    static let verticalPadding: CGFloat = 5
     static let indicatorSize: CGFloat = 7
-    static let activeRowCornerRadius: CGFloat = 6
-    static let activeRowOpacity: Double = 0.55
+    /// The selected row gets a brand-tinted card; an unselected row keeps
+    /// the neutral glass surface. Both share `cardCornerRadius`.
+    static let cardCornerRadius: CGFloat = 12
+    /// Internal card padding — the status dot + text live INSIDE this, so
+    /// nothing floats against the screen gutter.
+    static let cardHorizontalPadding: CGFloat = 12
+    static let cardVerticalPadding: CGFloat = 9
+    /// Gap between the leading status dot and the text column.
+    static let dotTextSpacing: CGFloat = 10
+    /// Vertical gap between stacked cards in the list.
+    static let interRowSpacing: CGFloat = 6
+    /// Brand tint opacity on the selected card.
+    static let selectedTintOpacity: Double = 0.22
 }
 
 private struct HomeRowView: View {
     let row: LitterUI.HomeRow
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: HomeRowMetrics.dotTextSpacing) {
+            // Status dot lives INSIDE the card now (it used to float in
+            // the screen gutter to the left). Vertically centred against
+            // the title for a clean leading rail.
             indicator
                 .frame(width: HomeRowMetrics.indicatorSize, height: HomeRowMetrics.indicatorSize)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 // Prominent friendly name. 13pt semibold per audit §A.1.1
                 // (litter-faithful density); single line, truncating.
                 Text(row.title)
@@ -420,17 +445,16 @@ private struct HomeRowView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.leading, HomeRowMetrics.leadingPadding)
-        .padding(.trailing, HomeRowMetrics.trailingPadding)
-        .padding(.vertical, HomeRowMetrics.verticalPadding)
-        .background(
-            // Active-row fill per audit §A.1.3 — litter selects a row
-            // by painting a 6pt rounded rect at 55% surfaceLight,
-            // not by swapping an SF Symbol.
-            RoundedRectangle(cornerRadius: HomeRowMetrics.activeRowCornerRadius, style: .continuous)
-                .fill(LitterUI.Palette.surfaceLight.color.opacity(row.isSelected ? HomeRowMetrics.activeRowOpacity : 0))
+        .padding(.horizontal, HomeRowMetrics.cardHorizontalPadding)
+        .padding(.vertical, HomeRowMetrics.cardVerticalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .litterGlassRoundedRect(
+            cornerRadius: HomeRowMetrics.cardCornerRadius,
+            tint: row.isSelected
+                ? LitterUI.Palette.brand.color.opacity(HomeRowMetrics.selectedTintOpacity)
+                : nil
         )
-        .contentShape(Rectangle())
+        .contentShape(RoundedRectangle(cornerRadius: HomeRowMetrics.cardCornerRadius, style: .continuous))
     }
 
     /// Secondary line: agent chip · status (tinted by run state) ·

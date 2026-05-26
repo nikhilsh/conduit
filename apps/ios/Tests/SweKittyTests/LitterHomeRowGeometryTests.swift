@@ -2,13 +2,13 @@ import Testing
 import SwiftUI
 @testable import SweKitty
 
-/// Pins the litter-faithful home row metrics chosen in
-/// `PLAN-LITTER-VISUAL-PARITY` PR 3. Before this PR the home row was
-/// rendered at `.title3.bold` (~20pt) with `.padding(.horizontal, 14)
-/// .vertical, 12`, which is roughly 2.8× litter's actual row density
-/// (audit §A.1.1 / §A.1.2). If a refactor accidentally restores any of
-/// the loose values, the row stops matching litter's reference and the
-/// audit drift comes back — these expects catch that.
+/// Pins the home row metrics. Typography stays litter-faithful
+/// (`PLAN-LITTER-VISUAL-PARITY` PR 3, audit §A.1.1) — a refactor that
+/// restores the old loose `.title3.bold` row would reintroduce the audit
+/// drift. The row chrome is the styling-polish card: the status dot now
+/// lives INSIDE a contained glass card (it used to float in the screen
+/// gutter to the left) with tightened padding so the row no longer reads
+/// tall/empty. These expects catch a regression on either front.
 @Suite("Litter HomeRow geometry")
 struct LitterHomeRowGeometryTests {
 
@@ -20,30 +20,25 @@ struct LitterHomeRowGeometryTests {
         #expect(HomeRowMetrics.subtitlePointSize == 11)
     }
 
-    @Test func leadingPaddingMatchesLitter() {
-        // Litter's `SessionCanvasLine` runs flush to the left gutter
-        // (`.padding(.leading, 1)`). The trailing side keeps a small
-        // 8pt gap so the trailing chevron / time stamp doesn't kiss
-        // the edge.
-        #expect(HomeRowMetrics.leadingPadding == 1)
-        #expect(HomeRowMetrics.trailingPadding == 8)
-    }
-
-    @Test func verticalPaddingMatchesLitter() {
-        #expect(HomeRowMetrics.verticalPadding == 5)
-    }
-
     @Test func indicatorIsSevenPoints() {
         // 7pt filled dot per audit §A.1.7 — replaces the old SF Symbol
         // `circle.fill`/`circle` swap.
         #expect(HomeRowMetrics.indicatorSize == 7)
     }
 
-    @Test func activeRowFillMatchesLitter() {
-        // Litter selects a row by painting a 6pt rounded rect at
-        // 55% `surfaceLight` (audit §A.1.3). Both values matter — a
-        // looser corner reads "tile," a tighter opacity reads "muted."
-        #expect(HomeRowMetrics.activeRowCornerRadius == 6)
-        #expect(HomeRowMetrics.activeRowOpacity == 0.55)
+    @Test func cardChromeIsContained() {
+        // The dot + text sit INSIDE the card's internal padding, so
+        // nothing floats against the screen gutter. Tight vertical
+        // padding keeps the card from reading tall/empty.
+        #expect(HomeRowMetrics.cardCornerRadius == 12)
+        #expect(HomeRowMetrics.cardHorizontalPadding == 12)
+        #expect(HomeRowMetrics.cardVerticalPadding == 9)
+        #expect(HomeRowMetrics.dotTextSpacing == 10)
+    }
+
+    @Test func selectedCardCarriesBrandTint() {
+        // Selection is conveyed by a brand-tinted card, not an SF Symbol
+        // swap or a stale-green dot.
+        #expect(HomeRowMetrics.selectedTintOpacity == 0.22)
     }
 }

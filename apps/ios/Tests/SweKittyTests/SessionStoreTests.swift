@@ -364,3 +364,53 @@ struct SessionStoreReadOnlyTests {
         #expect(store.isReadOnly(sessionID: id))
     }
 }
+
+/// `ios-archive-delete-model` — pins the two-tier delete model split:
+///   - `archive(sessionID:)` (home-list swipe): drops the row from the
+///     live `sessions` list + ends it on the broker, but does NOT
+///     tombstone — the session stays in History as a read-only transcript.
+///   - `permanentlyDelete(sessionID:)` (History only): drops the live row
+///     AND tombstones via `SavedSessionsStore`, so it leaves History for
+///     good.
+@Suite("SessionStore — archive vs permanent delete")
+@MainActor
+struct SessionStoreArchiveDeleteTests {
+
+    private func session(_ id: String) -> ProjectSession {
+        ProjectSession(
+            id: id, name: id, assistant: "claude", branch: nil,
+            preview: nil, reasoningEffort: nil, cwd: nil,
+            startedAt: nil, lastActivityAt: nil, displayName: nil
+        )
+    }
+
+    @Test func archiveDropsLiveRowButDoesNotTombstone() {
+        let store = SessionStore()
+        let id = "archive-\(UUID().uuidString)"
+        store.sessions = [session(id)]
+        store.selectedSessionID = id
+
+        store.archive(sessionID: id)
+
+        // Live row gone + selection cleared so the home list updates
+        // immediately…
+        #expect(!store.sessions.contains { $0.id == id })
+        #expect(store.selectedSessionID == nil)
+        // …but NO tombstone, so the History row survives as read-only.
+        #expect(!SavedSessionsStore.shared.isTombstoned(id: id))
+    }
+
+    @Test func permanentlyDeleteDropsLiveRowAndTombstones() {
+        let store = SessionStore()
+        let id = "permadelete-\(UUID().uuidString)"
+        store.sessions = [session(id)]
+        store.selectedSessionID = id
+
+        store.permanentlyDelete(sessionID: id)
+
+        #expect(!store.sessions.contains { $0.id == id })
+        #expect(store.selectedSessionID == nil)
+        // Permanent delete is the ONLY path that tombstones.
+        #expect(SavedSessionsStore.shared.isTombstoned(id: id))
+    }
+}

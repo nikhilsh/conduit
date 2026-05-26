@@ -202,6 +202,47 @@ struct SavedSessionsStoreTests {
         #expect(restored.recent().isEmpty)
     }
 
+    // MARK: - Two-tier delete model (archive vs permanent delete)
+
+    @Test func archiveKeepsHistoryRowWithoutTombstone() {
+        // ARCHIVE (home-list swipe → `SessionStore.archive`) ends the live
+        // session on the broker but must NOT touch the saved index: the row
+        // stays in History as a read-only transcript and is NOT tombstoned,
+        // so a later broker re-report can legitimately keep it fresh.
+        let store = makeStore()
+        let session = makeSession(id: "s-archived")
+        store.upsert(session: session, serverID: "srv-a", status: nil,
+                     firstUserMessage: "hi", messageCount: 1, isExited: false)
+
+        // Archive does NOT call `remove` — the History row survives, no
+        // tombstone is recorded.
+        #expect(store.recent().contains { $0.id == "s-archived" })
+        #expect(!store.isTombstoned(id: "s-archived"))
+
+        // A subsequent upsert (broker still reports it post-archive) keeps
+        // the row in History — archive is not terminal for the saved index.
+        store.upsert(session: session, serverID: "srv-a", status: nil,
+                     firstUserMessage: "hi", messageCount: 2, isExited: true)
+        #expect(store.recent().contains { $0.id == "s-archived" })
+        #expect(!store.isTombstoned(id: "s-archived"))
+    }
+
+    @Test func permanentDeleteTombstonesAndDropsFromHistory() {
+        // PERMANENT DELETE (History-only → `SessionStore.permanentlyDelete`
+        // → `SavedSessionsStore.remove`) removes the row from History AND
+        // tombstones it so it can never reappear. This is the only path
+        // that tombstones — the home-list swipe (archive) must not.
+        let store = makeStore()
+        let session = makeSession(id: "s-permadelete")
+        store.upsert(session: session, serverID: "srv-a", status: nil,
+                     firstUserMessage: "hi", messageCount: 1, isExited: false)
+        #expect(store.recent().contains { $0.id == "s-permadelete" })
+
+        store.remove(id: "s-permadelete")
+        #expect(!store.recent().contains { $0.id == "s-permadelete" })
+        #expect(store.isTombstoned(id: "s-permadelete"))
+    }
+
     @Test func resetClearsTombstones() {
         let store = makeStore()
         store.remove(id: "s-x")
