@@ -208,6 +208,9 @@ fun HomeScreen(
             } else {
                 Column(
                     modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp),
+                    // Breathing room between cards so the list doesn't read
+                    // as one packed slab.
+                    verticalArrangement = Arrangement.spacedBy(LitterHomeRowMetrics.rowGap.dp),
                 ) {
                     sessions.forEach { session ->
                         val isSelected = selectedId == session.id
@@ -229,15 +232,19 @@ fun HomeScreen(
                                 conversationLog[session.id],
                             ),
                         )
-                        // Active-row fill per audit §A.1.3 — litter
-                        // selects by painting a 6dp rounded rect at
-                        // 55% surfaceVariant, not by swapping an icon.
+                        // Every row now sits on a real Material 3 card — a
+                        // faint surfaceVariant fill, rounded corners, and the
+                        // status dot brought inside the card rather than
+                        // floating at the list's left edge. Selection bumps
+                        // the fill so it still stands out without an icon swap.
                         Surface(
-                            shape = RoundedCornerShape(LitterHomeRowMetrics.activeRowCornerRadius.dp),
-                            color = if (isSelected)
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = LitterHomeRowMetrics.activeRowOpacity)
-                            else
-                                androidx.compose.ui.graphics.Color.Transparent,
+                            shape = RoundedCornerShape(LitterHomeRowMetrics.cardCornerRadius.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(
+                                alpha = if (isSelected)
+                                    LitterHomeRowMetrics.selectedRowOpacity
+                                else
+                                    LitterHomeRowMetrics.restingRowOpacity,
+                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .combinedClickable(
@@ -250,16 +257,15 @@ fun HomeScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    // Comfortable two-line row with a proper
-                                    // tap target — looser than the single-line
-                                    // litter metrics now that the secondary
-                                    // line carries an agent chip + time.
-                                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                                    // Snug padding so the card hugs its two
+                                    // lines instead of standing tall and empty.
+                                    .padding(horizontal = 14.dp, vertical = 11.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(11.dp),
                             ) {
                                 // Status dot: copper accent when live/running,
-                                // muted when exited/idle/offline.
+                                // muted when exited/idle/offline. Aligned to the
+                                // title line, inside the card.
                                 Box(
                                     modifier = Modifier
                                         .size(LitterHomeRowMetrics.indicatorSize.dp)
@@ -270,7 +276,7 @@ fun HomeScreen(
                                 )
                                 Column(
                                     modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     // Prominent friendly name, single line.
                                     Text(
@@ -333,18 +339,21 @@ fun HomeScreen(
     pendingDelete?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete session?") },
+            title = { Text("Archive session?") },
             text = {
+                // Two-tier delete, tier 1: the active-list action archives
+                // (ends the live session, keeps it read-only in History).
+                // Permanent deletion lives in History.
                 Text(
-                    "This permanently deletes ${target.title} from the server, including its history.",
+                    "Ends ${target.title} on the server. It stays in History (read-only) — delete it permanently from there.",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    store.exit(target.id)
+                    store.archive(target.id)
                     pendingDelete = null
                 }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text("Archive")
                 }
             },
             dismissButton = {
@@ -379,6 +388,15 @@ internal object LitterHomeRowMetrics {
     const val indicatorSize: Float = 7f
     const val activeRowCornerRadius: Float = 6f
     const val activeRowOpacity: Float = 0.55f
+
+    // Card-style row polish: each row is its own Material 3 card with a
+    // faint resting fill (so the status dot reads as inside the card) that
+    // brightens on selection, larger corners than the bare active-rect, and
+    // a small inter-card gap.
+    const val cardCornerRadius: Float = 16f
+    const val restingRowOpacity: Float = 0.30f
+    const val selectedRowOpacity: Float = 0.60f
+    const val rowGap: Float = 8f
 }
 
 private fun canIssueCommands(state: HarnessState): Boolean = when (state) {

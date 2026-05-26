@@ -299,6 +299,20 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     private val _deletedIds = MutableStateFlow<List<String>>(emptyList())
     val deletedIds: StateFlow<List<String>> = _deletedIds.asStateFlow()
 
+    /**
+     * Persisted archived-session index. Android's History
+     * ([SessionSearchScreen]) used to list only the LIVE [sessions], so a
+     * session that ended (and dropped out of the broker's active list)
+     * disappeared from History with nowhere to live. This index mirrors
+     * iOS `SavedSessionsStore`: every live session is upserted here (from
+     * [onStatus] / [onExit]) so an ended/archived chat remains visible in
+     * History read-only — its transcript stays fetchable from the broker's
+     * `archived-sessions/<id>` via [fetchConversation]. Archiving keeps the
+     * row; permanent delete tombstones the id and removes the row.
+     */
+    private val _savedSessions = MutableStateFlow<List<SavedSession>>(emptyList())
+    val savedSessions: StateFlow<List<SavedSession>> = _savedSessions.asStateFlow()
+
     /** Banner-style error for the most recent session-creation failure. */
     private val _sessionCreationError = MutableStateFlow<String?>(null)
     val sessionCreationError: StateFlow<String?> = _sessionCreationError.asStateFlow()
@@ -594,6 +608,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             _savedServers.value = decodeSavedServers(p.getString(KEY_SAVED_SERVERS, null))
             _displayNames.value = decodeDisplayNames(p.getString(KEY_DISPLAY_NAMES, null))
             _deletedIds.value = decodeDeletedIds(p.getString(KEY_DELETED_IDS, null))
+            _savedSessions.value = SavedSessionsReducer.decode(p.getString(KEY_SAVED_SESSIONS, null))
             refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
@@ -1156,21 +1171,29 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         }
     }
 
-    fun exit(sessionId: String) {
-        // Tombstone first: delete is terminal. The deployed broker keeps
-        // tmux-backed PTYs alive (#199), so a just-deleted session keeps
-        // getting reported by listSessions and would reappear (reading as
-        // live → interactive). Recording the tombstone here — on every
-        // delete path (HomeScreen + drawer both funnel through `exit`) —
-        // lets refreshSessions filter it out permanently, even across
-        // relaunches. The broker DELETE below is the authoritative
-        // teardown; the tombstone is the client-side guarantee regardless.
-        tombstone(sessionId)
-        // Optimistic removal so the row disappears immediately. Previously
-        // we cleared state only *after* the async exitSession +
-        // refreshSessions round-trip, so the row lingered until the call
-        // returned (read as laggy). Prune locally first; refreshSessions
-        // re-pulls the live list afterward, so a failed exit self-corrects.
+    /**
+     * TWO-TIER delete, tier 1 — ARCHIVE (the active-list swipe/long-press
+     * action). Ends the live session on the broker to free resources but
+     * KEEPS it viewable read-only in History. Concretely:
+     *  - persist a snapshot into the archived index ([recordSavedSession]
+     *    with `isExited = true`) BEFORE we drop the live row, so there's
+     *    data to show in History even though the broker will stop listing
+     *    the session;
+     *  - drop it from the live [sessions] + clear lifecycle so the home row
+     *    disappears immediately (optimistic);
+     *  - issue the authoritative broker DELETE (kills agent + tmux, archives
+     *    the dir server-side under `archived-sessions/<id>` so the
+     *    transcript stays fetchable via [fetchConversation]);
+     *  - DO NOT tombstone — the session must still appear in History.
+     *
+     * Because the archived session is no longer live, [isReadOnly] returns
+     * true for it, so opening it from History yields the read-only
+     * transcript surface. Mirror of the iOS two-tier delete's archive path.
+     */
+    fun archive(sessionId: String) {
+        // Snapshot into History before the live row + status are gone.
+        recordSavedSession(sessionId, isExited = true)
+        // Optimistic removal so the row disappears immediately.
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
         if (_selectedId.value == sessionId) _selectedId.value = null
@@ -1182,8 +1205,44 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             // Authoritative broker-side delete: kills the agent process +
             // tmux, removes the session from the broker's active set, and
             // archives its dir. Without this the broker kept recovering the
-            // session on disk and the row reappeared / sessions piled up.
-            // No live WS handle required, so it also works for exited rows.
+            // session on disk and the row reappeared / sessions piled up. The
+            // broker preserves the transcript under `archived-sessions/<id>`,
+            // so History stays read-only-viewable. No live WS handle required.
+            runCatching { deleteSession(sessionId) }.onFailure { t ->
+                Telemetry.capture(
+                    error = t,
+                    message = "Android session archive failed",
+                    tags = mapOf("surface" to "android", "phase" to "session_archive"),
+                    extras = mapOf("endpoint" to _endpoint.value.displayHost, "session_id" to sessionId),
+                )
+            }
+            refreshSessions()
+        }
+    }
+
+    /**
+     * TWO-TIER delete, tier 2 — PERMANENT DELETE (the History-only
+     * action). Erases the session from the app entirely:
+     *  - [tombstone] the id (persisted `deleted_session_ids`) so a status /
+     *    list refresh — the broker keeps tmux-backed PTYs alive (#199) —
+     *    can NEVER resurrect it in the live list ([refreshSessions]) or the
+     *    archived index ([SavedSessionsReducer.upsert] suppresses
+     *    tombstoned ids);
+     *  - remove it from the archived index so it stops showing in History;
+     *  - drop any live row (covers permanent-deleting a still-live session).
+     *
+     * Kept app-side: we do NOT add a new broker endpoint. The active-list
+     * archive already issued the broker DELETE; purging the broker's
+     * `archived-sessions/<id>` dir is deferred (no endpoint for it yet).
+     */
+    fun deletePermanently(sessionId: String) {
+        tombstone(sessionId)
+        removeSavedSession(sessionId)
+        _sessions.value = _sessions.value.filterNot { it.id == sessionId }
+        updateLifecycle { it - sessionId }
+        if (_selectedId.value == sessionId) _selectedId.value = null
+        viewModelScope.launch {
+            client?.let { c -> runCatching { withContext(Dispatchers.IO) { c.exitSession(sessionId) } } }
             runCatching { deleteSession(sessionId) }.onFailure { t ->
                 Telemetry.capture(
                     error = t,
@@ -1220,6 +1279,83 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         }
         _deletedIds.value = next
         prefs?.edit()?.putString(KEY_DELETED_IDS, encodeDeletedIds(next))?.apply()
+    }
+
+    /**
+     * Stable server id for the archived index — prefers the saved-server
+     * row's UUID for the active endpoint, falling back to the sanitized
+     * host (or `(unsaved)`). Mirror of iOS `savedHistoryServerID`.
+     */
+    private fun savedHistoryServerId(): String {
+        _savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.let { return it.id }
+        val host = _endpoint.value.displayHost
+        return if (host.isEmpty() || host == "(no endpoint)") "(unsaved)" else host
+    }
+
+    /**
+     * Fold the latest snapshot of [sessionId] into the persisted archived
+     * index. Invoked from [onStatus] (every status frame) and [onExit] /
+     * [archive] (with `isExited = true` so the row locks terminal).
+     * Idempotent — [SavedSessionsReducer.upsert] suppresses no-op writes.
+     * `internal` so unit tests can drive it without `Dispatchers.Main`.
+     * Mirror of iOS `recordSavedSession`.
+     */
+    internal fun recordSavedSession(sessionId: String, isExited: Boolean = false) {
+        val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return
+        val exitedFromLifecycle = _sessionLifecycle.value[sessionId] is SessionLifecycle.Exited
+        val messageCount = _conversationLog.value[sessionId]?.size
+            ?: _chatLog.value[sessionId]?.size
+            ?: 0
+        val nowIso = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        val next = SavedSessionsReducer.upsert(
+            current = _savedSessions.value,
+            session = session,
+            serverId = savedHistoryServerId(),
+            status = _statusBySession.value[sessionId],
+            firstUserMessage = firstUserMessageOf(_conversationLog.value[sessionId]),
+            messageCount = messageCount,
+            isExited = isExited || exitedFromLifecycle,
+            deleted = _deletedIds.value.toSet(),
+            nowIso = nowIso,
+        )
+        if (next !== _savedSessions.value) {
+            _savedSessions.value = next
+            persistSavedSessions(next)
+        }
+    }
+
+    /**
+     * Remove every archived-index row for [sessionId] (permanent-delete
+     * path). `internal` for the same testability reason as [tombstone].
+     */
+    internal fun removeSavedSession(sessionId: String) {
+        val next = SavedSessionsReducer.remove(_savedSessions.value, sessionId)
+        if (next !== _savedSessions.value) {
+            _savedSessions.value = next
+            persistSavedSessions(next)
+        }
+    }
+
+    /**
+     * Test seam: register a live [ProjectSession] in the in-memory list so
+     * unit tests can drive [recordSavedSession] (and thus the archive-vs-
+     * permanent contract) without a live broker/WS. Production code only
+     * ever populates [_sessions] via [refreshSessions]/[listSessions].
+     */
+    internal fun registerSessionForTest(session: ProjectSession) {
+        _sessions.value = _sessions.value.filterNot { it.id == session.id } + session
+    }
+
+    /**
+     * Latest-first archived rows for History, tombstoned ids excluded.
+     * Mirror of iOS `SavedSessionsStore.recent`.
+     */
+    fun savedSessionsRecent(limit: Int = 500): List<SavedSession> =
+        SavedSessionsReducer.recent(_savedSessions.value, _deletedIds.value.toSet(), limit)
+
+    private fun persistSavedSessions(rows: List<SavedSession>) {
+        prefs?.edit()?.putString(KEY_SAVED_SESSIONS, SavedSessionsReducer.encode(rows))?.apply()
     }
 
     fun sendInput(sessionId: String, data: ByteArray) {
@@ -1603,6 +1739,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             prefs?.edit()?.putString(KEY_DISPLAY_NAMES, encodeDisplayNames(next))?.apply()
         }
         _harness.value = HarnessState.Live
+        // Fold this snapshot into the persisted archived index so the
+        // session survives in History after it ends (Android used to list
+        // only live sessions). Idempotent; tombstoned ids are suppressed.
+        recordSavedSession(status.session)
         refreshSessions()
     }
 
@@ -1618,6 +1758,8 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 health = "red",
             ))
         }
+        // Lock the archived-index row terminal so History shows it exited.
+        recordSavedSession(sessionId, isExited = true)
     }
 
     override fun onDisconnected(reason: String) {
@@ -1720,6 +1862,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         private const val KEY_RECENT_DIRS = "swekitty.recent_dirs_by_server"
         private const val KEY_DISPLAY_NAMES = "swekitty.session_display_names"
         private const val KEY_DELETED_IDS = "swekitty.deleted_session_ids"
+        private const val KEY_SAVED_SESSIONS = "swekitty.saved_sessions"
 
         /** Upper bound on retained delete tombstones. */
         private const val TOMBSTONE_CAP = 500

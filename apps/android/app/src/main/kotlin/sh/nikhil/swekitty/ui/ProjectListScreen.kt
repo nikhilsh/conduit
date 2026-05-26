@@ -51,10 +51,11 @@ fun ProjectListScreen(
     val creationError by store.sessionCreationError.collectAsState()
     var showAgentPicker by remember { mutableStateOf(false) }
     var showAddServer by remember { mutableStateOf(false) }
-    // Long-press delete confirmation target. The drawer list previously
+    // Long-press archive confirmation target. The drawer list previously
     // had no delete affordance (only HomeScreen did); we mirror that
-    // long-press → confirm → store.exit flow here so the broker-side
-    // DELETE wired in PR #206 is reachable from this list too.
+    // long-press → confirm → store.archive flow here. Archiving ends the
+    // live session on the broker (PR #206 DELETE) but keeps it read-only
+    // in History; permanent deletion is a History-only action.
     var pendingDelete by remember { mutableStateOf<DrawerSessionDeleteTarget?>(null) }
 
     val visible = remember(sessions, lifecycle) { store.visibleSessions() }
@@ -173,18 +174,18 @@ fun ProjectListScreen(
     pendingDelete?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete session?") },
+            title = { Text("Archive session?") },
             text = {
                 Text(
-                    "This permanently deletes ${target.title} from the server, including its history.",
+                    "Ends ${target.title} on the server. It stays in History (read-only) — delete it permanently from there.",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    store.exit(target.id)
+                    store.archive(target.id)
                     pendingDelete = null
                 }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text("Archive")
                 }
             },
             dismissButton = {

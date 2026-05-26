@@ -118,7 +118,7 @@ fun ProjectScreen(
                 onMenuDismiss = { menuExpanded = false },
                 onSwitchToClaude = { menuExpanded = false; store.switchAgent(session.id, "claude") },
                 onSwitchToCodex  = { menuExpanded = false; store.switchAgent(session.id, "codex") },
-                onEndSession    = { menuExpanded = false; store.exit(session.id) },
+                onEndSession    = { menuExpanded = false; store.archive(session.id) },
                 browserMode = browserMode,
                 onBrowserModeChange = { browserMode = it },
                 onJumpToBrowser = {
