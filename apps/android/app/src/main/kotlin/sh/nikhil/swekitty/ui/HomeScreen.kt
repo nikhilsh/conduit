@@ -232,6 +232,14 @@ fun HomeScreen(
                                 conversationLog[session.id],
                             ),
                         )
+                        // One-line latest-activity preview (iOS #238
+                        // parity): the most recent non-user item (assistant
+                        // reply or tool action), condensed. Complements the
+                        // title (the first user message) so active sessions
+                        // are distinguishable at a glance. Null → no line.
+                        val activityPreview = sh.nikhil.swekitty.latestActivityPreviewOf(
+                            conversationLog[session.id],
+                        )
                         // Every row now sits on a real Material 3 card — a
                         // faint surfaceVariant fill, rounded corners, and the
                         // status dot brought inside the card rather than
@@ -296,6 +304,18 @@ fun HomeScreen(
                                             session.lastActivityAt ?: session.startedAt,
                                         ),
                                     )
+                                    // Tertiary line: latest-activity preview
+                                    // (iOS #238). Muted, single line, only
+                                    // when there's non-user activity to show.
+                                    activityPreview?.let { preview ->
+                                        Text(
+                                            preview,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
                             }
                         }

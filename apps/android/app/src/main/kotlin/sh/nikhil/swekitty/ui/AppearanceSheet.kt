@@ -39,6 +39,7 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val themeMode by appearance.themeMode.collectAsState()
     val fontFamily by appearance.fontFamily.collectAsState()
+    val bodyPointSize by appearance.bodyPointSize.collectAsState()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -85,6 +86,54 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                         )
                     }
+                }
+            }
+
+            // Body font-size slider — matches iOS #239's AppearanceSheet
+            // so the Session Info → Appearance entry point carries the
+            // full theme / font / font-size trio (not just theme + font).
+            // Backed by the same AppearanceStore.bodyPointSize the
+            // Settings slider drives.
+            SettingsSection("Font Size") {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    androidx.compose.foundation.layout.Row(
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Body",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "${bodyPointSize.toInt()}pt",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        )
+                    }
+                    androidx.compose.material3.Slider(
+                        value = bodyPointSize,
+                        onValueChange = { appearance.setBodyPointSize(it) },
+                        valueRange = AppearanceStore.BODY_POINT_SIZE_RANGE,
+                        steps = (AppearanceStore.BODY_POINT_SIZE_RANGE.endInclusive
+                            - AppearanceStore.BODY_POINT_SIZE_RANGE.start).toInt() - 1,
+                        colors = androidx.compose.material3.SliderDefaults.colors(
+                            thumbColor = SweKittyTheme.accentStrong(),
+                            activeTrackColor = SweKittyTheme.accentStrong(),
+                        ),
+                    )
+                    Text(
+                        "The quick brown fox jumps over the lazy dog.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = androidx.compose.ui.unit.TextUnit(
+                            bodyPointSize,
+                            androidx.compose.ui.unit.TextUnitType.Sp,
+                        ),
+                    )
                 }
             }
 
