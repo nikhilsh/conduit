@@ -18,6 +18,7 @@ extension LitterUI {
         let session: ProjectSession
 
         @State private var showRename = false
+        @State private var showAppearance = false
 
         var body: some View {
             NavigationStack {
@@ -28,6 +29,7 @@ extension LitterUI {
                             hero
                             actionRow
                             statsGrid
+                            detailsCard
                             serverCard
                         }
                         .padding(.horizontal, 16)
@@ -52,6 +54,9 @@ extension LitterUI {
                         initialDraft: store.displayName(for: session)
                     )
                 }
+                .sheet(isPresented: $showAppearance) {
+                    LitterUI.AppearanceSheet()
+                }
             }
         }
 
@@ -66,13 +71,19 @@ extension LitterUI {
             let mcp = log.filter { ($0.toolName ?? "").lowercased().contains("mcp") }.count
             let files = Set(log.flatMap { $0.files.map { $0.path } }).count
             let exec = Int(log.compactMap { $0.durationMs }.reduce(0, +))
+            // Prefer the live `SessionStatus` for the agent/timestamps —
+            // it's refreshed by broker deltas, whereas the `ProjectSession`
+            // is a snapshot from when the row was last materialized. Fall
+            // back to the session fields when no status delta has landed.
+            let status = store.statusBySession[session.id]
             return LitterUI.SessionInfoSnapshot(
                 sessionID: session.id,
                 displayName: store.displayName(for: session),
-                assistant: session.assistant,
-                reasoningEffort: session.reasoningEffort,
-                cwd: session.cwd,
-                startedAt: session.startedAt,
+                assistant: status?.assistant ?? session.assistant,
+                reasoningEffort: status?.reasoningEffort ?? session.reasoningEffort,
+                cwd: status?.cwd ?? session.cwd,
+                startedAt: status?.startedAt ?? session.startedAt,
+                lastActivityAt: status?.lastActivityAt ?? session.lastActivityAt,
                 messagesCount: log.count,
                 turnsCount: turns,
                 commandsCount: commands,
@@ -112,7 +123,7 @@ extension LitterUI {
         private var actionRow: some View {
             HStack(spacing: 12) {
                 actionButton(systemImage: "paintbrush.fill", label: "Appearance") {
-                    // Appearance edits live in Settings for now.
+                    showAppearance = true
                 }
                 actionButton(systemImage: "arrow.triangle.branch", label: "Fork") {
                     store.forkSession(sessionID: session.id)
@@ -160,6 +171,51 @@ extension LitterUI {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
                     .litterGlassRoundedRect(cornerRadius: 14, config: .card)
+                }
+            }
+        }
+
+        private var detailsCard: some View {
+            let details = LitterUI.SessionInfoViewModel.details(snapshot)
+            return Group {
+                if !details.isEmpty {
+                    LitterUI.Card {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Details")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                                .textCase(.uppercase)
+                                .padding(.bottom, 8)
+                            ForEach(Array(details.enumerated()), id: \.element.id) { index, detail in
+                                detailRow(detail)
+                                if index < details.count - 1 {
+                                    Divider()
+                                        .background(LitterUI.Palette.separator.color)
+                                        .padding(.vertical, 8)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private func detailRow(_ detail: LitterUI.SessionInfoDetail) -> some View {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(detail.label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                Spacer(minLength: 12)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(detail.value)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                        .multilineTextAlignment(.trailing)
+                    if let caption = detail.caption {
+                        Text(caption)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(LitterUI.Palette.textMuted.color)
+                    }
                 }
             }
         }
