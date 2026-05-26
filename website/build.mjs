@@ -102,7 +102,7 @@ function htmlPage({ tagName, publishedAt, releaseUrl, ipa, apk, manifestUrl, ota
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>SweKitty</title>
-<meta name="description" content="Mobile harness for Claude Code and Codex sessions.">
+<meta name="description" content="Mobile client for Claude Code and Codex sessions.">
 <meta name="theme-color" content="#0c0e12" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
@@ -342,7 +342,7 @@ function htmlPage({ tagName, publishedAt, releaseUrl, ipa, apk, manifestUrl, ota
     <h1>SweKitty</h1>
   </header>
 
-  <p class="tagline">Mobile harness for Claude Code and Codex.</p>
+  <p class="tagline">Mobile client for Claude Code and Codex.</p>
 
   <div class="release" id="release" data-published="${publishedAt}">
     <span class="dot" aria-hidden="true"></span>
@@ -382,7 +382,7 @@ function htmlPage({ tagName, publishedAt, releaseUrl, ipa, apk, manifestUrl, ota
   </section>
 
   <section>
-    <h2 class="label">Run the harness</h2>
+    <h2 class="label">Run the server</h2>
     <pre><code>${installOneLiner}</code></pre>
   </section>
 
