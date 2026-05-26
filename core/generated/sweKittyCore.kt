@@ -958,7 +958,7 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_connect(`ptr`: Pointer,`delegate`: Long,
     ): Long
-    fun uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_disconnect(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1267,7 +1267,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 57151.toShort()) {
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 11612.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_disconnect() != 65142.toShort()) {
@@ -2217,7 +2217,7 @@ public interface SweKittyClientInterface {
     
     suspend fun `connect`(`delegate`: SweKittyDelegate)
     
-    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?): kotlin.String
+    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?): kotlin.String
     
     fun `disconnect`()
     
@@ -2407,12 +2407,12 @@ open class SweKittyClient: Disposable, AutoCloseable, SweKittyClientInterface {
     
     @Throws(SweKittyException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?) : kotlin.String {
+    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?) : kotlin.String {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
             UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(
                 thisPtr,
-                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),
+                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_rust_buffer(future, callback, continuation) },

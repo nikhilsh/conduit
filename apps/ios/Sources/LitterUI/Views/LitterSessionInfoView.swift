@@ -19,6 +19,7 @@ extension LitterUI {
 
         @State private var showRename = false
         @State private var showAppearance = false
+        @State private var showFork = false
 
         var body: some View {
             NavigationStack {
@@ -56,6 +57,12 @@ extension LitterUI {
                 }
                 .sheet(isPresented: $showAppearance) {
                     LitterUI.AppearanceSheet()
+                }
+                .sheet(isPresented: $showFork) {
+                    LitterUI.ForkSheet(
+                        session: session,
+                        currentEffort: store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
+                    )
                 }
             }
         }
@@ -126,8 +133,7 @@ extension LitterUI {
                     showAppearance = true
                 }
                 actionButton(systemImage: "arrow.triangle.branch", label: "Fork") {
-                    store.forkSession(sessionID: session.id)
-                    dismiss()
+                    showFork = true
                 }
                 actionButton(systemImage: "pencil", label: "Rename") {
                     showRename = true

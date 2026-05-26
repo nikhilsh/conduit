@@ -21,6 +21,7 @@ type codexChatProcess struct {
 	binary  string   // adapter.Command[0], e.g. "codex"
 	dir     string   // session worktree (first turn's -C)
 	env     []string // commandEnv
+	extra   []string // reasoning-effort / model override flags (may be nil)
 	publish func([]byte)
 
 	mu       sync.Mutex
@@ -29,19 +30,25 @@ type codexChatProcess struct {
 	running  *exec.Cmd // the in-flight turn, if any (killed on Close)
 }
 
-func newCodexChatProcess(binary, dir string, env []string, publish func([]byte)) *codexChatProcess {
-	return &codexChatProcess{binary: binary, dir: dir, env: env, publish: publish}
+func newCodexChatProcess(binary, dir string, env, extra []string, publish func([]byte)) *codexChatProcess {
+	return &codexChatProcess{binary: binary, dir: dir, env: env, extra: extra, publish: publish}
 }
 
 // codexTurnArgv builds the argv for one turn. The first turn (empty
 // threadID) runs `exec` with `-C <dir>`; later turns `exec resume
-// <threadID>` (resume reuses the recorded cwd and rejects -C). Pure, so the
+// <threadID>` (resume reuses the recorded cwd and rejects -C). `extra`
+// carries the optional reasoning-effort / model override flags, inserted
+// after the `exec`/`resume` subcommand and before the message. Pure, so the
 // branch is unit-testable without spawning codex.
-func codexTurnArgv(binary, dir, threadID, msg string) []string {
+func codexTurnArgv(binary, dir, threadID string, extra []string, msg string) []string {
 	if threadID == "" {
-		return []string{binary, "exec", "--json", "--skip-git-repo-check", "-C", dir, msg}
+		argv := []string{binary, "exec", "--json", "--skip-git-repo-check", "-C", dir}
+		argv = append(argv, extra...)
+		return append(argv, msg)
 	}
-	return []string{binary, "exec", "resume", threadID, "--json", "--skip-git-repo-check", msg}
+	argv := []string{binary, "exec", "resume", threadID, "--json", "--skip-git-repo-check"}
+	argv = append(argv, extra...)
+	return append(argv, msg)
 }
 
 // Send runs one codex turn for the user's message. It returns immediately;
@@ -55,7 +62,7 @@ func (c *codexChatProcess) Send(text string) error {
 	}
 	tid := c.threadID
 	c.mu.Unlock()
-	go c.runTurn(codexTurnArgv(c.binary, c.dir, tid, text))
+	go c.runTurn(codexTurnArgv(c.binary, c.dir, tid, c.extra, text))
 	return nil
 }
 

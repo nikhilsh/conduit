@@ -167,8 +167,18 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		assistant = "claude"
 	}
 	cwd := strings.TrimSpace(r.URL.Query().Get("cwd"))
+	// Optional per-session reasoning-effort / model override (fork onto a
+	// different model). Empty = adapter defaults; honored only when this
+	// connect creates the session. The mobile clients connect via WS
+	// directly (not the HTTP /api/session/start endpoint), so the fork UX
+	// rides in on these query params.
+	override := session.SpawnOverride{
+		ReasoningEffort: strings.TrimSpace(r.URL.Query().Get("reasoning_effort")),
+		Model:           strings.TrimSpace(r.URL.Query().Get("model")),
+	}
 	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{
-		CWD: cwd,
+		CWD:      cwd,
+		Override: override,
 	})
 	if err != nil {
 		msg := err.Error()

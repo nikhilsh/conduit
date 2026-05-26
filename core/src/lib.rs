@@ -180,16 +180,30 @@ impl SweKittyClient {
         }
     }
 
+    /// Open a brand-new session. `reasoning_effort` / `model` are optional
+    /// per-session overrides for the fork-onto-a-different-model path: when
+    /// present they ride to the broker as `reasoning_effort=` / `model=`
+    /// query params on the WS connect, and the broker applies them to the
+    /// spawned agent's CLI flags. Empty / None = the adapter's defaults
+    /// unchanged (the normal create path).
     pub async fn create_session(
         &self,
         assistant: String,
         branch: Option<String>,
+        reasoning_effort: Option<String>,
+        model: Option<String>,
     ) -> Result<String, SweKittyError> {
         let inner = Arc::clone(&self.inner);
         run_on_core(async move {
             let session_id = Uuid::new_v4().to_string();
             inner
-                .open_session(session_id.clone(), assistant, branch)
+                .open_session(
+                    session_id.clone(),
+                    assistant,
+                    branch,
+                    reasoning_effort,
+                    model,
+                )
                 .await?;
             Ok(session_id)
         })
@@ -207,6 +221,8 @@ impl SweKittyClient {
                 .open_session(
                     session_id,
                     assistant.unwrap_or_else(|| "claude".to_string()),
+                    None,
+                    None,
                     None,
                 )
                 .await
@@ -434,11 +450,14 @@ impl SweKittyClient {
 }
 
 impl Inner {
+    #[allow(clippy::too_many_arguments)]
     async fn open_session(
         self: Arc<Self>,
         session_id: String,
         assistant: String,
         branch: Option<String>,
+        reasoning_effort: Option<String>,
+        model: Option<String>,
     ) -> Result<(), SweKittyError> {
         let delegate = self
             .delegate
@@ -449,6 +468,11 @@ impl Inner {
             return Ok(());
         }
 
+        // Normalize empty strings to None so a blank override never leaks
+        // into the WS query string as `reasoning_effort=`.
+        let reasoning_effort = reasoning_effort.filter(|s| !s.trim().is_empty());
+        let model = model.filter(|s| !s.trim().is_empty());
+
         self.sessions.lock().insert(
             session_id.clone(),
             ProjectSessionState::new(ProjectSession {
@@ -457,7 +481,10 @@ impl Inner {
                 assistant: assistant.clone(),
                 branch,
                 preview: None,
-                reasoning_effort: None,
+                // Seed the chosen effort so the agent pill reflects the
+                // fork's effort immediately; the broker's status frame
+                // confirms / corrects it once the agent spawns.
+                reasoning_effort: reasoning_effort.clone(),
                 cwd: None,
                 started_at: None,
                 last_activity_at: None,
@@ -470,6 +497,10 @@ impl Inner {
             session_id.clone(),
             assistant.clone(),
             self.token.clone(),
+            transport::SpawnOverride {
+                reasoning_effort,
+                model,
+            },
             Arc::new(ClientDelegate {
                 sessions: Arc::clone(&self.sessions),
                 delegate,

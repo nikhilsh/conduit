@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -69,6 +70,20 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var showAppearance by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf(name) }
     val appearance = LocalAppearanceStore.current
+
+    // Fork chooser state: default the effort to the session's current
+    // effort (status delta wins over the snapshot), falling back to a
+    // sensible default for the agent. The model field stays blank = keep
+    // the current model.
+    val effortOptions = remember(session.assistant) { forkEffortOptions(session.assistant) }
+    val currentEffort = status?.reasoningEffort ?: session.reasoningEffort
+    var forkEffort by remember(showFork) {
+        mutableStateOf(
+            currentEffort?.takeIf { effortOptions.contains(it) }
+                ?: if (effortOptions.contains("medium")) "medium" else effortOptions.first(),
+        )
+    }
+    var forkModel by remember(showFork) { mutableStateOf("") }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -237,11 +252,68 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             onDismissRequest = { showFork = false },
             title = { Text("Fork session") },
             text = {
-                Text("Creates a new session with the same agent and branch. The new session is seeded with a hand-off note pointing at this one.")
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Creates a new session from this one, seeded with a hand-off note. Reasoning effort can't change mid-session — pick the new effort (and optionally a model) for the fork.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "REASONING EFFORT",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        effortOptions.forEach { level ->
+                            FilterChip(
+                                selected = forkEffort == level,
+                                onClick = { forkEffort = level },
+                                label = { Text(level.replaceFirstChar { it.uppercase() }) },
+                            )
+                        }
+                    }
+                    Text(
+                        "MODEL (OPTIONAL)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    ) {
+                        BasicTextField(
+                            value = forkModel,
+                            onValueChange = { forkModel = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            decorationBox = { inner ->
+                                if (forkModel.isEmpty()) {
+                                    Text(
+                                        forkModelPlaceholder(session.assistant),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                inner()
+                            },
+                            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                        )
+                    }
+                    Text(
+                        "Leave blank to keep the current model.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    store.forkSession(session.id)
+                    val model = forkModel.trim().ifEmpty { null }
+                    store.forkSession(session.id, reasoningEffort = forkEffort, model = model)
                     showFork = false
                     onDismiss()
                 }) { Text("Fork") }
@@ -309,6 +381,25 @@ private fun StatTile(value: String, label: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+/**
+ * Per-assistant reasoning-effort options offered in the fork chooser.
+ * Mirrors the broker's validated levels
+ * (`broker/internal/session/override.go`) so the UI never offers a level
+ * the agent would silently drop.
+ */
+internal fun forkEffortOptions(assistant: String): List<String> = when (assistant) {
+    "claude" -> listOf("low", "medium", "high", "xhigh", "max")
+    "codex" -> listOf("low", "medium", "high")
+    else -> listOf("low", "medium", "high")
+}
+
+/** Placeholder model alias hint for the fork chooser's model field. */
+internal fun forkModelPlaceholder(assistant: String): String = when (assistant) {
+    "claude" -> "opus"
+    "codex" -> "gpt-5-codex"
+    else -> "model"
 }
 
 /**

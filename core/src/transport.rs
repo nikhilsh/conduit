@@ -173,6 +173,19 @@ impl SessionHandle {
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// Optional per-session reasoning-effort / model override carried to the
+/// broker on the WS connect (the fork-onto-a-different-model path). Both
+/// fields default to None — the normal connect path — and ride as
+/// `reasoning_effort=` / `model=` query params when present. Cloned into
+/// the session worker so reconnects re-apply the same override (the broker
+/// only honors it on first create, but a reconnect after the agent died
+/// without the session being reaped should still request the same spawn).
+#[derive(Clone, Default)]
+pub struct SpawnOverride {
+    pub reasoning_effort: Option<String>,
+    pub model: Option<String>,
+}
+
 /// Open a WebSocket session against the harness and spawn a worker that
 /// keeps it alive across transient drops.
 ///
@@ -184,12 +197,13 @@ pub async fn connect(
     session_id: String,
     assistant: String,
     token: String,
+    override_: SpawnOverride,
     delegate: Arc<dyn SweKittyDelegate>,
 ) -> Result<SessionHandle, SweKittyError> {
     // First connect is synchronous from the caller's POV so auth
     // failures surface to the create-session UX. Subsequent reconnects
     // happen in the background.
-    let ws = open_ws(&endpoint, &session_id, &assistant, &token).await?;
+    let ws = open_ws(&endpoint, &session_id, &assistant, &token, &override_).await?;
 
     let (tx, rx) = mpsc::channel::<Message>(64);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -203,6 +217,7 @@ pub async fn connect(
         session_id,
         assistant,
         token,
+        override_,
         initial_ws: Some(ws),
         rx,
         shutdown_rx,
@@ -222,6 +237,7 @@ struct WorkerArgs {
     session_id: String,
     assistant: String,
     token: String,
+    override_: SpawnOverride,
     initial_ws: Option<WsStream>,
     rx: mpsc::Receiver<Message>,
     shutdown_rx: oneshot::Receiver<()>,
@@ -245,6 +261,7 @@ async fn session_worker(mut args: WorkerArgs) {
                     &args.session_id,
                     &args.assistant,
                     &args.token,
+                    &args.override_,
                     &args.delegate,
                     &mut shutdown_rx,
                 )
@@ -327,11 +344,13 @@ enum ReconnectOutcome {
     ShutdownRequested,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reconnect(
     endpoint: &str,
     session_id: &str,
     assistant: &str,
     token: &str,
+    override_: &SpawnOverride,
     delegate: &Arc<dyn SweKittyDelegate>,
     shutdown_rx: &mut oneshot::Receiver<()>,
 ) -> ReconnectOutcome {
@@ -354,7 +373,7 @@ async fn reconnect(
             _ = &mut *shutdown_rx => { return ReconnectOutcome::ShutdownRequested; }
         }
 
-        match open_ws(endpoint, session_id, assistant, token).await {
+        match open_ws(endpoint, session_id, assistant, token, override_).await {
             Ok(ws) => {
                 delegate.on_connection_health(session_id.to_string(), ConnectionHealth::Connected);
                 return ReconnectOutcome::Reconnected(Box::new(ws));
@@ -485,9 +504,10 @@ async fn open_ws(
     session_id: &str,
     assistant: &str,
     token: &str,
+    override_: &SpawnOverride,
 ) -> Result<WsStream, SweKittyError> {
     let base = normalize_ws_endpoint(endpoint)?;
-    let mut target = build_initial_ws_url(&base, session_id, assistant, token)?;
+    let mut target = build_initial_ws_url(&base, session_id, assistant, token, override_)?;
     let mut hops = 0usize;
 
     loop {
@@ -545,14 +565,31 @@ fn build_initial_ws_url(
     session_id: &str,
     assistant: &str,
     token: &str,
+    override_: &SpawnOverride,
 ) -> Result<Url, SweKittyError> {
-    let raw = format!(
+    let mut raw = format!(
         "{}/ws/{}?assistant={}&token={}",
         base.as_str().trim_end_matches('/'),
         session_id,
         urlencode(assistant),
         urlencode(token),
     );
+    // Append the optional fork override. The broker reads these on the WS
+    // connect and applies them to the spawned agent (honored only when this
+    // connect creates the session). Skipped entirely when None so the
+    // normal connect URL is unchanged.
+    if let Some(effort) = override_.reasoning_effort.as_deref() {
+        if !effort.is_empty() {
+            raw.push_str("&reasoning_effort=");
+            raw.push_str(&urlencode(effort));
+        }
+    }
+    if let Some(model) = override_.model.as_deref() {
+        if !model.is_empty() {
+            raw.push_str("&model=");
+            raw.push_str(&urlencode(model));
+        }
+    }
     Url::parse(&raw).map_err(|e| SweKittyError::Connection(e.to_string()))
 }
 
@@ -1003,7 +1040,8 @@ mod tests {
         // https://harness.example.com/ws/abc. The fix must NOT re-append
         // /ws/abc on the next hop.
         let base = normalize_ws_endpoint("ws://harness.example.com").unwrap();
-        let initial = build_initial_ws_url(&base, "abc", "claude", "tok").unwrap();
+        let initial =
+            build_initial_ws_url(&base, "abc", "claude", "tok", &SpawnOverride::default()).unwrap();
         assert_eq!(
             initial.as_str(),
             "ws://harness.example.com/ws/abc?assistant=claude&token=tok"
@@ -1023,9 +1061,51 @@ mod tests {
     }
 
     #[test]
+    fn initial_ws_url_appends_fork_override() {
+        let base = normalize_ws_endpoint("wss://example.com").unwrap();
+        // Both effort + model present: query carries both, url-encoded.
+        let with_both = build_initial_ws_url(
+            &base,
+            "s1",
+            "claude",
+            "tok",
+            &SpawnOverride {
+                reasoning_effort: Some("high".into()),
+                model: Some("claude-sonnet-4-6".into()),
+            },
+        )
+        .unwrap();
+        assert!(with_both.as_str().contains("reasoning_effort=high"));
+        assert!(with_both.as_str().contains("model=claude-sonnet-4-6"));
+
+        // No override: query is the plain assistant+token shape (no
+        // empty reasoning_effort=/model= leaks).
+        let plain =
+            build_initial_ws_url(&base, "s1", "claude", "tok", &SpawnOverride::default()).unwrap();
+        assert!(!plain.as_str().contains("reasoning_effort"));
+        assert!(!plain.as_str().contains("model="));
+
+        // Empty-string fields behave like None.
+        let empties = build_initial_ws_url(
+            &base,
+            "s1",
+            "claude",
+            "tok",
+            &SpawnOverride {
+                reasoning_effort: Some(String::new()),
+                model: Some(String::new()),
+            },
+        )
+        .unwrap();
+        assert!(!empties.as_str().contains("reasoning_effort"));
+        assert!(!empties.as_str().contains("model="));
+    }
+
+    #[test]
     fn redirect_relative_location_resolves_against_target() {
         let base = normalize_ws_endpoint("https://example.com").unwrap();
-        let initial = build_initial_ws_url(&base, "s1", "claude", "t").unwrap();
+        let initial =
+            build_initial_ws_url(&base, "s1", "claude", "t", &SpawnOverride::default()).unwrap();
         let next = redirect_to_ws_url(&initial, "/ws/s1/", "t").unwrap();
         assert_eq!(next.scheme(), "wss");
         assert_eq!(next.path(), "/ws/s1/");
@@ -1035,7 +1115,9 @@ mod tests {
     #[test]
     fn redirect_preserves_token_when_proxy_strips_it() {
         let base = normalize_ws_endpoint("wss://example.com").unwrap();
-        let initial = build_initial_ws_url(&base, "s1", "claude", "secret").unwrap();
+        let initial =
+            build_initial_ws_url(&base, "s1", "claude", "secret", &SpawnOverride::default())
+                .unwrap();
         // Proxy returns a Location without the original token query.
         let next = redirect_to_ws_url(
             &initial,
@@ -1092,7 +1174,8 @@ mod tests {
     #[test]
     fn redirect_keeps_existing_token_in_location() {
         let base = normalize_ws_endpoint("ws://example.com").unwrap();
-        let initial = build_initial_ws_url(&base, "s1", "claude", "old").unwrap();
+        let initial =
+            build_initial_ws_url(&base, "s1", "claude", "old", &SpawnOverride::default()).unwrap();
         let next = redirect_to_ws_url(
             &initial,
             "ws://example.com/ws/s1?assistant=claude&token=fresh",

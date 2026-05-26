@@ -232,7 +232,7 @@ interface SweKittyClient {
     void notify_network_change();
 
     [Async, Throws=SweKittyError]
-    string create_session(string assistant, string? branch);
+    string create_session(string assistant, string? branch, string? reasoning_effort, string? model);
 
     [Async, Throws=SweKittyError]
     void join_session(string session_id, string? assistant);

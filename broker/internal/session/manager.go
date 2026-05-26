@@ -124,6 +124,12 @@ type Session struct {
 	// applyPaths runs; appends tolerate concurrent callers.
 	convLog *convLogger
 
+	// override carries the optional per-session reasoning-effort / model
+	// overrides supplied at creation (the fork-onto-a-different-model
+	// path). Zero value = adapter defaults unchanged. Read-only after
+	// newSession, so no locking needed.
+	override SpawnOverride
+
 	// agentHomeDir is the per-session ephemeral $HOME. ALWAYS populated
 	// for every session (except in the rare case the mkdir fails, in
 	// which case the agent falls back to inheriting the broker $HOME).
@@ -164,7 +170,11 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		argv := terminalShellArgv(tmuxPath, sanitizeTmuxName(id))
 		cmd = exec.Command(argv[0], argv[1:]...)
 	} else {
-		cmd = exec.Command(adapter.Command[0], append(adapter.Command[1:], adapter.Args...)...)
+		// Apply the optional reasoning-effort / model override after the
+		// adapter's own args. Empty override → adapter.Args unchanged, so
+		// the normal start path is byte-for-byte identical to before.
+		ptyArgs := append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)
+		cmd = exec.Command(adapter.Command[0], append(append([]string{}, adapter.Command[1:]...), ptyArgs...)...)
 	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
 	s := &Session{
@@ -172,6 +182,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		Assistant:    adapter.Name,
 		termgrid:     opts.termgrid,
 		adapter:      adapter,
+		override:     opts.override,
 		rows:         40,
 		cols:         120,
 		closed:       make(chan struct{}),
@@ -332,7 +343,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		)
 		chat, cerr := startChatProcess(
 			context.Background(),
-			claudeStreamCommand(adapter.Command, adapter.Args),
+			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)),
 			s.commandEnv(nil),
 			s.workspaceDir,
 			s.PublishText,
@@ -346,7 +357,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	case "codex":
 		// codex via per-turn exec/resume; constructed lazily (spawns on
 		// first Send). Same publish path; PTY is a shell.
-		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.PublishText)
+		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), opts.override.extraArgsFor(adapter.Name), s.PublishText)
 	default:
 		s.scraper = newChatScraper(s.PublishText)
 		go s.scraper.run(s.closed)
@@ -674,7 +685,9 @@ func (s *Session) Done() <-chan struct{} { return s.closed }
 func (s *Session) ReasoningEffort() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.adapter.ReasoningEffort
+	// Surface the validated per-session override when the session was
+	// forked onto a different effort; otherwise the adapter default.
+	return s.override.effectiveEffort(s.Assistant, s.adapter.ReasoningEffort)
 }
 
 // DisplayName returns the human-readable session label set by the most
@@ -885,6 +898,10 @@ func (m *Manager) ReplayBaseDir() string {
 
 type CreateOptions struct {
 	CWD string
+	// Override carries the optional reasoning-effort / model override
+	// applied when this session is created (fork-onto-different-model).
+	// Zero value = adapter defaults unchanged. Honored only on create.
+	Override SpawnOverride
 }
 
 func NewManager(registry *agents.Registry) *Manager {
@@ -1021,6 +1038,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		termgrid:      m.termgrid,
 		replayBaseDir: m.replayBaseDir,
 		credStore:     m.credStore,
+		override:      opts.Override,
 	})
 	if err != nil {
 		return nil, false, err
@@ -1122,6 +1140,10 @@ type sessionOptions struct {
 	// legacy host-mirror $HOME behaviour. Manager fills this in
 	// from its own field; tests typically leave it empty.
 	credStore *credentials.Store
+	// override carries the optional reasoning-effort / model override
+	// applied to the spawned agent's argv. Zero value = adapter
+	// defaults unchanged (the normal start path).
+	override SpawnOverride
 }
 
 type sessionMetadata struct {

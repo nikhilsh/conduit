@@ -71,7 +71,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = SweKittyClient::new(endpoint, token);
     client.connect(Box::new(StdoutDelegate)).await?;
 
-    let session_id = client.create_session(assistant.clone(), None).await?;
+    let session_id = client
+        .create_session(assistant.clone(), None, None, None)
+        .await?;
     eprintln!("[create_session] {session_id} assistant={assistant}");
 
     client.resize(session_id.clone(), 40, 120).await?;

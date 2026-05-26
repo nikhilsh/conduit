@@ -91,14 +91,22 @@ type startSessionRequest struct {
 	SessionID string `json:"session_id"`
 	Assistant string `json:"assistant"`
 	CWD       string `json:"cwd"`
+	// ReasoningEffort / Model are optional per-session overrides for the
+	// fork-onto-a-different-model path. Empty = adapter defaults. Honored
+	// only on create; an existing session keeps the effort/model it was
+	// spawned with.
+	ReasoningEffort string `json:"reasoning_effort"`
+	Model           string `json:"model"`
 }
 
 type startSessionResponse struct {
-	SessionID string `json:"session_id"`
-	Assistant string `json:"assistant"`
-	CWD       string `json:"cwd"`
-	Created   bool   `json:"created"`
-	WSPath    string `json:"ws_path"`
+	SessionID       string `json:"session_id"`
+	Assistant       string `json:"assistant"`
+	CWD             string `json:"cwd"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Created         bool   `json:"created"`
+	WSPath          string `json:"ws_path"`
 }
 
 func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +137,11 @@ func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{CWD: cwd})
+	override := session.SpawnOverride{
+		ReasoningEffort: strings.TrimSpace(req.ReasoningEffort),
+		Model:           strings.TrimSpace(req.Model),
+	}
+	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{CWD: cwd, Override: override})
 	if err != nil {
 		msg := err.Error()
 		switch {
@@ -143,11 +155,13 @@ func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := startSessionResponse{
-		SessionID: sess.ID,
-		Assistant: sess.Assistant,
-		CWD:       cwd,
-		Created:   created,
-		WSPath:    fmt.Sprintf("/ws/%s?assistant=%s", sess.ID, sess.Assistant),
+		SessionID:       sess.ID,
+		Assistant:       sess.Assistant,
+		CWD:             cwd,
+		ReasoningEffort: sess.ReasoningEffort(),
+		Model:           override.Model,
+		Created:         created,
+		WSPath:          fmt.Sprintf("/ws/%s?assistant=%s", sess.ID, sess.Assistant),
 	}
 	s.Sessions.RecordRecentProject(sess.WorkspaceDir(), sess.Assistant, sess.ID)
 	writeJSON(w, http.StatusOK, resp)

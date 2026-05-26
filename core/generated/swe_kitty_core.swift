@@ -814,7 +814,7 @@ public protocol SweKittyClientProtocol : AnyObject {
     
     func connect(delegate: SweKittyDelegate) async throws 
     
-    func createSession(assistant: String, branch: String?) async throws  -> String
+    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?) async throws  -> String
     
     func disconnect() 
     
@@ -956,13 +956,13 @@ open func connect(delegate: SweKittyDelegate)async throws  {
         )
 }
     
-open func createSession(assistant: String, branch: String?)async throws  -> String {
+open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch)
+                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model)
                 )
             },
             pollFunc: ffi_swe_kitty_core_rust_future_poll_rust_buffer,
@@ -3739,7 +3739,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 57151) {
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 11612) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_disconnect() != 65142) {

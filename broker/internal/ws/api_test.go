@@ -59,6 +59,38 @@ func TestSessionStartEndpoint(t *testing.T) {
 	}
 }
 
+func TestSessionStartWithOverride(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := `{"assistant":"claude","reasoning_effort":"high","model":"opus"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/session/start?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST session start: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	var out struct {
+		SessionID       string `json:"session_id"`
+		ReasoningEffort string `json:"reasoning_effort"`
+		Model           string `json:"model"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("no session id")
+	}
+	if out.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort echoed = %q, want high", out.ReasoningEffort)
+	}
+	if out.Model != "opus" {
+		t.Fatalf("model echoed = %q, want opus", out.Model)
+	}
+}
+
 func TestSessionDeleteEndpoint(t *testing.T) {
 	srv, tok := newTestServer(t)
 

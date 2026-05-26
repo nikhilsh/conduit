@@ -570,13 +570,21 @@ class SessionStore : ViewModel(), SweKittyDelegate {
      * docs/PLAN-LITTER-UI.md Stage 3 flagged a Rust `fork_session`
      * UDL method as a future optimization, but client-side is enough.
      */
-    fun forkSession(sessionId: String) {
+    /**
+     * Fork onto a (possibly) different reasoning effort and/or model.
+     * [reasoningEffort] / [model] are optional overrides applied to the
+     * NEW session's agent (via core create_session → broker WS query
+     * params → agent CLI flags). null for either = keep the original's
+     * (the broker falls back to the adapter default). Effort can't change
+     * mid-session — that's why forking is the path, not a live switch.
+     */
+    fun forkSession(sessionId: String, reasoningEffort: String? = null, model: String? = null) {
         val c = client ?: return
         val original = _sessions.value.firstOrNull { it.id == sessionId } ?: return
         viewModelScope.launch {
             try {
                 val newId = withContext(Dispatchers.IO) {
-                    c.createSession(original.assistant, original.branch)
+                    c.createSession(original.assistant, original.branch, reasoningEffort, model)
                 }
                 val seed = "Forked from ${original.name} (id $sessionId). Pick up where the previous session left off."
                 runCatching { withContext(Dispatchers.IO) { c.sendChat(newId, seed) } }
@@ -1155,7 +1163,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         updateLifecycle { it + (pendingId to SessionLifecycle.Creating) }
         viewModelScope.launch {
             try {
-                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch) }
+                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, null, null) }
                 startupCwd?.trim()?.takeIf { it.isNotEmpty() }?.let { cwd ->
                     val cmd = "cd ${shellQuoted(cwd)} && pwd\n"
                     runCatching { withContext(Dispatchers.IO) { c.sendInput(id, cmd.toByteArray()) } }

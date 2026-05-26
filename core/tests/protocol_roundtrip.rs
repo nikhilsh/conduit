@@ -130,6 +130,7 @@ async fn status_frame_round_trips_to_delegate() {
         "s-test".into(),
         "claude".into(),
         "test-token".into(),
+        transport::SpawnOverride::default(),
         delegate.clone(),
     )
     .await
@@ -195,6 +196,7 @@ async fn view_event_chat_round_trips_to_delegate() {
         "s-chat".into(),
         "claude".into(),
         "test-token".into(),
+        transport::SpawnOverride::default(),
         delegate.clone(),
     )
     .await
@@ -254,6 +256,7 @@ async fn view_event_status_agent_login_round_trips_to_delegate() {
         "s-oauth".into(),
         "codex".into(),
         "test-token".into(),
+        transport::SpawnOverride::default(),
         delegate.clone(),
     )
     .await
@@ -301,6 +304,7 @@ async fn connection_reports_healthy_on_open() {
         "s-health".into(),
         "claude".into(),
         "test-token".into(),
+        transport::SpawnOverride::default(),
         delegate.clone(),
     )
     .await

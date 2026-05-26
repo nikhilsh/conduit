@@ -830,7 +830,7 @@ final class SessionStore {
         }
         Task {
             do {
-                let id = try await client.createSession(assistant: assistant, branch: branch)
+                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: nil, model: nil)
                 if let startupCwd {
                     let trimmed = startupCwd.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty {
@@ -1983,15 +1983,24 @@ final class SessionStore {
 
     /// Fork: create a fresh session with the same assistant + branch,
     /// and seed it with a one-line hand-off pointing at the original.
-    /// v1 stays fully client-side (no Rust core change); Stage 3 of
-    /// docs/PLAN-LITTER-UI.md flagged a `fork_session` UDL method as a
-    /// future optimization but the client-side path is enough for now.
-    func forkSession(sessionID: String) {
+    /// The fork can target a different reasoning effort and/or model than
+    /// the original — both are optional overrides that ride through the
+    /// core's `create_session` to the broker, which applies them to the
+    /// new agent's CLI flags. nil for either means "same as the original"
+    /// (the broker falls back to the adapter default). Reasoning effort
+    /// can't be changed mid-session — that's why this is a fork (new
+    /// session), not a live switch.
+    func forkSession(sessionID: String, reasoningEffort: String? = nil, model: String? = nil) {
         guard let original = sessions.first(where: { $0.id == sessionID }) else { return }
         guard let client else { return }
         Task {
             do {
-                let newID = try await client.createSession(assistant: original.assistant, branch: original.branch)
+                let newID = try await client.createSession(
+                    assistant: original.assistant,
+                    branch: original.branch,
+                    reasoningEffort: reasoningEffort,
+                    model: model
+                )
                 let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."
                 try? await client.sendChat(sessionId: newID, msg: seed)
                 self.sessionLifecycle[newID] = .live
