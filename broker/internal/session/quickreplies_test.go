@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseQuickReplies(t *testing.T) {
@@ -378,6 +379,141 @@ func TestQuickReplyPromptIncludesAssistantText(t *testing.T) {
 	}
 	if !strings.Contains(p, "JSON array") {
 		t.Fatal("prompt should ask for a JSON array")
+	}
+}
+
+// TestQuickReplyPromptTrimsLongContext: a long assistant turn is capped to
+// its tail so the haiku request stays small and fast. The closing
+// question (the part the user actually replies to) must survive; the head
+// must be dropped.
+func TestQuickReplyPromptTrimsLongContext(t *testing.T) {
+	head := strings.Repeat("noise about an old subtask. ", 300) // ~8KB
+	tail := "All set — should I open the PR now?"
+	p := quickReplyPrompt(head + tail)
+	if !strings.Contains(p, tail) {
+		t.Fatal("prompt must keep the tail of the assistant message")
+	}
+	if strings.Contains(p, head) {
+		t.Fatal("prompt must drop the head of an over-long assistant message")
+	}
+	// The embedded assistant section must be bounded (prompt scaffolding
+	// adds a few hundred chars; the assistant slice itself is capped).
+	if len(p) > quickReplyContextChars+1024 {
+		t.Fatalf("prompt too large after trim: %d chars", len(p))
+	}
+}
+
+func TestTrimAssistantTail(t *testing.T) {
+	if got := trimAssistantTail("short", 2000); got != "short" {
+		t.Fatalf("under-budget text should be unchanged, got %q", got)
+	}
+	if got := trimAssistantTail("anything", 0); got != "anything" {
+		t.Fatalf("max<=0 should be unchanged, got %q", got)
+	}
+	long := strings.Repeat("x", 100) + "TAIL"
+	got := trimAssistantTail(long, 20)
+	if !strings.HasSuffix(got, "TAIL") {
+		t.Fatalf("expected tail preserved, got %q", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("trimmed text must stay valid UTF-8: %q", got)
+	}
+	// A multi-byte rune straddling the cut must not yield invalid UTF-8.
+	multi := strings.Repeat("é", 50) // 2 bytes each = 100 bytes
+	if !utf8.ValidString(trimAssistantTail(multi, 25)) {
+		t.Fatal("trim must not split a multi-byte rune")
+	}
+}
+
+func TestIsTransientGenError(t *testing.T) {
+	transient := []string{
+		"timeout: context deadline exceeded",
+		"messages api: status 429 (rate limited)",
+		"messages api: status 503 (overloaded)",
+		"messages api: Post: read tcp: connection reset by peer",
+		"messages api: unexpected EOF",
+	}
+	for _, m := range transient {
+		if !isTransientGenError(fmt.Errorf("%s", m)) {
+			t.Errorf("expected transient: %q", m)
+		}
+	}
+	permanent := []string{
+		"messages api: status 401 (unauthorized)",
+		"messages api: status 400 (bad request)",
+		"oauth access token expired",
+		"read credentials: no such file",
+	}
+	for _, m := range permanent {
+		if isTransientGenError(fmt.Errorf("%s", m)) {
+			t.Errorf("expected permanent: %q", m)
+		}
+	}
+	if isTransientGenError(nil) {
+		t.Error("nil error must not be transient")
+	}
+}
+
+// TestQuickReplyInvokeRetriesTransient: a first transient failure (503)
+// followed by a success must yield the replies — proving the retry.
+func TestQuickReplyInvokeRetriesTransient(t *testing.T) {
+	home := writeCreds(t, "tok", time.Now().Add(time.Hour).UnixMilli())
+	calls := 0
+	g := &quickReplyGenerator{
+		sessionID:    "sess-retry",
+		agentHomeDir: home,
+		publish:      func([]byte) {},
+		httpDo: func(req *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{
+					StatusCode: 503,
+					Body:       io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"overloaded_error"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(strings.NewReader(`{"content":[{"type":"text","text":"[\"Yes\",\"No\"]"}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+	replies, err := g.invoke(context.Background(), "Proceed?")
+	if err != nil {
+		t.Fatalf("invoke after retry: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 attempts (1 retry), got %d", calls)
+	}
+	if !reflect.DeepEqual(replies, []string{"Yes", "No"}) {
+		t.Fatalf("replies = %#v", replies)
+	}
+}
+
+// TestQuickReplyInvokeNoRetryOnPermanent: a 401 (expired/invalid token) is
+// permanent — invoke must NOT retry it.
+func TestQuickReplyInvokeNoRetryOnPermanent(t *testing.T) {
+	home := writeCreds(t, "tok", time.Now().Add(time.Hour).UnixMilli())
+	calls := 0
+	g := &quickReplyGenerator{
+		sessionID:    "sess-401-once",
+		agentHomeDir: home,
+		publish:      func([]byte) {},
+		httpDo: func(req *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{
+				StatusCode: 401,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"unauthorized"}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+	if _, err := g.invoke(context.Background(), "hi"); err == nil {
+		t.Fatal("expected error on 401")
+	}
+	if calls != 1 {
+		t.Fatalf("expected no retry on permanent 401, got %d attempts", calls)
 	}
 }
 
