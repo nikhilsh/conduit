@@ -47,6 +47,14 @@ extension LitterUI {
 
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
+        // Composer attachments (#240 cross-surface): files picked via the
+        // "+" menu sit here as removable chips until send. On send each
+        // is uploaded via core `send_file` (0x01 frame → broker writes
+        // `uploads/<sessionID>/<filename>`) and a reference line is
+        // appended to the outgoing message.
+        @State private var pendingAttachments: [LitterUI.ComposerAttachment] = []
+        @State private var attachError: String? = nil
+        @State private var isUploading = false
         @FocusState private var composerFocused: Bool
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
@@ -347,18 +355,55 @@ extension LitterUI {
         // MARK: Composer
 
         private var composer: some View {
-            HStack(spacing: 8) {
-                Button {
-                    // attach — wired in follow-up.
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                        .frame(width: 36, height: 36)
-                        .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
+            VStack(alignment: .leading, spacing: 0) {
+                // Picked-file chips + any transient pick/upload error
+                // ride ABOVE the text field so they don't crowd the
+                // send button, and stay inside the keyboard-tracking
+                // inset cluster (#232/#236).
+                if let attachError {
+                    Text(attachError)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(LitterUI.Palette.danger.color)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.opacity)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Attach")
+                if !pendingAttachments.isEmpty {
+                    LitterUI.ComposerAttachmentChips(
+                        attachments: pendingAttachments,
+                        onRemove: { attachment in
+                            pendingAttachments.removeAll { $0.id == attachment.id }
+                        }
+                    )
+                }
+                composerInputRow
+            }
+            .background(
+                LinearGradient(
+                    colors: [
+                        LitterUI.Palette.surface.color.opacity(0),
+                        LitterUI.Palette.surface.color.opacity(0.95)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        }
+
+        private var composerInputRow: some View {
+            HStack(spacing: 8) {
+                LitterUI.ComposerAttachButton(
+                    onAttach: { attachment in
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            pendingAttachments.append(attachment)
+                            attachError = nil
+                        }
+                    },
+                    onError: { message in
+                        withAnimation(.easeOut(duration: 0.18)) { attachError = message }
+                    }
+                )
 
                 TextField(
                     LitterUI.ChatViewModel.composerPlaceholder(forAgent: session.assistant),
@@ -373,14 +418,28 @@ extension LitterUI {
                 .litterGlassCapsule(config: .pill)
                 .onSubmit { send() }
 
-                let canSend = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                if canSend {
+                // Send is enabled by a non-empty draft OR at least one
+                // pending attachment (attachment-only sends are valid —
+                // the reference line is the message). Disabled mid-upload
+                // so a double-tap can't fire two sends.
+                let hasDraft = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let canSend = (hasDraft || !pendingAttachments.isEmpty) && !isUploading
+                if hasDraft || !pendingAttachments.isEmpty {
                     Button(action: send) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(LitterUI.Palette.brand.color)
+                        Group {
+                            if isUploading {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 28, height: 28)
+                            } else {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 28, weight: .semibold))
+                                    .foregroundStyle(LitterUI.Palette.brand.color)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
+                    .disabled(!canSend)
                     .accessibilityLabel("Send")
                 } else {
                     Button {
@@ -398,26 +457,61 @@ extension LitterUI {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(
-                LinearGradient(
-                    colors: [
-                        LitterUI.Palette.surface.color.opacity(0),
-                        LitterUI.Palette.surface.color.opacity(0.95)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
         }
 
         private func send() {
             let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return }
-            store.sendChat(sessionID: session.id, message: text)
+            let attachments = pendingAttachments
+            guard !text.isEmpty || !attachments.isEmpty else { return }
+            guard !isUploading else { return }
+
+            // No attachments: keep the original synchronous send path so
+            // the optimistic local echo lands instantly (no upload step).
+            if attachments.isEmpty {
+                store.sendChat(sessionID: session.id, message: text)
+                draft = ""
+                autoScroll.scrollToBottomRequested()
+                return
+            }
+
+            // Attachments present: upload each (0x01 frame → broker
+            // lands bytes at uploads/<sessionID>/<filename>) BEFORE the
+            // chat message goes out, so the referenced paths exist when
+            // the agent reads them. Clear the composer optimistically and
+            // surface any upload failure inline.
+            let sessionID = session.id
+            let outgoing = LitterUI.composeOutgoingMessage(
+                draft: text,
+                pendingAttachments: attachments,
+                sessionID: sessionID
+            )
             draft = ""
-            // Sending is an explicit intent to see the reply — re-arm
-            // auto-follow even if the user had scrolled up to read back.
+            pendingAttachments = []
+            attachError = nil
+            isUploading = true
             autoScroll.scrollToBottomRequested()
+            Task {
+                do {
+                    for attachment in attachments {
+                        try await store.sendFile(
+                            sessionID: sessionID,
+                            filename: attachment.filename,
+                            mime: attachment.mimeType,
+                            bytes: attachment.bytes
+                        )
+                    }
+                    store.sendChat(sessionID: sessionID, message: outgoing)
+                } catch {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        attachError = "Attachment upload failed. Tap send to retry."
+                        // Restore the draft + chips so the user can retry
+                        // without re-picking the files.
+                        pendingAttachments = attachments
+                        draft = text
+                    }
+                }
+                isUploading = false
+            }
         }
     }
 }
