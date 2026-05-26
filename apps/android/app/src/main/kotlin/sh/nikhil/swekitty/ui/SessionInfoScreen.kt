@@ -177,6 +177,44 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 }
             }
 
+            // Details card (iOS #239 parity): model (+effort) / started /
+            // last activity / uptime, built from live status (preferred)
+            // falling back to the session snapshot — mirroring how the
+            // store materializes a session. Sits between the stats grid
+            // and the server-usage card.
+            val details = remember(status, session) {
+                SessionDetails.rows(
+                    assistant = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant,
+                    reasoningEffort = status?.reasoningEffort ?: session.reasoningEffort,
+                    startedAt = status?.startedAt ?: session.startedAt,
+                    lastActivityAt = status?.lastActivityAt ?: session.lastActivityAt,
+                )
+            }
+            if (details.isNotEmpty()) {
+                Column {
+                    Text(
+                        "DETAILS",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            details.forEach { detail -> DetailRow(detail) }
+                        }
+                    }
+                }
+            }
+
             session.preview?.let { preview ->
                 Column {
                     Text(
@@ -363,6 +401,36 @@ private fun ActionTile(icon: ImageVector, title: String, modifier: Modifier = Mo
 }
 
 @Composable
+private fun DetailRow(detail: SessionDetails.Detail) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            detail.label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                detail.value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            detail.caption?.let { caption ->
+                Text(
+                    caption,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun StatTile(value: String, label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
@@ -450,5 +518,98 @@ data class SessionStats(
                 execTimeMs = execTime,
             )
         }
+    }
+}
+
+/**
+ * Session "Details" rows — model (+effort) / started / last activity /
+ * uptime — built from live status/session fields. Pure (string in,
+ * string out, fixed clock injectable) so JUnit can pin the formatting
+ * and uptime math. Mirror of iOS
+ * `SessionInfoViewModel.details(_:)` / `relative(_:)`.
+ */
+object SessionDetails {
+    data class Detail(val label: String, val value: String, val caption: String? = null)
+
+    fun rows(
+        assistant: String,
+        reasoningEffort: String?,
+        startedAt: String?,
+        lastActivityAt: String?,
+        nowMs: Long = System.currentTimeMillis(),
+    ): List<Detail> {
+        val rows = mutableListOf<Detail>()
+
+        // Model — the broker exposes only the assistant identifier (no
+        // separate model-version field), optionally qualified by effort.
+        val model = assistant.ifBlank { "—" }
+        val modelValue = reasoningEffort?.takeIf { it.isNotBlank() }?.let { "$model · $it" } ?: model
+        rows += Detail("Model", modelValue)
+
+        val startedMs = parseMs(startedAt)
+        if (startedMs != null) {
+            rows += Detail("Started", absolute(startedMs), relative(startedMs, nowMs))
+        }
+
+        val lastMs = parseMs(lastActivityAt) ?: startedMs
+        if (lastMs != null) {
+            rows += Detail("Last Activity", relative(lastMs, nowMs))
+        }
+
+        if (startedMs != null) {
+            val end = parseMs(lastActivityAt) ?: nowMs
+            val elapsed = (end - startedMs).coerceAtLeast(0L)
+            rows += Detail("Uptime", formatDuration(elapsed))
+        }
+        return rows
+    }
+
+    private fun parseMs(raw: String?): Long? {
+        val trimmed = raw?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+        return runCatching { java.time.Instant.parse(trimmed).toEpochMilli() }.getOrNull()
+            ?: runCatching { java.time.OffsetDateTime.parse(trimmed).toInstant().toEpochMilli() }.getOrNull()
+    }
+
+    private fun absolute(ms: Long): String {
+        val dt = java.time.Instant.ofEpochMilli(ms)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDateTime()
+        return dt.format(
+            java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy · h:mm a", java.util.Locale.getDefault()),
+        )
+    }
+
+    /**
+     * Compact relative-time string ("just now", "5m ago", "3h ago",
+     * "2d ago"); older than two weeks falls back to a short date.
+     */
+    fun relative(ms: Long, nowMs: Long = System.currentTimeMillis()): String {
+        val delta = (nowMs - ms).coerceAtLeast(0L)
+        val secs = delta / 1000L
+        if (secs < 60L) return "just now"
+        val mins = secs / 60L
+        if (mins < 60L) return "${mins}m ago"
+        val hours = mins / 60L
+        if (hours < 24L) return "${hours}h ago"
+        val days = hours / 24L
+        if (days < 14L) return "${days}d ago"
+        val dt = java.time.Instant.ofEpochMilli(ms)
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDate()
+        return dt.format(
+            java.time.format.DateTimeFormatter.ofPattern("M/d/yy", java.util.Locale.getDefault()),
+        )
+    }
+
+    /** "<n>s" / "<m>m <s>s" / "<h>h <m>m" elapsed-time formatting. */
+    fun formatDuration(ms: Long): String {
+        if (ms <= 0L) return "—"
+        val s = ms / 1000L
+        if (s < 60L) return "${s}s"
+        val m = s / 60L
+        if (m < 60L) return "${m}m ${s % 60L}s"
+        val h = m / 60L
+        return "${h}h ${m % 60L}m"
     }
 }

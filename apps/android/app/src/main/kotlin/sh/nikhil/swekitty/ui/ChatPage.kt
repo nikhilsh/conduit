@@ -1338,7 +1338,12 @@ private fun CodeBlock(language: String?, content: String) {
 
 @Composable
 private fun ConversationToolCard(ev: ConversationItem) {
-    var expanded by remember { mutableStateOf(true) }
+    // Tool/bash cards start COLLAPSED (iOS #236 parity): the header row
+    // alone — label · status · command one-liner · time + chevron — until
+    // the user taps to reveal the full COMMAND box + output. Per-card
+    // state, so expanding one keeps it open for the session while every
+    // new card still arrives collapsed.
+    var expanded by remember { mutableStateOf(false) }
     val sections = remember(ev) { ConversationRenderer.toolSections(ev) }
     val summary = remember(ev) {
         val cmd = ev.command?.takeIf { it.isNotBlank() }?.take(80)
@@ -1387,7 +1392,13 @@ private fun ConversationToolCard(ev: ConversationItem) {
                             }
                         }
                     }
-                    Text(summary, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                    // The command one-liner lives in the collapsed header
+                    // only; once expanded the COMMAND box (below) already
+                    // shows it verbatim, so we drop the plain duplicate
+                    // (iOS #236 parity).
+                    if (!expanded) {
+                        Text(summary, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                    }
                 }
                 if (ev.ts.isNotEmpty()) {
                     Text(ConversationTimestamp.relative(ev.ts), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
@@ -1688,6 +1699,15 @@ private fun ConversationComposer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // No color seam where chat meets the keyboard (iOS #236
+            // parity): paint the composer cluster with the SAME backdrop
+            // as the chat surface (the wrapping `surfaceVariant 0.35f`
+            // Surface in ProjectScreen) and do it BEFORE `imePadding()`,
+            // so the fill extends down through the IME-inset band. Without
+            // this the band above the keyboard showed the bare window
+            // background — a visible mismatched stripe between the chat
+            // list and the keyboard.
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
             // Lift the whole composer cluster (quick-reply chips + pinned
             // context + the input row) above the soft keyboard. The
             // Activity's `adjustResize` shrinks the window when the IME is

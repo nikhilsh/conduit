@@ -185,6 +185,57 @@ internal object SessionNaming {
     private val TIME_FMT = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
     private val WEEKDAY_FMT = DateTimeFormatter.ofPattern("EEE", Locale.US)
     private val SHORT_DATE_FMT = DateTimeFormatter.ofPattern("MMM d", Locale.US)
+
+    /**
+     * Condense a single transcript item into a one-line activity preview
+     * for the home card. Pure string inputs (role / kind / toolName /
+     * command / content) keep this Compose- and core-type-free so JUnit
+     * can pin it. Mirror of iOS `HomeViewModel.activityPreview`:
+     *  - a tool action surfaces its command ("Bash: cargo test") or, with
+     *    no command, "<tool>: <first line>";
+     *  - assistant / other text uses the first non-empty body line.
+     * Returns null when there's nothing worth showing.
+     */
+    fun activityPreview(
+        role: String,
+        kind: String,
+        toolName: String?,
+        command: String?,
+        content: String,
+        budget: Int = 72,
+    ): String? {
+        if (role.lowercase() == "tool" || kind.lowercase() == "tool") {
+            val cmd = command?.takeIf { it.isNotBlank() }
+            if (cmd != null) {
+                val label = toolName?.takeIf { it.isNotEmpty() } ?: "Run"
+                return clip("$label: ${firstLine(cmd)}", budget)
+            }
+            val body = firstLine(content)
+            if (body.isNotEmpty()) {
+                val prefix = toolName?.takeIf { it.isNotEmpty() }?.let { "$it: " } ?: ""
+                return clip(prefix + body, budget)
+            }
+            return toolName?.takeIf { it.isNotEmpty() }?.let { clip(it, budget) }
+        }
+        val body = firstLine(content)
+        return if (body.isEmpty()) null else clip(body, budget)
+    }
+
+    /**
+     * First non-empty line of a (possibly multi-line) string with
+     * internal whitespace runs collapsed to single spaces.
+     */
+    private fun firstLine(raw: String): String {
+        raw.lineSequence().forEach { line ->
+            val collapsed = line.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+            if (collapsed.isNotEmpty()) return collapsed
+        }
+        return ""
+    }
+
+    /** Trim to [budget] chars with an ellipsis when over. */
+    private fun clip(s: String, budget: Int): String =
+        if (s.length <= budget) s else s.take(budget - 1) + "…"
 }
 
 /**
@@ -267,4 +318,26 @@ internal fun firstUserMessageOf(
         ?.takeIf { it.isNotBlank() }
         ?.let { return it }
     return null
+}
+
+/**
+ * One-line "what's happening" preview for a session card — the most
+ * recent NON-user transcript item (assistant reply or tool action),
+ * condensed. The card title is already the first user message, so this
+ * complements it and lets the user tell active sessions apart at a
+ * glance. Mirror of iOS `LitterHomeView.latestActivityPreview` +
+ * `HomeViewModel.activityPreview`. Returns null when there's no non-user
+ * activity yet (placeholder / user-only transcripts).
+ */
+internal fun latestActivityPreviewOf(
+    conversation: List<ConversationItem>?,
+): String? {
+    val latest = conversation?.lastOrNull { it.role.lowercase() != "user" } ?: return null
+    return SessionNaming.activityPreview(
+        role = latest.role,
+        kind = latest.kind,
+        toolName = latest.toolName,
+        command = latest.command,
+        content = latest.content,
+    )
 }
