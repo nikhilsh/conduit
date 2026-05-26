@@ -108,6 +108,61 @@ class TerminalPaletteThemeTest {
         assertEquals(16, TerminalPalette.DARK.ansi.size)
     }
 
+    // --- Curated terminal themes (iOS GhosttyTheme parity) -------
+
+    @Test
+    fun allFiveTerminalThemes_resolveToSixteenANSISlots() {
+        // Each curated theme must carry a full 16-slot ANSI table so the
+        // xterm-256 cube + Termux colour table can index 0..15 safely.
+        for (t in AppearanceStore.TerminalTheme.values()) {
+            assertEquals(16, TerminalPalette.forTheme(t).ansi.size)
+        }
+    }
+
+    @Test
+    fun terminalThemes_matchIOSGhosttyThemeHexValues() {
+        // The whole point of reading the values from iOS' GhosttyTheme:
+        // the two platforms must render identically. Lock the bg/fg of
+        // each theme to the exact `#rrggbb` iOS ships (see
+        // apps/ios/GhosttyVT/Sources/GhosttyVT/Terminal.swift).
+        assertEquals("#1d1f21", TerminalPalette.toHex(
+            TerminalPalette.forTheme(AppearanceStore.TerminalTheme.GhosttyDark).defaultBackground))
+        assertEquals("#c5c8c6", TerminalPalette.toHex(
+            TerminalPalette.forTheme(AppearanceStore.TerminalTheme.GhosttyDark).defaultForeground))
+        assertEquals("#002b36", TerminalPalette.toHex(
+            TerminalPalette.forTheme(AppearanceStore.TerminalTheme.SolarizedDark).defaultBackground))
+        assertEquals("#2e3440", TerminalPalette.toHex(
+            TerminalPalette.forTheme(AppearanceStore.TerminalTheme.Nord).defaultBackground))
+        assertEquals("#282a36", TerminalPalette.toHex(
+            TerminalPalette.forTheme(AppearanceStore.TerminalTheme.Dracula).defaultBackground))
+        assertEquals("#282828", TerminalPalette.toHex(
+            TerminalPalette.forTheme(AppearanceStore.TerminalTheme.GruvboxDark).defaultBackground))
+    }
+
+    @Test
+    fun draculaRedANSISlot_matchesIOS() {
+        // Spot-check an ANSI slot too (index 1 = red) so a future palette
+        // edit that shifts the cube is caught, not just the defaults.
+        assertEquals(
+            "#ff5555",
+            TerminalPalette.toHex(
+                TerminalPalette.forTheme(AppearanceStore.TerminalTheme.Dracula).ansi[1],
+            ),
+        )
+    }
+
+    @Test
+    fun xtermThemeJson_carriesBackgroundForegroundCursorAndAllSixteenSlots() {
+        val json = TerminalPalette.xtermThemeJson(AppearanceStore.TerminalTheme.GhosttyDark)
+        assertTrue("has background", json.contains("\"background\":\"#1d1f21\""))
+        assertTrue("has foreground", json.contains("\"foreground\":\"#c5c8c6\""))
+        assertTrue("has cursor", json.contains("\"cursor\":\"#c5c8c6\""))
+        // Named ANSI keys xterm.js expects.
+        assertTrue("has black", json.contains("\"black\":"))
+        assertTrue("has brightWhite", json.contains("\"brightWhite\":\"#eaeaea\""))
+        assertTrue("has red", json.contains("\"red\":\"#cc6666\""))
+    }
+
     // --- Helpers -------------------------------------------------
 
     /** Crude perceived brightness: sum of RGB channel values. */

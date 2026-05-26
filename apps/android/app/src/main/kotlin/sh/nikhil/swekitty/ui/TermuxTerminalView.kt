@@ -15,7 +15,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -98,18 +97,22 @@ fun TermuxTerminalView(
     val buffers by store.terminalBuffer.collectAsState()
     val rawBuffer = buffers[session.id] ?: ByteArray(0)
 
-    // Appearance-driven palette + font. `.System` defers to the
-    // composable-local `isSystemInDarkTheme()` lambda so a system
-    // light/dark flip recomposes and re-applies the right palette to
-    // the live emulator without a remount. Font-family choice maps
-    // to a typeface that's always monospaced (the cell grid can't
-    // tolerate proportional widths) but follows the user's design
+    // Appearance-driven palette + font. A theme/font change recomposes
+    // and re-applies to the live emulator without a remount. Font-family
+    // choice maps to a typeface that's always monospaced (the cell grid
+    // can't tolerate proportional widths) but follows the user's design
     // hint where the system ships a matching variant.
     val appearance = LocalAppearanceStore.current
-    val themeMode by appearance.themeMode.collectAsState()
     val fontFamily by appearance.fontFamily.collectAsState()
-    val isDark = isSystemInDarkTheme()
-    val palette = TerminalPalette.forMode(themeMode, isSystemDark = isDark)
+    // Terminal colour theme + font size are the SAME user-tunable
+    // controls the xterm.js path reads, so the native (Termux) path
+    // honours them too. The curated theme (Ghostty Dark / Solarized /
+    // Nord / Dracula / Gruvbox) drives the colour table; it replaces
+    // the old light/dark `forMode` split (all five are dark themes,
+    // matching iOS).
+    val terminalTheme by appearance.terminalTheme.collectAsState()
+    val terminalFontSize by appearance.terminalFontSize.collectAsState()
+    val palette = TerminalPalette.forTheme(terminalTheme)
 
     AndroidView(
         modifier = modifier,
@@ -127,6 +130,7 @@ fun TermuxTerminalView(
                     mount = mount,
                     initialPalette = palette,
                     initialFontFamily = fontFamily,
+                    initialFontSize = terminalFontSize,
                 )
             } catch (t: Throwable) {
                 // Catch Errors too (e.g. NoClassDefFoundError if the
@@ -181,9 +185,9 @@ fun TermuxTerminalView(
     // palette or font family. The `applyAppearance` helper is
     // idempotent — same inputs, same view → no-op — so this is cheap
     // and lets a Settings-sheet swap take effect without remounting.
-    LaunchedEffect(palette, fontFamily, emulatorReadyTick.intValue) {
+    LaunchedEffect(palette, fontFamily, terminalFontSize, emulatorReadyTick.intValue) {
         val view = mount.terminalView ?: return@LaunchedEffect
-        applyAppearance(view, mount.session, palette, fontFamily)
+        applyAppearance(view, mount.session, palette, fontFamily, terminalFontSize)
     }
 
     DisposableEffect(session.id) {
@@ -281,6 +285,7 @@ private fun buildTermuxTerminalView(
     mount: TermuxMount,
     initialPalette: TerminalPalette,
     initialFontFamily: AppearanceStore.FontFamily,
+    initialFontSize: Float,
 ): View {
     val view = TerminalView(ctx, /* attributes= */ null).apply {
         setBackgroundColor(initialPalette.defaultBackground)
@@ -341,7 +346,7 @@ private fun buildTermuxTerminalView(
     // initial paint already reads from `AppearanceStore`. Colour table
     // wires through to the emulator on `view.post {}` because the
     // emulator instance isn't live until the first layout pass.
-    applyAppearance(view, /* session = */ null, initialPalette, initialFontFamily)
+    applyAppearance(view, /* session = */ null, initialPalette, initialFontFamily, initialFontSize)
 
     // Stage 2 banner. `emulator` is null until updateSize runs on
     // the first layout pass — defer the append until then so we
@@ -354,7 +359,7 @@ private fun buildTermuxTerminalView(
             emulator?.append(bytes, bytes.size)
             // Re-apply once the emulator is live so the per-colour
             // table sees the user's palette on the first frame.
-            applyAppearance(view, session, initialPalette, initialFontFamily)
+            applyAppearance(view, session, initialPalette, initialFontFamily, initialFontSize)
             view.invalidate()
         } catch (t: Throwable) {
             Log.w(TAG, "Stage 2 banner inject failed", t)
@@ -389,6 +394,7 @@ internal fun applyAppearance(
     session: TerminalSession?,
     palette: TerminalPalette,
     fontFamily: AppearanceStore.FontFamily,
+    fontSize: Float = AppearanceStore.DEFAULT_TERMINAL_FONT_SIZE,
 ) {
     // 1. Background — the view's own backing colour shows through
     //    cells with `defaultBackground` so the palette swap takes
@@ -406,13 +412,15 @@ internal fun applyAppearance(
     }
     runCatching { view.setTypeface(typeface) }
 
-    // 3. Cell text size. Base 13sp, scaled against the user's system
-    //    "Font size" preference for Dynamic-Type parity with iOS.
+    // 3. Cell text size. Base is the user's Settings terminal font size
+    //    (default 10sp, denser than the old 13sp — matches iOS), scaled
+    //    against the system "Font size" preference for Dynamic-Type
+    //    parity with iOS.
     val res = view.resources
     val fontScale = res.configuration.fontScale.coerceAtLeast(0.5f)
     val px = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_SP,
-        13f * fontScale,
+        fontSize * fontScale,
         res.displayMetrics,
     )
     runCatching { view.setTextSize(px.toInt()) }

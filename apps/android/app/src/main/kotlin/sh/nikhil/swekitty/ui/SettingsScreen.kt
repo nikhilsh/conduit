@@ -93,6 +93,8 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
     val collapseTurns by appearance.collapseTurns.collectAsState()
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
+    val terminalFontSize by appearance.terminalFontSize.collectAsState()
+    val terminalTheme by appearance.terminalTheme.collectAsState()
 
     var showAddServer by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
@@ -217,6 +219,62 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                     isOn = collapseTurns,
                     onChange = { appearance.setCollapseTurns(it) },
                 )
+            }
+
+            // Terminal — font size slider + color theme picker. Android
+            // mirror of the iOS native-terminal controls: the size +
+            // five themes (Ghostty Dark / Solarized Dark / Nord /
+            // Dracula / Gruvbox Dark) match iOS exactly. Applies to the
+            // production xterm.js terminal and the experimental Termux
+            // path alike; both live-update.
+            SettingsSection("Terminal") {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.FormatSize,
+                            contentDescription = null,
+                            tint = SweKittyTheme.accentStrong(),
+                            modifier = Modifier.size(24.dp),
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Text(
+                            "Font Size",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "${terminalFontSize.toInt()}pt",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    Slider(
+                        value = terminalFontSize,
+                        onValueChange = { appearance.setTerminalFontSize(it) },
+                        valueRange = AppearanceStore.TERMINAL_FONT_SIZE_RANGE,
+                        steps = (AppearanceStore.TERMINAL_FONT_SIZE_RANGE.endInclusive
+                            - AppearanceStore.TERMINAL_FONT_SIZE_RANGE.start).toInt() - 1,
+                        colors = SliderDefaults.colors(
+                            thumbColor = SweKittyTheme.accentStrong(),
+                            activeTrackColor = SweKittyTheme.accentStrong(),
+                        ),
+                    )
+                }
+                SettingsDivider()
+                AppearanceStore.TerminalTheme.values().forEachIndexed { idx, choice ->
+                    PickerRow(
+                        icon = Icons.Filled.Palette,
+                        title = choice.label,
+                        isSelected = terminalTheme == choice,
+                        onClick = { appearance.setTerminalTheme(choice) },
+                    )
+                    if (idx < AppearanceStore.TerminalTheme.values().lastIndex) SettingsDivider()
+                }
             }
 
             // Servers

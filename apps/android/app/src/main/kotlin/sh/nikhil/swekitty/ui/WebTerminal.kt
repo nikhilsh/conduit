@@ -9,12 +9,15 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
+import sh.nikhil.swekitty.AppearanceStore
+import sh.nikhil.swekitty.LocalAppearanceStore
 import sh.nikhil.swekitty.SessionStore
 import uniffi.swe_kitty_core.ProjectSession
 
@@ -34,9 +37,17 @@ import uniffi.swe_kitty_core.ProjectSession
 fun TerminalPage(store: SessionStore, session: ProjectSession) {
     val buffers by store.terminalBuffer.collectAsState()
     val raw = buffers[session.id] ?: ByteArray(0)
+    // Appearance: font size + curated terminal theme are user-tunable
+    // in Settings and live-update the visible terminal (matching the
+    // iOS native terminal). Defaults are a dense 10pt + Ghostty Dark.
+    val appearance = LocalAppearanceStore.current
+    val fontSize by appearance.terminalFontSize.collectAsState()
+    val terminalTheme by appearance.terminalTheme.collectAsState()
     WebTerminal(
         sessionID = session.id,
         buffer = raw,
+        fontSize = fontSize,
+        terminalTheme = terminalTheme,
         onInput = { bytes -> store.sendInput(session.id, bytes) },
         onResize = { rows, cols ->
             store.resize(session.id, rows.toUShort(), cols.toUShort())
@@ -56,6 +67,8 @@ fun TerminalPage(store: SessionStore, session: ProjectSession) {
 fun WebTerminal(
     sessionID: String,
     buffer: ByteArray,
+    fontSize: Float = AppearanceStore.DEFAULT_TERMINAL_FONT_SIZE,
+    terminalTheme: AppearanceStore.TerminalTheme = AppearanceStore.TerminalTheme.GhosttyDark,
     onInput: (ByteArray) -> Unit,
     onResize: (Int, Int) -> Unit,
     modifier: Modifier = Modifier,
@@ -94,6 +107,11 @@ fun WebTerminal(
             wv.addJavascriptInterface(bridge, "swekitty")
 
             state.webView = wv
+            // Seed the appearance so the first paint (and the `ready`
+            // flush) already use the user's font size + theme rather
+            // than a brief flash of the JS defaults.
+            state.fontSize = fontSize
+            state.terminalTheme = terminalTheme
             wv.loadUrl("file:///android_asset/terminal/terminal.html")
             wv
         },
@@ -117,6 +135,16 @@ fun WebTerminal(
             }
         },
     )
+
+    // Live-apply font size + theme on every change. Idempotent on the
+    // JS side; if the terminal isn't `ready` yet the value is stashed in
+    // [WebTerminalState] and flushed by the `ready` handler.
+    LaunchedEffect(sessionID, fontSize) {
+        state.applyFontSize(fontSize)
+    }
+    LaunchedEffect(sessionID, terminalTheme) {
+        state.applyTheme(terminalTheme)
+    }
 
     DisposableEffect(sessionID) {
         onDispose {
@@ -144,6 +172,27 @@ internal class WebTerminalState {
     private var pendingReset: Boolean = false
     private val main = Handler(Looper.getMainLooper())
 
+    // Current appearance, mirrored so we can re-apply on `ready` (the
+    // first paint) and so a change while not-ready is not lost. Seeded
+    // by the factory before the page loads.
+    @Volatile var fontSize: Float = AppearanceStore.DEFAULT_TERMINAL_FONT_SIZE
+    @Volatile var terminalTheme: AppearanceStore.TerminalTheme =
+        AppearanceStore.TerminalTheme.GhosttyDark
+
+    /** Push a new font size to the live terminal (re-fits the grid). */
+    @Synchronized
+    fun applyFontSize(size: Float) {
+        fontSize = size
+        if (ready) evalOnMain("window.setFontSize($size)")
+    }
+
+    /** Push a new color theme to the live terminal. */
+    @Synchronized
+    fun applyTheme(theme: AppearanceStore.TerminalTheme) {
+        terminalTheme = theme
+        if (ready) evalOnMain("window.setTheme('${TerminalPalette.xtermThemeJson(theme)}')")
+    }
+
     @Synchronized
     fun feedOrQueue(b64: String) {
         if (b64.isEmpty()) return
@@ -167,6 +216,10 @@ internal class WebTerminalState {
 
     @Synchronized
     fun flushPending() {
+        // Apply the user's font size + theme first so the buffer we're
+        // about to feed reflows / paints with the right metrics + colors.
+        evalOnMain("window.setFontSize($fontSize)")
+        evalOnMain("window.setTheme('${TerminalPalette.xtermThemeJson(terminalTheme)}')")
         if (pendingReset) {
             evalOnMain("window.reset()")
             pendingReset = false

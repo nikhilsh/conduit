@@ -132,6 +132,139 @@ internal data class TerminalPalette(
         }
 
         /**
+         * Resolve the curated terminal color theme the user picked in
+         * Settings into a concrete palette. These are the SAME five
+         * themes (and exact `#rrggbb` values) iOS ships in
+         * `GhosttyVT.GhosttyTheme` — read from
+         * `apps/ios/GhosttyVT/Sources/GhosttyVT/Terminal.swift` so the
+         * two platforms render identically. Used by both the xterm.js
+         * path ([WebTerminal]) and the Termux path
+         * ([TermuxTerminalView]); the chosen terminal theme is
+         * independent of the chat light/dark [forMode] split above (all
+         * five are dark backgrounds, matching iOS).
+         */
+        fun forTheme(theme: AppearanceStore.TerminalTheme): TerminalPalette = when (theme) {
+            AppearanceStore.TerminalTheme.GhosttyDark -> GHOSTTY_DARK
+            AppearanceStore.TerminalTheme.SolarizedDark -> SOLARIZED_DARK
+            AppearanceStore.TerminalTheme.Nord -> NORD
+            AppearanceStore.TerminalTheme.Dracula -> DRACULA
+            AppearanceStore.TerminalTheme.GruvboxDark -> GRUVBOX_DARK
+        }
+
+        /** Ghostty Dark — the default. Colors lifted verbatim from
+         *  iOS `GhosttyTheme.ghosttyDark`. */
+        val GHOSTTY_DARK = TerminalPalette(
+            defaultForeground = hex("#c5c8c6"),
+            defaultBackground = hex("#1d1f21"),
+            ansi = hexAnsi(
+                "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
+                "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
+                "#666666", "#d54e53", "#b9ca4a", "#e7c547",
+                "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
+            ),
+        )
+
+        /** Solarized Dark — iOS `GhosttyTheme.solarizedDark`. */
+        val SOLARIZED_DARK = TerminalPalette(
+            defaultForeground = hex("#839496"),
+            defaultBackground = hex("#002b36"),
+            ansi = hexAnsi(
+                "#073642", "#dc322f", "#859900", "#b58900",
+                "#268bd2", "#d33682", "#2aa198", "#eee8d5",
+                "#002b36", "#cb4b16", "#586e75", "#657b83",
+                "#839496", "#6c71c4", "#93a1a1", "#fdf6e3",
+            ),
+        )
+
+        /** Nord — iOS `GhosttyTheme.nord`. */
+        val NORD = TerminalPalette(
+            defaultForeground = hex("#d8dee9"),
+            defaultBackground = hex("#2e3440"),
+            ansi = hexAnsi(
+                "#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
+                "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+                "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b",
+                "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4",
+            ),
+        )
+
+        /** Dracula — iOS `GhosttyTheme.dracula`. */
+        val DRACULA = TerminalPalette(
+            defaultForeground = hex("#f8f8f2"),
+            defaultBackground = hex("#282a36"),
+            ansi = hexAnsi(
+                "#21222c", "#ff5555", "#50fa7b", "#f1fa8c",
+                "#bd93f9", "#ff79c6", "#8be9fd", "#f8f8f2",
+                "#6272a4", "#ff6e6e", "#69ff94", "#ffffa5",
+                "#d6acff", "#ff92df", "#a4ffff", "#ffffff",
+            ),
+        )
+
+        /** Gruvbox Dark — iOS `GhosttyTheme.gruvboxDark`. */
+        val GRUVBOX_DARK = TerminalPalette(
+            defaultForeground = hex("#ebdbb2"),
+            defaultBackground = hex("#282828"),
+            ansi = hexAnsi(
+                "#282828", "#cc241d", "#98971a", "#d79921",
+                "#458588", "#b16286", "#689d6a", "#a89984",
+                "#928374", "#fb4934", "#b8bb26", "#fabd2f",
+                "#83a598", "#d3869b", "#8ec07c", "#ebdbb2",
+            ),
+        )
+
+        /** Cursor color per theme, matching iOS `GhosttyTheme.cursor`. */
+        fun cursorHex(theme: AppearanceStore.TerminalTheme): String = when (theme) {
+            AppearanceStore.TerminalTheme.GhosttyDark -> "#c5c8c6"
+            AppearanceStore.TerminalTheme.SolarizedDark -> "#93a1a1"
+            AppearanceStore.TerminalTheme.Nord -> "#d8dee9"
+            AppearanceStore.TerminalTheme.Dracula -> "#f8f8f2"
+            AppearanceStore.TerminalTheme.GruvboxDark -> "#ebdbb2"
+        }
+
+        /**
+         * Build the xterm.js `theme` option object (as a JSON string)
+         * for a curated [AppearanceStore.TerminalTheme]. xterm.js wants
+         * `{ background, foreground, cursor, black, red, … brightWhite }`
+         * with `#rrggbb` strings; the 16 ANSI slots map to its named
+         * keys in order. The values come straight from [forTheme] /
+         * [cursorHex] so xterm.js and Termux render the same colours
+         * (and both match iOS).
+         */
+        fun xtermThemeJson(theme: AppearanceStore.TerminalTheme): String {
+            val p = forTheme(theme)
+            val names = arrayOf(
+                "black", "red", "green", "yellow",
+                "blue", "magenta", "cyan", "white",
+                "brightBlack", "brightRed", "brightGreen", "brightYellow",
+                "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
+            )
+            val sb = StringBuilder()
+            sb.append("{")
+            sb.append("\"background\":\"").append(toHex(p.defaultBackground)).append("\",")
+            sb.append("\"foreground\":\"").append(toHex(p.defaultForeground)).append("\",")
+            sb.append("\"cursor\":\"").append(cursorHex(theme)).append("\"")
+            for (i in names.indices) {
+                sb.append(",\"").append(names[i]).append("\":\"")
+                    .append(toHex(p.ansi[i])).append("\"")
+            }
+            sb.append("}")
+            return sb.toString()
+        }
+
+        /** Packed ARGB int → `#rrggbb` (alpha dropped; xterm wants RGB). */
+        fun toHex(argb: Int): String =
+            String.format("#%06x", argb and 0x00FFFFFF)
+
+        /** Parse a `#rrggbb` string into a packed opaque ARGB int. */
+        private fun hex(s: String): Int = Color.parseColor(s)
+
+        /** Parse 16 `#rrggbb` strings into the ANSI slot int array. */
+        private fun hexAnsi(vararg s: String): IntArray {
+            require(s.size == 16) { "expected 16 ANSI hex colours, got ${s.size}" }
+            return IntArray(16) { Color.parseColor(s[it]) }
+        }
+
+        /**
          * Build an ARGB int from 0..1 float channels. Local helper so
          * the palette constants stay readable. Same fixed-point math
          * iOS uses on its `UIColor(red:green:blue:alpha:)` calls.
