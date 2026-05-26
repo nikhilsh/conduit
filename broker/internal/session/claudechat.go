@@ -64,16 +64,32 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 //
 // Assistant text becomes a role:"assistant" chat event; tool_use blocks
 // become a role:"tool" event whose content ("Name: <summary>") the client's
-// conversation classifier renders as a tool card. system/result/stream_event
+// conversation classifier renders as a tool card. system/stream_event
 // envelopes are skipped — no TUI chrome can leak in, which is the whole
 // point of the structured channel (device bug #6).
-func processClaudeStreamOutput(r io.Reader, publish func([]byte)) error {
+//
+// The `result` envelope (turn end) fires the AI quick-reply generator
+// (task #233) with the turn's last assistant text. gen may be nil
+// (feature disabled / non-claude), in which case turn-end is a no-op.
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	// Track the most recent assistant prose + its event ts across the
+	// turn so the turn-end `result` can hand the generator the message it
+	// should base chips on (and an id the apps tie the chips to).
+	var lastAssistantText, lastAssistantTS string
 	for sc.Scan() {
-		evs, ok := parseClaudeStreamLine(sc.Bytes())
+		line := sc.Bytes()
+		if claudeStreamLineIsTurnEnd(line) {
+			// Turn complete: kick off best-effort AI quick replies for the
+			// turn's final assistant message, then reset for the next turn.
+			gen.kickoff(lastAssistantText, lastAssistantTS)
+			lastAssistantText, lastAssistantTS = "", ""
+			continue
+		}
+		evs, ok := parseClaudeStreamLine(line)
 		if !ok {
 			continue
 		}
@@ -87,13 +103,17 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte)) error {
 			default:
 				continue
 			}
+			ts := claudeChatNow().UTC().Format(time.RFC3339Nano)
+			if role == "assistant" {
+				lastAssistantText, lastAssistantTS = content, ts
+			}
 			payload, err := json.Marshal(map[string]any{
 				"type": "view_event",
 				"view": "chat",
 				"event": map[string]any{
 					"role":    role,
 					"content": content,
-					"ts":      claudeChatNow().UTC().Format(time.RFC3339Nano),
+					"ts":      ts,
 					"files":   []any{},
 				},
 			})

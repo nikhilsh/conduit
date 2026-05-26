@@ -155,6 +155,36 @@ data class Endpoint(val url: String = "", val token: String = "") {
 data class PendingAgentPick(val hostNote: String)
 
 /**
+ * AI-generated quick replies for a session (task #233). [replies] are the
+ * short tap-able strings the broker's one-shot model produced;
+ * [forMessageId] ties them to the assistant message they were generated
+ * for. Parsed from the core's flattened `quick_replies` `onViewEvent`
+ * payload (`replies` is a JSON-array string, `for_message_id` plain).
+ * Mirror of iOS `AIQuickReplies`.
+ */
+data class AIQuickReplies(
+    val replies: List<String>,
+    val forMessageId: String,
+) {
+    companion object {
+        /** Decode the flattened payload, or null when no usable replies. */
+        fun from(payload: Map<String, String>): AIQuickReplies? {
+            val raw = payload["replies"] ?: return null
+            val cleaned = runCatching {
+                val arr = JSONArray(raw)
+                (0 until arr.length())
+                    .mapNotNull { arr.optString(it, "").trim().ifEmpty { null } }
+            }.getOrNull() ?: return null
+            if (cleaned.isEmpty()) return null
+            return AIQuickReplies(
+                replies = cleaned.take(4),
+                forMessageId = payload["for_message_id"] ?: "",
+            )
+        }
+    }
+}
+
+/**
  * Pairs the in-flight [OAuthRequest] (PKCE verifier + state, kept in
  * memory only) with the redirect [android.net.Uri] delivered to
  * MainActivity by the `swekitty://oauth/...` intent filter. The
@@ -310,6 +340,16 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     val chatLog: StateFlow<Map<String, List<ChatEvent>>> = _chatLog.asStateFlow()
     private val _conversationLog = MutableStateFlow<Map<String, List<ConversationItem>>>(emptyMap())
     val conversationLog: StateFlow<Map<String, List<ConversationItem>>> = _conversationLog.asStateFlow()
+
+    /**
+     * AI-generated quick replies per session (task #233). The broker
+     * emits a `view:"quick_replies"` view_event when an assistant turn
+     * completes; the chat composer renders these as tap-able chips,
+     * replacing the old client-side heuristic. Cleared on send / when a
+     * fresh turn arrives. Mirror of iOS `SessionStore.quickReplies`.
+     */
+    private val _quickReplies = MutableStateFlow<Map<String, AIQuickReplies>>(emptyMap())
+    val quickReplies: StateFlow<Map<String, AIQuickReplies>> = _quickReplies.asStateFlow()
 
     private val _previews = MutableStateFlow<Map<String, PreviewInfo>>(emptyMap())
     val previews: StateFlow<Map<String, PreviewInfo>> = _previews.asStateFlow()
@@ -1228,6 +1268,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
     }
 
     fun sendChat(sessionId: String, msg: String) {
+        // The user has answered — clear the AI quick-reply chips so they
+        // don't linger over the next turn (task #233). Done before the
+        // client guard so the chips drop even mid-reconnect.
+        clearQuickReplies(sessionId)
         val c = client ?: return
         // Optimistic local echo — harness doesn't loop user messages back
         // as onChatEvent, so the chat tab would stay empty until the
@@ -1539,11 +1583,36 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
         }
+        // A fresh turn invalidates the previous turn's AI chips (task
+        // #233); the broker emits a new set after this turn completes.
+        clearQuickReplies(sessionId)
         refreshConversation(sessionId)
     }
 
     override fun onViewEvent(sessionId: String, kind: String, payload: Map<String, String>) {
-        routeAgentLoginViewEvent(kind, payload)
+        if (kind == "quick_replies") {
+            ingestQuickReplies(sessionId, payload)
+        } else {
+            routeAgentLoginViewEvent(kind, payload)
+        }
+    }
+
+    /**
+     * Ingest a broker-generated quick-reply set for a session (task
+     * #233). Replaces any prior set; an unusable payload (no replies)
+     * clears the chips. Mirror of iOS `SessionStore.ingestQuickReplies`.
+     */
+    fun ingestQuickReplies(sessionId: String, payload: Map<String, String>) {
+        val parsed = AIQuickReplies.from(payload)
+        _quickReplies.value = _quickReplies.value.toMutableMap().also { m ->
+            if (parsed != null) m[sessionId] = parsed else m.remove(sessionId)
+        }
+    }
+
+    /** Clear a session's AI quick-reply chips (on send / fresh turn). */
+    private fun clearQuickReplies(sessionId: String) {
+        if (_quickReplies.value[sessionId] == null) return
+        _quickReplies.value = _quickReplies.value.toMutableMap().also { it.remove(sessionId) }
     }
 
     override fun onPreviewReady(sessionId: String, preview: PreviewInfo) {

@@ -756,6 +756,22 @@ async fn handle_text(
                             delegate.on_chat_event(session_id.to_string(), chat);
                         }
                     }
+                    // AI-generated quick replies (task #233). The broker
+                    // emits view:"quick_replies" with an object payload
+                    // {session_id, replies:[...], for_message_id}. The
+                    // typed on_view_event delegate carries only string
+                    // values, so we flatten `replies` to a JSON-encoded
+                    // string the apps decode back into a [String]. Reuses
+                    // the generic view_event router rather than growing the
+                    // UDL surface — minimal passthrough.
+                    "quick_replies" => {
+                        let payload = flatten_quick_replies(&ev);
+                        delegate.on_view_event(
+                            session_id.to_string(),
+                            "quick_replies".to_string(),
+                            payload,
+                        );
+                    }
                     // view:"status" carries typed sub-events keyed by name,
                     // e.g. {"agent_login_url": {"url": ..., "loopback_port": 8080, ...}}.
                     // Flatten each sub-event's inner object to string values and
@@ -884,12 +900,57 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+/// Flatten a broker `view:"quick_replies"` event into the string-map the
+/// typed `on_view_event` delegate carries (task #233). The delegate's
+/// `record<string,string>` can't hold a list, so `replies` is re-encoded
+/// as a JSON-array string the apps decode back into `[String]`;
+/// `for_message_id` passes through as-is. Missing fields are simply
+/// omitted — the apps treat an absent/empty `replies` as "clear the
+/// chips".
+fn flatten_quick_replies(ev: &serde_json::Value) -> HashMap<String, String> {
+    let mut payload = HashMap::new();
+    if let Some(obj) = ev.as_object() {
+        if let Some(replies) = obj.get("replies") {
+            payload.insert("replies".to_string(), replies.to_string());
+        }
+        if let Some(id) = obj.get("for_message_id").and_then(|v| v.as_str()) {
+            payload.insert("for_message_id".to_string(), id.to_string());
+        }
+    }
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use std::io::Write;
+
+    #[test]
+    fn flatten_quick_replies_encodes_list_and_id() {
+        let ev = serde_json::json!({
+            "session_id": "s1",
+            "replies": ["Yes, go ahead", "No", "Tell me more"],
+            "for_message_id": "msg-7"
+        });
+        let p = flatten_quick_replies(&ev);
+        assert_eq!(p.get("for_message_id").map(String::as_str), Some("msg-7"));
+        // `replies` is a JSON-array string the apps decode.
+        let decoded: Vec<String> = serde_json::from_str(p.get("replies").unwrap()).unwrap();
+        assert_eq!(decoded, vec!["Yes, go ahead", "No", "Tell me more"]);
+    }
+
+    #[test]
+    fn flatten_quick_replies_tolerates_missing_fields() {
+        let p = flatten_quick_replies(&serde_json::json!({"session_id": "s1"}));
+        assert!(!p.contains_key("replies"));
+        assert!(!p.contains_key("for_message_id"));
+
+        // Non-object event → empty map, no panic.
+        let p2 = flatten_quick_replies(&serde_json::json!("nope"));
+        assert!(p2.is_empty());
+    }
 
     #[test]
     fn snapshot_reassembles_in_order() {

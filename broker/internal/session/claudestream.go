@@ -46,6 +46,24 @@ type ClaudeChatEvent struct {
 	ToolInput json.RawMessage // tool_use args, for the card summary
 }
 
+// claudeStreamLineIsTurnEnd reports whether a stream-json line is the
+// turn-terminating `result` envelope claude emits once the assistant has
+// finished its reply (and all tool calls in it). It's the hook the
+// AI quick-reply generator fires on. Tolerates malformed lines (returns
+// false). Kept separate from parseClaudeStreamLine so the chat-event
+// mapping stays a pure text/tool extractor.
+func claudeStreamLineIsTurnEnd(line []byte) bool {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return false
+	}
+	var ev claudeStreamEvent
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return false
+	}
+	return ev.Type == "result"
+}
+
 // parseClaudeStreamLine lifts renderable chat items out of a single
 // stream-json line. It returns (events, true) for an "assistant" event
 // that carries text or tool_use blocks, and (nil, false) for everything

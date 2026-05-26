@@ -271,6 +271,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
     val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
     val typedLog by store.conversationLog.collectAsState()
     val fallbackLog by store.chatLog.collectAsState()
+    val aiQuickReplies by store.quickReplies.collectAsState()
     // PR #111 + iOS ChatViewModel parity: render a SINGLE chronologically
     // sorted list, merging the typed `conversationLog` with the broker's
     // raw `chatLog`. Picking one source or the other (the prior
@@ -508,7 +509,14 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
             HorizontalDivider()
             ConversationComposer(
                 draft = draft,
-                quickReplies = remember(events) { QuickReplyDetector.suggestions(events) },
+                // AI-generated chips from the broker (task #233) are
+                // PRIMARY; the client-side heuristic only fills in when
+                // the broker sends none (feature off, codex, generation
+                // failed, or before the post-turn set arrives).
+                quickReplies = remember(events, aiQuickReplies) {
+                    val ai = aiQuickReplies[session.id]?.replies ?: emptyList()
+                    if (ai.isNotEmpty()) ai else QuickReplyDetector.suggestions(events)
+                },
                 agentAccent = agentAccent,
                 currentAssistant = session.assistant,
                 pinnedContexts = pinnedContexts,

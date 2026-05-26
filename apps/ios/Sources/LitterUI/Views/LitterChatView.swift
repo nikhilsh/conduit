@@ -277,11 +277,14 @@ extension LitterUI {
 
         // MARK: Suggested quick-replies
 
-        /// Up to 3 contextual chips inferred from the agent's latest
-        /// message — only when the agent just spoke (it's the user's
-        /// turn). Distinct from the agent's explicit pending-input
-        /// options (`LitterPendingInputCard` owns those), so we bail
-        /// when the last event carries `pendingOptions`.
+        /// Quick-reply chips shown above the composer when it's the
+        /// user's turn. AI-generated chips from the broker
+        /// (`view:"quick_replies"`, task #233) are PRIMARY; the legacy
+        /// client-side heuristic is only a fallback for sessions where
+        /// the broker sends none (feature disabled, codex, generation
+        /// failed). Distinct from the agent's explicit pending-input
+        /// options (`LitterPendingInputCard` owns those), so we bail when
+        /// the last event carries `pendingOptions`.
         private var suggestedReplies: [String] {
             guard let last = events.last,
                   last.role.lowercased() == "assistant",
@@ -291,6 +294,12 @@ extension LitterUI {
             // Don't suggest mid-stream — wait for the turn to settle.
             let status = last.status.lowercased()
             guard !["streaming", "working", "thinking", "pending"].contains(status) else { return [] }
+            // Primary: broker AI replies. They arrive after the turn ends,
+            // so they may briefly lag the visible message — the heuristic
+            // fills that gap and any non-claude session.
+            if let ai = store.quickReplies[session.id], !ai.replies.isEmpty {
+                return ai.replies
+            }
             return LitterUI.ChatViewModel.suggestedReplies(forLastAssistant: last.content)
         }
 

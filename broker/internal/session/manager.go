@@ -317,12 +317,26 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		// claude headless in stream-json. Publishes clean chat events via
 		// the same path the scraper used — no PTY scraping (scraper stays
 		// nil); the PTY (a shell) drains to the Terminal tab below.
+		// AI quick replies (task #233): on each completed assistant turn,
+		// a best-effort one-shot `claude -p` (cheap model) suggests up to
+		// 4 tap-able user replies, emitted as a `view:"quick_replies"`
+		// view_event. nil when the feature is off or there's no ephemeral
+		// HOME to copy creds from — the stream reader then no-ops turn-end.
+		gen := newQuickReplyGenerator(
+			s.ID,
+			adapter.Command[0],
+			s.agentHomeDir,
+			s.workspaceDir,
+			s.commandEnv(nil),
+			s.PublishText,
+		)
 		chat, cerr := startChatProcess(
 			context.Background(),
 			claudeStreamCommand(adapter.Command, adapter.Args),
 			s.commandEnv(nil),
 			s.workspaceDir,
 			s.PublishText,
+			gen,
 		)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)

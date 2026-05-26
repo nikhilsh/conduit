@@ -122,6 +122,31 @@ The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror 
 - `agent_login_failed` — `{ "provider": "...", "reason": "human-readable" }`. Emitted on any v2 login error: unknown provider, CLI not on PATH, URL parse timeout, unknown `session_token` on callback, CLI exited non-zero. The phone surfaces `reason` and re-presents the login button.
 
 ```json
+{ "type": "view_event",
+  "session": "<uuid>",
+  "view": "quick_replies",
+  "event": {
+    "session_id": "<uuid>",
+    "replies": ["Yes, go ahead", "Show me the diff", "Run the tests"],
+    "for_message_id": "<ts-of-assistant-message>"
+  }
+}
+```
+
+The `view: "quick_replies"` shape carries **AI-generated** contextual quick replies (task #233), replacing the apps' old client-side heuristic chips. When a Claude stream-json assistant turn finishes (the `result` envelope), the broker fires a **best-effort, async, non-blocking** one-shot `claude -p --model haiku` against the session's credentials and emits up to 4 short tap-able *user* replies for the turn's final assistant message. Field semantics:
+
+- `replies` — array of ≤4 short strings. The apps render them as composer chips and clear them on send / when a new turn arrives. An empty/absent array means "no chips".
+- `for_message_id` — the `ts` of the assistant message the chips were generated for, so a stale set can be dropped.
+- `session_id` — echoes the bound session for symmetry with the envelope `session`.
+
+Generation details and guarantees:
+- **Never blocks the real turn**: runs in a goroutine with an 8s timeout; any error/timeout/malformed model output emits **nothing**.
+- **Credential-race safe**: the interactive session and the one-shot share one ephemeral `$HOME`, so a concurrent OAuth refresh-token rotation on `.claude/.credentials.json` could race. The one-shot sidesteps this by running against a **throwaway temp-`$HOME` copy** of the session's `.claude` creds (removed after the call) — any refresh it does lands in the discardable copy, never the live session's token.
+- **Config-gated**: on by default; `SWE_KITTY_AI_QUICKREPLIES=0` (or `false`/`off`/`no`) disables it entirely.
+- **Claude-only**: codex / TUI-scrape sessions cleanly no-op (no chips from the broker; the apps fall back to the local heuristic).
+- Core passes this through `on_view_event(session_id, "quick_replies", { replies: "<json-array-string>", for_message_id })` — the typed `record<string,string>` delegate, so `replies` is JSON-encoded as a string the apps decode. No UDL change.
+
+```json
 { "type": "exit", "session": "<uuid>", "code": 0 }
 ```
 

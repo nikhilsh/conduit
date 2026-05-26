@@ -218,6 +218,35 @@ struct PinnedContext: Identifiable, Equatable {
     }
 }
 
+/// AI-generated quick replies for a session (task #233). `replies` are
+/// the short tap-able strings the broker's one-shot model produced;
+/// `forMessageID` ties them to the assistant message they were generated
+/// for, so a stale set (from a turn the user has since moved past) can be
+/// dropped. Parsed from the broker's `view:"quick_replies"` view_event.
+struct AIQuickReplies: Equatable {
+    var replies: [String]
+    var forMessageID: String
+
+    /// Decode the core's flattened `on_view_event` payload: `replies` is a
+    /// JSON-array string, `for_message_id` is plain. Returns nil when the
+    /// payload has no usable replies (the caller then clears the chips).
+    static func from(payload: [String: String]) -> AIQuickReplies? {
+        guard
+            let raw = payload["replies"],
+            let data = raw.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else { return nil }
+        let cleaned = decoded
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return nil }
+        return AIQuickReplies(
+            replies: Array(cleaned.prefix(4)),
+            forMessageID: payload["for_message_id"] ?? ""
+        )
+    }
+}
+
 @Observable
 @MainActor
 final class SessionStore {
@@ -272,6 +301,13 @@ final class SessionStore {
     var chatLog: [String: [ChatEvent]] = [:]
     /// Typed conversation timeline per session, oldest first.
     var conversationLog: [String: [ConversationItem]] = [:]
+
+    /// AI-generated quick replies per session (task #233). The broker
+    /// emits a `view:"quick_replies"` view_event when an assistant turn
+    /// completes; the chat composer renders these as tap-able chips,
+    /// replacing the old client-side heuristic. Cleared when the user
+    /// sends or a fresh assistant turn arrives.
+    var quickReplies: [String: AIQuickReplies] = [:]
 
     /// Manually pinned context per session — rendered above the
     /// composer as removable chips. PR ios-composer-parity introduces
@@ -998,6 +1034,9 @@ final class SessionStore {
         conversationLog[sessionID, default: []].append(item)
         let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
         chatLog[sessionID, default: []].append(localEvent)
+        // The user has answered — clear the AI quick-reply chips so they
+        // don't linger over the next turn (task #233).
+        quickReplies[sessionID] = nil
         if useRustStore {
             ensureRustSessionPresent(sessionID)
             _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
@@ -1305,8 +1344,23 @@ final class SessionStore {
     // down "only the transport delegate can ingest"; that constraint
     // is fine to relax for tests because the type guards (ChatEvent)
     // make malformed calls a compile error anyway.
+    /// Ingest a broker-generated quick-reply set for a session (task
+    /// #233). Replaces any prior set; an unusable payload (no replies)
+    /// clears the chips. Mirrored on Android in `ingestQuickReplies`.
+    func ingestQuickReplies(_ sessionID: String, payload: [String: String]) {
+        if let qr = AIQuickReplies.from(payload: payload) {
+            quickReplies[sessionID] = qr
+        } else {
+            quickReplies[sessionID] = nil
+        }
+    }
+
     func ingestChat(_ sessionID: String, _ event: ChatEvent) {
         chatLog[sessionID, default: []].append(event)
+        // A fresh user/assistant turn invalidates the previous turn's AI
+        // chips — clear them so stale suggestions don't linger. The
+        // broker emits the new set after the assistant turn completes.
+        quickReplies[sessionID] = nil
         refreshConversation(sessionID: sessionID)
         if useRustStore {
             ensureRustSessionPresent(sessionID)
@@ -2299,6 +2353,12 @@ private final class StoreDelegate: SweKittyDelegate {
         Task { @MainActor in self.store?.ingestConnectionHealth(sessionId, health) }
     }
     func onViewEvent(sessionId: String, kind: String, payload: [String: String]) {
-        Task { @MainActor in self.store?.routeAgentLoginViewEvent(kind: kind, payload: payload) }
+        Task { @MainActor in
+            if kind == "quick_replies" {
+                self.store?.ingestQuickReplies(sessionId, payload: payload)
+            } else {
+                self.store?.routeAgentLoginViewEvent(kind: kind, payload: payload)
+            }
+        }
     }
 }
