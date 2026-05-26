@@ -47,6 +47,7 @@ fun ProjectListScreen(
     val harness by store.harness.collectAsState()
     val endpoint by store.endpoint.collectAsState()
     val displayNames by store.displayNames.collectAsState()
+    val conversationLog by store.conversationLog.collectAsState()
     val creationError by store.sessionCreationError.collectAsState()
     var showAgentPicker by remember { mutableStateOf(false) }
     var showAddServer by remember { mutableStateOf(false) }
@@ -125,10 +126,24 @@ fun ProjectListScreen(
                         )
                     }
                     items(visible, key = { it.id }) { entry ->
-                        val realId = (entry as? VisibleSession.Real)?.session?.id
+                        val realSession = (entry as? VisibleSession.Real)?.session
+                        val realId = realSession?.id
+                        // Friendly, never-raw-UUID label (custom rename →
+                        // first user message → broker label → "<agent> · time").
+                        // Derived from collected state so the row recomposes
+                        // when the rename map or conversation log changes.
+                        val friendly = realSession?.let { s ->
+                            sh.nikhil.swekitty.SessionNaming.friendlyFor(
+                                session = s,
+                                custom = displayNames[s.id],
+                                firstUserMessage = sh.nikhil.swekitty.firstUserMessageOf(
+                                    conversationLog[s.id],
+                                ),
+                            )
+                        }
                         SessionRow(
                             entry = entry,
-                            displayName = realId?.let { displayNames[it] },
+                            displayName = friendly,
                             health = realId?.let { statuses[it]?.health },
                             phase = realId?.let { statuses[it]?.phase },
                             lifecycle = lifecycle[entry.id],
@@ -144,7 +159,7 @@ fun ProjectListScreen(
                                 if (entry is VisibleSession.Real) {
                                     pendingDelete = DrawerSessionDeleteTarget(
                                         entry.session.id,
-                                        displayNames[entry.session.id] ?: entry.session.name,
+                                        friendly ?: entry.session.id.take(8),
                                     )
                                 }
                             },
@@ -462,17 +477,15 @@ private fun SessionRow(
 }
 
 /**
- * Headline for a row: user display name, else the cwd basename, else the
- * session's own name, else a short id. Mirrors the
- * displayName → cwd → name precedence used by ProjectHeaderModel.
+ * Headline for a row: the friendly `displayName` the caller resolved
+ * (custom rename → first user message → broker label → "<agent> · time"),
+ * never the raw UUID. Falls back to a short id only if the friendly name
+ * is somehow blank.
  */
 private fun rowTitle(entry: VisibleSession, displayName: String?): String = when (entry) {
     is VisibleSession.Real -> {
         val s = entry.session
         displayName?.trim()?.takeIf { it.isNotEmpty() }
-            ?: s.displayName?.trim()?.takeIf { it.isNotEmpty() }
-            ?: s.cwd?.trim()?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
-            ?: s.name.takeIf { it.isNotBlank() }
             ?: s.id.take(8)
     }
     is VisibleSession.Creating -> "Starting session…"

@@ -116,6 +116,7 @@ fun ThreadSwitcherSheet(
     val endpoint by store.endpoint.collectAsState()
     val statuses by store.statusBySession.collectAsState()
     val displayNames by store.displayNames.collectAsState()
+    val conversationLog by store.conversationLog.collectAsState()
 
     val currentServerID = savedServers.firstOrNull { it.endpoint == endpoint }?.id
     val model = ThreadSwitcherModel.from(
@@ -168,7 +169,13 @@ fun ThreadSwitcherSheet(
                     items(model.sameServerSessions, key = { it.id }) { s ->
                         SessionRow(
                             session = s,
-                            displayName = displayNames[s.id] ?: s.name,
+                            displayName = sh.nikhil.swekitty.SessionNaming.friendlyFor(
+                                session = s,
+                                custom = displayNames[s.id],
+                                firstUserMessage = sh.nikhil.swekitty.firstUserMessageOf(
+                                    conversationLog[s.id],
+                                ),
+                            ),
                             health = statuses[s.id]?.health,
                             phase = statuses[s.id]?.phase,
                             onClick = { switchTo(s) },

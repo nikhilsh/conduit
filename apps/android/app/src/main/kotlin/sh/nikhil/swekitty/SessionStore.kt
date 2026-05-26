@@ -459,8 +459,44 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         _pinnedContexts.value = PinnedContextReducer.unpin(_pinnedContexts.value, sessionId, id)
     }
 
+    /**
+     * Friendly, never-a-raw-UUID label for a session. Priority order
+     * (Android parity of the iOS list/naming work):
+     *  1. user-set custom name ([_displayNames]) — wins.
+     *  2. first user chat message (from [_conversationLog]), condensed to
+     *     a single ~40-char ellipsized line, ChatGPT/Claude style.
+     *  3. a broker-supplied label (folded into [_displayNames] by
+     *     [onStatus]) when it isn't itself the raw id.
+     *  4. fallback "<agent> · <relative start time>" from `startedAt`.
+     *
+     * The raw UUID `session.name` is NEVER returned as a user-facing label
+     * — it stays in Session Info only. See [SessionNaming.friendly].
+     */
     fun displayName(session: ProjectSession): String =
-        _displayNames.value[session.id] ?: session.name
+        SessionNaming.friendlyFor(
+            session = session,
+            custom = _displayNames.value[session.id],
+            firstUserMessage = firstUserMessageOf(_conversationLog.value[session.id]),
+        )
+
+    /** Friendly label resolved from loose fields — used where the caller
+     *  only has the bits, not a full [ProjectSession] (e.g. a search hit). */
+    fun displayName(
+        sessionId: String,
+        rawName: String,
+        agent: String,
+        serverLabel: String?,
+        startedAt: String?,
+    ): String =
+        SessionNaming.friendly(
+            sessionId = sessionId,
+            rawName = rawName,
+            agent = agent,
+            custom = _displayNames.value[sessionId],
+            firstUserMessage = firstUserMessageOf(_conversationLog.value[sessionId]),
+            serverLabel = serverLabel,
+            startedAt = startedAt,
+        )
 
     fun renameSession(sessionId: String, newName: String) {
         val trimmed = newName.trim()
@@ -1553,8 +1589,13 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         // the renamed label without each having to read the status
         // bag separately. Prefer the new `displayName` field; fall
         // back to the legacy `sessionName` mirror for older brokers.
-        val serverLabel = status.displayName?.trim()?.takeIf { it.isNotEmpty() }
-            ?: status.sessionName?.trim()?.takeIf { it.isNotEmpty() }
+        // Skip a label that's just the raw session id/UUID — the broker
+        // echoes the id as the "name" for unnamed sessions, and folding
+        // that into displayNames (priority #1) would clobber the friendly
+        // chat-derived name. A real `rename_session` label still lands.
+        val serverLabel = (status.displayName?.trim()?.takeIf { it.isNotEmpty() }
+            ?: status.sessionName?.trim()?.takeIf { it.isNotEmpty() })
+            ?.takeUnless { it == status.session || SessionNaming.UUID_REGEX.matches(it) }
         if (serverLabel != null && _displayNames.value[status.session] != serverLabel) {
             val next = _displayNames.value.toMutableMap()
             next[status.session] = serverLabel

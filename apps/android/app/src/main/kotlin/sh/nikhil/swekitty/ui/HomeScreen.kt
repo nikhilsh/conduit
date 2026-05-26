@@ -42,13 +42,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.HarnessState
 import sh.nikhil.swekitty.SessionStore
 import sh.nikhil.swekitty.SessionLifecycle
+import sh.nikhil.swekitty.SessionNaming
 
 /**
  * Litter-style home screen — shown when no session is selected, in
@@ -72,6 +72,9 @@ fun HomeScreen(
     val savedServers by store.savedServers.collectAsState()
     val sessions by store.sessions.collectAsState()
     val displayNames by store.displayNames.collectAsState()
+    // Collected so a row's friendly name recomposes the moment the first
+    // user message lands in the conversation log.
+    val conversationLog by store.conversationLog.collectAsState()
     val statuses by store.statusBySession.collectAsState()
     val lifecycle by store.sessionLifecycle.collectAsState()
     val selectedId by store.selectedId.collectAsState()
@@ -213,8 +216,19 @@ fun HomeScreen(
                         // connected — a stale "running" phase must not show
                         // green while the connection is down.
                         val connected = harness is HarnessState.Live || harness is HarnessState.Linked
-                        val isRunning = connected && !(statuses[session.id]?.phase ?: "ready").startsWith("exited")
-                        val rowTitle = displayNames[session.id] ?: session.name
+                        val phase = statuses[session.id]?.phase
+                        val isRunning = connected && !(phase ?: "ready").startsWith("exited")
+                        // Friendly name (never the raw UUID): custom rename →
+                        // first user message → broker label → "<agent> · time".
+                        // Derived from the collected displayNames + conversation
+                        // log so the row recomposes when either changes.
+                        val rowTitle = SessionNaming.friendlyFor(
+                            session = session,
+                            custom = displayNames[session.id],
+                            firstUserMessage = sh.nikhil.swekitty.firstUserMessageOf(
+                                conversationLog[session.id],
+                            ),
+                        )
                         // Active-row fill per audit §A.1.3 — litter
                         // selects by painting a 6dp rounded rect at
                         // 55% surfaceVariant, not by swapping an icon.
@@ -236,17 +250,16 @@ fun HomeScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(
-                                        start = LitterHomeRowMetrics.leadingPadding.dp,
-                                        end = LitterHomeRowMetrics.trailingPadding.dp,
-                                        top = LitterHomeRowMetrics.verticalPadding.dp,
-                                        bottom = LitterHomeRowMetrics.verticalPadding.dp,
-                                    ),
+                                    // Comfortable two-line row with a proper
+                                    // tap target — looser than the single-line
+                                    // litter metrics now that the secondary
+                                    // line carries an agent chip + time.
+                                    .padding(horizontal = 8.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                // 7dp filled circle per audit §A.1.7
-                                // (replaces 16dp SF Symbol equivalent).
+                                // Status dot: copper accent when live/running,
+                                // muted when exited/idle/offline.
                                 Box(
                                     modifier = Modifier
                                         .size(LitterHomeRowMetrics.indicatorSize.dp)
@@ -255,27 +268,27 @@ fun HomeScreen(
                                             shape = CircleShape,
                                         ),
                                 )
-                                Column(modifier = Modifier.weight(1f)) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                                ) {
+                                    // Prominent friendly name, single line.
                                     Text(
                                         rowTitle,
-                                        fontSize = androidx.compose.ui.unit.TextUnit(
-                                            LitterHomeRowMetrics.titlePointSize,
-                                            androidx.compose.ui.unit.TextUnitType.Sp,
-                                        ),
+                                        style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    Text(
-                                        "${session.assistant} · ${statuses[session.id]?.phase ?: "ready"}",
-                                        fontSize = androidx.compose.ui.unit.TextUnit(
-                                            LitterHomeRowMetrics.subtitlePointSize,
-                                            androidx.compose.ui.unit.TextUnitType.Sp,
+                                    // Secondary line: agent chip + status + relative time.
+                                    SessionMetaRow(
+                                        agent = session.assistant,
+                                        statusLabel = sessionStatusLabel(connected, phase),
+                                        running = isRunning,
+                                        relativeTime = SessionNaming.relativeAgo(
+                                            session.lastActivityAt ?: session.startedAt,
                                         ),
-                                        fontFamily = FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
@@ -371,6 +384,87 @@ internal object LitterHomeRowMetrics {
 private fun canIssueCommands(state: HarnessState): Boolean = when (state) {
     is HarnessState.Live, is HarnessState.Linked -> true
     else -> false
+}
+
+/**
+ * Human-readable status word for a session row. When the connection is
+ * down we say "idle" rather than echoing a stale "running" phase (device
+ * bug #30 parity). Otherwise map the broker phase to a short word.
+ */
+private fun sessionStatusLabel(connected: Boolean, phase: String?): String {
+    if (!connected) return "idle"
+    val p = (phase ?: "ready").trim().lowercase()
+    return when {
+        p.isEmpty() -> "idle"
+        p.startsWith("exited") -> "exited"
+        p.startsWith("failed") || p.startsWith("dead") -> "exited"
+        p == "ready" || p == "idle" -> "idle"
+        else -> p
+    }
+}
+
+/**
+ * Secondary line for a session row: an agent chip, a status word with a
+ * matching dot, and a relative time, all in one tidy line. Replaces the
+ * old monospace "<agent> · <phase>" plus the ugly ephemeral working dir.
+ */
+@Composable
+private fun SessionMetaRow(
+    agent: String,
+    statusLabel: String,
+    running: Boolean,
+    relativeTime: String,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Agent chip — tinted capsule with the agent name.
+        val tint = SweKittyTheme.accent(forAgent = agent)
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = tint.copy(alpha = 0.18f),
+        ) {
+            Text(
+                agent,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+        }
+        // Status word with a small dot.
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .background(
+                    color = if (running) SweKittyTheme.accentStrong()
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    shape = CircleShape,
+                ),
+        )
+        Text(
+            statusLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (relativeTime.isNotEmpty()) {
+            Text(
+                "·",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            )
+            Text(
+                relativeTime,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                maxLines = 1,
+            )
+        }
+    }
 }
 
 @Composable
