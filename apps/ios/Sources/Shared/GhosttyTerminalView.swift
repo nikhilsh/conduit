@@ -275,29 +275,12 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// nothing until we size it). nil until libghostty attaches one.
     private var ghosttySublayer: CALayer?
 
-    /// On-screen diagnostic overlay (top-left, tiny mono text). Surfaces
-    /// the live `GhosttyDiagnostics` state — init result, app/surface
-    /// handles (nil vs ptr), addSublayer-hook count, draw-tick count,
-    /// wakeup/action counts, bounds, fed bytes — so a device tester can
-    /// read off exactly where the libghostty pipeline stalls even if the
-    /// surface is still visually blank. Behind `experimentalNativeTerminal`
-    /// (this whole view only mounts on the flag-on path), so default
-    /// users never see it. A `CADisplayLink`-driven label refresh keeps
-    /// it live. Set `showDiagnosticOverlay = false` to compile it out of
-    /// the layout entirely (kept on by default while we chase the blank
-    /// screen).
-    static var showDiagnosticOverlay = true
-    private lazy var diagnosticLabel: UILabel = {
-        let label = UILabel()
-        label.numberOfLines = 0
-        label.font = UIFont.monospacedSystemFont(ofSize: 9, weight: .regular)
-        label.textColor = UIColor.green
-        label.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        label.layer.zPosition = 10_000  // above libghostty's sublayer
-        label.isUserInteractionEnabled = false
-        label.lineBreakMode = .byClipping
-        return label
-    }()
+    // The on-screen diagnostic overlay (a green top-left `UILabel`
+    // surfacing `GhosttyDiagnostics`) was scaffolding for the now-fixed
+    // blank-screen bug and has been removed — nothing diagnostic renders
+    // on screen anymore. `GhosttyDiagnostics` itself is retained as plain
+    // counters because the GhosttyVT wrapper still increments them
+    // internally; we just never paint them.
 
     /// Frame pacing. A `CADisplayLink` drives `Terminal.draw()` (→
     /// `ghostty_surface_draw`) once per frame while the view is on a
@@ -310,6 +293,15 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// leak the view (self → link → self).
     private var frameDisplayLink: CADisplayLink?
     private var frameDisplayLinkProxy: FrameDisplayLinkProxy?
+
+    /// Occlusion lifecycle. `true` while the app is backgrounded (the
+    /// surface is off-screen even though the view may still be on a
+    /// window). Combined with window presence to decide whether the
+    /// frame `CADisplayLink` should run: we pause the draw pump — and
+    /// tell libghostty via `ghostty_surface_set_occlusion` — whenever the
+    /// surface is hidden, then resume on foreground. Mirrors geistty's
+    /// occlusion handling (`set_occlusion(!visible)` + renderer stand-down).
+    private var isAppBackgrounded = false
 
     /// Weak-target indirection for `frameDisplayLink`. Mirrors geistty's
     /// `FrameDisplayLinkProxy`: the link retains this proxy, the proxy
@@ -333,7 +325,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             // recompute landed.
             view.syncPtyToGhosttyGrid()
             #endif
-            view.refreshDiagnosticOverlay()
         }
     }
 
@@ -512,6 +503,35 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     override var inputAccessoryView: UIView? { accessoryBar }
 
+    /// Tell libghostty the surface gained key focus when we become first
+    /// responder (the soft keyboard appears / a hardware key lands here).
+    /// libghostty uses focus to drive cursor blink + (potentially) focus
+    /// reporting. Mirrors geistty / libghostty-spm wiring focus to the
+    /// host view's responder state.
+    @discardableResult
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became {
+            #if canImport(GhosttyVT)
+            terminal?.setFocus(true)
+            #endif
+        }
+        return became
+    }
+
+    /// Clear libghostty's focus when we resign first responder (keyboard
+    /// dismissed, another view took over).
+    @discardableResult
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            #if canImport(GhosttyVT)
+            terminal?.setFocus(false)
+            #endif
+        }
+        return resigned
+    }
+
     // MARK: - UIKeyInput
 
     var hasText: Bool { false }
@@ -635,15 +655,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         pan.require(toFail: longPress)
         addGestureRecognizer(pan)
 
-        // Diagnostic overlay (top-left). Added unconditionally on the
-        // flag-on path so it still reports "gh: not linked" on the
-        // placeholder build. It sits above libghostty's sublayer via
-        // its high zPosition; `layoutSubviews` keeps it pinned top-left.
-        if GhosttyRenderView.showDiagnosticOverlay {
-            addSubview(diagnosticLabel)
-            refreshDiagnosticOverlay()
-        }
-
         #if canImport(GhosttyVT)
         // Faithful init: with `GhosttyApp.shared` booted (real
         // wakeup/action callbacks), instantiate the surface WITH this
@@ -678,32 +689,53 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             terminal = term
         }
         #endif
+
+        // Occlusion lifecycle: when the app backgrounds we mark the
+        // surface occluded (libghostty's renderer stands down) and pause
+        // the frame pump; foregrounding reverses both. View appear /
+        // disappear is already handled by `didMoveToWindow`.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
     }
 
-    /// Pull the latest `GhosttyDiagnostics` snapshot and repaint the
-    /// overlay label. Cheap (string format + frame set); called once per
-    /// frame from the display-link proxy and on layout. No-op when the
-    /// overlay is compiled out.
-    func refreshDiagnosticOverlay() {
-        guard GhosttyRenderView.showDiagnosticOverlay else { return }
+    @objc private func handleAppDidEnterBackground() {
+        isAppBackgrounded = true
         #if canImport(GhosttyVT)
-        let snap = GhosttyDiagnostics.shared.snapshot()
-        diagnosticLabel.text = snap.overlayText
-        #else
-        diagnosticLabel.text = "gh: not linked (flag-on, no lib)"
+        // Reuse the SAME occlusion path `didMoveToWindow` drives
+        // (`setVisible(false)`) so libghostty's renderer stands down
+        // through the established, proven recipe rather than a second,
+        // potentially conflicting occlusion signal.
+        terminal?.setVisible(false)
+        terminal?.setFocus(false)
         #endif
-        diagnosticLabel.sizeToFit()
-        let pad: CGFloat = 4
-        let size = diagnosticLabel.intrinsicContentSize
-        let topInset = safeAreaInsets.top
-        let maxWidth = max(0, bounds.width - pad * 2)
-        diagnosticLabel.frame = CGRect(
-            x: pad,
-            y: topInset + pad,
-            width: min(size.width + pad * 2, maxWidth),
-            height: size.height + pad
-        )
-        bringSubviewToFront(diagnosticLabel)
+        updateFrameDisplayLinkRunning()
+    }
+
+    @objc private func handleAppWillEnterForeground() {
+        isAppBackgrounded = false
+        #if canImport(GhosttyVT)
+        // Only un-occlude if we're actually on-screen; an off-window view
+        // foregrounding stays paused until `didMoveToWindow` re-attaches.
+        if window != nil {
+            // Same wake recipe `didMoveToWindow` uses so the freshly
+            // un-occluded surface repaints instead of showing stale pixels.
+            terminal?.setVisible(true)
+            terminal?.setFocus(false)
+            terminal?.setFocus(true)
+            terminal?.refresh()
+        }
+        #endif
+        updateFrameDisplayLinkRunning()
     }
 
     // MARK: - Selection gestures
@@ -978,7 +1010,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         super.layoutSubviews()
         recomputeGridFromBounds()
         sizeGhosttyLayer()
-        refreshDiagnosticOverlay()
     }
 
     /// libghostty's iOS renderer builds its own `IOSurfaceLayer` and parents
@@ -1005,7 +1036,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         ghosttySublayer = sublayer
         layer.addSublayer(sublayer)
         sizeGhosttyLayer()
-        refreshDiagnosticOverlay()
     }
 
     /// Keep libghostty's render target sized to our bounds at the real
@@ -1031,11 +1061,9 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             sub.contentsScale = scale
         }
         // Catch any IOSurfaceLayer libghostty parented directly on our root
-        // layer (not via the view-level hook). Skip the diagnostic overlay's
-        // backing layer — it's a UIView subview positioned in layoutSubviews.
+        // layer (not via the view-level hook).
         if let sublayers = layer.sublayers {
-            let overlayLayer = diagnosticLabel.layer
-            for sub in sublayers where sub !== overlayLayer && sub !== ghosttySublayer {
+            for sub in sublayers where sub !== ghosttySublayer {
                 sub.frame = bounds
                 sub.contentsScale = scale
             }
@@ -1108,12 +1136,24 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             terminal?.setFocus(false)
         }
         #endif
-        if visible {
+        // Gate the draw pump on BOTH window presence and app-foreground
+        // state (a view can be on-window while the app is backgrounded).
+        updateFrameDisplayLinkRunning()
+    }
+
+    /// Run the frame `CADisplayLink` only while the surface is actually
+    /// visible: on a window AND the app is foregrounded. Pausing it on
+    /// occlusion (background / off-window) is the battery/perf win — we
+    /// stop pumping `ghostty_surface_draw` for a surface nothing can see —
+    /// and we resume cleanly on un-occlusion without disturbing the
+    /// wakeup→tick render loop.
+    private func updateFrameDisplayLinkRunning() {
+        let shouldRun = (window != nil) && !isAppBackgrounded
+        if shouldRun {
             startFrameDisplayLink()
         } else {
             stopFrameDisplayLink()
         }
-        refreshDiagnosticOverlay()
     }
 
     /// Start the per-frame draw pump. The link drives `Terminal.draw()`
@@ -1138,6 +1178,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     deinit {
         frameDisplayLink?.invalidate()
+        NotificationCenter.default.removeObserver(self)
     }
 
     /// Fallback grid estimate from CoreText cell metrics. ONLY authoritative
