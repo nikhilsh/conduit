@@ -100,6 +100,19 @@ extension LitterUI {
             // `endEditing(true)` walks the window and forces the current
             // first responder + descendants to resign — the documented
             // hammer for a stuck keyboard owned by a UIView.
+            //
+            // Device feedback v0.0.49 #3: a SINGLE synchronous pass loses a
+            // race when leaving Terminal — the WKWebView/Ghostty input view
+            // can re-assert (or finish resigning) on the next runloop,
+            // leaving the keyboard up over the freshly-laid-out Chat
+            // composer (which owns no first responder, so SwiftUI's
+            // keyboard-avoidance never lifts it). Fire once now and again
+            // on the next runloop so the late resign also lands.
+            endAllEditing()
+            DispatchQueue.main.async { endAllEditing() }
+        }
+
+        private func endAllEditing() {
             for scene in UIApplication.shared.connectedScenes {
                 guard let windowScene = scene as? UIWindowScene else { continue }
                 for window in windowScene.windows {

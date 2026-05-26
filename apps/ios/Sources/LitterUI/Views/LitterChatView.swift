@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - LitterChatView
 //
@@ -195,24 +196,6 @@ extension LitterUI {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if !isReadOnly {
                         VStack(spacing: 0) {
-                            // Device feedback v0.0.47 #3: the
-                            // scroll-to-bottom button lives ABOVE the
-                            // composer (top-trailing of the inset cluster)
-                            // so it can never collide with the send / mic
-                            // button. As part of the keyboard-tracking
-                            // inset it rides up with the IME, keeping the
-                            // #226/#232 pinned + fade-at-bottom behavior.
-                            HStack {
-                                Spacer()
-                                scrollToBottomButton(proxy: proxy)
-                                    .opacity(autoScroll.showScrollToBottomButton ? 1 : 0)
-                                    .scaleEffect(autoScroll.showScrollToBottomButton ? 1 : 0.8)
-                                    .allowsHitTesting(autoScroll.showScrollToBottomButton)
-                                    .accessibilityHidden(!autoScroll.showScrollToBottomButton)
-                                    .animation(.easeOut(duration: 0.2), value: autoScroll.showScrollToBottomButton)
-                            }
-                            .padding(.trailing, 16)
-                            .padding(.bottom, 8)
                             suggestionBar
                             composer
                         }
@@ -222,6 +205,28 @@ extension LitterUI {
                         // color, so there's no color seam where the chat
                         // meets the composer / keyboard inset.
                         .background(LitterUI.Palette.surface.color)
+                    }
+                }
+                // Device feedback v0.0.49 #1: the scroll-to-bottom arrow is
+                // now a true floating OVERLAY — it no longer occupies a
+                // layout row inside the inset cluster ("occupies 2 rows").
+                // The overlay is applied AFTER `.safeAreaInset(.bottom)` so
+                // the composer cluster has already shrunk this view's safe
+                // area; `.bottomTrailing` then pins the arrow just ABOVE the
+                // composer (riding up with it/the keyboard) without ever
+                // colliding with the send/mic button (#236 concern). Zero
+                // vertical footprint, so streaming content never shifts to
+                // make room for it.
+                .overlay(alignment: .bottomTrailing) {
+                    if !isReadOnly {
+                        scrollToBottomButton(proxy: proxy)
+                            .opacity(autoScroll.showScrollToBottomButton ? 1 : 0)
+                            .scaleEffect(autoScroll.showScrollToBottomButton ? 1 : 0.8)
+                            .allowsHitTesting(autoScroll.showScrollToBottomButton)
+                            .accessibilityHidden(!autoScroll.showScrollToBottomButton)
+                            .animation(.easeOut(duration: 0.2), value: autoScroll.showScrollToBottomButton)
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 12)
                     }
                 }
                 // Measure distance from the bottom edge so the controller
@@ -271,6 +276,28 @@ extension LitterUI {
                         guard autoScroll.shouldFollowStreaming else { return }
                         scrollToTrueBottom(proxy)
                     }
+                }
+                // Device feedback v0.0.49 #3: when Chat is (re-)entered —
+                // e.g. Terminal → back → Chat — the chat composer must NOT
+                // start hidden behind a keyboard left up by another tab.
+                // The composer owns no first responder on appear, so
+                // SwiftUI's keyboard-avoidance can't lift it past a
+                // straggling keyboard; force a clean keyboard state on
+                // appear (the parent ProjectView also dismisses on tab
+                // change, but this covers the appear-side race directly).
+                .onAppear { dismissStrayKeyboard() }
+            }
+        }
+
+        /// Resign any first responder lingering from another tab so the
+        /// chat composer never appears occluded by a stray soft keyboard
+        /// on (re-)entry. Mirrors `LitterProjectView.dismissKeyboard`'s
+        /// `endEditing(true)` walk but scoped to the chat appear path.
+        private func dismissStrayKeyboard() {
+            for scene in UIApplication.shared.connectedScenes {
+                guard let windowScene = scene as? UIWindowScene else { continue }
+                for window in windowScene.windows {
+                    window.endEditing(true)
                 }
             }
         }
@@ -346,8 +373,21 @@ extension LitterUI {
                         }
                     }
                     .padding(.horizontal, 14)
-                    .padding(.top, 4)
+                    .padding(.top, 6)
                     .padding(.bottom, 6)
+                }
+                // Device feedback v0.0.49 #2: the quick-reply bar reads as
+                // translucent BLURRED glass rather than an opaque row.
+                // `.ultraThinMaterial` lets the message list show through
+                // (the chips themselves keep their own glass capsule so
+                // they stay legible over light + dark content), and a thin
+                // hairline at the top separates the bar from the scroll
+                // content without a hard color seam.
+                .background(.ultraThinMaterial)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(LitterUI.Palette.separator.color.opacity(0.4))
+                        .frame(height: 0.5)
                 }
             }
         }

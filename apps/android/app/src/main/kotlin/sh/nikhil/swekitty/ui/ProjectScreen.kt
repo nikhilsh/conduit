@@ -102,6 +102,19 @@ fun ProjectScreen(
     // the centre mic FAB should route to voice or surface a toast.
     val activeContext = InSessionContext.fromTab(ProjectTab.entries[pagerState.currentPage])
 
+    // Device feedback v0.0.49 #3 (Android parity): clear focus + hide the
+    // soft keyboard on every tab change. Without this, swiping/tapping
+    // Terminal → Chat could leave the keyboard up (raised by the terminal
+    // surface) so it covered the chat composer on return — the Android
+    // analog of iOS device bug #31. The chat composer's `imePadding()`
+    // re-lifts it the moment the user taps the field again.
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(pagerState.currentPage) {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp).padding(top = 8.dp)) {
         Column(
             modifier = Modifier
