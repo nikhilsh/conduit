@@ -1,6 +1,7 @@
 package sh.nikhil.swekitty.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,6 +53,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -339,9 +341,36 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
     // `events.size` changes on a new turn. Either, while not scrolled up,
     // re-pins the bottom.
     val streamingSignature = events.size to (events.lastOrNull()?.content?.length ?: 0)
-    LaunchedEffect(streamingSignature, autoScroll.shouldFollow) {
+
+    // Bug 3: "agent is typing…" indicator. Drive a content-growth state
+    // machine off the same streaming signature the follow uses. A timer
+    // re-evaluates the quiet window so the indicator disappears promptly
+    // once the stream stops (read-only transcripts never stream, so it
+    // stays hidden there).
+    var typing by remember { mutableStateOf(TypingIndicatorModel()) }
+    var typingTick by remember { mutableStateOf(0L) }
+    LaunchedEffect(streamingSignature) {
+        val last = events.lastOrNull()
+        typing = typing.onTrailingTurn(
+            role = last?.role,
+            contentLength = last?.content?.length ?: 0,
+            nowMs = System.currentTimeMillis(),
+        )
+        typingTick = System.currentTimeMillis()
+        // After the quiet window with no further growth, re-evaluate so
+        // the indicator hides without needing a new event. Keyed on the
+        // signature, so a fresh token cancels + reschedules this.
+        kotlinx.coroutines.delay(TypingIndicatorModel.DEFAULT_QUIET_WINDOW_MS + 50)
+        typingTick = System.currentTimeMillis()
+    }
+    val showTyping = !readOnly && typing.isStreaming(typingTick)
+
+    // Follow the stream + new messages + the typing row appearing. While
+    // not scrolled up, re-pin the absolute bottom. Keyed on `showTyping`
+    // too so the indicator stays visible above the composer when pinned.
+    LaunchedEffect(streamingSignature, showTyping, autoScroll.shouldFollow) {
         if (autoScroll.shouldFollow && events.isNotEmpty()) {
-            listState.animateScrollToItem(events.size)
+            scrollToTrueBottom(listState)
         }
     }
 
@@ -352,7 +381,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
     LaunchedEffect(lastContentLength) {
         kotlinx.coroutines.delay(300)
         if (autoScroll.shouldFollow && events.isNotEmpty()) {
-            listState.animateScrollToItem(events.size)
+            scrollToTrueBottom(listState)
         }
     }
 
@@ -365,7 +394,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
         snapshotFlow { listState.layoutInfo.viewportEndOffset }
             .collect {
                 if (autoScroll.shouldFollow && events.isNotEmpty()) {
-                    listState.scrollToItem(events.size)
+                    listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
                 }
             }
     }
@@ -425,23 +454,50 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
                         }
                     }
                 }
+                // "Agent is typing…" — last content row (before the
+                // trailing spacer) so when pinned to the bottom it's
+                // followed by autoscroll like any new content.
+                if (showTyping) {
+                    item { TypingIndicatorRow(session.assistant, agentAccent) }
+                }
                 item { Spacer(Modifier.height(1.dp)) }
             }
 
-            androidx.compose.animation.AnimatedVisibility(
-                visible = autoScroll.showScrollToBottomButton && events.isNotEmpty(),
-                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                AssistChip(
+            // Scroll-to-bottom button: a fixed overlay pinned to the
+            // bottom-end of the list region (Box-anchored, NOT a
+            // LazyColumn item) so it does not move as messages
+            // appear/stream. It fades out via an animated alpha when the
+            // user is practically at the bottom and fades in only once
+            // they've scrolled up a meaningful amount
+            // (`scrollToBottomButtonAlpha`). Tapping scrolls to the
+            // ABSOLUTE bottom and re-pins follow.
+            val targetAlpha = if (events.isEmpty()) 0f else autoScroll.scrollToBottomButtonAlpha
+            val buttonAlpha by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = targetAlpha,
+                label = "scrollToBottomAlpha",
+            )
+            if (buttonAlpha > 0.01f) {
+                FilledIconButton(
                     onClick = {
                         autoScroll = autoScroll.onScrollToBottomRequested()
-                        scope.launch { listState.animateScrollToItem(events.size) }
+                        scope.launch { scrollToTrueBottom(listState) }
                     },
-                    label = { Text("Latest") },
-                    leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null) },
-                )
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(12.dp)
+                        .size(40.dp)
+                        .graphicsLayer {
+                            alpha = buttonAlpha
+                            scaleX = 0.85f + 0.15f * buttonAlpha
+                            scaleY = 0.85f + 0.15f * buttonAlpha
+                        },
+                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
+                ) {
+                    Icon(Icons.Outlined.ArrowDownward, contentDescription = "Scroll to latest")
+                }
             }
         }
 
@@ -493,6 +549,29 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
             onDismiss = { showExpandedComposer = false },
         )
     }
+}
+
+/**
+ * Scroll the chat list to its ABSOLUTE bottom, reliably. A single
+ * `animateScrollToItem(lastIndex)` can land short while the stream is
+ * still appending or the final layout pass hasn't settled (the last
+ * row's measured height changes after code/diff blocks finish), so we
+ * animate to the true last index and then, on the next frame, snap
+ * again if we're still not pinned. The trailing 1dp `Spacer` is the
+ * genuine last item, so `totalItemsCount - 1` is the real end.
+ */
+private suspend fun scrollToTrueBottom(listState: androidx.compose.foundation.lazy.LazyListState) {
+    repeat(3) {
+        val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+        listState.animateScrollToItem(target)
+        val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+        val atBottom = last != null &&
+            last.index >= listState.layoutInfo.totalItemsCount - 1 &&
+            last.offset + last.size <= listState.layoutInfo.viewportEndOffset + 4
+        if (atBottom) return
+    }
+    // Final hard snap in case animation kept losing the race to layout.
+    listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
 }
 
 /**
@@ -872,6 +951,56 @@ private fun ConversationBubble(
     }
 }
 
+/**
+ * Lightweight "agent is typing…" row: an animated three-dot pulse plus
+ * the agent name. Shown at the bottom of the message list while the
+ * agent streams (Bug 3 / iOS `isStreaming` parity). Three dots pulse
+ * out of phase via an infinite transition.
+ */
+@Composable
+private fun TypingIndicatorRow(assistant: String, accent: Color) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            Icons.Outlined.SmartToy,
+            contentDescription = null,
+            tint = accent,
+            modifier = Modifier.size(14.dp),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            repeat(3) { i ->
+                val dotAlpha by transition.animateFloat(
+                    initialValue = 0.3f,
+                    targetValue = 1f,
+                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                        animation = androidx.compose.animation.core.tween(
+                            durationMillis = 600,
+                            delayMillis = i * 160,
+                        ),
+                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+                    ),
+                    label = "dot$i",
+                )
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .graphicsLayer { alpha = dotAlpha }
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
+                )
+            }
+        }
+        Text(
+            "$assistant is typing…",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun RoleIcon(role: ConversationRole, tint: Color = role.accent) {
     val icon = when (role) {
@@ -893,22 +1022,91 @@ private fun MarkdownBlock(text: String, role: ConversationRole) {
     } else {
         FontFamily.Default
     }
-    // PLAN-LITTER-VISUAL-PARITY PR 4: chat body picks up the user's
-    // `bodyPointSize` slider (landed in PR 2 on Android). Headings
-    // (`#`, `##`, `###`, `####`) get a per-line scale walk — the
-    // Compose Text path doesn't compose markdown into runs the way
-    // SwiftUI does, so we render the per-heading scale as an
-    // `AnnotatedString` with per-line `SpanStyle`.
+    val onColor = if (role == ConversationRole.System) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+
+    // Android parity of the iOS chat-polish change: agent markdown was
+    // rendering cramped + structurally collapsed — a whole reply went
+    // into one `Text`, so GFM tables came out as run-on `| a | b |`
+    // text, headings jammed into the following line, and blocks had no
+    // vertical rhythm. We now split into typed [LitterMarkdownBlocks]
+    // and render each block as its own composable with real spacing:
+    // headings weighted + spaced, lists with bullets/indent, tables
+    // stacked as "header: value" rows, code monospaced.
     //
-    // Task #38: the parse goes through the hoisted LRU
-    // `ParsedMarkdownCache` so a recycled LazyColumn row whose
-    // `remember` key changed renders from cache instead of re-parsing
-    // (0px → final height) and judder. The cache key folds content +
-    // body size + font (everything that changes the output) into a
-    // revision; the id is the content hash so identical text shares one
-    // entry. `remember` still short-circuits the steady state; the
-    // cache catches the recycle path where `remember` recomputes.
+    // Block parsing is a cheap structural pass; the expensive
+    // per-heading scaled [AnnotatedString] styling still goes through
+    // the hoisted LRU [ParsedMarkdownCache] (task #38) so streaming
+    // ticks and LazyColumn recycles render from cache rather than
+    // re-parsing (0px → final height judder). The cache key folds
+    // content + body size + font into a revision; the id is the
+    // content hash so identical text shares one entry.
     val cache = LocalParsedMarkdownCache.current
+    val blocks = remember(text) { LitterMarkdownBlocks.parse(text) }
+    SelectionContainer {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            blocks.forEach { block ->
+                when (block) {
+                    is LitterMarkdownBlocks.MdBlock.Heading ->
+                        MarkdownHeading(block, bodyPointSize, resolvedFont, onColor)
+                    is LitterMarkdownBlocks.MdBlock.Paragraph ->
+                        MarkdownProse(block.text, bodyPointSize, fontChoice, resolvedFont, onColor, cache)
+                    is LitterMarkdownBlocks.MdBlock.ListBlock ->
+                        MarkdownList(block, bodyPointSize, resolvedFont, onColor)
+                    is LitterMarkdownBlocks.MdBlock.Quote ->
+                        MarkdownQuote(block.text, bodyPointSize, resolvedFont)
+                    is LitterMarkdownBlocks.MdBlock.Table ->
+                        MarkdownTable(block, bodyPointSize, resolvedFont, onColor)
+                }
+            }
+            if (blocks.isEmpty()) {
+                MarkdownProse(text, bodyPointSize, fontChoice, resolvedFont, onColor, cache)
+            }
+        }
+    }
+}
+
+/** A scaled, weighted heading line with clear breathing room. */
+@Composable
+private fun MarkdownHeading(
+    block: LitterMarkdownBlocks.MdBlock.Heading,
+    bodyPointSize: Float,
+    font: FontFamily,
+    onColor: Color,
+) {
+    val mult = LitterMarkdownHeadingScaler.multiplier(block.level) ?: 1f
+    Text(
+        text = block.text,
+        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+        fontSize = androidx.compose.ui.unit.TextUnit(
+            bodyPointSize * mult,
+            androidx.compose.ui.unit.TextUnitType.Sp,
+        ),
+        fontWeight = FontWeight.SemiBold,
+        fontFamily = font,
+        color = onColor,
+    )
+}
+
+/**
+ * A prose paragraph at the user-chosen body size. The styled
+ * [AnnotatedString] is served through the hoisted [ParsedMarkdownCache]
+ * (task #38) so streaming ticks and LazyColumn recycles render from
+ * cache instead of re-styling — keeping the cache meaningfully wired
+ * post block-split.
+ */
+@Composable
+private fun MarkdownProse(
+    text: String,
+    bodyPointSize: Float,
+    fontChoice: sh.nikhil.swekitty.AppearanceStore.FontFamily,
+    font: FontFamily,
+    onColor: Color,
+    cache: ParsedMarkdownCache,
+) {
     val revision = remember(text, bodyPointSize, fontChoice) {
         markdownRevision(text, bodyPointSize, fontChoice)
     }
@@ -917,24 +1115,149 @@ private fun MarkdownBlock(text: String, role: ConversationRole) {
             LitterMarkdownHeadingScaler.scaledAnnotated(text, basePointSize = bodyPointSize)
         }
     }
-    SelectionContainer {
+    Text(
+        text = annotated,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = androidx.compose.ui.unit.TextUnit(
+                bodyPointSize,
+                androidx.compose.ui.unit.TextUnitType.Sp,
+            ),
+        ),
+        fontFamily = font,
+        color = onColor,
+    )
+}
+
+/** Bullet / numbered list with markers + indent. */
+@Composable
+private fun MarkdownList(
+    block: LitterMarkdownBlocks.MdBlock.ListBlock,
+    bodyPointSize: Float,
+    font: FontFamily,
+    onColor: Color,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        block.items.forEachIndexed { idx, item ->
+            val marker = if (block.ordered) "${idx + 1}." else "•"
+            Row(modifier = Modifier.padding(start = (item.indent * 14).dp)) {
+                Text(
+                    text = marker,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = androidx.compose.ui.unit.TextUnit(
+                            bodyPointSize,
+                            androidx.compose.ui.unit.TextUnitType.Sp,
+                        ),
+                    ),
+                    fontFamily = font,
+                    color = onColor,
+                    modifier = Modifier.widthIn(min = 20.dp),
+                )
+                Text(
+                    text = item.text,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = androidx.compose.ui.unit.TextUnit(
+                            bodyPointSize,
+                            androidx.compose.ui.unit.TextUnitType.Sp,
+                        ),
+                    ),
+                    fontFamily = font,
+                    color = onColor,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/** A blockquote with a left accent rule. */
+@Composable
+private fun MarkdownQuote(
+    text: String,
+    bodyPointSize: Float,
+    font: FontFamily,
+) {
+    Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(2.dp)),
+        )
+        Spacer(Modifier.width(10.dp))
         Text(
-            text = annotated,
+            text = text,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = androidx.compose.ui.unit.TextUnit(
                     bodyPointSize,
                     androidx.compose.ui.unit.TextUnitType.Sp,
                 ),
             ),
-            // Body font driven by AppearanceStore — defaults to monospace
-            // (litter / codex aesthetic), switchable via Settings → Font.
-            fontFamily = resolvedFont,
-            color = if (role == ConversationRole.System) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
+            fontFamily = font,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/**
+ * GFM table rendered as stacked per-record "header: value" rows — the
+ * robust narrow-phone layout the iOS change picked over a true grid.
+ * Each data row becomes a small card of label/value pairs; cells never
+ * concatenate into run-on text.
+ */
+@Composable
+private fun MarkdownTable(
+    block: LitterMarkdownBlocks.MdBlock.Table,
+    bodyPointSize: Float,
+    font: FontFamily,
+    onColor: Color,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        block.rows.forEach { row ->
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    block.header.forEachIndexed { idx, headerCell ->
+                        val value = row.getOrNull(idx).orEmpty()
+                        Row(verticalAlignment = Alignment.Top) {
+                            Text(
+                                text = if (headerCell.isNotEmpty()) "$headerCell:" else "",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(0.4f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = value,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = androidx.compose.ui.unit.TextUnit(
+                                        bodyPointSize,
+                                        androidx.compose.ui.unit.TextUnitType.Sp,
+                                    ),
+                                ),
+                                fontFamily = font,
+                                color = onColor,
+                                modifier = Modifier.weight(0.6f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        // A header-only table (no data rows) still reads as its columns.
+        if (block.rows.isEmpty() && block.header.isNotEmpty()) {
+            Text(
+                text = block.header.joinToString("  •  "),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

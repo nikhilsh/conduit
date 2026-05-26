@@ -49,9 +49,42 @@ data class ChatAutoScrollModel(
     val shouldFollow: Boolean
         get() = !userScrolledUp
 
-    /** Whether the scroll-to-bottom FAB should show. */
+    /**
+     * Whether the scroll-to-bottom button should be present at all. The
+     * user must have actually taken manual control ([userScrolledUp])
+     * AND be a meaningful amount above the bottom. A fresh / pinned /
+     * tiny-overscroll model never shows it; returning within the band
+     * clears [userScrolledUp] (in [onBottomProximityChanged]) and hides
+     * it. See [scrollToBottomButtonAlpha] for the smooth fade the
+     * Compose layer animates toward.
+     */
     val showScrollToBottomButton: Boolean
-        get() = userScrolledUp
+        get() = userScrolledUp && distanceFromBottomPx > showButtonThresholdPx
+
+    /**
+     * Target opacity for the scroll-to-bottom button. 0 when not
+     * scrolled up or practically at the bottom (faded out), ramping to 1
+     * once the user has scrolled up past [showButtonThresholdPx] by a
+     * full near-bottom band. The Compose layer feeds this into
+     * `animateFloatAsState` so the button fades in/out smoothly rather
+     * than popping.
+     */
+    val scrollToBottomButtonAlpha: Float
+        get() {
+            if (!userScrolledUp) return 0f
+            if (distanceFromBottomPx <= showButtonThresholdPx) return 0f
+            val ramp = nearBottomThresholdPx.coerceAtLeast(1f)
+            val over = distanceFromBottomPx - showButtonThresholdPx
+            return (over / ramp).coerceIn(0f, 1f)
+        }
+
+    /**
+     * Distance past which the button becomes meaningful. Sits at the
+     * near-bottom band edge so a tiny overscroll / being pinned keeps
+     * the button faded out; scrolling up a meaningful amount fades it in.
+     */
+    private val showButtonThresholdPx: Float
+        get() = nearBottomThresholdPx
 
     /** The user began a drag: latch manual control. */
     fun onUserDragged(): ChatAutoScrollModel =

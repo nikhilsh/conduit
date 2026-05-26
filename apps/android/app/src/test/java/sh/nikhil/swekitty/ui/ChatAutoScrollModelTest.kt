@@ -98,4 +98,45 @@ class ChatAutoScrollModelTest {
     @Test fun defaultThresholdConstant() {
         assertEquals(80f, ChatAutoScrollModel.DEFAULT_THRESHOLD_PX, 0.001f)
     }
+
+    // --- Bug 2: button visibility is distance-driven, with a fade ---
+
+    @Test fun buttonHiddenWhenPracticallyAtBottom() {
+        // Pinned / tiny overscroll inside the band → button faded out.
+        val m = ChatAutoScrollModel(nearBottomThresholdPx = 80f)
+            .onBottomProximityChanged(10f)
+        assertFalse(m.showScrollToBottomButton)
+        assertEquals(0f, m.scrollToBottomButtonAlpha, 0.001f)
+    }
+
+    @Test fun buttonHiddenExactlyAtThreshold() {
+        val m = ChatAutoScrollModel(nearBottomThresholdPx = 80f)
+            .onBottomProximityChanged(80f)
+        assertFalse(m.showScrollToBottomButton)
+        assertEquals(0f, m.scrollToBottomButtonAlpha, 0.001f)
+    }
+
+    @Test fun buttonShowsWhenScrolledUpMeaningfully() {
+        val m = ChatAutoScrollModel(nearBottomThresholdPx = 80f)
+            .onUserDragged()
+            .onBottomProximityChanged(400f)
+        assertTrue(m.showScrollToBottomButton)
+        assertEquals("fully ramped past a band's worth", 1f, m.scrollToBottomButtonAlpha, 0.001f)
+    }
+
+    @Test fun alphaRampsBetweenThresholdAndFullBand() {
+        // Half a band past the threshold → ~0.5 alpha.
+        val m = ChatAutoScrollModel(nearBottomThresholdPx = 80f)
+            .onUserDragged()
+            .onBottomProximityChanged(120f) // 40px over threshold, band=80
+        assertTrue(m.showScrollToBottomButton)
+        assertEquals(0.5f, m.scrollToBottomButtonAlpha, 0.001f)
+    }
+
+    @Test fun overscrollPastBottomKeepsButtonHidden() {
+        val m = ChatAutoScrollModel(nearBottomThresholdPx = 80f)
+            .onBottomProximityChanged(-50f) // clamped to 0
+        assertFalse(m.showScrollToBottomButton)
+        assertEquals(0f, m.scrollToBottomButtonAlpha, 0.001f)
+    }
 }
