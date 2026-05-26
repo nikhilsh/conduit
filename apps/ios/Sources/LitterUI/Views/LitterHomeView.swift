@@ -109,7 +109,7 @@ extension LitterUI {
                         pendingDelete = nil
                     }
                 } message: { target in
-                    Text("This ends \(target.title) on the harness. The conversation history stays available under Sessions.")
+                    Text("This permanently deletes \(target.title) from the server, including its history.")
                 }
                 .onChange(of: store.selectedSessionID) { _, new in
                     selectedSessionID = new

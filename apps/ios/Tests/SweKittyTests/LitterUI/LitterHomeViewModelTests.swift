@@ -110,7 +110,7 @@ struct LitterHomeViewModelTests {
 
     @Test func emptyStateChangesByHarnessReachability() {
         let unreachable = LitterUI.HomeSnapshot.empty
-        #expect(LitterUI.HomeViewModel.emptyTitle(unreachable) == "Waiting for harness")
+        #expect(LitterUI.HomeViewModel.emptyTitle(unreachable) == "Waiting for server")
         #expect(LitterUI.HomeViewModel.emptySymbol(unreachable) == "cloud.slash")
 
         let reachable = LitterUI.HomeSnapshot(

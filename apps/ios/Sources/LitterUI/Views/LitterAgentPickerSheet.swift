@@ -56,7 +56,7 @@ extension LitterUI {
                                 subtitle: "OpenAI — green accent"
                             )
                             if !store.harness.canIssueCommands {
-                                Text("Connect to a harness first — open Settings to pair.")
+                                Text("Connect to a server first — open Settings to pair.")
                                     .font(.footnote)
                                     .foregroundStyle(LitterUI.Palette.textMuted.color)
                                     .multilineTextAlignment(.center)

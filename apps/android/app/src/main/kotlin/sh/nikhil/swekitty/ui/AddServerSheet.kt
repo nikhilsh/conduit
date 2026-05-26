@@ -77,7 +77,7 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
         ) {
             Text("Add server", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                "Pick how this device should reach the swe-kitty harness. You can switch servers later from Settings.",
+                "Pick how this device should reach the swe-kitty server. You can switch servers later from Settings.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -85,19 +85,19 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
                 icon = { Icon(Icons.Filled.QrCodeScanner, null, tint = Color.White) },
                 tint = SweKittyTheme.accentStrong(),
                 title = "Scan pairing QR",
-                subtitle = "Camera-scan the QR printed by the harness.",
+                subtitle = "Camera-scan the QR from the broker terminal.",
             ) { scanner.launch(Unit) }
             EntryCard(
                 icon = { Icon(Icons.Filled.Wifi, null, tint = Color.White) },
                 tint = SweKittyTheme.codexAccent(),
                 title = "Discover on LAN",
-                subtitle = "Find a harness advertising via mDNS on the same Wi-Fi.",
+                subtitle = "Find a broker advertising via mDNS on the same Wi-Fi.",
             ) { showDiscover = true }
             EntryCard(
                 icon = { Icon(Icons.Filled.Terminal, null, tint = Color.White) },
                 tint = SweKittyTheme.claudeAccent(),
                 title = "SSH bootstrap",
-                subtitle = "Cold-start a harness on a remote box you can SSH to.",
+                subtitle = "Cold-start a broker on a remote box you can SSH to.",
             ) { showSsh = true }
             EntryCard(
                 icon = { Icon(Icons.Filled.Link, null, tint = Color.White) },

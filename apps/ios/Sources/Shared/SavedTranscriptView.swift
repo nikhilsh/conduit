@@ -107,7 +107,7 @@ struct SavedTranscriptView: View {
         infoState(
             icon: "clock.badge.xmark",
             title: "No saved transcript",
-            message: "This session ended before transcripts were saved on the harness, so there's nothing to replay."
+            message: "This session ended before transcripts were saved on the server, so there's nothing to replay."
         )
     }
 

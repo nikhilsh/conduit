@@ -57,7 +57,7 @@ struct BrowserTab: View {
     private var placeholderBody: String {
         switch mode {
         case .preview: return "The agent hasn't reported a preview URL for this session."
-        case .memory:  return "The harness hasn't written a memory checkpoint for this session."
+        case .memory:  return "The server hasn't written a memory checkpoint for this session."
         }
     }
 }

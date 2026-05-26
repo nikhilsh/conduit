@@ -161,7 +161,7 @@ fun ProjectListScreen(
             title = { Text("Delete session?") },
             text = {
                 Text(
-                    "This ends ${target.title} on the harness. The conversation history stays available under Sessions.",
+                    "This permanently deletes ${target.title} from the server, including its history.",
                 )
             },
             confirmButton = {
@@ -343,7 +343,7 @@ private fun EmptySessionsHint(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                if (canCreate) "Start a session" else "Waiting for harness",
+                if (canCreate) "Start a session" else "Waiting for server",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -351,9 +351,9 @@ private fun EmptySessionsHint(
             Spacer(Modifier.height(6.dp))
             Text(
                 if (canCreate)
-                    "Pick an agent and we'll spin up a new conversation against the harness."
+                    "Pick an agent and we'll spin up a new conversation against the server."
                 else
-                    "Once we can reach the harness this is where your sessions will appear.",
+                    "Once we can reach the server this is where your sessions will appear.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -488,5 +488,5 @@ private fun rowSubtitle(
         "${entry.session.assistant} — ${phase ?: "ready"}"
     is VisibleSession.Creating ->
         if (lifecycle is SessionLifecycle.FailedToStart) lifecycle.reason
-        else "asking harness for a session…"
+        else "asking server for a session…"
 }

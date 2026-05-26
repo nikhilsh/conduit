@@ -201,7 +201,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Choose a label for this session. The harness name stays the same — this rename is local to your device.",
+                        "Choose a label for this session. The broker name stays the same — this rename is local to your device.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

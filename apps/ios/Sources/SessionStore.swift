@@ -612,7 +612,7 @@ final class SessionStore {
             let preToken = UUID().uuidString
             let bridge = SshHostKeyBridge(store: self, host: host, port: port)
             do {
-                self.sshBootstrapState = .running(message: "Starting harness on \(host)…")
+                self.sshBootstrapState = .running(message: "Starting server on \(host)…")
                 let result = try await sshBootstrap(
                     credentials: credentials,
                     preAllocatedToken: preToken,
@@ -836,7 +836,7 @@ final class SessionStore {
                 }
                 self.sessionCreationError = detail
                 if Self.isAuth(error) {
-                    self.harness = .failed("Pairing expired. Scan a new QR code from the harness.")
+                    self.harness = .failed("Pairing expired. Scan a new QR code from the server.")
                 }
                 Telemetry.capture(
                     error: error,
@@ -865,7 +865,7 @@ final class SessionStore {
                 let detail = Self.describe(error)
                 self.sessionLifecycle[sessionID] = .failed("switch_agent: \(detail)")
                 if Self.isAuth(error) {
-                    self.harness = .failed("Pairing expired. Scan a new QR code from the harness.")
+                    self.harness = .failed("Pairing expired. Scan a new QR code from the server.")
                 }
                 Telemetry.capture(
                     error: error,
@@ -1443,7 +1443,7 @@ final class SessionStore {
         }
         let lower = reason.lowercased()
         if lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized") {
-            harness = .failed("Pairing expired. Scan a new QR code from the harness.")
+            harness = .failed("Pairing expired. Scan a new QR code from the server.")
         } else {
             harness = .failed("Disconnected: \(reason)")
         }
@@ -1481,7 +1481,7 @@ final class SessionStore {
         case let .disconnected(reason, auth):
             connectionHealthBySession[sessionID] = health
             if auth {
-                harness = .failed("Pairing expired. Scan a new QR code from the harness.")
+                harness = .failed("Pairing expired. Scan a new QR code from the server.")
                 Telemetry.capture(
                     error: NSError(domain: "SessionStore", code: 401, userInfo: [NSLocalizedDescriptionKey: reason]),
                     message: "iOS connection health auth failure",
@@ -1925,7 +1925,7 @@ final class SessionStore {
             try await Task.sleep(nanoseconds: pollNs)
             elapsedNs += pollNs
         }
-        throw NSError(domain: "SessionStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for harness link"])
+        throw NSError(domain: "SessionStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for server link"])
     }
 
     // MARK: - Rust shadow-store helpers
@@ -2038,7 +2038,7 @@ private extension SessionStore {
 
     static func describe(_ error: Error) -> String {
         if isAuth(error) {
-            return "Authentication failed. This pairing token has expired; scan a fresh QR code from the harness."
+            return "Authentication failed. This pairing token has expired; scan a fresh QR code from the server."
         }
         return String(describing: error)
     }
@@ -2057,7 +2057,7 @@ private extension SessionStore {
         case .DockerMissing(let m):         return "Docker is not installed on the server: \(m)"
         case .DockerPermission(let m):      return "User can't reach Docker: \(m)"
         case .PortConflict(let m):          return "Server port is already in use: \(m)"
-        case .HarnessStartTimeout(let m):   return "Harness took too long to come up: \(m)"
+        case .HarnessStartTimeout(let m):   return "Server took too long to come up: \(m)"
         case .BootstrapExitCode(let m):     return "Bootstrap script failed: \(m)"
         case .BootstrapParse(let m):        return "Couldn't parse bootstrap output: \(m)"
         case .PortForward(let m):           return "Port forward failed: \(m)"
