@@ -77,6 +77,10 @@
 
 import Foundation
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 #if canImport(libghostty)
 import libghostty
 #endif
@@ -479,7 +483,9 @@ public final class GhosttyApp {
             read_clipboard_cb: { userdata, loc, state in
                 GhosttyApp.readClipboard(userdata, location: loc, state: state)
             },
-            confirm_read_clipboard_cb: { _, _, _, _ in },
+            confirm_read_clipboard_cb: { userdata, str, state, request in
+                GhosttyApp.confirmReadClipboard(userdata, string: str, state: state, request: request)
+            },
             write_clipboard_cb: { userdata, loc, content, len, confirm in
                 GhosttyApp.writeClipboard(userdata, location: loc, content: content, len: len, confirm: confirm)
             },
@@ -547,21 +553,63 @@ public final class GhosttyApp {
         }
     }
 
-    /// Read iOS pasteboard into libghostty. Stubbed body (the harness
-    /// owns paste via the renderer's edit menu) but a real, non-no-op
-    /// function pointer so the lib's clipboard path is well-formed.
+    // MARK: - Clipboard (OSC 52 + paste)
+    //
+    // libghostty routes three clipboard hooks through the runtime
+    // config. The `userdata` they receive is the SURFACE's userdata (set
+    // to the host UIView opaque pointer in `GhosttySurface.init`), NOT
+    // this App's runtime userdata — matches ghostty's `apprt.embedded`
+    // (the surface forwards its own userdata) and geistty, which recovers
+    // a per-surface object from it. To complete a request we need the
+    // `ghostty_surface_t` handle, so each live `GhosttySurface` registers
+    // itself in `surfaceRegistry` keyed by that same host-view pointer;
+    // the read/confirm callbacks look it up there.
+
+    /// Read iOS pasteboard into libghostty (paste / OSC 52 read). On the
+    /// pinned ABI libghostty defers the actual completion: it hands us a
+    /// `state` token and expects us to call
+    /// `ghostty_surface_complete_clipboard_request` once we have the
+    /// string. We return `false` (meaning "not handled synchronously")
+    /// and complete asynchronously on the main thread — the same split
+    /// geistty + the GTK backend use, so the request isn't dropped or
+    /// deadlocked. `UIPasteboard.general` must be touched on main.
     static func readClipboard(
         _ userdata: UnsafeMutableRawPointer?,
         location: ghostty_clipboard_e,
         state: UnsafeMutableRawPointer?
     ) -> Bool {
-        // The host owns clipboard reads via the UIKit edit menu; we do
-        // not complete the request here, but the callback exists and
-        // returns cleanly rather than trapping.
+        guard let surface = GhosttyApp.surface(for: userdata) else { return false }
+        DispatchQueue.main.async {
+            let str = Self.pasteboardString()
+            surface.completeClipboardRequest(string: str, state: state, confirmed: false)
+        }
         return false
     }
 
-    /// Write libghostty's clipboard payload to the iOS pasteboard.
+    /// Confirmation hop for a clipboard read. iOS already mediates
+    /// clipboard access at the system level, so we auto-confirm and
+    /// complete the request with the supplied string (the value
+    /// libghostty wants pasted). Mirrors geistty's confirm/read split so
+    /// the OSC-52-read flow that routes through confirmation doesn't
+    /// stall.
+    static func confirmReadClipboard(
+        _ userdata: UnsafeMutableRawPointer?,
+        string: UnsafePointer<CChar>?,
+        state: UnsafeMutableRawPointer?,
+        request: ghostty_clipboard_request_e
+    ) {
+        guard let surface = GhosttyApp.surface(for: userdata) else { return }
+        // Copy the C string now — the pointer may not survive the hop.
+        let str: String = string.map { String(cString: $0) } ?? ""
+        DispatchQueue.main.async {
+            surface.completeClipboardRequest(string: str, state: state, confirmed: true)
+        }
+    }
+
+    /// Write libghostty's clipboard payload to the iOS pasteboard. Fires
+    /// when the remote shell / tmux / vim emits OSC 52 (libghostty parses
+    /// the bytes we feed it and calls back here). `UIPasteboard.general`
+    /// must be set on the main thread.
     static func writeClipboard(
         _ userdata: UnsafeMutableRawPointer?,
         location: ghostty_clipboard_e,
@@ -569,9 +617,70 @@ public final class GhosttyApp {
         len: Int,
         confirm: Bool
     ) {
-        // No-op body for now (renderer owns copy); kept as a real
-        // function pointer so the runtime config is fully populated.
-        _ = (userdata, location, content, len, confirm)
+        guard let content = content, len > 0, let data = content.pointee.data else { return }
+        // The `data` field is the OSC 52 payload as a NUL-terminated C
+        // string (libghostty decodes the base64 before handing it over).
+        // Copy it now — the pointer is only valid for this call.
+        let str = String(cString: data)
+        DispatchQueue.main.async {
+            Self.setPasteboardString(str)
+        }
+    }
+
+    /// Read the system clipboard string. iOS only; no-op (empty) on
+    /// platforms without UIKit so the GhosttyVT package still builds for
+    /// its declared macOS slice.
+    private static func pasteboardString() -> String {
+        #if canImport(UIKit)
+        return UIPasteboard.general.string ?? ""
+        #else
+        return ""
+        #endif
+    }
+
+    /// Write the system clipboard string. iOS only (see `pasteboardString`).
+    private static func setPasteboardString(_ str: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = str
+        #endif
+    }
+
+    // MARK: - Surface registry
+    //
+    // Maps a surface's host-view opaque pointer → live `GhosttySurface`
+    // so the clipboard read/confirm callbacks (which receive that pointer
+    // as `userdata`) can recover the surface handle to complete a
+    // request. Weak values so a freed surface drops out automatically.
+    // Guarded by `registryLock` because clipboard callbacks may arrive
+    // off the surface's thread.
+
+    private static let registryLock = NSLock()
+    private static var surfaceRegistry: [UnsafeRawPointer: WeakSurfaceBox] = [:]
+
+    private final class WeakSurfaceBox {
+        weak var surface: GhosttySurface?
+        init(_ surface: GhosttySurface) { self.surface = surface }
+    }
+
+    static func registerSurface(_ surface: GhosttySurface, key: UnsafeMutableRawPointer?) {
+        guard let key = key else { return }
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        surfaceRegistry[UnsafeRawPointer(key)] = WeakSurfaceBox(surface)
+    }
+
+    static func unregisterSurface(key: UnsafeMutableRawPointer?) {
+        guard let key = key else { return }
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        surfaceRegistry[UnsafeRawPointer(key)] = nil
+    }
+
+    static func surface(for userdata: UnsafeMutableRawPointer?) -> GhosttySurface? {
+        guard let userdata = userdata else { return nil }
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        return surfaceRegistry[UnsafeRawPointer(userdata)]?.surface
     }
 }
 
@@ -586,6 +695,13 @@ public final class GhosttySurface {
     private var _surface: UnsafeMutableRawPointer?
     private var _hostView: AnyObject?
     private var lastSizePx: (width: UInt32, height: UInt32) = (0, 0)
+
+    /// Host-view opaque pointer this surface was created with. Used as
+    /// the key into `GhosttyApp.surfaceRegistry` so the clipboard
+    /// read/confirm callbacks (which receive this same pointer as
+    /// `userdata`) can recover us to complete a request. Held so `deinit`
+    /// can unregister.
+    private var _clipboardKey: UnsafeMutableRawPointer?
 
     /// Forwarded user input from libghostty's HOST_MANAGED backend
     /// (`receive_buffer`). The host wires this to send bytes to the
@@ -685,6 +801,12 @@ public final class GhosttySurface {
         self._surface = surface
         GhosttyDiagnostics.shared.setSurface(created: true)
 
+        // Register under the host-view pointer so the clipboard
+        // read/confirm callbacks (which receive that pointer as their
+        // `userdata`) can find this surface to complete a request.
+        self._clipboardKey = uiviewPtr
+        GhosttyApp.registerSurface(self, key: uiviewPtr)
+
         // Apply the user's color theme (and re-assert the font size) via
         // a config update. `config.font_size` above already seeds the
         // glyph size, but COLORS can only be set through a
@@ -749,6 +871,7 @@ public final class GhosttySurface {
     }
 
     deinit {
+        GhosttyApp.unregisterSurface(key: _clipboardKey)
         if let surface = _surface {
             ghostty_surface_free(surface)
         }
@@ -841,6 +964,21 @@ public final class GhosttySurface {
     public func setOcclusion(_ visible: Bool) {
         guard let surface = _surface else { return }
         ghostty_surface_set_occlusion(surface, visible)
+    }
+
+    /// Hand a clipboard read/paste result back to libghostty. Completes a
+    /// request opened by `read_clipboard_cb` / `confirm_read_clipboard_cb`
+    /// using the per-request `state` token libghostty handed us. Main
+    /// thread only (UIKit pasteboard + libghostty surface mutation).
+    func completeClipboardRequest(
+        string: String,
+        state: UnsafeMutableRawPointer?,
+        confirmed: Bool
+    ) {
+        guard let surface = _surface else { return }
+        string.withCString { ptr in
+            ghostty_surface_complete_clipboard_request(surface, ptr, state, confirmed)
+        }
     }
 
     /// The grid libghostty itself derived from the current surface pixel
