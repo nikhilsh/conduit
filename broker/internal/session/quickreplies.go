@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // AI-generated contextual quick replies (task #233). When a Claude
@@ -34,11 +35,22 @@ import (
 //     (default ON).
 //   - Credential-race safe: see aigen.go.
 
-// quickReplyTimeout caps the HTTP call. The chips are a nicety, not the
-// turn, so we bail rather than let a slow request linger; on timeout we
-// emit nothing. The direct API call typically returns in ~1-2s, so this
-// is comfortably generous.
-const quickReplyTimeout = 12 * time.Second
+// quickReplyTimeout is the OVERALL budget for generation, spanning one
+// attempt plus (on a transient failure) one quick retry. The chips are a
+// nicety, not the turn, so we still bail rather than let it linger; on
+// timeout we emit nothing. The direct API call typically returns in
+// ~1-2s, but live brokers saw the old tighter budget expire under model
+// latency and fall back to the heuristic — this gives generous headroom
+// so the AI chips actually land. See quickReplyAttemptTimeout for the
+// per-attempt slice.
+const quickReplyTimeout = 15 * time.Second
+
+// quickReplyAttemptTimeout caps a SINGLE Messages API attempt. It is
+// deliberately under half the overall budget so a stalled first attempt
+// is abandoned with room for one retry inside quickReplyTimeout. A
+// healthy call returns well under this; a call that hasn't answered by
+// here is almost certainly wedged, so retrying beats waiting it out.
+const quickReplyAttemptTimeout = 7 * time.Second
 
 // quickReplyMaxTokens caps the model's output. Four short reply strings
 // in a JSON array fit easily under this.
@@ -47,6 +59,16 @@ const quickReplyMaxTokens = 256
 // maxQuickReplies is the hard cap on chips, matching the apps' render
 // budget. We trim anything the model over-produces.
 const maxQuickReplies = 4
+
+// quickReplyContextChars caps how much of the assistant's latest message
+// we feed the model. Generation only needs the TAIL of the turn — the
+// last thing the assistant said is what the user is replying to — so a
+// long turn (pages of prose or a big diff) is trimmed to its final chunk.
+// This keeps the request small and the haiku call fast/reliable, which is
+// the difference between landing the AI chips and timing out into the
+// heuristic. ~2000 chars comfortably covers a normal closing paragraph or
+// question while bounding the worst case.
+const quickReplyContextChars = 2000
 
 // quickRepliesEnabled reports whether AI quick-reply generation is on.
 // Default ON; SWE_KITTY_AI_QUICKREPLIES=0 (or "false"/"off") disables it.
@@ -147,13 +169,60 @@ func (g *quickReplyGenerator) kickoff(lastText, forMessageID string) {
 }
 
 // invoke makes a direct Anthropic Messages API call against a fast model
-// and returns the parsed replies.
+// and returns the parsed replies. It gives the call one quick retry on a
+// transient failure (timeout / network blip / 5xx / overloaded) so a
+// single slow or hiccuping request doesn't drop us to the heuristic — the
+// common cause of the chips "falling back often". Each attempt is bounded
+// by quickReplyAttemptTimeout, and both attempts together stay within the
+// caller's overall quickReplyTimeout ctx; we never retry a permanent
+// failure (e.g. 401 expired token, malformed creds).
 func (g *quickReplyGenerator) invoke(ctx context.Context, lastText string) ([]string, error) {
-	text, err := anthropicMessages(ctx, g.httpDo, g.agentHomeDir, quickReplyPrompt(lastText), quickReplyMaxTokens)
-	if err != nil {
-		return nil, err
+	prompt := quickReplyPrompt(lastText)
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		// Stop early if the overall budget is already spent.
+		if ctx.Err() != nil {
+			break
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, quickReplyAttemptTimeout)
+		text, err := anthropicMessages(attemptCtx, g.httpDo, g.agentHomeDir, prompt, quickReplyMaxTokens)
+		cancel()
+		if err == nil {
+			return parseQuickReplies(text), nil
+		}
+		lastErr = err
+		if !isTransientGenError(err) {
+			break
+		}
 	}
-	return parseQuickReplies(text), nil
+	return nil, lastErr
+}
+
+// isTransientGenError reports whether a generation error is worth one
+// retry: a timeout, a transient network failure, or a retryable server
+// status (429 / 5xx / overloaded). A definite client/auth failure (e.g. a
+// 401 expired token) is permanent and not retried. We classify on the
+// error string because anthropicMessages formats status into the message;
+// this stays a cheap best-effort heuristic, matching the surrounding code.
+func isTransientGenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timeout"),
+		strings.Contains(msg, "deadline exceeded"),
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "eof"),
+		strings.Contains(msg, "overloaded"),
+		strings.Contains(msg, "status 429"),
+		strings.Contains(msg, "status 500"),
+		strings.Contains(msg, "status 502"),
+		strings.Contains(msg, "status 503"),
+		strings.Contains(msg, "status 504"):
+		return true
+	}
+	return false
 }
 
 // publishReplies marshals and emits the quick_replies view_event.
@@ -187,8 +256,30 @@ func quickReplyPrompt(lastAssistant string) string {
 	b.WriteString("Respond with ONLY a compact JSON array of strings, nothing else. ")
 	b.WriteString("If no useful replies fit, respond with [].\n\n")
 	b.WriteString("Assistant message:\n")
-	b.WriteString(lastAssistant)
+	b.WriteString(trimAssistantTail(lastAssistant, quickReplyContextChars))
 	return b.String()
+}
+
+// trimAssistantTail caps the assistant text we feed the model to its last
+// `max` characters, keeping the TAIL (what the user is actually replying
+// to) rather than the head. It snaps the cut forward to the next rune
+// boundary so we never split a multi-byte character, and marks the
+// elision so the model knows it's seeing the end of a longer turn.
+// `max <= 0` or text already within budget is returned unchanged.
+func trimAssistantTail(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	tail := s[len(s)-max:]
+	// Advance to the next valid UTF-8 boundary so a mid-rune cut can't
+	// produce an invalid leading byte.
+	for i := 0; i < len(tail) && i < 4; i++ {
+		if utf8.RuneStart(tail[i]) {
+			tail = tail[i:]
+			break
+		}
+	}
+	return "[…earlier output omitted…]\n" + strings.TrimSpace(tail)
 }
 
 // parseQuickReplies extracts the reply strings from the model's raw
