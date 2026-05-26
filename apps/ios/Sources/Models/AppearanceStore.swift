@@ -105,10 +105,11 @@ final class AppearanceStore {
     /// dense grid legible on iPhone; upper bound stops the grid collapsing
     /// to a few columns. Stepper steps by 1.
     static let ghosttyFontSizeRange: ClosedRange<Double> = 8...24
-    /// Default native-terminal font size. Smaller than the old hard-coded
-    /// 13pt-after-Dynamic-Type bloat — 13pt is the canonical terminal
-    /// default the reference apps ship and reads compact on iPhone.
-    static let defaultGhosttyFontSize: Double = 13
+    /// Default native-terminal font size. The 13pt default tested too
+    /// large on device; 10pt gives a denser, real-terminal feel while
+    /// staying legible on iPhone. Users can still adjust via the 8–24
+    /// Settings slider.
+    static let defaultGhosttyFontSize: Double = 10
 
     /// Clamp range for [bodyPointSize]. Lower bound keeps captions
     /// readable; upper bound prevents headings from blowing out the

@@ -222,6 +222,24 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// UIGestureRecognizer.
     var selectionRange: TerminalSelectionRange?
 
+    /// Whether the in-flight one-finger pan is scrolling scrollback (vs
+    /// extending a selection). Decided at the pan's `.began` from whether a
+    /// selection was already anchored; latched for the gesture's lifetime
+    /// so a mid-drag selection clear can't flip it into selection mode.
+    private var panIsScrolling = false
+
+    /// Accumulated pan translation (points) consumed by the scroll handler,
+    /// so each `.changed` callback feeds libghostty only the INCREMENTAL
+    /// delta since the last callback.
+    private var scrollPanLastY: CGFloat = 0
+
+    /// Points-of-finger-travel → pixel-precise scroll-delta multiplier.
+    /// 1.0 = content-following (the surface scrolls with the finger), the
+    /// natural iOS feel; libghostty divides the pixel delta by its cell
+    /// height to land on rows. Tunable if device testing wants it
+    /// faster/slower.
+    private static let scrollSensitivity: Double = 1.0
+
     #if canImport(GhosttyVT)
     private var terminal: Terminal?
 
@@ -383,7 +401,8 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         fontSize: Double,
         theme: AppearanceStore.GhosttyTerminalTheme
     ) {
-        let changed = fontSize != ghosttyFontSize || theme != ghosttyTheme
+        let fontChanged = fontSize != ghosttyFontSize
+        let changed = fontChanged || theme != ghosttyTheme
         ghosttyFontSize = fontSize
         ghosttyTheme = theme
         guard changed else { return }
@@ -392,6 +411,18 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             fontSize: Float(fontSize),
             theme: Self.mapTheme(theme)
         )
+        // A font-size change rebuilds the surface (update_config does not
+        // re-rasterize the glyph atlas on the pinned ABI). The new surface
+        // boots occluded/unfocused, so re-assert visibility + focus and
+        // ask for a full refresh — same wake recipe `didMoveToWindow`
+        // uses — otherwise the freshly-attached IOSurfaceLayer can stay
+        // blank until the next PTY byte.
+        if fontChanged, window != nil {
+            terminal?.setVisible(true)
+            terminal?.setFocus(false)
+            terminal?.setFocus(true)
+            terminal?.refresh()
+        }
         // Re-drive the grid: a font change re-derives libghostty's cell px,
         // so the surface must reflow at the current bounds and the broker
         // PTY must be re-sized to the new grid. `sizeGhosttyLayer` re-pushes
@@ -591,9 +622,16 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         addGestureRecognizer(longPress)
 
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleSelectionPan(_:)))
+        // Single one-finger pan with a dual role (standard mobile-terminal
+        // model): with NO active selection it SCROLLS libghostty's
+        // scrollback; with a selection already anchored (by long-press /
+        // double- / triple-tap) it EXTENDS that selection. It requires the
+        // long-press to fail first, so a hold-then-drag goes to the
+        // long-press's own `.changed` selection path and a quick drag
+        // (long-press never fires) becomes the pan. The scroll-vs-select
+        // branch is decided at `.began` from `selectionRange`.
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
-        // Only extend selection after long-press has anchored it.
         pan.require(toFail: longPress)
         addGestureRecognizer(pan)
 
@@ -722,7 +760,71 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         }
     }
 
-    @objc private func handleSelectionPan(_ recognizer: UIPanGestureRecognizer) {
+    /// One-finger pan with a dual role. At `.began` we latch the mode from
+    /// whether a selection is already anchored: a selection means EXTEND
+    /// it (drag-to-select), no selection means SCROLL libghostty's
+    /// scrollback. Scrolling never starts a selection, so a plain drag on
+    /// fresh output just walks history — the standard mobile-terminal feel.
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            // Latch the role once: selection extend vs scroll.
+            panIsScrolling = (selectionRange == nil)
+            scrollPanLastY = 0
+            if panIsScrolling {
+                handleScrollPan(recognizer)
+            } else {
+                handleSelectionPan(recognizer)
+            }
+        case .changed:
+            if panIsScrolling {
+                handleScrollPan(recognizer)
+            } else {
+                handleSelectionPan(recognizer)
+            }
+        case .ended, .cancelled, .failed:
+            if panIsScrolling {
+                handleScrollPan(recognizer)
+            } else {
+                handleSelectionPan(recognizer)
+            }
+            panIsScrolling = false
+            scrollPanLastY = 0
+        default:
+            break
+        }
+    }
+
+    /// Convert the pan's vertical translation into pixel-precise scroll
+    /// deltas for libghostty's scrollback. We track the consumed
+    /// translation so each callback feeds only the incremental movement.
+    /// Sign: a finger dragging DOWN (positive translation.y) should reveal
+    /// OLDER content above, so we negate before handing off — `Terminal.scroll`
+    /// treats positive `deltaY` as "scroll up into history".
+    private func handleScrollPan(_ recognizer: UIPanGestureRecognizer) {
+        #if canImport(GhosttyVT)
+        switch recognizer.state {
+        case .began:
+            // Dragging the terminal dismisses any open edit menu + soft
+            // keyboard focus is irrelevant to scrolling; leave it alone.
+            scrollPanLastY = 0
+        case .changed:
+            let translationY = recognizer.translation(in: self).y
+            let deltaPoints = translationY - scrollPanLastY
+            scrollPanLastY = translationY
+            guard deltaPoints != 0 else { return }
+            // Negate: finger DOWN → reveal history ABOVE (scroll up).
+            let scrollDelta = -Double(deltaPoints) * Self.scrollSensitivity
+            terminal?.scroll(deltaY: scrollDelta)
+        default:
+            break
+        }
+        #else
+        _ = recognizer
+        #endif
+    }
+
+    private func handleSelectionPan(_ recognizer: UIPanGestureRecognizer) {
         guard selectionRange != nil else { return }
         let point = recognizer.location(in: self)
         let cell = gridCell(at: point)
@@ -894,6 +996,12 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         #if canImport(GhosttyVT)
         GhosttyDiagnostics.shared.incAddSublayer()
         #endif
+        // A font-size change rebuilds the surface, which hands us a fresh
+        // IOSurfaceLayer. Detach the previous one so we don't stack stale
+        // (now-orphaned) render layers on top of each other.
+        if let old = ghosttySublayer, old !== sublayer {
+            old.removeFromSuperlayer()
+        }
         ghosttySublayer = sublayer
         layer.addSublayer(sublayer)
         sizeGhosttyLayer()

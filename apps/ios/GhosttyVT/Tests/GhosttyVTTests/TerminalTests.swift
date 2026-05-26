@@ -84,6 +84,16 @@ final class GhosttyThemeTests: XCTestCase {
         XCTAssertTrue(body.contains("cursor-color = \(GhosttyTheme.dracula.cursor)"))
     }
 
+    func testConfigStringCarriesScrollbackLimit() {
+        // Scrollback must be wired into the surface config or touch-scroll
+        // has no history to reveal. Default is the generous byte limit.
+        let body = GhosttyTheme.ghosttyDark.configString(fontSize: 10)
+        XCTAssertTrue(body.contains("scrollback-limit = 10000000"))
+        // Caller-supplied limits are honoured verbatim.
+        let custom = GhosttyTheme.nord.configString(fontSize: 10, scrollbackLimit: 500_000)
+        XCTAssertTrue(custom.contains("scrollback-limit = 500000"))
+    }
+
     func testConfigStringEmitsAll16PaletteEntries() {
         let body = GhosttyTheme.nord.configString(fontSize: 13)
         for index in 0..<16 {

@@ -215,12 +215,18 @@ public enum GhosttyTheme: String, CaseIterable, Sendable {
     /// size. Line-based `key = value` syntax (verified against the
     /// reference repos' generated `ghostty.conf`). The font size is
     /// folded in here so a single config-update call carries both.
-    func configString(fontSize: Float) -> String {
+    func configString(fontSize: Float, scrollbackLimit: UInt = 10_000_000) -> String {
         var lines: [String] = []
         // Clamp to a sane terminal range so a corrupted default can't
         // hand libghostty a zero / negative point size.
         let clamped = min(max(fontSize, 6), 32)
         lines.append("font-size = \(Int(clamped.rounded()))")
+        // libghostty keeps its OWN scrollback of the bytes it has
+        // received; `scrollback-limit` (bytes) bounds it. Without this the
+        // surface keeps only the visible screen, so a touch-scroll has no
+        // history to reveal. Mouse-scroll scrolls THIS buffer — no tmux
+        // copy-mode involved.
+        lines.append("scrollback-limit = \(scrollbackLimit)")
         lines.append("background = \(background)")
         lines.append("foreground = \(foreground)")
         lines.append("cursor-color = \(cursor)")
@@ -310,6 +316,7 @@ public struct GhosttyDiagnosticsSnapshot: Equatable, Sendable {
     public var lastBoundsW: Int
     public var lastBoundsH: Int
     public var fedBytes: Int
+    public var scrollCount: Int
 
     /// Compact multi-line label for the top-left overlay. Each token is
     /// the smallest string that still disambiguates the failure mode.
@@ -324,6 +331,7 @@ public struct GhosttyDiagnosticsSnapshot: Equatable, Sendable {
         render:\(renderActionCount) draw:\(drawCount)
         addSublayer:\(addSublayerCount)
         bounds:\(lastBoundsW)x\(lastBoundsH) fed:\(fedBytes)
+        scroll:\(scrollCount)
         """
     }
 }
@@ -356,6 +364,7 @@ public final class GhosttyDiagnostics: @unchecked Sendable {
     private var _lastBoundsW = 0
     private var _lastBoundsH = 0
     private var _fedBytes = 0
+    private var _scrollCount = 0
 
     private init() {}
 
@@ -377,6 +386,7 @@ public final class GhosttyDiagnostics: @unchecked Sendable {
         lock.lock(); _lastBoundsW = w; _lastBoundsH = h; lock.unlock()
     }
     public func addFedBytes(_ n: Int) { lock.lock(); _fedBytes += n; lock.unlock() }
+    public func incScroll() { lock.lock(); _scrollCount += 1; lock.unlock() }
 
     public func snapshot() -> GhosttyDiagnosticsSnapshot {
         lock.lock(); defer { lock.unlock() }
@@ -393,7 +403,8 @@ public final class GhosttyDiagnostics: @unchecked Sendable {
             renderActionCount: _renderActionCount,
             lastBoundsW: _lastBoundsW,
             lastBoundsH: _lastBoundsH,
-            fedBytes: _fedBytes
+            fedBytes: _fedBytes,
+            scrollCount: _scrollCount
         )
     }
 }
@@ -602,15 +613,22 @@ public final class GhosttySurface {
 
     public var isAlive: Bool { return _surface != nil }
 
+    /// libghostty's own scrollback buffer size in BYTES. Held so
+    /// `applyConfig` re-asserts it on every config reload (a config update
+    /// that omitted it would reset scrollback to the libghostty default).
+    private let scrollbackLimit: UInt
+
     public init(
         app: GhosttyApp = .shared,
         hostView: AnyObject? = nil,
         pixelWidth: UInt32 = 0,
         pixelHeight: UInt32 = 0,
         scaleFactor: Double = 2.0,
-        fontSize: Float = 13.0,
+        fontSize: Float = 10.0,
+        scrollbackLimit: UInt = 10_000_000,
         theme: GhosttyTheme = .ghosttyDark
     ) {
+        self.scrollbackLimit = scrollbackLimit
         guard let appHandle = app.appHandle else {
             GhosttyDiagnostics.shared.setSurface(created: false)
             return
@@ -706,7 +724,7 @@ public final class GhosttySurface {
         guard let cfg: UnsafeMutableRawPointer = ghostty_config_new() else { return }
         defer { ghostty_config_free(cfg) }
 
-        let body = theme.configString(fontSize: fontSize)
+        let body = theme.configString(fontSize: fontSize, scrollbackLimit: scrollbackLimit)
         // A few-hundred-byte temp `.conf`, unique per call and removed via
         // the defer below. A failed write just skips the update (config
         // keeps its prior state).
@@ -751,6 +769,34 @@ public final class GhosttySurface {
 
     public func feed(_ string: String) {
         feed(Data(string.utf8))
+    }
+
+    /// Build libghostty's packed `ghostty_input_scroll_mods_t` (a plain
+    /// `int`). Layout (from `src/input/mouse.zig`, mirrored by the
+    /// reference apps): bit 0 = precision (pixel-precise) flag, bits 1–3 =
+    /// momentum phase. Touch scrolling uses precision deltas with momentum
+    /// phase "changed" (3) during an active drag.
+    private static func scrollMods(precision: Bool, momentum: UInt8 = 0) -> Int32 {
+        var mods: Int32 = 0
+        if precision { mods |= 1 }                 // bit 0
+        mods |= Int32(momentum & 0x7) << 1         // bits 1–3
+        return mods
+    }
+
+    /// Scroll libghostty's OWN scrollback by a pixel-precise vertical
+    /// delta (points). Sign convention matches the reference touch apps
+    /// and native iOS terminals: a POSITIVE `deltaY` reveals OLDER content
+    /// (scrolls up into scrollback), so callers pass the negated finger
+    /// translation (finger dragging DOWN → reveal history above). After
+    /// scrolling we refresh + tick so the event-driven renderer paints the
+    /// new viewport without waiting for the next PTY byte.
+    public func scroll(deltaY: Double) {
+        guard let surface = _surface, deltaY != 0 else { return }
+        let mods = GhosttySurface.scrollMods(precision: true, momentum: 3)
+        ghostty_surface_mouse_scroll(surface, 0, deltaY, mods)
+        ghostty_surface_refresh(surface)
+        GhosttyDiagnostics.shared.incScroll()
+        GhosttyApp.shared.tick()
     }
 
     /// Push the host view's pixel size + scale. Cell grid + reflow happen
@@ -864,8 +910,25 @@ public final class Terminal {
     public private(set) var fontSize: Float
     public private(set) var theme: GhosttyTheme
 
+    /// libghostty scrollback buffer size in BYTES. Seeded from the
+    /// `maxScrollback` init param and threaded into every surface this
+    /// façade builds (initial `attach` + font-size rebuild) so there is
+    /// always history for touch-scroll to reveal.
+    private let scrollbackLimit: UInt
+
     #if canImport(libghostty)
     private var surface: GhosttySurface?
+
+    /// Host-view attach parameters, captured on `attach(...)` so a
+    /// font-size change can tear down + rebuild the surface on the SAME
+    /// host view (update_config does not re-rasterize the glyph atlas on
+    /// the pinned 1.1.5 ABI — clauntty changes size via keybind actions,
+    /// not config reload — so a clean surface rebuild is the reliable way
+    /// to make the size slider visibly re-render).
+    private weak var attachedHostView: AnyObject?
+    private var attachedPixelWidth: UInt32 = 0
+    private var attachedPixelHeight: UInt32 = 0
+    private var attachedScaleFactor: Double = 2.0
     #endif
 
     /// User input forwarded out of libghostty's HOST_MANAGED backend.
@@ -881,8 +944,8 @@ public final class Terminal {
     public init(
         cols: UInt,
         rows: UInt,
-        maxScrollback: UInt = 10_000,
-        fontSize: Float = 13.0,
+        maxScrollback: UInt = 10_000_000,
+        fontSize: Float = 10.0,
         theme: GhosttyTheme = .ghosttyDark
     ) {
         precondition(cols > 0 && cols <= UInt(UInt16.max), "cols out of range")
@@ -891,12 +954,17 @@ public final class Terminal {
         self.rows = rows
         self.fontSize = fontSize
         self.theme = theme
+        // `maxScrollback` is libghostty's own scrollback buffer size in
+        // BYTES (the `scrollback-limit` config key). Threaded into the
+        // surface config so touch-scroll has history to reveal. (Was
+        // previously discarded, which left only the visible screen and
+        // made scrollback impossible.)
+        self.scrollbackLimit = maxScrollback
         // Surface is created lazily in `attach(...)` with the real host
         // view + non-zero pixel size. Creating a hostless surface here
         // (as the skeleton did) starves the renderer of a layer to
         // attach to — the reference apps always create the surface WITH
         // the view.
-        _ = maxScrollback
     }
 
     /// Attach a host UIView. Re-creates the underlying surface because
@@ -904,20 +972,37 @@ public final class Terminal {
     public func attach(hostView: AnyObject?, pixelWidth: UInt32, pixelHeight: UInt32, scaleFactor: Double) {
         #if canImport(libghostty)
         guard GhosttyApp.shared.isAlive else { return }
-        let s = GhosttySurface(
-            hostView: hostView,
-            pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight,
-            scaleFactor: scaleFactor,
-            fontSize: fontSize,
-            theme: theme
-        )
-        s.onReceiveInput = onReceiveInput
-        surface = s
+        attachedHostView = hostView
+        attachedPixelWidth = pixelWidth
+        attachedPixelHeight = pixelHeight
+        attachedScaleFactor = scaleFactor
+        buildSurface()
         #else
         _ = (hostView, pixelWidth, pixelHeight, scaleFactor)
         #endif
     }
+
+    #if canImport(libghostty)
+    /// Build (or rebuild) the libghostty surface on the captured host view
+    /// using the current `fontSize` / `theme` / `scrollbackLimit`. The old
+    /// surface is released first (its `deinit` frees the libghostty
+    /// handle). `platform.ios.uiview` is read once at creation, so this is
+    /// also how a font-size change re-rasterizes — a clean rebuild on the
+    /// same host view.
+    private func buildSurface() {
+        let s = GhosttySurface(
+            hostView: attachedHostView,
+            pixelWidth: attachedPixelWidth,
+            pixelHeight: attachedPixelHeight,
+            scaleFactor: attachedScaleFactor,
+            fontSize: fontSize,
+            scrollbackLimit: scrollbackLimit,
+            theme: theme
+        )
+        s.onReceiveInput = onReceiveInput
+        surface = s
+    }
+    #endif
 
     public func write(_ bytes: Data) {
         #if canImport(libghostty)
@@ -962,10 +1047,37 @@ public final class Terminal {
     /// (a font-size change shifts libghostty's cell px → grid), which the
     /// `GhosttyRenderView` does via `sizeGhosttyLayer` → `syncPtyToGhosttyGrid`.
     public func applyConfig(fontSize: Float, theme: GhosttyTheme) {
+        #if canImport(libghostty)
+        let fontChanged = fontSize != self.fontSize
         self.fontSize = fontSize
         self.theme = theme
+        // COLORS apply live via `ghostty_surface_update_config` (verified
+        // in #218). FONT SIZE does NOT re-rasterize live on the pinned
+        // 1.1.5 ABI through update_config (clauntty uses keybind actions,
+        // not config reload, to resize), so a font-size change tears down
+        // + rebuilds the surface on the same host view with the new
+        // `config.font_size`. Either way the theme/colors are re-applied
+        // by the rebuild's own `applyConfig` in `GhosttySurface.init`.
+        if fontChanged, attachedHostView != nil {
+            buildSurface()
+        } else {
+            surface?.applyConfig(fontSize: fontSize, theme: theme)
+        }
+        #else
+        self.fontSize = fontSize
+        self.theme = theme
+        #endif
+    }
+
+    /// Scroll libghostty's own scrollback. `deltaY` is in points; positive
+    /// reveals OLDER content (scrolls up into history). The view converts
+    /// finger pan translation into this delta (negating it so a finger
+    /// dragging DOWN reveals history above, matching native iOS).
+    public func scroll(deltaY: Double) {
         #if canImport(libghostty)
-        surface?.applyConfig(fontSize: fontSize, theme: theme)
+        surface?.scroll(deltaY: deltaY)
+        #else
+        _ = deltaY
         #endif
     }
 
