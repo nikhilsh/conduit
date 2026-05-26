@@ -1001,6 +1001,24 @@ final class SessionStore {
         Task { try? await client.sendInput(sessionId: sessionID, data: bytes) }
     }
 
+    /// Upload a composer attachment to the session's
+    /// `<workspace>/uploads/<sessionID>/<filename>` via the core 0x01
+    /// binary frame (`SweKittyClient.sendFile`). Awaited by the chat
+    /// composer BEFORE the outgoing message is sent, so the bytes have
+    /// landed by the time the agent reads the referenced upload path.
+    /// Throws when there's no live transport or the WS write fails, so
+    /// the caller can surface "upload failed" instead of sending a
+    /// message that references a file the broker never received.
+    func sendFile(sessionID: String, filename: String, mime: String, bytes: Data) async throws {
+        guard let client else { throw SweKittyError.NotConnected(message: "no session transport") }
+        try await client.sendFile(
+            sessionId: sessionID,
+            filename: filename,
+            mime: mime,
+            payload: bytes
+        )
+    }
+
     func sendChat(sessionID: String, message: String) {
         // Bug #2: previously this method returned early when `client`
         // was nil — that swallowed the optimistic local echo *and* the
