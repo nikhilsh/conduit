@@ -1646,6 +1646,15 @@ private fun ConversationComposer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Lift the whole composer cluster (quick-reply chips + pinned
+            // context + the input row) above the soft keyboard. The
+            // Activity's `adjustResize` shrinks the window when the IME is
+            // up so the bottom-anchored composer rides above it; the
+            // `imePadding()` here is the edge-to-edge-correct belt to the
+            // resize suspenders, so the cluster sits directly above the
+            // keyboard regardless of inset-dispatch mode (device bug #19:
+            // the input row was occluded while the chips peeked above).
+            .imePadding()
             .padding(10.dp)
             .windowInsetsPadding(WindowInsets.navigationBars),
         verticalArrangement = Arrangement.spacedBy(8.dp),

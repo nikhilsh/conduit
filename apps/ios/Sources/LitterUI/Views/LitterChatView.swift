@@ -58,25 +58,12 @@ extension LitterUI {
         @State private var autoScroll = ChatAutoScrollController()
 
         var body: some View {
-            // Composer is hosted via `.safeAreaInset(edge: .bottom)` so
-            // SwiftUI lifts it above the soft keyboard (and the home
-            // indicator at rest) while the messages scroll view shrinks
-            // accordingly — the last message stays visible above both
-            // the composer and the keyboard. Previously the composer
-            // was a sibling VStack child, which on this navigation
-            // stack let the keyboard cover it.
+            // The composer + suggestion cluster is hosted via
+            // `.safeAreaInset(edge: .bottom)` on the messages `ScrollView`
+            // (see `messagesList`), so SwiftUI lifts it above the soft
+            // keyboard while the scroll content insets to keep the latest
+            // message visible. The body just adds the voice sheet.
             messagesList
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    // Exited sessions are a frozen transcript — no live
-                    // WS to send into — so the composer + suggestion bar
-                    // are suppressed entirely in read-only mode.
-                    if !isReadOnly {
-                        VStack(spacing: 0) {
-                            suggestionBar
-                            composer
-                        }
-                    }
-                }
                 // In-chat voice dictation. Mirrors the home-screen mic
                 // (device bug #26) — same VoiceDictationSheet — and brings
                 // the composer mic to parity with Android, which already
@@ -190,6 +177,21 @@ extension LitterUI {
                     .animation(.easeOut(duration: 0.18), value: isStreaming)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // Composer + suggestion bar as a bottom safe-area inset on
+                // the ScrollView *itself* (not the ScrollViewReader): this
+                // is the keyboard-tracking surface, so the whole cluster
+                // rides up with the IME and the scroll content insets so
+                // the latest message stays visible above it (device bug
+                // #19). Exited sessions are a frozen transcript — no live
+                // WS — so the cluster is suppressed in read-only mode.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if !isReadOnly {
+                        VStack(spacing: 0) {
+                            suggestionBar
+                            composer
+                        }
+                    }
+                }
                 // Measure distance from the bottom edge so the controller
                 // can decide when the user has scrolled up vs. is pinned
                 // to the latest. `contentOffset.y + bounds.height` is the
