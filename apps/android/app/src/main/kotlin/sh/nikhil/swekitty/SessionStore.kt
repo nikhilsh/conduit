@@ -1440,6 +1440,23 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } } }
     }
 
+    /**
+     * Upload a composer attachment to the session via the 0x01 binary WS
+     * frame (core `send_file` → broker writes
+     * `<workspace>/uploads/<sessionID>/<filename>`). The send path calls
+     * this for each pending attachment before/with the chat message that
+     * references the landed paths. Mirror of iOS `SessionStore.sendFile`.
+     *
+     * Suspends until the frame is enqueued so the caller can sequence the
+     * chat message after the uploads complete. Failures are swallowed
+     * (best-effort, same as `sendChat`) — the agent simply won't find the
+     * referenced path if the upload didn't land.
+     */
+    suspend fun sendFile(sessionId: String, filename: String, mime: String, payload: ByteArray) {
+        val c = client ?: return
+        runCatching { withContext(Dispatchers.IO) { c.sendFile(sessionId, filename, mime, payload) } }
+    }
+
     suspend fun listDirectories(path: String?): RemoteDirectoryListing {
         val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
         val url = if (path.isNullOrBlank()) {

@@ -1,6 +1,7 @@
 package sh.nikhil.swekitty.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,13 +27,11 @@ class ComposerAttachModelTest {
         assertEquals("Attach file", AttachKind.File.title)
     }
 
-    @Test fun subtitles_mentionInlineBase64() {
-        // Subtitle copy is user-facing — both rows promise the file gets
-        // encoded inline as base64. If we ever swap to the 0x01 binary
-        // frame transport (other parallel PR), update both surfaces in
-        // lockstep.
-        assertTrue(AttachKind.Image.subtitle.contains("base64"))
-        assertTrue(AttachKind.File.subtitle.contains("base64"))
+    @Test fun referenceTokens_lowercaseImageAndFile() {
+        // The reference line embeds this token so the agent knows how to
+        // treat the path. iOS mirrors the same two tokens.
+        assertEquals("image", AttachKind.Image.referenceToken)
+        assertEquals("file", AttachKind.File.referenceToken)
     }
 
     @Test fun mimeFallback_emptyExtension() {
@@ -67,69 +66,107 @@ class ComposerAttachModelTest {
         assertEquals("application/pdf", ComposerMime.fromExtensionOrDefault("pdf", fake))
     }
 
-    @Test fun inlineBlock_imageFormatMatchesIOSRegex() {
-        // Same wire format as the iOS composer — brokers reuse one
-        // regex to parse the inline header. Two-line layout: header
-        // line, then the base64 payload.
-        val att = ComposerAttachment(
-            id = "fixed-id",
+    @Test fun referenceLine_imageMatchesCrossSurfaceConvention() {
+        // The agent acts on this line: it points at the broker-written
+        // upload path relative to the session workspace. iOS mirrors the
+        // identical "[attached <kind>: <filename> — uploads/<sid>/<name>]"
+        // shape so one regex parses both surfaces.
+        val line = attachmentReferenceLine(
             kind = AttachKind.Image,
             filename = "IMG_0123.HEIC",
-            mimeType = "image/jpeg",
-            base64 = "ZmFrZS1ieXRlcw==",
+            sessionId = "sess-42",
         )
-        val block = att.inlineBlock
         assertEquals(
-            "[attached image: IMG_0123.HEIC; mime=image/jpeg; base64]\nZmFrZS1ieXRlcw==",
-            block,
+            "[attached image: IMG_0123.HEIC — uploads/sess-42/IMG_0123.HEIC]",
+            line,
         )
-        // Regex matches the litter web composer pattern: "[attached
-        // <kind>: <filename>; mime=<mime>; base64]\n<payload>".
-        val regex = Regex("^\\[attached (image|file): (.+); mime=([^;]+); base64]\n(.*)\$")
-        val match = regex.find(block)
-        assertNotNull("inlineBlock must match the cross-surface regex", match)
+        val regex = Regex("^\\[attached (image|file): (.+) — uploads/([^/]+)/(.+)]\$")
+        val match = regex.find(line)
+        assertNotNull("reference line must match the cross-surface regex", match)
         assertEquals("image", match!!.groupValues[1])
         assertEquals("IMG_0123.HEIC", match.groupValues[2])
-        assertEquals("image/jpeg", match.groupValues[3])
-        assertEquals("ZmFrZS1ieXRlcw==", match.groupValues[4])
+        assertEquals("sess-42", match.groupValues[3])
+        assertEquals("IMG_0123.HEIC", match.groupValues[4])
     }
 
-    @Test fun inlineBlock_fileFormatMatchesIOSRegex() {
-        val att = ComposerAttachment(
-            id = "fixed-id",
+    @Test fun referenceLine_fileMatchesCrossSurfaceConvention() {
+        val line = attachmentReferenceLine(
             kind = AttachKind.File,
             filename = "spec.pdf",
-            mimeType = "application/pdf",
-            base64 = "JVBERi0=",
+            sessionId = "sess-7",
         )
-        val block = att.inlineBlock
         assertEquals(
-            "[attached file: spec.pdf; mime=application/pdf; base64]\nJVBERi0=",
-            block,
+            "[attached file: spec.pdf — uploads/sess-7/spec.pdf]",
+            line,
         )
-        val regex = Regex("^\\[attached (image|file): (.+); mime=([^;]+); base64]\n(.*)\$")
-        val match = regex.find(block)
+        val regex = Regex("^\\[attached (image|file): (.+) — uploads/([^/]+)/(.+)]\$")
+        val match = regex.find(line)
         assertNotNull(match)
         assertEquals("file", match!!.groupValues[1])
+        assertEquals("spec.pdf", match.groupValues[4])
     }
 
-    @Test fun composeOutgoingMessage_attachmentsAppendedAfterDraft() {
-        val draft = "please review"
+    @Test fun attachment_sizeReflectsBytes() {
+        val att = ComposerAttachment(
+            kind = AttachKind.File,
+            filename = "a.bin",
+            mimeType = "application/octet-stream",
+            bytes = ByteArray(123),
+        )
+        assertEquals(123, att.sizeBytes)
+    }
+
+    @Test fun attachment_structuralEquality() {
+        // data class equality on a ByteArray field would compare by
+        // reference; we override equals/hashCode to compare contents so
+        // de-dupe + test assertions are honest.
+        val a = ComposerAttachment(id = "x", kind = AttachKind.Image, filename = "p.png", mimeType = "image/png", bytes = byteArrayOf(1, 2, 3))
+        val b = ComposerAttachment(id = "x", kind = AttachKind.Image, filename = "p.png", mimeType = "image/png", bytes = byteArrayOf(1, 2, 3))
+        val c = ComposerAttachment(id = "x", kind = AttachKind.Image, filename = "p.png", mimeType = "image/png", bytes = byteArrayOf(9))
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertFalse(a == c)
+    }
+
+    @Test fun sizeLimit_rejectsEmptyAndOversized() {
+        assertFalse(ComposerAttachmentLimits.isWithinLimit(0))
+        assertTrue(ComposerAttachmentLimits.isWithinLimit(1))
+        assertTrue(ComposerAttachmentLimits.isWithinLimit(ComposerAttachmentLimits.MAX_BYTES))
+        assertFalse(ComposerAttachmentLimits.isWithinLimit(ComposerAttachmentLimits.MAX_BYTES + 1))
+    }
+
+    @Test fun composeOutgoingMessage_attachmentReferenceAppendedAfterDraft() {
         val att = ComposerAttachment(
             id = "a",
             kind = AttachKind.File,
             filename = "spec.pdf",
             mimeType = "application/pdf",
-            base64 = "AAA=",
+            bytes = byteArrayOf(0),
         )
         val msg = composeOutgoingMessage(
-            draft = draft,
+            draft = "please review",
             pinnedContexts = emptyList(),
             pendingAttachments = listOf(att),
+            sessionId = "sess-1",
         )
         assertTrue(msg.startsWith("please review"))
-        assertTrue(msg.contains("[attached file: spec.pdf; mime=application/pdf; base64]"))
-        assertTrue(msg.endsWith("AAA="))
+        assertTrue(msg.contains("[attached file: spec.pdf — uploads/sess-1/spec.pdf]"))
+        // The base64 payload is NOT inlined anymore — bytes go over the
+        // upload frame, only the path reference rides the message.
+        assertFalse(msg.contains("base64"))
+    }
+
+    @Test fun composeOutgoingMessage_multipleAttachmentsEachReferenced() {
+        val img = ComposerAttachment(id = "i", kind = AttachKind.Image, filename = "a.png", mimeType = "image/png", bytes = byteArrayOf(1))
+        val pdf = ComposerAttachment(id = "p", kind = AttachKind.File, filename = "b.pdf", mimeType = "application/pdf", bytes = byteArrayOf(2))
+        val msg = composeOutgoingMessage(
+            draft = "look",
+            pinnedContexts = emptyList(),
+            pendingAttachments = listOf(img, pdf),
+            sessionId = "S",
+        )
+        assertTrue(msg.contains("[attached image: a.png — uploads/S/a.png]"))
+        assertTrue(msg.contains("[attached file: b.pdf — uploads/S/b.pdf]"))
     }
 
     @Test fun composeOutgoingMessage_emptyDraftAndNothingPinned_returnsEmpty() {
@@ -139,7 +176,21 @@ class ComposerAttachModelTest {
             draft = "   ",
             pinnedContexts = emptyList(),
             pendingAttachments = emptyList(),
+            sessionId = "sess-1",
         )
         assertEquals("", msg)
+    }
+
+    @Test fun composeOutgoingMessage_attachmentOnlyStillSends() {
+        // An attachment with no typed draft must still produce a non-empty
+        // message (the reference line), so the send path isn't a no-op.
+        val att = ComposerAttachment(kind = AttachKind.Image, filename = "a.png", mimeType = "image/png", bytes = byteArrayOf(1))
+        val msg = composeOutgoingMessage(
+            draft = "",
+            pinnedContexts = emptyList(),
+            pendingAttachments = listOf(att),
+            sessionId = "sess-9",
+        )
+        assertEquals("[attached image: a.png — uploads/sess-9/a.png]", msg)
     }
 }

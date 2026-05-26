@@ -404,15 +404,34 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
     // dialog (which lives at the ChatPage function scope, outside
     // Column) can also reach it. Single dispatch path, two call sites.
     val dispatchSend: () -> Unit = {
+        val attachmentsToSend = pendingAttachments
         val msg = composeOutgoingMessage(
             draft = draft,
             pinnedContexts = pinnedContexts,
-            pendingAttachments = pendingAttachments,
+            pendingAttachments = attachmentsToSend,
+            sessionId = session.id,
         )
         if (msg.isNotEmpty()) {
-            store.sendChat(session.id, msg)
+            // Clear the composer immediately (optimistic) so the UI feels
+            // responsive; the upload + chat dispatch run in the
+            // background and reference the paths the broker writes.
             draft = ""
             pendingAttachments = emptyList()
+            scope.launch {
+                // Upload each picked file over the 0x01 binary frame
+                // (core send_file → broker writes uploads/<sid>/<name>)
+                // BEFORE the chat message lands, so the referenced paths
+                // exist by the time the agent reads them.
+                attachmentsToSend.forEach { att ->
+                    store.sendFile(
+                        sessionId = session.id,
+                        filename = att.filename,
+                        mime = att.mimeType,
+                        payload = att.bytes,
+                    )
+                }
+                store.sendChat(session.id, msg)
+            }
             // Sending is explicit intent to see the reply — re-arm follow
             // even if the user had scrolled up.
             autoScroll = autoScroll.onScrollToBottomRequested()
@@ -539,11 +558,17 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
     }
 
     if (showAttachSheet) {
+        val attachContext = androidx.compose.ui.platform.LocalContext.current
         ComposerAttachSheet(
             onAttach = { attachment ->
                 pendingAttachments = pendingAttachments + attachment
             },
             onDismiss = { showAttachSheet = false },
+            onError = { message ->
+                android.widget.Toast
+                    .makeText(attachContext, message, android.widget.Toast.LENGTH_SHORT)
+                    .show()
+            },
         )
     }
 
@@ -645,11 +670,18 @@ internal fun mergedConversation(
  * attachments into a single outgoing chat message. Mirror of iOS
  * `ChatTab.composeOutgoingMessage` — inlined here rather than on
  * SessionStore because it's purely a presentation concern.
+ *
+ * Attachments are NOT inlined as base64 anymore: the bytes go over the
+ * 0x01 binary upload frame (core `send_file`) and the broker lands them
+ * at `uploads/<sessionId>/<filename>`. We append one reference line per
+ * file so the agent (running in the session workspace) can read each by
+ * its relative path. [sessionId] is required to build that path.
  */
 internal fun composeOutgoingMessage(
     draft: String,
     pinnedContexts: List<PinnedContext>,
     pendingAttachments: List<ComposerAttachment>,
+    sessionId: String,
 ): String {
     val pieces = mutableListOf<String>()
     if (pinnedContexts.isNotEmpty()) {
@@ -660,7 +692,9 @@ internal fun composeOutgoingMessage(
     }
     val trimmed = draft.trim()
     if (trimmed.isNotEmpty()) pieces += trimmed
-    pendingAttachments.forEach { pieces += it.inlineBlock }
+    pendingAttachments.forEach {
+        pieces += attachmentReferenceLine(it.kind, it.filename, sessionId)
+    }
     return pieces.joinToString("\n\n")
 }
 
@@ -1791,11 +1825,18 @@ private fun PendingAttachmentChip(
             modifier = Modifier.padding(start = 10.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                attachment.filename,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            Column {
+                Text(
+                    attachment.filename,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    humanReadableSize(attachment.sizeBytes),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             androidx.compose.material3.IconButton(
                 onClick = onRemove,
                 modifier = Modifier.size(24.dp),
@@ -1809,6 +1850,13 @@ private fun PendingAttachmentChip(
             }
         }
     }
+}
+
+/** Human-friendly byte count for the attachment chip ("12 KB", "3.4 MB"). */
+internal fun humanReadableSize(bytes: Int): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
 }
 
 /**
