@@ -148,11 +148,12 @@ extension LitterUI {
         /// assistant turn has started yet) and a working/thinking/pending
         /// assistant status as busy.
         private var isAgentWorking: Bool {
-            if isStreaming { return true }
-            guard let last = events.last else { return false }
-            if last.role.lowercased() == "user" { return true }
-            let status = last.status.lowercased()
-            return ["thinking", "working", "pending", "streaming", "running"].contains(status)
+            let last = events.last
+            return LitterUI.ChatViewModel.isAgentWorking(
+                lastRole: last?.role,
+                lastStatus: last?.status,
+                isStreaming: isStreaming
+            )
         }
 
         /// Stable id for an invisible spacer pinned at the very end of

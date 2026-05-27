@@ -370,12 +370,7 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
     // working/thinking/pending assistant status both count as busy.
     val agentWorking = run {
         val l = events.lastOrNull()
-        when {
-            l == null -> false
-            l.role.equals("user", ignoreCase = true) -> true
-            l.status.lowercase() in setOf("thinking", "working", "pending", "streaming", "running") -> true
-            else -> false
-        }
+        TypingIndicatorModel.agentWorking(lastRole = l?.role, lastStatus = l?.status)
     }
     val showTyping = !readOnly && (typing.isStreaming(typingTick) || agentWorking)
 

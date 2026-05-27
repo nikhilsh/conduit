@@ -110,6 +110,34 @@ extension LitterUI {
             return "Message…"
         }
 
+        /// Statuses that mark the trailing assistant turn as still busy
+        /// (the pre-token "thinking" phase or an in-flight turn). Kept
+        /// alongside the predicate so the iOS view and its test share one
+        /// source of truth.
+        static let workingStatuses: Set<String> = [
+            "thinking", "working", "pending", "streaming", "running",
+        ]
+
+        /// Whether the agent is busy producing a reply — either actively
+        /// streaming tokens OR in the pre-token "thinking" phase. Pure
+        /// decision extracted from `LitterChatView.isAgentWorking`
+        /// (device feedback v0.0.50 #5) so it can be pinned without a
+        /// SwiftUI host: streaming wins; otherwise the user's message
+        /// being the trailing event (no assistant turn started yet) or a
+        /// working/thinking/pending/streaming/running assistant status
+        /// both count as busy. `lastRole`/`lastStatus` are nil when the
+        /// log is empty.
+        static func isAgentWorking(
+            lastRole: String?,
+            lastStatus: String?,
+            isStreaming: Bool
+        ) -> Bool {
+            if isStreaming { return true }
+            guard let lastRole else { return false }
+            if lastRole.lowercased() == "user" { return true }
+            return workingStatuses.contains((lastStatus ?? "").lowercased())
+        }
+
         /// Layout alignment for a message. User messages right-align,
         /// everything else left-aligns.
         static func alignment(for message: ChatMessage) -> ChatMessageAlignment {
