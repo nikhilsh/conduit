@@ -96,7 +96,12 @@ The same four-field bundle is also re-emitted on the typed `view_event` channel 
 }
 ```
 
-The `view: "chat"` shape is emitted by the broker's Tier 1 PTY scraper (`broker/internal/session/chatscraper.go`, added in #13) after every chat turn — `markUserSent` arms it, idle gap >700ms after the last assistant-side byte flushes one event. ANSI is stripped and border-only lines are dropped before emit. Tunables: `KITTY_CHAT_IDLE_MS` (default 700), `KITTY_CHAT_TURN_MAX_MS` (default 30000).
+The `view: "chat"` shape is the agent's chat output. It is produced from each
+agent's **structured** mode (claude stream-json, codex `exec --json`), not by
+scraping the TUI — see [`CHAT-CHANNEL.md`](CHAT-CHANNEL.md) for the per-agent
+backends. `role: "tool"` events carry the structured tool payload the client's
+conversation classifier renders as cards. (The legacy PTY scraper
+`chatScraper` survives only as a fallback for adapters with no `chat_mode`.)
 
 ```json
 { "type": "view_event",
@@ -116,8 +121,8 @@ The `view: "status"` shape is reserved for **sweswe parity** — a typed mirror 
 - `viewer_count` — integer count of live WebSocket subscribers attached to the session right now. Mirrors `status.viewers`. Clients are expected to render a badge only when `viewer_count > 1` (one viewer is the local user; no point announcing yourself to yourself).
 - `terminal_cols` / `terminal_rows` — current PTY dimensions in character cells. Mirrors `status.cols` / `status.rows`. Emitted whenever the broker resizes the PTY (after a `0x00` binary resize frame) so a late-joining viewer can immediately render scrollback at the right geometry without waiting for the next `status` envelope.
 - `display_name` — human-readable session label. Mirrors `status.session_name`. Set by `rename_session` (§3.3) and persisted by the broker until the session exits.
-- `agent_credentials_refreshed` — `{ "provider": "anthropic" | "openai" }`. Emitted exactly once per successful `set_agent_credentials` (§3.3) so the phone can confirm the credential blob landed in the broker's per-identity store. Optional; older clients ignore it. See [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md) §D for the broader refresh-broadcast contract — Stage 1 only ships the post-`set_agent_credentials` ack; the agent-driven refresh broadcast (inotify on the CLI's on-disk credential file) lands in a later stage.
-- `agent_login_url` — `{ "provider": "openai" | "anthropic", "url": "<authorize-url>", "loopback_port": 1455, "session_token": "<hex>" }`. Emitted in response to a successful `start_agent_login` (§3.3). The phone opens `url` in `ASWebAuthenticationSession` / `CustomTabsIntent`, binds a tiny HTTP listener on `127.0.0.1:<loopback_port>` to catch the provider's redirect, then ships the captured query string back via `agent_login_callback`. `session_token` must round-trip verbatim — see [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md) "Approach v2".
+- `agent_credentials_refreshed` — `{ "provider": "anthropic" | "openai" }`. Emitted exactly once per successful `set_agent_credentials` (§3.3) so the phone can confirm the credential blob landed in the broker's per-identity store. Optional; older clients ignore it. See [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md) §D for the broader refresh-broadcast contract — Stage 1 only ships the post-`set_agent_credentials` ack; the agent-driven refresh broadcast (inotify on the CLI's on-disk credential file) lands in a later stage.
+- `agent_login_url` — `{ "provider": "openai" | "anthropic", "url": "<authorize-url>", "loopback_port": 1455, "session_token": "<hex>" }`. Emitted in response to a successful `start_agent_login` (§3.3). The phone opens `url` in `ASWebAuthenticationSession` / `CustomTabsIntent`, binds a tiny HTTP listener on `127.0.0.1:<loopback_port>` to catch the provider's redirect, then ships the captured query string back via `agent_login_callback`. `session_token` must round-trip verbatim — see [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md) "Approach v2".
 - `agent_login_complete` — `{ "ok": true }`. Emitted after the broker successfully ferried the OAuth callback to the CLI and the CLI exited cleanly (token exchange complete + on-disk credential file written). The phone dismisses its login sheet.
 - `agent_login_failed` — `{ "provider": "...", "reason": "human-readable" }`. Emitted on any v2 login error: unknown provider, CLI not on PATH, URL parse timeout, unknown `session_token` on callback, CLI exited non-zero. The phone surfaces `reason` and re-presents the login button.
 
@@ -167,7 +172,7 @@ Generation details and guarantees:
 { "type": "set_agent_credentials",
   "provider": "anthropic" | "openai",
   "kind": "oauth",
-  "credential": { /* provider-native JSON; see PLAN-AGENT-OAUTH.md §D */ } }
+  "credential": { /* provider-native JSON; see archive/PLAN-AGENT-OAUTH.md §D */ } }
 ```
 
 `rename_session` notes (sweswe parity):
@@ -176,10 +181,15 @@ Generation details and guarantees:
 - Renames are last-writer-wins. The broker does not stamp authorship and does not return an ack — clients should treat the broadcast `status` as the source of truth and avoid optimistic local mutation.
 
 `chat` notes:
-- The broker writes `msg + "\r"` (CR, not LF) into the agent's PTY stdin. Fixed in #12 — TUI agents (Claude, Codex) submit on CR; LF left text in the prompt without entering it.
-- Each `chat` send primes the broker's PTY scraper to capture the assistant's reply and emit it back as `view_event { view: "chat" }`. Echo-suppression on the scraper means an agent that redraws the user's input bar verbatim is not re-shipped as an "assistant" reply.
+- For structured-mode agents (the default — see [`CHAT-CHANNEL.md`](CHAT-CHANNEL.md))
+  the composer message is written to the agent's stdin as a structured input
+  event; the reply comes back as `view_event { view: "chat" }`. The Terminal tab
+  is a separate bash shell.
+- On the legacy fallback path (adapters with no `chat_mode`), the broker writes
+  `msg + "\r"` (CR) into the agent's PTY stdin and the scraper lifts the reply
+  back out — fragile, retained only for agents without a structured mode.
 
-`set_agent_credentials` notes (Stage 1 of [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md)):
+`set_agent_credentials` notes (Stage 1 of [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md)):
 - `provider` must be `"anthropic"` or `"openai"`. Anything else is rejected with a `view_event { view: "chat", role: "tool", tool_name: "set_agent_credentials" }` carrying a human-readable reason; the socket stays open.
 - `kind` is `"oauth"` for now. The field is required so a future protocol rev that adds `"api_key"` / `"signed_jwt"` etc. doesn't have to thread an explicit version bump.
 - `credential` is the **provider-native** OAuth blob — for `anthropic` the `claudeAiOauth` object the `claude` CLI writes to `~/.claude/.credentials.json`; for `openai` the `AuthDotJson` shape the `codex` CLI writes to `~/.codex/auth.json`. The broker stores it verbatim (no normalization) so additive vendor changes survive round-trip without code changes.
@@ -187,7 +197,7 @@ Generation details and guarantees:
 - On success, the broker emits a typed `view_event { view: "status", event: { agent_credentials_refreshed: { provider } } }` so the phone learns the credential landed without needing a separate ack channel. This piggybacks on the existing `view: "status"` mirror so multi-viewer surfaces stay consistent.
 - The encrypted credential is keyed by **a hash of the broker's bearer token**, not per-session — subsequent sessions started by the same phone reuse the stored credential. The broker materializes it into a per-session ephemeral `$HOME` (with `CODEX_HOME` set for codex) at session spawn time; missing-credential sessions fall back to the legacy host-mirror behaviour exactly as before.
 
-`set_agent_credentials` is **deprecated** in favour of the v2 server-side login flow below. v1 PRs (#100, #104, #110, #112) shipped the wire but both providers reject the phone-generated `swekitty://` custom-scheme redirect URI at the authorize endpoint, so the existing path is dead code. Stage 4 of [PLAN-AGENT-OAUTH.md](PLAN-AGENT-OAUTH.md) removes it.
+`set_agent_credentials` is **deprecated** in favour of the v2 server-side login flow below. v1 PRs (#100, #104, #110, #112) shipped the wire but both providers reject the phone-generated `swekitty://` custom-scheme redirect URI at the authorize endpoint, so the existing path is dead code. Stage 4 of [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md) removes it.
 
 #### v2 agent-login control messages
 
@@ -201,7 +211,7 @@ Generation details and guarantees:
   "session_token": "<broker-issued>" }
 ```
 
-`start_agent_login` notes (PLAN-AGENT-OAUTH.md "Approach v2"):
+`start_agent_login` notes (archive/PLAN-AGENT-OAUTH.md "Approach v2"):
 - The broker spawns the CLI's own login subcommand on the broker host — `codex login` for `openai`, `claude auth login --claudeai` for `anthropic`. The CLI binds its own loopback HTTP listener (`http://127.0.0.1:1455/auth/callback` by default, fallback `1457`) and prints the authorize URL on stdout. The broker parses the URL out of stdout and emits a typed `view_event { view: "status", event: { agent_login_url: { provider, url, loopback_port, session_token } } }` so the phone can open `url` in `ASWebAuthenticationSession` (iOS) / `CustomTabsIntent` (Android).
 - The `session_token` is a broker-minted 32-byte hex string that scopes the subsequent `agent_login_callback`. The phone must echo it back verbatim; the broker rejects callbacks whose token doesn't match an active session. This is the confused-deputy mitigation for shared brokers where multiple paired identities could otherwise race callback delivery.
 - `loopback_port` is `0` when the provider's CLI doesn't use a loopback (Anthropic's code-paste flow may fall into this category — pending Stage 2 verification, see PLAN §K). In that case the phone presents a "paste your code" affordance after the browser closes, and ships the code back via a future `agent_login_code` message.
@@ -221,7 +231,7 @@ Unknown `type` values are logged and ignored — never close the socket for them
 
 ### 4.1 New session
 1. Client opens `GET /ws/<new-uuid>?assistant=claude&cwd=/abs/path` (optional `cwd` only on create).
-2. Server creates worktree + Docker container + PTY (per `docs/SESSION-LIFECYCLE.md`).
+2. Server creates worktree + agent process + PTY (per `docs/SESSION-LIFECYCLE.md`).
 3. Server sends a `status` frame.
 4. Server starts forwarding PTY bytes as raw binary frames.
 

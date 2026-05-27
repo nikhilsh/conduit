@@ -21,8 +21,11 @@ Every session has three independent rails on disk. Recovery is possible iff all 
    3. Renders session memory HTML from `.swe-kitty/memory/session-template.html` (substitutes placeholders).
    4. Creates `scrollback.bin` (16 MiB mmap).
    5. Looks up adapter for `<a>`, runs `on_start` hook.
-   6. Spawns container: `docker run -d --name swekitty-<uuid> -v <work>:/workspace -v <memory>:/swe-kitty-memory:ro -e SESSION_UUID=<uuid> -e PORT=<p> -e AGENT_CHAT_PORT=<p+1000> --restart unless-stopped <image>`
-   7. Connects PTY to the container's main process.
+   6. Spawns the agent as a host child process: `pty.Start` in the worktree with
+      a per-session ephemeral `$HOME` and the env from
+      [`AGENT-ADAPTERS.md §2.3`](AGENT-ADAPTERS.md) (no Docker — the broker runs
+      directly on the host).
+   7. Connects the PTY to the agent process.
 3. Server sends initial `status` JSON.
 
 ## 3. Checkpoints
@@ -32,7 +35,7 @@ A checkpoint is a coordinated flush of all three rails. Triggers:
 - Every `switch_agent`
 - Every clean `exit`
 - `SIGTERM` to the broker
-- Manual `swe-kitty memory checkpoint --session <uuid>` from inside the container or host
+- Manual `swe-kitty memory checkpoint --session <uuid>` from the broker host
 
 Checkpoint sequence (atomic):
 1. Pause PTY drain into an in-memory tail buffer
@@ -49,16 +52,16 @@ A goroutine per session, independent of the PTY drain. Runs three checks every 3
 
 | Check | Probe | Failure action |
 |---|---|---|
-| Container alive | `docker exec <name> /bin/true` | Mark session `dead`; broadcast `phase: "stalled"`; emit `view_event` to chat tab; **do not** auto-restart |
+| Agent process alive | the PTY child's exit is observed | Mark session `dead`; broadcast `phase: "stalled"`; emit `view_event` to chat tab; **do not** auto-restart |
 | PTY producing output | bytes-since-last-output > `[watchdog] stall_alert_after_sec` (default 300s) | Mark `warning`; broadcast `phase: "stalled"`; emit alert `view_event` |
 | Memory writable | open + fsync probe file under `.swe-kitty/memory/` | Log error; broadcast `phase: "stalled"`; do not crash broker |
 
 `auto_restart_on_crash` is `false` by default (avoids agents looping forever burning credits). Users tap "Resume" in the mobile app to restart.
 
 Health states surfaced via `status` JSON:
-- 🟢 `healthy` — container alive, PTY drained <`stall_alert_after_sec` ago, last checkpoint <`interval_sec * 1.5` ago
+- 🟢 `healthy` — agent process alive, PTY drained <`stall_alert_after_sec` ago, last checkpoint <`interval_sec * 1.5` ago
 - 🟡 `warning` — one of the above is missed but session still recoverable
-- 🔴 `dead` — container exited
+- 🔴 `dead` — agent process exited
 
 ## 5. Agent swap
 
@@ -66,17 +69,18 @@ Triggered by `{"type":"switch_agent","assistant":"<new>"}` from any connected cl
 
 1. Broadcast `{"type":"status","phase":"swapping","from":"<old>","to":"<new>"}`.
 2. **Force checkpoint** (§3) so we have a known-good baseline.
-3. Send `SIGUSR1` to the container's main process. Adapter entrypoint traps this and writes `/workspace/.swe-kitty/HANDOFF-OUT.html`. Wait up to 30s.
+3. Send `SIGUSR1` to the agent process. The adapter traps this and writes
+   `$KITTY_HANDOFF_OUT_PATH`. Wait up to 30s.
 4. If `HANDOFF-OUT.html` lands within timeout: parse, validate against `docs/MEMORY-FORMAT.md`, merge its `handoff` section into the session memory.
    If timeout: log a warning, proceed with the last checkpoint's session memory as the handoff baseline.
-5. `docker stop swekitty-<uuid> -t 10` (then kill if non-compliant).
+5. `SIGTERM` the old agent (10s grace, then `SIGKILL`).
 6. Run adapter `on_swap` hook with `FROM_AGENT`, `TO_AGENT` env.
-7. Re-render session memory's `handoff` section into `/workspace/.swe-kitty/HANDOFF.html` for the incoming agent.
-8. Spawn new container with new adapter (§2 step 6). The new agent's entrypoint reads `HANDOFF.html` and prepends to system prompt.
-9. PTY is **the same on-disk scrollback ring** — the new container's stdout/stderr appends. Clients reconnecting see the seamless transition via the standard snapshot.
+7. Re-render session memory's `handoff` section into `$KITTY_HANDOFF_PATH` for the incoming agent.
+8. Spawn the new agent with the new adapter (§2 step 6). It reads `HANDOFF.html` and prepends to its system prompt.
+9. PTY is **the same on-disk scrollback ring** — the new process's stdout/stderr appends. Clients reconnecting see the seamless transition via the standard snapshot.
 10. Broadcast `{"type":"status","phase":"running","assistant":"<new>"}`.
 
-The worktree, branch, git state, scrollback, and memory are preserved across the swap. The container instance and process state are reset (deliberately — that's the point).
+The worktree, branch, git state, scrollback, and memory are preserved across the swap. The agent process is reset (deliberately — that's the point). See [`AGENT-ADAPTERS.md §4`](AGENT-ADAPTERS.md) for the same swap from the adapter's side.
 
 ## 6. Broker restart recovery
 
@@ -85,13 +89,14 @@ The worktree, branch, git state, scrollback, and memory are preserved across the
 1. Scan `.swe-kitty/sessions/*/` for sessions.
 2. For each:
    1. Validate all three rails (§1). If any rail missing, mark `corrupted` and skip with a warning.
-   2. Check if `docker inspect swekitty-<uuid>` still exists. Docker's `--restart unless-stopped` policy usually means yes.
-      - If yes: re-attach PTY to the live container.
-      - If no: re-spawn container per §2 step 6. The new agent reads the existing `HANDOFF.html` (last checkpoint state).
+   2. Check whether the session's tmux server still holds the PTY (tmux survives
+      a broker restart since it's a separate process).
+      - If yes: re-attach to the live tmux PTY.
+      - If no: re-spawn the agent per §2 step 6. The new agent reads the existing `HANDOFF.html` (last checkpoint state).
    3. Mark `phase: "running"`.
 3. Start the WebSocket server. Reconnecting clients get the standard snapshot and resume.
 
-Sessions can survive an arbitrary number of broker restarts as long as Docker and the filesystem persist.
+Sessions can survive an arbitrary number of broker restarts as long as tmux and the filesystem persist.
 
 ## 7. Session shutdown
 
@@ -101,7 +106,7 @@ Triggered by:
 
 Shutdown sequence:
 1. Final checkpoint (§3).
-2. `docker stop swekitty-<uuid> -t 10`.
+2. `SIGTERM` the agent process (10s grace, then `SIGKILL`); tear down its tmux PTY.
 3. Run `on_exit` hook.
 4. Optionally archive: move `.swe-kitty/sessions/<uuid>/` to `.swe-kitty/archive/<uuid>/` (configurable; default off — keeps disk usage in check).
 5. Remove the git worktree: `git worktree remove --force <path>`.
@@ -111,8 +116,8 @@ Shutdown sequence:
 
 | Failure | Expected behavior |
 |---|---|
-| Agent CLI crashes inside container | Watchdog detects, session `dead`, mobile shows Resume sheet; scrollback + memory intact; Resume re-runs `on_start` and respawns container with same adapter |
-| Container OOM-killed | Same as above |
+| Agent CLI crashes | Watchdog detects, session `dead`, mobile shows Resume sheet; scrollback + memory intact; Resume re-runs `on_start` and respawns the agent with the same adapter |
+| Agent OOM-killed | Same as above |
 | Broker process `kill -9` | On restart (§6), all sessions recovered; clients reconnect and see snapshot — appears as a brief network blip |
 | Mid-PR agent swap | §5 round-trip; new agent sees diff-so-far via `git stash list` from the auto-WIP, plus `HANDOFF.html` |
 | Phone loses network for 1h | Sessions keep running on broker; on reconnect, gzip snapshot brings UI up to date |

@@ -1,5 +1,9 @@
 # Mobile Migration Plan
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** The
+> skeleton→product-shell migration is done. Preserved for the licensing posture
+> (clean-room) and migration rationale.
+
 Date: 2026-05-18
 
 ## Executive Summary

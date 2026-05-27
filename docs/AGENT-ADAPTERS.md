@@ -37,8 +37,9 @@ per-session **PTY/process tree** — not from any container boundary.
 The broker may run as **root**: it sets `IS_SANDBOX=1` for the agents it
 spawns, which is what lets Claude Code accept
 `--dangerously-skip-permissions` under root (it otherwise refuses). See
-`docs/SELF-HOST.md` for install + run, and `PLAN-DEVICE-BUGS-2026-05-24.md`
-for why this replaced the old "run as a non-root container user" approach.
+`docs/SELF-HOST.md` for install + run, and `docs/ROADMAP.md` "Direction &
+decisions" for why this replaced the old "run as a non-root container user"
+approach (detail preserved in `docs/archive/PLAN-DEVICE-BUGS-2026-05-24.md`).
 
 > A legacy `image` field may still appear in older TOMLs; it is parsed but
 > **ignored** (the broker `pty.Start`s `command`, it never `docker run`s).

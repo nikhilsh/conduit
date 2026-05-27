@@ -1,5 +1,9 @@
 # Renaming `broker/` → `broker/`
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** The
+> `harness/` → `broker/` rename landed and "harness" is gone from the
+> user-facing product. Preserved for the rename rationale and migration notes.
+
 Written 2026-05-21. Companion to `docs/TESTING-STRATEGY.md`.
 
 ## Why

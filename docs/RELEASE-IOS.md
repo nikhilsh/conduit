@@ -6,7 +6,7 @@ push produces a signed ad-hoc IPA attached to the GitHub Release.
 
 Most credential work is automated through the **App Store Connect MCP**
 (`@seriousmonster/app-store-connect-mcp`, aka STOMP), driven from a Claude Code
-session. See `docs/PLAN.md` §C3 for the high-level workflow design.
+session. See `docs/archive/PLAN.md` §C3 for the high-level workflow design.
 
 ---
 
@@ -123,7 +123,7 @@ Outputs:
 > **Blocker:** the workflow expects `apps/ios/` to exist (`project.yml`,
 > `build-rust.sh`, `ExportOptions.plist`, `SweKitty` scheme). If absent, the
 > `xcodegen generate` step fails. Scaffold that before the first tag — see
-> `docs/PLAN.md` §B for the iOS app skeleton.
+> `docs/archive/PLAN.md` §B for the iOS app skeleton.
 
 ---
 

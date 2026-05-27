@@ -1,5 +1,10 @@
 # PLAN — device-test bug triage (v0.0.29) + isolation-model question
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** The
+> triaged bugs were fixed and the isolation-model question was decided in favour
+> of the bare-box (no-Docker) model — see `ROADMAP.md` "Direction & decisions".
+> Preserved for the on-device findings.
+
 Date: 2026-05-24
 Source: first real on-device test of v0.0.29 (OAuth v2 build). Four bugs
 found, plus a product question about whether the broker box needs Docker.

@@ -2,7 +2,7 @@
 
 > **Archived 2026-05-23.** Sidecar landed (`broker/internal/termgrid/` +
 > ring-buffer fallback live on `main`). Terminal renderer trajectory now
-> continues in [`PLAN-TERMINAL-REWRITE.md`](../PLAN-TERMINAL-REWRITE.md)
+> continues in [`PLAN-TERMINAL-REWRITE.md`](PLAN-TERMINAL-REWRITE.md)
 > (CoreText / Ghostty path).
 
 ## Problem

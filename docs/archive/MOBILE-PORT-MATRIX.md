@@ -1,5 +1,8 @@
 # Mobile Port Matrix
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** The
+> file-level port audit it drove is complete. Preserved for reference.
+
 Date: 2026-05-18
 
 ## Purpose

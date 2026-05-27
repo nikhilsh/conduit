@@ -1,5 +1,9 @@
 # Plan — Litter-style UI rebuild
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** The
+> LitterUI tree is the default on iOS (`experimentalLitterUI` defaults on).
+> Preserved for the stage-by-stage design rationale.
+
 Date: 2026-05-20 (status block updated 2026-05-23)
 Reference: 4 litter iOS screenshots shared by the user
 (`Home`, `Info`, `Chat`, `Settings`) + `https://kittylitter.app/`.

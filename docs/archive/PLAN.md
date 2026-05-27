@@ -1,5 +1,12 @@
 # Plan: `swe-kitty` — phone-first AI coding broker with per-project multi-view, built under its own dev harness
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** This
+> was the original master plan. v0.1–v0.4 all shipped and the forward-looking
+> roadmap now lives in `ROADMAP.md`. Note: much of the text below predates the
+> direction changes (Docker dropped, "harness"→"server", structured chat) —
+> `ROADMAP.md` is authoritative where they disagree. Preserved for design
+> rationale.
+
 ## How To Read This Document
 
 - **Status Snapshot** below is the current reality and should drive execution.

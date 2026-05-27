@@ -1,5 +1,12 @@
 # Terminal renderer rewrite — Ghostty libghostty pick
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).**
+> xterm.js is the shipping default terminal; the native Ghostty path is built
+> and reachable behind `experimentalNativeTerminal`. The one remaining item —
+> on-device verification before Ghostty becomes the default and xterm.js is
+> retired — is tracked in `ROADMAP.md` "In progress". Preserved for the staging
+> rationale.
+
 ## Status
 
 Stage 0 spike (feature-flag scaffold) in progress. Stage 1+ deferred.

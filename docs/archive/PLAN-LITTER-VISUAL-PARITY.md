@@ -1,5 +1,9 @@
 # PLAN — Litter Visual Parity (exhaustive gap audit)
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** The
+> 5-PR visual-parity rebuild shipped end-to-end on iOS + Android. Preserved for
+> the gap-audit detail.
+
 Date: 2026-05-22 (status block updated 2026-05-23)
 Author: research agent (audit only, no code changes)
 Reference: `github.com/dnakov/litter` @ main (Swift sources fetched 2026-05-22)

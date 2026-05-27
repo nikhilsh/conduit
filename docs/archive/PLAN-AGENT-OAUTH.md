@@ -1,5 +1,11 @@
 # Per-user in-app OAuth for Claude + Codex agents
 
+> **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).**
+> OAuth v2 (server-side login manager, providers openai + anthropic) is the live
+> path on both platforms. The only residue — deleting the dead v1
+> `OAuthClient` / `set_agent_credentials` code once v2 is device-verified — is
+> tracked in `ROADMAP.md` "In progress". Preserved for the v1→v2 history.
+
 ## Status (2026-05-23)
 
 **Approach v2 (litter-faithful) — current.** v1 (PKCE on the phone,
