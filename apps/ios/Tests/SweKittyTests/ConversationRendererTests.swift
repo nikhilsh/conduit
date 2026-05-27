@@ -347,4 +347,78 @@ struct LitterMarkdownStructureTests {
             Issue.record("empty input not a paragraph: \(pieces[0])")
         }
     }
+
+    @Test func bareFenceWithNoLanguageBecomesCodeWithNilLanguage() {
+        // A fence opened with bare ``` (no language tag) must still be a
+        // .code piece — and the language must be nil, not the empty
+        // string, so the renderer hides the language label entirely.
+        let pieces = LitterMarkdownStructure.parse("""
+        ```
+        plain code
+        ```
+        """)
+        #expect(pieces.count == 1)
+        guard case .code(let lang, let body) = pieces[0] else {
+            Issue.record("bare fence not code: \(pieces[0])"); return
+        }
+        #expect(lang == nil)
+        #expect(body == "plain code")
+    }
+
+    @Test func codeInterleavedWithProseKeepsPieceOrdering() {
+        // Prose · code · prose · code · prose — every block must survive
+        // in order, with the two fences landing as the 2nd and 4th pieces.
+        let pieces = LitterMarkdownStructure.parse("""
+        First, the setup:
+
+        ```sh
+        npm install
+        ```
+
+        Then run it:
+
+        ```sh
+        npm start
+        ```
+
+        That's all.
+        """)
+        #expect(pieces.count == 5)
+        if case .paragraph(let p) = pieces[0] { #expect(p.contains("First, the setup")) } else { Issue.record("0 not paragraph: \(pieces[0])") }
+        guard case .code(let lang1, let body1) = pieces[1] else {
+            Issue.record("1 not code: \(pieces[1])"); return
+        }
+        #expect(lang1 == "sh")
+        #expect(body1 == "npm install")
+        if case .paragraph(let p) = pieces[2] { #expect(p.contains("Then run it")) } else { Issue.record("2 not paragraph: \(pieces[2])") }
+        guard case .code(let lang2, let body2) = pieces[3] else {
+            Issue.record("3 not code: \(pieces[3])"); return
+        }
+        #expect(lang2 == "sh")
+        #expect(body2 == "npm start")
+        if case .paragraph(let p) = pieces[4] { #expect(p.contains("That's all")) } else { Issue.record("4 not paragraph: \(pieces[4])") }
+    }
+
+    @Test func fenceImmediatelyFollowedByHeadingAfterCloseSeparatesCleanly() {
+        // The close fence butts right up against a heading with no blank
+        // line. The heading must NOT be swallowed into the code body and
+        // must surface as its own .heading piece.
+        let pieces = LitterMarkdownStructure.parse("""
+        ```swift
+        let x = 1
+        ```
+        ## Next steps
+        """)
+        #expect(pieces.count == 2)
+        guard case .code(let lang, let body) = pieces[0] else {
+            Issue.record("0 not code: \(pieces[0])"); return
+        }
+        #expect(lang == "swift")
+        #expect(body == "let x = 1")
+        guard case .heading(let level, let text) = pieces[1] else {
+            Issue.record("1 not heading: \(pieces[1])"); return
+        }
+        #expect(level == 2)
+        #expect(text == "Next steps")
+    }
 }

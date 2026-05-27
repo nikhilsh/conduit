@@ -67,4 +67,42 @@ class TypingIndicatorModelTest {
         m = m.onTrailingTurn("assistant", 50, nowMs = 100) // same length, no growth
         assertTrue(m.isStreaming(nowMs = 100))
     }
+
+    // ---------- agentWorking() (pre-token "thinking" predicate) ----------
+    //
+    // Extracted verbatim from ChatPage's inline block; OR-ed with the
+    // streaming model at the call site. Same case set / outcomes as iOS
+    // `LitterUI.ChatViewModel.isAgentWorking`.
+
+    @Test fun agentWorkingFalseWhenNoEvents() {
+        assertFalse(TypingIndicatorModel.agentWorking(lastRole = null, lastStatus = null))
+    }
+
+    @Test fun agentWorkingTrueWhenUserMessageIsLast() {
+        // User just sent — no assistant turn started yet.
+        assertTrue(TypingIndicatorModel.agentWorking(lastRole = "user", lastStatus = ""))
+        // Case-insensitive on the role.
+        assertTrue(TypingIndicatorModel.agentWorking(lastRole = "USER", lastStatus = "done"))
+    }
+
+    @Test fun agentWorkingTrueForBusyAssistantStatuses() {
+        for (status in listOf("thinking", "working", "pending", "streaming", "running")) {
+            assertTrue(
+                "status $status should read as busy",
+                TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = status),
+            )
+            // Status check is case-insensitive.
+            assertTrue(
+                TypingIndicatorModel.agentWorking(
+                    lastRole = "assistant",
+                    lastStatus = status.uppercase(),
+                ),
+            )
+        }
+    }
+
+    @Test fun agentWorkingFalseForSettledAssistant() {
+        assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = "done"))
+        assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = ""))
+    }
 }

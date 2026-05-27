@@ -67,5 +67,28 @@ data class TypingIndicatorModel(
          * indicator disappears promptly when the turn finishes.
          */
         const val DEFAULT_QUIET_WINDOW_MS = 700L
+
+        /** Statuses that mark the trailing assistant turn as still busy. */
+        val WORKING_STATUSES = setOf("thinking", "working", "pending", "streaming", "running")
+
+        /**
+         * Pure decision for the pre-token "thinking" phase (device
+         * feedback v0.0.50 #5 parity, OR-ed with the streaming model at
+         * the call site). Extracted verbatim from `ChatPage`'s inline
+         * `agentWorking` block so it can be pinned without a composition:
+         * a null trailing event (empty log) is not busy; the user's
+         * message being the trailing event (no assistant turn started
+         * yet) is busy; and a working/thinking/pending/streaming/running
+         * trailing status is busy. `lastRole`/`lastStatus` are null only
+         * when there is no trailing event.
+         */
+        fun agentWorking(lastRole: String?, lastStatus: String?): Boolean {
+            if (lastRole == null) return false
+            return when {
+                lastRole.equals("user", ignoreCase = true) -> true
+                lastStatus.orEmpty().lowercase() in WORKING_STATUSES -> true
+                else -> false
+            }
+        }
     }
 }

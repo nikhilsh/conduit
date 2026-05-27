@@ -97,4 +97,52 @@ struct LitterChatViewModelTests {
             #expect(LitterUI.ChatViewModel.suggestedReplies(forLastAssistant: text).count <= 3)
         }
     }
+
+    // MARK: isAgentWorking (typing-indicator predicate)
+
+    @Test func isAgentWorkingTrueWhileStreaming() {
+        // Streaming wins regardless of the trailing role/status.
+        #expect(LitterUI.ChatViewModel.isAgentWorking(
+            lastRole: "assistant", lastStatus: "done", isStreaming: true
+        ))
+    }
+
+    @Test func isAgentWorkingTrueWhenUserMessageIsLast() {
+        // The user just sent — no assistant turn has started yet.
+        #expect(LitterUI.ChatViewModel.isAgentWorking(
+            lastRole: "user", lastStatus: "", isStreaming: false
+        ))
+        // Case-insensitive on the role.
+        #expect(LitterUI.ChatViewModel.isAgentWorking(
+            lastRole: "USER", lastStatus: "", isStreaming: false
+        ))
+    }
+
+    @Test func isAgentWorkingTrueForBusyAssistantStatuses() {
+        for status in ["thinking", "working", "pending", "streaming", "running"] {
+            #expect(LitterUI.ChatViewModel.isAgentWorking(
+                lastRole: "assistant", lastStatus: status, isStreaming: false
+            ), "status \(status) should read as busy")
+            // Status check is case-insensitive.
+            #expect(LitterUI.ChatViewModel.isAgentWorking(
+                lastRole: "assistant", lastStatus: status.uppercased(), isStreaming: false
+            ))
+        }
+    }
+
+    @Test func isAgentWorkingFalseForSettledAssistant() {
+        #expect(!LitterUI.ChatViewModel.isAgentWorking(
+            lastRole: "assistant", lastStatus: "done", isStreaming: false
+        ))
+        #expect(!LitterUI.ChatViewModel.isAgentWorking(
+            lastRole: "assistant", lastStatus: "", isStreaming: false
+        ))
+    }
+
+    @Test func isAgentWorkingFalseWhenNoEvents() {
+        // Empty log → nil role/status → not busy.
+        #expect(!LitterUI.ChatViewModel.isAgentWorking(
+            lastRole: nil, lastStatus: nil, isStreaming: false
+        ))
+    }
 }
