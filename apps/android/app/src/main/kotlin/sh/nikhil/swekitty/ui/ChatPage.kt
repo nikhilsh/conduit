@@ -1722,29 +1722,23 @@ private fun ConversationComposer(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (quickReplies.isNotEmpty()) {
-            // Device feedback v0.0.49 #2 (Android parity): the quick-reply
-            // bar reads as a translucent/blurred glass strip rather than an
-            // opaque row. A low-alpha `surfaceVariant` Surface lets the
-            // message list tint through; each chip keeps its own
-            // `AssistChip` container so it stays fully tappable and legible
-            // over both light and dark content.
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                modifier = Modifier.fillMaxWidth(),
+            // Device feedback v0.0.49 (round 2) #1 (Android parity): NO strip
+            // background behind the quick replies — the chips float directly
+            // over the chat (overlay-style, like the scroll-to-bottom button),
+            // matching the iOS change. Each `AssistChip` keeps its own
+            // container so it stays tappable and legible; the earlier
+            // translucent `Surface` strip still read as a flat bar.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(
-                    modifier = Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    quickReplies.forEach { reply ->
-                        AssistChip(
-                            onClick = { onQuickReply(reply) },
-                            label = { Text(reply) },
-                        )
-                    }
+                quickReplies.forEach { reply ->
+                    AssistChip(
+                        onClick = { onQuickReply(reply) },
+                        label = { Text(reply) },
+                    )
                 }
             }
         }

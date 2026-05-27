@@ -186,6 +186,26 @@ extension LitterUI {
                     .animation(.easeOut(duration: 0.18), value: isStreaming)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // Device feedback v0.0.49 (round 2) #2: the scroll-to-bottom
+                // arrow must float just ABOVE the composer, never on top of
+                // the send button. It's applied BEFORE `.safeAreaInset(.bottom)`
+                // so the inset lays this ScrollView (with the overlay) out in
+                // the region above the composer cluster — `.bottomTrailing`
+                // then resolves to the TOP edge of the composer, not the screen
+                // bottom where Send lives (the prior order pinned it exactly on
+                // Send). Zero vertical footprint; rides up with the keyboard.
+                .overlay(alignment: .bottomTrailing) {
+                    if !isReadOnly {
+                        scrollToBottomButton(proxy: proxy)
+                            .opacity(autoScroll.showScrollToBottomButton ? 1 : 0)
+                            .scaleEffect(autoScroll.showScrollToBottomButton ? 1 : 0.8)
+                            .allowsHitTesting(autoScroll.showScrollToBottomButton)
+                            .accessibilityHidden(!autoScroll.showScrollToBottomButton)
+                            .animation(.easeOut(duration: 0.2), value: autoScroll.showScrollToBottomButton)
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 8)
+                    }
+                }
                 // Composer + suggestion bar as a bottom safe-area inset on
                 // the ScrollView *itself* (not the ScrollViewReader): this
                 // is the keyboard-tracking surface, so the whole cluster
@@ -196,37 +216,21 @@ extension LitterUI {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if !isReadOnly {
                         VStack(spacing: 0) {
+                            // Device feedback v0.0.49 (round 2) #1: the
+                            // quick-reply chips float as translucent glass
+                            // capsules over the chat (overlay-style, like the
+                            // scroll arrow) — NO opaque strip behind them. Only
+                            // the composer carries the solid surface background,
+                            // so there is no flat dark "bar" the chips sit on.
                             suggestionBar
                             composer
+                                // Device feedback v0.0.47 #4: the composer (and
+                                // the safe-area band it pushes above the
+                                // keyboard) uses the chat surface color, so
+                                // there's no color seam at the composer/keyboard
+                                // inset.
+                                .background(LitterUI.Palette.surface.color)
                         }
-                        // Device feedback v0.0.47 #4: the whole inset
-                        // cluster (and the safe-area band it pushes into
-                        // above the keyboard) uses the same chat surface
-                        // color, so there's no color seam where the chat
-                        // meets the composer / keyboard inset.
-                        .background(LitterUI.Palette.surface.color)
-                    }
-                }
-                // Device feedback v0.0.49 #1: the scroll-to-bottom arrow is
-                // now a true floating OVERLAY — it no longer occupies a
-                // layout row inside the inset cluster ("occupies 2 rows").
-                // The overlay is applied AFTER `.safeAreaInset(.bottom)` so
-                // the composer cluster has already shrunk this view's safe
-                // area; `.bottomTrailing` then pins the arrow just ABOVE the
-                // composer (riding up with it/the keyboard) without ever
-                // colliding with the send/mic button (#236 concern). Zero
-                // vertical footprint, so streaming content never shifts to
-                // make room for it.
-                .overlay(alignment: .bottomTrailing) {
-                    if !isReadOnly {
-                        scrollToBottomButton(proxy: proxy)
-                            .opacity(autoScroll.showScrollToBottomButton ? 1 : 0)
-                            .scaleEffect(autoScroll.showScrollToBottomButton ? 1 : 0.8)
-                            .allowsHitTesting(autoScroll.showScrollToBottomButton)
-                            .accessibilityHidden(!autoScroll.showScrollToBottomButton)
-                            .animation(.easeOut(duration: 0.2), value: autoScroll.showScrollToBottomButton)
-                            .padding(.trailing, 16)
-                            .padding(.bottom, 12)
                     }
                 }
                 // Measure distance from the bottom edge so the controller
@@ -277,15 +281,22 @@ extension LitterUI {
                         scrollToTrueBottom(proxy)
                     }
                 }
-                // Device feedback v0.0.49 #3: when Chat is (re-)entered —
-                // e.g. Terminal → back → Chat — the chat composer must NOT
-                // start hidden behind a keyboard left up by another tab.
-                // The composer owns no first responder on appear, so
-                // SwiftUI's keyboard-avoidance can't lift it past a
-                // straggling keyboard; force a clean keyboard state on
-                // appear (the parent ProjectView also dismisses on tab
-                // change, but this covers the appear-side race directly).
-                .onAppear { dismissStrayKeyboard() }
+                // Device feedback v0.0.49 (round 2) #3: returning to Chat from
+                // another tab (Terminal → back → Chat) still trapped the
+                // composer behind the keyboard. Root cause: leaving the tab
+                // only called `endEditing`, never reset the @FocusState, so on
+                // re-entry SwiftUI RESTORED the stale `composerFocused = true`
+                // → the keyboard popped back up but the `.safeAreaInset`
+                // avoidance didn't re-engage, hiding the input. Clearing the
+                // focus state on both disappear and appear (not just
+                // `endEditing`) keeps the composer at rest and visible; the
+                // user re-taps to type and the keyboard then presents cleanly
+                // with avoidance working.
+                .onAppear {
+                    composerFocused = false
+                    dismissStrayKeyboard()
+                }
+                .onDisappear { composerFocused = false }
             }
         }
 
@@ -373,22 +384,17 @@ extension LitterUI {
                         }
                     }
                     .padding(.horizontal, 14)
-                    .padding(.top, 6)
-                    .padding(.bottom, 6)
+                    .padding(.top, 8)
+                    .padding(.bottom, 8)
                 }
-                // Device feedback v0.0.49 #2: the quick-reply bar reads as
-                // translucent BLURRED glass rather than an opaque row.
-                // `.ultraThinMaterial` lets the message list show through
-                // (the chips themselves keep their own glass capsule so
-                // they stay legible over light + dark content), and a thin
-                // hairline at the top separates the bar from the scroll
-                // content without a hard color seam.
-                .background(.ultraThinMaterial)
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(LitterUI.Palette.separator.color.opacity(0.4))
-                        .frame(height: 0.5)
-                }
+                // Device feedback v0.0.49 (round 2) #1: NO bar background —
+                // the chips float directly over the chat as glass capsules
+                // (each `litterGlassCapsule` is its own translucent blurred
+                // surface), matching the floating scroll-to-bottom arrow. The
+                // earlier `.ultraThinMaterial` strip still read as a flat,
+                // opaque-looking row because the inset cluster painted an
+                // opaque surface behind it; that backing now lives on the
+                // composer alone.
             }
         }
 
