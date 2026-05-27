@@ -50,6 +50,11 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		lastCheckpoint: lastCheckpoint,
 		termgrid:       m.termgrid,
 		replayBaseDir:  m.replayBaseDir,
+		// Restore the user-chosen workspace dir so the recovered agent
+		// spawns back in the directory the user picked, not the empty
+		// per-session work/ dir. Falls back to adapter/worktreeDir
+		// for pre-feature sessions that have no workspace_dir field.
+		requestedCWD: meta.WorkspaceDir,
 	})
 	if err != nil {
 		return nil, err

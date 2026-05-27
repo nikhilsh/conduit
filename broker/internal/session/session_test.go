@@ -255,6 +255,55 @@ func TestManagerRecoverRestoresPersistedSnapshot(t *testing.T) {
 	}
 }
 
+// TestRecoverRestoresWorkspaceDir proves that a session created with a
+// user-chosen CWD recovers to the same workspace dir after a simulated
+// broker restart (manager close + re-open + Recover). Before the fix,
+// requestedCWD was not persisted in meta.json so the recovered agent
+// ran in the empty per-session work/ dir instead of the user's project.
+func TestRecoverRestoresWorkspaceDir(t *testing.T) {
+	root := testRoot(t)
+
+	// A separate real directory the "user" chose as their project.
+	projectDir := t.TempDir()
+
+	reg := testRegistry(t, root, map[string]string{
+		"claude": idleScript("cwd-ready"),
+	})
+
+	// Create session with an explicit CWD.
+	m1 := NewManager(reg)
+	sess, _, err := m1.GetOrCreateWithOptions("session-cwd", "claude", CreateOptions{CWD: projectDir})
+	if err != nil {
+		t.Fatalf("GetOrCreateWithOptions: %v", err)
+	}
+	waitForOutput(t, sess, "cwd-ready")
+	if sess.WorkspaceDir() != projectDir {
+		t.Fatalf("workspaceDir before persist = %q, want %q", sess.WorkspaceDir(), projectDir)
+	}
+	if err := sess.Checkpoint("cwd"); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	m1.Close()
+
+	// Simulate broker restart: new manager, recover sessions.
+	m2 := NewManager(reg)
+	t.Cleanup(m2.Close)
+	recovered, err := m2.Recover()
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if len(recovered) != 1 || recovered[0] != "session-cwd" {
+		t.Fatalf("unexpected recovered ids: %v", recovered)
+	}
+	sess2, ok := m2.Get("session-cwd")
+	if !ok {
+		t.Fatal("recovered session missing from manager")
+	}
+	if sess2.WorkspaceDir() != projectDir {
+		t.Fatalf("workspaceDir after recover = %q, want %q", sess2.WorkspaceDir(), projectDir)
+	}
+}
+
 func testRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
