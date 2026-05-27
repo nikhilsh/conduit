@@ -48,13 +48,14 @@
 // regression is fixed in this PR.
 //
 // **Pin source** (matches `scripts/fetch-ghostty-kit-xcframework.sh`):
-//   URL:      https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.1.5/GhosttyKit.xcframework.zip
-//   sha256:   a7045bef1f3149989d79e413b07f2f17847d68348da9f55eb56578093a5af405
+//   URL:      https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.2.1/GhosttyKit.xcframework.zip
+//   sha256:   8333a035ae372ef39f7dff26affaa1f3dac4129a52251aa3264828700b784071
 //   Source:   Lakr233's published `Package.swift` (binaryTarget
 //             checksum field) + verified against the live asset by
-//             `curl -fsSL <url> | shasum -a 256` on 2026-05-22.
-//   Tag:      `storage.1.1.5` (downstream of upstream Ghostty
-//             `v1.3.1`, sha 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28).
+//             `curl -fsSL <url> | sha256sum` on 2026-05-27.
+//   Tag:      `storage.1.2.1` (storage.1.1.5 was deleted upstream —
+//             these storage.* tags are mutable/prunable, so re-pin to
+//             whatever the publisher still hosts).
 //
 // Bump cadence: Lakr233's pipeline cron is weekly Mondays; pin once
 // per upstream Ghostty semver tag, not per upstream cut. If Lakr233
@@ -84,10 +85,18 @@ let package = Package(
         // The xcodebuild iOS-simulator linker now finds matching
         // slices (this was PR #94's blocker against upstream's
         // arm64-only `tip` build).
+        //
+        // 2026-05-27: bumped storage.1.1.5 → storage.1.2.1. Upstream
+        // Lakr233/libghostty-spm DELETED the `storage.1.1.5` release
+        // (asset + tag now 404), which broke every iOS build at the SPM
+        // dependency-resolution step (`badResponseStatusCode(404)`).
+        // These `storage.*` tags are mutable/prunable, so the pin has to
+        // track whatever the publisher still hosts; storage.1.2.1 is the
+        // current binary. checksum = sha256 of the .zip artifact.
         .binaryTarget(
             name: "libghostty",
-            url: "https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.1.5/GhosttyKit.xcframework.zip",
-            checksum: "a7045bef1f3149989d79e413b07f2f17847d68348da9f55eb56578093a5af405"
+            url: "https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.2.1/GhosttyKit.xcframework.zip",
+            checksum: "8333a035ae372ef39f7dff26affaa1f3dac4129a52251aa3264828700b784071"
         ),
         // Thin Swift wrapper. Re-exports the libghostty App/Surface
         // C symbols through a typed Swift API
