@@ -1269,6 +1269,14 @@ type sessionMetadata struct {
 	// persisted so a reopened/relisted session keeps it without
 	// re-generating. omitempty: pre-feature sessions simply have no title.
 	AITitle string `json:"ai_title,omitempty"`
+	// WorkspaceDir is the resolved CWD for both the agent and the
+	// terminal shell. Persisted so that on broker restart the recovered
+	// session's agent spawns back in the same directory the user
+	// originally chose, rather than falling back to the empty
+	// per-session work/ dir. omitempty: pre-feature sessions without
+	// this field recover with the legacy adapter-workdir / worktreeDir
+	// fallback behaviour.
+	WorkspaceDir string `json:"workspace_dir,omitempty"`
 }
 
 func (s *Session) applyPaths() {
@@ -1285,15 +1293,16 @@ func (s *Session) applyPaths() {
 func (s *Session) persistMetadata() error {
 	s.mu.Lock()
 	meta := sessionMetadata{
-		ID:         s.ID,
-		Assistant:  s.Assistant,
-		Rows:       s.rows,
-		Cols:       s.cols,
-		Phase:      s.phase,
-		Health:     s.health,
-		ReasonCode: s.reasonCode,
-		ExitCode:   s.exitCode,
-		AITitle:    s.aiTitle,
+		ID:           s.ID,
+		Assistant:    s.Assistant,
+		Rows:         s.rows,
+		Cols:         s.cols,
+		Phase:        s.phase,
+		Health:       s.health,
+		ReasonCode:   s.reasonCode,
+		ExitCode:     s.exitCode,
+		AITitle:      s.aiTitle,
+		WorkspaceDir: s.workspaceDir,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

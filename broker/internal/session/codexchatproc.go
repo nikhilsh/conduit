@@ -2,11 +2,19 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os/exec"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
+
+// ansiStripRe matches ANSI/VT escape sequences so we can strip colour codes
+// from codex stderr before surfacing error snippets in the Chat tab.
+var ansiStripRe = regexp.MustCompile(`\x1b\[[0-9;]*[mKHJABCDsuGfnr]`)
 
 // codexChatProcess drives the structured Chat tab for codex. Unlike claude
 // (a persistent stream-json stdin process), `codex exec` is one-shot, so
@@ -72,9 +80,17 @@ func (c *codexChatProcess) runTurn(argv []string) {
 	cmd.Dir = c.dir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		publishChatSystem(c.publish, "⚠️ codex: failed to start turn (stdout pipe): "+err.Error())
 		return
 	}
+	// Capture stderr so auth / startup errors surface in the Chat tab
+	// rather than vanishing silently. We cap the read to 4 KB — enough
+	// to show the first meaningful error line without buffering the full
+	// stderr of a verbose run.
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &limitWriter{w: &stderrBuf, limit: 4096}
 	if err := cmd.Start(); err != nil {
+		publishChatSystem(c.publish, "⚠️ codex: failed to start: "+err.Error())
 		return
 	}
 	c.mu.Lock()
@@ -88,6 +104,7 @@ func (c *codexChatProcess) runTurn(argv []string) {
 
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	published := false
 	for sc.Scan() {
 		evs, tid, ok := parseCodexStreamLine(sc.Bytes())
 		if tid != "" {
@@ -116,15 +133,84 @@ func (c *codexChatProcess) runTurn(argv []string) {
 			})
 			if perr == nil {
 				c.publish(payload)
+				published = true
 			}
 		}
 	}
 	_ = cmd.Wait()
 	c.mu.Lock()
+	intentional := c.closed
 	if c.running == cmd {
 		c.running = nil
 	}
 	c.mu.Unlock()
+
+	// If the turn ended without emitting any assistant message (e.g. an
+	// auth failure or codex crash), the client's typing indicator would
+	// spin forever — the user's message stays as the last chat item and
+	// agentWorking stays true. Emit a system message so the indicator
+	// clears and the user sees what went wrong. Skip when the session
+	// was intentionally closed (killed by Close()) — that's just the
+	// user ending the session, not an error.
+	if !published && !intentional {
+		msg := "⚠️ codex: no reply from agent (turn failed or timed out)"
+		if stderrBuf.Len() > 0 {
+			// Surface the first useful error line from stderr. Skip ANSI
+			// colour codes and blank lines; cap the snippet at 200 chars.
+			if snip := firstMeaningfulLine(stderrBuf.String()); snip != "" {
+				msg = "⚠️ codex error: " + snip
+			}
+		}
+		publishChatSystem(c.publish, msg)
+	}
+}
+
+// limitWriter is an io.Writer that stops writing after limit bytes.
+// Used to cap codex's verbose stderr so we don't buffer megabytes.
+type limitWriter struct {
+	w     io.Writer
+	limit int
+	n     int
+}
+
+func (l *limitWriter) Write(p []byte) (int, error) {
+	if l.n >= l.limit {
+		return len(p), nil // silently discard once full
+	}
+	room := l.limit - l.n
+	if len(p) > room {
+		p = p[:room]
+	}
+	n, err := l.w.Write(p)
+	l.n += n
+	return len(p), err // lie about count so cmd doesn't see a short write
+}
+
+// firstMeaningfulLine returns the first non-blank line from s that doesn't
+// look like an ANSI escape or a purely-numeric/date prefix. Caps at 200 chars.
+func firstMeaningfulLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		// Strip ANSI escapes (ESC [ … m sequences)
+		line = ansiStripRe.ReplaceAllString(line, "")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Skip lines that are just log prefixes (timestamps, log levels)
+		// like "2026-05-27T08:39:11.384060Z ERROR codex_login…".
+		// We want the actual human message after the module path.
+		if idx := strings.Index(line, "] "); idx >= 0 {
+			line = strings.TrimSpace(line[idx+2:])
+		}
+		if line == "" {
+			continue
+		}
+		if len(line) > 200 {
+			line = line[:200] + "…"
+		}
+		return line
+	}
+	return ""
 }
 
 // Close stops the codex backend: no persistent process, but kill any
