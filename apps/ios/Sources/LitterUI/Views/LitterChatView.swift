@@ -46,6 +46,14 @@ extension LitterUI {
         /// stays the path for never-tracked rows that fetch over HTTP.
         var forceReadOnly: Bool = false
 
+        /// Whether this chat is the visible/active tab. Device feedback
+        /// v0.0.50 #3: `ProjectView` keeps the chat view MOUNTED across tab
+        /// switches (rather than rebuilding it) so keyboard avoidance stays
+        /// warm; this flag lets the view drop composer focus + the keyboard
+        /// when it's hidden behind another tab, and never grab the keyboard
+        /// while off-screen.
+        var isActive: Bool = true
+
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
         // Composer attachments (#240 cross-surface): files picked via the
@@ -131,6 +139,22 @@ extension LitterUI {
             }
         }
 
+        /// `true` while the agent is busy producing a reply — either
+        /// actively streaming tokens OR in the pre-token "thinking" phase.
+        /// Device feedback v0.0.50 #5: the typing indicator gated on
+        /// `isStreaming` alone, so nothing showed during the (often
+        /// multi-second) think before the first token arrived. We also
+        /// treat "the user's message is the last thing in the log" (no
+        /// assistant turn has started yet) and a working/thinking/pending
+        /// assistant status as busy.
+        private var isAgentWorking: Bool {
+            if isStreaming { return true }
+            guard let last = events.last else { return false }
+            if last.role.lowercased() == "user" { return true }
+            let status = last.status.lowercased()
+            return ["thinking", "working", "pending", "streaming", "running"].contains(status)
+        }
+
         /// Stable id for an invisible spacer pinned at the very end of
         /// the list. Scrolling to *this* (rather than the last event)
         /// guarantees we reach the absolute bottom — below the typing
@@ -171,7 +195,7 @@ extension LitterUI {
                         // BUG 3: "agent is typing" indicator lives inside
                         // the scroll content so it follows autoscroll like
                         // any new content while the user is at the bottom.
-                        if isStreaming {
+                        if isAgentWorking && !isReadOnly {
                             LitterTypingIndicator()
                                 .padding(.horizontal, 16)
                                 .transition(.opacity)
@@ -183,7 +207,7 @@ extension LitterUI {
                             .id(Self.bottomAnchorID)
                     }
                     .padding(.vertical, 14)
-                    .animation(.easeOut(duration: 0.18), value: isStreaming)
+                    .animation(.easeOut(duration: 0.18), value: isAgentWorking)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 // Device feedback v0.0.49 (round 2) #2: the scroll-to-bottom
@@ -275,10 +299,21 @@ extension LitterUI {
                 .onChange(of: isStreaming) { wasStreaming, nowStreaming in
                     guard wasStreaming, !nowStreaming else { return }
                     guard autoScroll.shouldFollowStreaming else { return }
+                    // Device feedback v0.0.50 #1: when the turn ends, the final
+                    // message re-renders from the plain streaming buffer into
+                    // the structured-markdown view (code blocks, headings) — a
+                    // TALLER layout that lands a single settle-scroll short of
+                    // the new bottom, so the scroll-to-bottom arrow lingers even
+                    // though the user is visually at the end. Re-settle across
+                    // the reflow window, bailing the instant the user takes
+                    // manual control, so we reach the true bottom and the arrow
+                    // fades out on its own.
                     Task {
-                        try? await Task.sleep(nanoseconds: 300_000_000)
-                        guard autoScroll.shouldFollowStreaming else { return }
-                        scrollToTrueBottom(proxy)
+                        for delayMs: UInt64 in [120, 350, 700, 1100] {
+                            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                            guard autoScroll.shouldFollowStreaming else { return }
+                            scrollToTrueBottom(proxy)
+                        }
                     }
                 }
                 // Device feedback v0.0.49 (round 2) #3: returning to Chat from
@@ -297,6 +332,18 @@ extension LitterUI {
                     dismissStrayKeyboard()
                 }
                 .onDisappear { composerFocused = false }
+                // The view stays mounted across tab switches now, so drive
+                // keyboard state off the active flag rather than appear/
+                // disappear: drop focus + the keyboard when hidden behind
+                // another tab, and clear any stray keyboard when shown again.
+                .onChange(of: isActive) { _, active in
+                    if active {
+                        dismissStrayKeyboard()
+                    } else {
+                        composerFocused = false
+                        dismissStrayKeyboard()
+                    }
+                }
             }
         }
 

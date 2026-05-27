@@ -255,9 +255,30 @@ extension LitterUI {
 
         @ViewBuilder
         private var liveContent: some View {
+            ZStack {
+                // Device feedback v0.0.50 #3: keep the chat view MOUNTED
+                // across tab switches instead of rebuilding it via `switch`.
+                // A freshly-created chat view missed SwiftUI keyboard
+                // avoidance on the FIRST composer focus after Terminal→Chat —
+                // the input stayed behind the keyboard until you dismissed and
+                // reopened it. Staying mounted keeps its avoidance machinery +
+                // scroll position warm, so the first focus lifts correctly.
+                // `isActive` lets it release the keyboard while hidden.
+                LitterUI.ChatView(session: session, isActive: tab == .chat)
+                    .opacity(tab == .chat ? 1 : 0)
+                    .allowsHitTesting(tab == .chat)
+                    .accessibilityHidden(tab != .chat)
+                    .zIndex(tab == .chat ? 1 : 0)
+
+                liveSecondaryContent
+            }
+        }
+
+        @ViewBuilder
+        private var liveSecondaryContent: some View {
             switch tab {
             case .chat:
-                LitterUI.ChatView(session: session)
+                EmptyView()
             case .terminal:
                 // Default engine is the xterm.js terminal (shipping,
                 // proven). Stage 5 wires the native `GhosttyTerminalTab`

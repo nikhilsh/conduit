@@ -364,7 +364,20 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
         kotlinx.coroutines.delay(TypingIndicatorModel.DEFAULT_QUIET_WINDOW_MS + 50)
         typingTick = System.currentTimeMillis()
     }
-    val showTyping = !readOnly && typing.isStreaming(typingTick)
+    // Device feedback v0.0.50 #5 (parity): show the indicator during the
+    // pre-token "thinking" phase too, not just active streaming — the
+    // user's own message being last (no assistant turn started yet) or a
+    // working/thinking/pending assistant status both count as busy.
+    val agentWorking = run {
+        val l = events.lastOrNull()
+        when {
+            l == null -> false
+            l.role.equals("user", ignoreCase = true) -> true
+            l.status.lowercase() in setOf("thinking", "working", "pending", "streaming", "running") -> true
+            else -> false
+        }
+    }
+    val showTyping = !readOnly && (typing.isStreaming(typingTick) || agentWorking)
 
     // Follow the stream + new messages + the typing row appearing. While
     // not scrolled up, re-pin the absolute bottom. Keyed on `showTyping`
