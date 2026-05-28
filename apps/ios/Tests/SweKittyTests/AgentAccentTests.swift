@@ -17,11 +17,14 @@ struct AgentAccentTests {
         expectRGB(SweKittyTheme.accent(forAgent: "claude"), hex: "#CC785C")
     }
 
-    @Test func codexIsEmerald() {
-        // Switched from the older OpenAI green #10A37F to Tailwind
-        // emerald-500 (#10B981) — picked to read clearly distinct
-        // from claude copper on the picker sheet.
-        expectRGB(SweKittyTheme.accent(forAgent: "codex"), hex: "#10B981")
+    @Test func codexIsMonochrome() {
+        // Codex's brand wordmark is monochrome (white on dark, dark on
+        // light) — the previous emerald-500 (#10B981) didn't match
+        // marketing. Light theme gets a near-black so the accent stays
+        // legible against the light surface; the dark counterpart lives
+        // in `codexAccent.dark` (#F5F5F5) and isn't checked here because
+        // expectRGB pins the light variant only.
+        expectRGB(SweKittyTheme.accent(forAgent: "codex"), hex: "#262626")
     }
 
     @Test func hermesIsPurple() {
@@ -45,7 +48,7 @@ struct AgentAccentTests {
 
     @Test func matchIsCaseInsensitive() {
         expectRGB(SweKittyTheme.accent(forAgent: "CLAUDE"), hex: "#CC785C")
-        expectRGB(SweKittyTheme.accent(forAgent: "Codex"), hex: "#10B981")
+        expectRGB(SweKittyTheme.accent(forAgent: "Codex"), hex: "#262626")
     }
 
     // MARK: - Strong variant
@@ -55,7 +58,9 @@ struct AgentAccentTests {
     }
 
     @Test func codexStrongIsDarker() {
-        expectRGB(SweKittyTheme.accentStrong(forAgent: "codex"), hex: "#047857")
+        // Strong variant pushes the monochrome accent further toward
+        // pure black on light so filled avatars + selected states pop.
+        expectRGB(SweKittyTheme.accentStrong(forAgent: "codex"), hex: "#0A0A0A")
     }
 
     @Test func unknownStrongFallsBackToNeutral() {

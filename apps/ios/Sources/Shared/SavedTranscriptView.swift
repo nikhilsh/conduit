@@ -53,6 +53,7 @@ struct SavedTranscriptView: View {
         .navigationBarTitleDisplayMode(.inline)
         .tint(LitterUI.Palette.brand.color)
         .task { await load() }
+        .appearanceColorScheme()
     }
 
     // MARK: - Fetch

@@ -2,9 +2,18 @@ import SwiftUI
 
 // MARK: - LitterPillButton
 //
-// Capsule-shaped button — used for the BottomActionBar's mic / search
-// (44x44 floating glass capsules) and for the centered "+" FAB which
-// is sized larger and uses the brand tint.
+// Capsule / circular button used for the BottomActionBar's mic / search
+// (44pt) and for the centered "+" FAB which uses the brand tint.
+//
+// Uses Apple's native `.buttonStyle(.glass)` / `.buttonStyle(.glassProminent)`
+// — Liquid Glass. The system owns the specular highlight that responds
+// to motion, content displacement on press, spring physics, and the
+// dynamic light-source edge. We only feed in the glyph and the tint
+// (the prominent variant honours `.tint(_:)`; the regular variant
+// ignores it).
+//
+// The app's iOS deployment target is 26.0, so there's no pre-26
+// branch — every device running this binary has Liquid Glass.
 
 extension LitterUI {
 
@@ -19,56 +28,26 @@ extension LitterUI {
             Button(action: action) {
                 Image(systemName: systemImage)
                     .font(.system(size: isProminent ? 22 : 18, weight: isProminent ? .bold : .semibold))
-                    .foregroundStyle(foreground)
                     .frame(width: size, height: size)
-                    // device feedback (v0.0.47): the prominent "+" read as a
-                    // faint outline. `litterGlassCircle` only paints the tint
-                    // as a ~6% wash over translucent glass, so a brand-tinted
-                    // FAB never actually filled. Lay a SOLID brand circle
-                    // UNDER the glass for the prominent variant so the create
-                    // affordance reads as a clearly-filled copper button with
-                    // a contrasting glyph; mic/search stay on plain glass.
-                    .background {
-                        if isProminent {
-                            Circle()
-                                .fill(tint ?? LitterUI.Palette.brand.color)
-                        }
-                    }
-                    .litterGlassCircle(
-                        tint: backgroundTint,
-                        config: .floating
-                    )
-                    // Subtle brand-tinted ring + lift so the filled FAB
-                    // separates from the surface behind it.
-                    .overlay {
-                        if isProminent {
-                            Circle()
-                                .strokeBorder(
-                                    LitterUI.Palette.textOnAccent.color.opacity(0.22),
-                                    lineWidth: 1
-                                )
-                        }
-                    }
-                    .shadow(
-                        color: isProminent
-                            ? (tint ?? LitterUI.Palette.brand.color).opacity(0.45)
-                            : .clear,
-                        radius: isProminent ? 10 : 0,
-                        x: 0,
-                        y: isProminent ? 4 : 0
-                    )
             }
-            .buttonStyle(.plain)
+            .modifier(LiquidGlassButtonStyleModifier(isProminent: isProminent))
+            .tint(tint ?? LitterUI.Palette.brand.color)
         }
+    }
+}
 
-        private var backgroundTint: Color {
-            isProminent ? (tint ?? LitterUI.Palette.brand.color) : (tint ?? LitterUI.Palette.surfaceLight.color)
-        }
+/// Carries the `.buttonStyle(.glass)` vs `.buttonStyle(.glassProminent)`
+/// choice. The two style values have distinct types, so Swift won't let
+/// us write `.buttonStyle(isProminent ? .glassProminent : .glass)` at a
+/// single call site; the conditional has to live behind a ViewModifier.
+private struct LiquidGlassButtonStyleModifier: ViewModifier {
+    let isProminent: Bool
 
-        private var foreground: Color {
-            isProminent
-                ? LitterUI.Palette.textOnAccent.color
-                : LitterUI.Palette.textPrimary.color
+    func body(content: Content) -> some View {
+        if isProminent {
+            content.buttonStyle(.glassProminent)
+        } else {
+            content.buttonStyle(.glass)
         }
     }
 }

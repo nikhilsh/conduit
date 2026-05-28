@@ -1,30 +1,20 @@
 import Testing
 @testable import SweKitty
 
-/// Stage 6 glass-polish — defends the per-modifier `Material` audit and
-/// the per-agent tint overload. The rendering surface itself is hard to
-/// snapshot in a Swift Testing run (SwiftUI / Metal), so the params are
-/// lifted into a pure-data `GlassConfig` struct that we can compare
-/// directly.
-@Suite("GlassConfig — Stage 6 material audit + agent-tint overload")
+/// Defends the agent-tint overlay on `GlassConfig`. The rendering
+/// surface itself is hard to snapshot in a Swift Testing run
+/// (SwiftUI / Metal), so the params are lifted into a pure-data
+/// `GlassConfig` struct that we can compare directly.
+///
+/// The old "material audit" tests pinned `GlassConfig.material` to
+/// `.regular` / `.ultraThin` — those targeted the pre-iOS-26 material
+/// fallback path. With the app's deployment target at iOS 26.0 we now
+/// render through `.glassEffect(.regular, in: shape)` exclusively, so
+/// the `material` enum was removed from `GlassConfig`. The remaining
+/// knob we still care about is `tintOverlayOpacity` — the per-agent
+/// wash painted on top of the system glass.
+@Suite("GlassConfig — agent-tint overload")
 struct GlassModifierTests {
-
-    // MARK: - Default presets
-
-    @Test func solidCardUsesRegularMaterial() {
-        // Litter's cards feel solid, not see-through. `glassRoundedRect`
-        // and `glassCapsule` must bump from `.ultraThinMaterial` /
-        // `.thinMaterial` to `.regularMaterial`.
-        #expect(GlassConfig.solid.material == .regular)
-    }
-
-    @Test func transientSurfaceStaysUltraThin() {
-        // `glassCircle` is used for floating FAB-style controls that sit
-        // over scrollable content (BottomActionBar, HomeView top icons).
-        // Those should stay translucent so what's underneath remains
-        // visible — `.ultraThinMaterial`.
-        #expect(GlassConfig.transient.material == .ultraThin)
-    }
 
     @Test func solidPresetHasNoAgentTintOverlay() {
         // The bare `glassRoundedRect()` must paint zero tint overlay,
@@ -33,14 +23,18 @@ struct GlassModifierTests {
         #expect(GlassConfig.solid.tintOverlayOpacity == 0.0)
     }
 
-    // MARK: - Agent-tint overload
+    @Test func transientPresetHasNoAgentTintOverlay() {
+        // Same guarantee for `glassCircle` (floating FAB-style
+        // controls): no accidental tint without explicit opt-in.
+        #expect(GlassConfig.transient.tintOverlayOpacity == 0.0)
+    }
 
     @Test func agentTintedConfigDiffersFromBare() {
-        // The headline assertion for this stage: passing an
-        // `agentTint:` overload must produce a different `GlassConfig`
-        // than the bare overload — otherwise the overlay isn't being
-        // applied and call sites that switched to the agent-aware
-        // overload regress to a flat card.
+        // The headline assertion for the agent-tint overload: passing
+        // an `agentTint:` overload must produce a different
+        // `GlassConfig` than the bare overload — otherwise the overlay
+        // isn't being applied and call sites that switched to the
+        // agent-aware overload regress to a flat card.
         let bare = GlassConfig.solid
         let tinted = GlassConfig.solidAgentTinted()
         #expect(bare != tinted)
@@ -48,26 +42,16 @@ struct GlassModifierTests {
 
     @Test func agentTintedOverlayIsSubtle() {
         // Spec says 0.08 opacity — light enough that the underlying
-        // material still reads as the dominant surface, dark enough
-        // that the agent hue is visible against the gradient highlight.
+        // glass still reads as the dominant surface, dark enough that
+        // the agent hue is visible against the specular highlight.
         #expect(GlassConfig.solidAgentTinted().tintOverlayOpacity == 0.08)
     }
 
-    @Test func agentTintedKeepsRegularMaterial() {
-        // The tint is a layer on top, not a swap of the material. The
-        // tinted variant must keep `.regularMaterial` so the visual
-        // weight of the card matches the un-tinted siblings on the
-        // same screen (e.g. SessionInfoView's hero + server-usage
-        // cards should feel like one set, not two).
-        #expect(GlassConfig.solidAgentTinted().material == .regular)
-    }
-
     @Test func agentTintedOpacityIsConfigurable() {
-        // Optional override — Stage 6 also wants to experiment with
-        // 0.04 for tool/diff cards in ConversationView. Verify the
-        // helper takes an explicit opacity.
+        // Optional override — `solidAgentTinted` accepts a custom
+        // opacity for tool/diff cards in ConversationView (4%) so the
+        // hue stays even quieter on dense surfaces.
         let cfg = GlassConfig.solidAgentTinted(opacity: 0.04)
         #expect(cfg.tintOverlayOpacity == 0.04)
-        #expect(cfg.material == .regular)
     }
 }

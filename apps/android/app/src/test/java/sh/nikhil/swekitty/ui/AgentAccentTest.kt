@@ -24,10 +24,13 @@ class AgentAccentTest {
         assertEquals(0xFFCC785CL, SweKittyTheme.accentForAgentLightRgb("claude"))
     }
 
-    @Test fun codex_isEmerald() {
-        // Switched from older OpenAI green #10A37F to Tailwind
-        // emerald-500 (#10B981) for clear separation from claude.
-        assertEquals(0xFF10B981L, SweKittyTheme.accentForAgentLightRgb("codex"))
+    @Test fun codex_isMonochrome() {
+        // Codex brand wordmark is monochrome (white on dark, dark on
+        // light) — switched off the emerald-500 (#10B981) which didn't
+        // match marketing. Light theme gets a near-black accent so it
+        // reads clearly against the light surface; dark counterpart is
+        // #F5F5F5 (asserted by the dark-variant tests, not here).
+        assertEquals(0xFF262626L, SweKittyTheme.accentForAgentLightRgb("codex"))
     }
 
     @Test fun hermes_isPurple() {
@@ -51,7 +54,7 @@ class AgentAccentTest {
 
     @Test fun match_isCaseInsensitive() {
         assertEquals(0xFFCC785CL, SweKittyTheme.accentForAgentLightRgb("CLAUDE"))
-        assertEquals(0xFF10B981L, SweKittyTheme.accentForAgentLightRgb("Codex"))
+        assertEquals(0xFF262626L, SweKittyTheme.accentForAgentLightRgb("Codex"))
     }
 
     // --- Strong variant ---
@@ -61,7 +64,9 @@ class AgentAccentTest {
     }
 
     @Test fun codexStrong_isDarker() {
-        assertEquals(0xFF047857L, SweKittyTheme.accentStrongForAgentLightRgb("codex"))
+        // Strong variant pushes the monochrome accent further toward
+        // pure black on light so filled avatars + selected states pop.
+        assertEquals(0xFF0A0A0AL, SweKittyTheme.accentStrongForAgentLightRgb("codex"))
     }
 
     @Test fun unknownStrong_fallsBackToNeutral() {

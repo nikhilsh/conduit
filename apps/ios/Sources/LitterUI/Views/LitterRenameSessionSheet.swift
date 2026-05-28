@@ -68,6 +68,7 @@ extension LitterUI {
                     }
                 }
             }
+            .appearanceColorScheme()
         }
 
         private var trimmedDraft: String {

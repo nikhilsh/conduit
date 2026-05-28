@@ -1,20 +1,32 @@
 package sh.nikhil.swekitty.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 
 /**
+ * Effective dark-mode flag for the rendered tree. Provided by the
+ * activity once it has resolved `AppearanceStore.themeMode` against
+ * the system theme (System → follow OS, Light/Dark → force). All
+ * palette lookups read this rather than `isSystemInDarkTheme()` so a
+ * user-forced Light/Dark stays consistent across surfaces — including
+ * sheets, dialogs, and any other window that inherits the parent
+ * composition. Without this we ended up half-dark when the user
+ * override disagreed with the OS theme.
+ */
+val LocalUseDarkTheme = compositionLocalOf { false }
+
+/**
  * Compose mirror of `apps/ios/Sources/Theme/Palette.swift` +
  * `Theme.swift`. Same hex values, same semantic tokens. The composables
- * here resolve to light/dark via `isSystemInDarkTheme()` so call sites
+ * here resolve to light/dark via [LocalUseDarkTheme] so call sites
  * read like `SweKittyTheme.accentStrong()` rather than threading a
  * `ColorScheme` parameter.
  */
 internal data class AdaptiveColor(val light: Long, val dark: Long) {
     @Composable @ReadOnlyComposable
-    fun color(): Color = if (isSystemInDarkTheme()) Color(dark) else Color(light)
+    fun color(): Color = if (LocalUseDarkTheme.current) Color(dark) else Color(light)
 }
 
 internal object SweKittyPalette {
@@ -24,8 +36,12 @@ internal object SweKittyPalette {
     val accentStrong    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
     val claudeAccent    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
     val claudeAccentStrong = AdaptiveColor(0xFFA85A3F, 0xFFCC785C)
-    val codexAccent     = AdaptiveColor(0xFF10B981, 0xFF34D399)
-    val codexAccentStrong  = AdaptiveColor(0xFF047857, 0xFF10B981)
+    // Codex brand is monochrome (white wordmark on dark, dark on light)
+    // — the green here didn't match marketing. Light theme gets near-black
+    // for legibility on light surfaces; dark theme gets off-white so it
+    // doesn't blow out highlights but still reads as the white wordmark.
+    val codexAccent     = AdaptiveColor(0xFF262626, 0xFFF5F5F5)
+    val codexAccentStrong  = AdaptiveColor(0xFF0A0A0A, 0xFFFAFAFA)
     // Hermes purple — Tailwind purple-500. No public Hermes adapter
     // brand to anchor to, so this is a defensible choice that contrasts
     // cleanly with claude/codex.
@@ -64,10 +80,11 @@ object SweKittyTheme {
 
     /**
      * Per-agent accent. Each adapter that ships with the harness gets
-     * a distinct hue — Claude copper, Codex green, Hermes purple,
-     * Pi blue, opencode orange. Falls back to the neutral gray
-     * [accent] for unknown agents (rather than the copper brand
-     * accent, so an unknown agent doesn't masquerade as Claude).
+     * a distinct hue — Claude copper, Codex mono (white/black, matching
+     * OpenAI's monochrome brand), Hermes purple, Pi blue, opencode
+     * orange. Falls back to the neutral gray [accent] for unknown
+     * agents (rather than the copper brand accent, so an unknown agent
+     * doesn't masquerade as Claude).
      */
     @Composable @ReadOnlyComposable
     fun accent(forAgent: String): Color = when (forAgent.lowercase()) {

@@ -70,6 +70,7 @@ struct QRScannerSheet: View {
                 importPhoto(item)
             }
         }
+        .appearanceColorScheme()
     }
 
     private func importPhoto(_ item: PhotosPickerItem) {

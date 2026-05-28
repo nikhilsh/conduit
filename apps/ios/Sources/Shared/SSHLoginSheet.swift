@@ -67,6 +67,7 @@ struct SSHLoginSheet: View {
                 }
             }
         }
+        .appearanceColorScheme()
     }
 
     // MARK: - Sections

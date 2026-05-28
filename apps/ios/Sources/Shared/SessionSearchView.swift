@@ -49,6 +49,7 @@ struct SessionSearchView: View {
                 }
             }
         }
+        .appearanceColorScheme()
     }
 
     private var searchField: some View {

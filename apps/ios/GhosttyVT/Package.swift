@@ -47,20 +47,26 @@
 // the experimental terminal flag rendered an empty grid. That
 // regression is fixed in this PR.
 //
-// **Pin source** (matches `scripts/fetch-ghostty-kit-xcframework.sh`):
-//   URL:      https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.2.1/GhosttyKit.xcframework.zip
-//   sha256:   8333a035ae372ef39f7dff26affaa1f3dac4129a52251aa3264828700b784071
-//   Source:   Lakr233's published `Package.swift` (binaryTarget
-//             checksum field) + verified against the live asset by
-//             `curl -fsSL <url> | sha256sum` on 2026-05-27.
-//   Tag:      `storage.1.2.1` (storage.1.1.5 was deleted upstream —
-//             these storage.* tags are mutable/prunable, so re-pin to
-//             whatever the publisher still hosts).
+// **Pin source — VENDORED.** The xcframework now lives at
+// `Vendor/GhosttyKit.xcframework.zip` in this repo (not a URL).
+//   Tag at vendor time:  storage.1.2.2  (Lakr233/libghostty-spm)
+//   sha256:              7f712b8df5943ba02070c468de7d785abedebf207d3a3ded6515c7467309e902
 //
-// Bump cadence: Lakr233's pipeline cron is weekly Mondays; pin once
-// per upstream Ghostty semver tag, not per upstream cut. If Lakr233
-// ever stops publishing, fall back to Option A in §"Stage 2 unblock"
-// — copy their build matrix into our own GitHub Actions job.
+// Why vendored: storage.* tags on libghostty-spm are mutable —
+// `storage.1.1.5` was deleted upstream on 2026-05-27 and
+// `storage.1.2.1` had its `GhosttyKit.xcframework.zip` asset renamed
+// on 2026-05-28 (canonical URL → 404). Three CI breakages in 36 hours
+// burned three iOS releases. SPM `binaryTarget(url:checksum:)` has no
+// hedge against publisher mutation, so we mirror what every other
+// Swift Ghostty consumer audited (OmniWM, muxy, supacode, kooky, mori,
+// devhaven, axel — see `docs/archive/PLAN-TERMINAL-REWRITE.md:1086`)
+// does: commit the binary in-tree.
+//
+// Bump cadence (1-2x/year per upstream Ghostty semver):
+//   scripts/fetch-ghostty-kit-xcframework.sh bump <new-storage-tag>
+// which downloads the new asset, prints the new sha256, and writes
+// `Vendor/GhosttyKit.xcframework.zip`. Then update the sha256 in this
+// file and the script. No URL is ever resolved at build time.
 import PackageDescription
 
 let package = Package(
@@ -86,17 +92,15 @@ let package = Package(
         // slices (this was PR #94's blocker against upstream's
         // arm64-only `tip` build).
         //
-        // 2026-05-27: bumped storage.1.1.5 → storage.1.2.1. Upstream
-        // Lakr233/libghostty-spm DELETED the `storage.1.1.5` release
-        // (asset + tag now 404), which broke every iOS build at the SPM
-        // dependency-resolution step (`badResponseStatusCode(404)`).
-        // These `storage.*` tags are mutable/prunable, so the pin has to
-        // track whatever the publisher still hosts; storage.1.2.1 is the
-        // current binary. checksum = sha256 of the .zip artifact.
+        // 2026-05-28: switched from URL-pinned to vendored. Three
+        // breakages in 36h on Lakr233's storage.* tags (1.1.5 deleted,
+        // 1.2.1 asset renamed) confirmed the URL-pinned approach isn't
+        // viable. Now points at a local zip under `Vendor/` so a
+        // network-fetch can never break the iOS build. See file header
+        // for bump instructions.
         .binaryTarget(
             name: "libghostty",
-            url: "https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.2.1/GhosttyKit.xcframework.zip",
-            checksum: "8333a035ae372ef39f7dff26affaa1f3dac4129a52251aa3264828700b784071"
+            path: "Vendor/GhosttyKit.xcframework.zip"
         ),
         // Thin Swift wrapper. Re-exports the libghostty App/Surface
         // C symbols through a typed Swift API

@@ -2,33 +2,37 @@ import Testing
 import SwiftUI
 @testable import SweKitty
 
-/// Pins the LitterUI glass surface defaults set in
-/// `PLAN-LITTER-VISUAL-PARITY` PR 2:
+/// Pins the LitterUI glass surface defaults still meaningful after the
+/// iOS-26 deployment-target migration:
 ///   - `litterGlassRoundedRect` default corner radius dropped 16 → 14.
 ///   - `LitterUI.Card` default corner radius dropped 16 → 14.
-///   - Glass config shadow opacities stayed where PR 1 left them
-///     (card 0.08 / pill 0.04 / floating 0.18).
+///   - Per-shape highlight opacity (card / pill / floating) still
+///     differs so the three variants don't render identically.
 ///
-/// If a future refactor flips any of these back, the downstream PRs
-/// (Home rebuild, ChatTab rebuild, Sheet polish) will silently regress
-/// to the over-rounded / over-shadowed look the audit flagged in
-/// §A.3.2 / §A.1.8. This catches it before that happens.
+/// The earlier shadow-opacity assertions targeted the pre-26 material
+/// fallback's manual drop shadow — that path is gone now (Liquid Glass
+/// paints its own ambient shadow), so the `shadowOpacity` / `borderOpacity`
+/// / `fallbackFillOpacity` fields were removed from `LitterUI.GlassConfig`
+/// and their pin-tests with them.
 @Suite("LitterGlass defaults")
 struct LitterGlassDefaultsTests {
 
-    @Test func cardConfigShadowOpacityStaysHalved() {
-        #expect(LitterUI.GlassConfig.card.shadowOpacity == 0.08)
+    @Test func cardConfigHighlightIsSubtle() {
+        // Cards (home rows, settings sections) carry the lightest
+        // highlight wash so dense surfaces don't read as glowing.
+        #expect(LitterUI.GlassConfig.card.highlightOpacity == 0.12)
     }
 
-    @Test func pillConfigShadowIsBarelyThere() {
-        #expect(LitterUI.GlassConfig.pill.shadowOpacity == 0.04)
+    @Test func pillConfigHighlightSitsBetween() {
+        // Pill (chips, server pills) — between card and floating so
+        // small surfaces stay legible without screaming.
+        #expect(LitterUI.GlassConfig.pill.highlightOpacity == 0.16)
     }
 
-    @Test func floatingConfigShadowKeepsPresence() {
-        // Floating affordances (FAB, BottomActionBar buttons) keep a
-        // visible shadow so they read as "above" the content; we
-        // intentionally don't halve this one.
-        #expect(LitterUI.GlassConfig.floating.shadowOpacity == 0.18)
+    @Test func floatingConfigHighlightLeads() {
+        // Floating affordances (FAB, BottomActionBar buttons) get the
+        // brightest highlight so they read as "above" the content.
+        #expect(LitterUI.GlassConfig.floating.highlightOpacity == 0.22)
     }
 
     @Test func litterCardDefaultCornerRadiusIs14() {

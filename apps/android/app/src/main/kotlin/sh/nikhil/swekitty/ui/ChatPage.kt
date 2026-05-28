@@ -57,6 +57,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.PinnedContext
@@ -290,7 +292,18 @@ private object ConversationRenderer {
 }
 
 @Composable
-fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = false) {
+fun ChatPage(
+    store: SessionStore,
+    session: ProjectSession,
+    readOnly: Boolean = false,
+    /**
+     * When non-null, skip [SessionStore.conversationLog] / [SessionStore.chatLog]
+     * and render exactly these items. Used by [SavedTranscriptScreen] to
+     * replay a fetched archived transcript without polluting the live
+     * log maps. Mirror of iOS `LitterUI.ChatView(session, readOnlyItems:)`.
+     */
+    readOnlyItems: List<ConversationItem>? = null,
+) {
     val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
     val typedLog by store.conversationLog.collectAsState()
     val fallbackLog by store.chatLog.collectAsState()
@@ -304,11 +317,19 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
     // sank every user message to the bottom. `mergedConversation` dedupes
     // by role+content and sorts by `ts`, interleaving user and assistant
     // turns correctly. Mirror of iOS `LitterUI.ChatViewModel.mergedEvents`.
-    val events = remember(typedLog, fallbackLog, session.id) {
-        mergedConversation(
-            conversation = typedLog[session.id] ?: emptyList(),
-            chatLog = fallbackLog[session.id] ?: emptyList(),
-        )
+    val events = remember(typedLog, fallbackLog, session.id, readOnlyItems) {
+        // Read-only history opens hand us a pre-fetched transcript;
+        // bypass the live log maps so the saved render doesn't see
+        // stale entries from a recently-attached live session of the
+        // same id, and so the live maps don't accumulate archived rows.
+        if (readOnlyItems != null) {
+            readOnlyItems
+        } else {
+            mergedConversation(
+                conversation = typedLog[session.id] ?: emptyList(),
+                chatLog = fallbackLog[session.id] ?: emptyList(),
+            )
+        }
     }
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -561,7 +582,14 @@ fun ChatPage(store: SessionStore, session: ProjectSession, readOnly: Boolean = f
         // no live WS to send into — so the composer + quick-reply bar are
         // suppressed entirely (mirrors iOS `LitterChatView` read-only mode).
         if (!readOnly) {
-            HorizontalDivider()
+            // Agent-tinted hairline above the composer — a quiet "you're
+            // talking to X" cue. Pairs with the composer's tinted shadow
+            // (see ConversationComposer's outer modifier) so the cluster
+            // reads as agent-coloured without painting the surface.
+            HorizontalDivider(
+                thickness = 1.5.dp,
+                color = agentAccent.copy(alpha = 0.55f),
+            )
             ConversationComposer(
                 draft = draft,
                 // AI-generated chips from the broker (task #233) are
@@ -1746,6 +1774,20 @@ private fun ConversationComposer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Agent-tinted halo around the composer cluster — pairs with
+            // the tinted divider above and the iOS `.shadow(color:agent…)`
+            // on LitterChatView's composer. The ambient + spot colors push
+            // the dropshadow into the agent accent; elevation stays modest
+            // so the effect reads as ambient mood, not a hard chip.
+            // Sits BEFORE the background fill so the shadow projects
+            // outside the composer's solid backdrop instead of being
+            // covered by it.
+            .shadow(
+                elevation = 10.dp,
+                shape = RectangleShape,
+                ambientColor = agentAccent.copy(alpha = 0.45f),
+                spotColor = agentAccent.copy(alpha = 0.55f),
+            )
             // No color seam where chat meets the keyboard (iOS #236
             // parity): paint the composer cluster with the SAME backdrop
             // as the chat surface (the wrapping `surfaceVariant 0.35f`

@@ -73,5 +73,6 @@ struct HostKeyPromptSheet: View {
             .navigationTitle("Verify Host Key")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .appearanceColorScheme()
     }
 }

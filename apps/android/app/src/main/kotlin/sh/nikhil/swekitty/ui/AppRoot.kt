@@ -27,6 +27,14 @@ fun AppRoot(store: SessionStore) {
     var showAgentPicker by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showVoice by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    var showLicenses by remember { mutableStateOf(false) }
+    // Read-only transcript drilldown from History. The full saved row
+    // travels (not just the id) so the transcript can render the title,
+    // agent, and timestamps without a second fetch.
+    var transcriptTarget by remember {
+        mutableStateOf<sh.nikhil.swekitty.SavedSession?>(null)
+    }
 
     val selectedId by store.selectedId.collectAsState()
     val sessions by store.sessions.collectAsState()
@@ -63,6 +71,7 @@ fun AppRoot(store: SessionStore) {
                     store = store,
                     onOpenSettings = { showSettings = true },
                     onOpenDrawer = { scope.launch { drawerState.open() } },
+                    onOpenHistory = { showHistory = true },
                     onAddServer = { showAddServer = true },
                     onNewSession = {
                         if (harness is HarnessState.Live || harness is HarnessState.Linked) {
@@ -82,7 +91,12 @@ fun AppRoot(store: SessionStore) {
         SettingsScreen(
             store = store,
             onDismiss = { showSettings = false },
+            onOpenLicenses = { showLicenses = true },
         )
+    }
+
+    if (showLicenses) {
+        LicensesScreen(onDismiss = { showLicenses = false })
     }
 
     if (showAddServer) {
@@ -99,6 +113,25 @@ fun AppRoot(store: SessionStore) {
 
     if (showSearch) {
         SessionSearchScreen(store = store, onDismiss = { showSearch = false })
+    }
+
+    if (showHistory) {
+        HistoryScreen(
+            store = store,
+            onDismiss = { showHistory = false },
+            onOpenTranscript = { row ->
+                showHistory = false
+                transcriptTarget = row
+            },
+        )
+    }
+
+    transcriptTarget?.let { row ->
+        SavedTranscriptScreen(
+            store = store,
+            session = row,
+            onDismiss = { transcriptTarget = null },
+        )
     }
 
     if (showVoice) {

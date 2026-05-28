@@ -498,6 +498,17 @@ extension LitterUI {
                     endPoint: .bottom
                 )
             )
+            // Agent-tinted glow rising up from the composer — a quiet
+            // "you're talking to X" cue without painting the surface.
+            // Copper-orange for Claude, mono-white for Codex, etc. Low
+            // alpha + soft radius so it reads as ambient, not loud.
+            .shadow(
+                color: SweKittyTheme.accent(forAgent: session.assistant)
+                    .opacity(0.35),
+                radius: 14,
+                x: 0,
+                y: -2
+            )
         }
 
         private var composerInputRow: some View {

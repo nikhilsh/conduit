@@ -93,6 +93,7 @@ struct VoiceDictationSheet: View {
             }
             .onDisappear { transcriber.stop() }
         }
+        .appearanceColorScheme()
     }
 
     private var displayTranscript: String {

@@ -22,6 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
@@ -43,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.HarnessState
@@ -62,6 +66,7 @@ fun HomeScreen(
     store: SessionStore,
     onOpenSettings: () -> Unit,
     onOpenDrawer: () -> Unit,
+    onOpenHistory: () -> Unit,
     onAddServer: () -> Unit,
     onNewSession: () -> Unit,
     onSearch: () -> Unit,
@@ -116,6 +121,11 @@ fun HomeScreen(
                 )
             }
             Spacer(Modifier.weight(1f))
+            // Trailing slot now carries both History (cross-server, includes
+            // archived) and the live-sessions drawer. iOS only needs the
+            // history entry because its home view IS the live list; Android
+            // needs the drawer too for multi-project nav.
+            CircleIconButton(Icons.Default.History, "History", onClick = onOpenHistory)
             CircleIconButton(Icons.Default.List, "Sessions", onClick = onOpenDrawer)
         }
 
@@ -185,24 +195,39 @@ fun HomeScreen(
         // Sessions list
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (sessions.isEmpty()) {
+                // iOS LitterHomeView empty-state parity: hero glyph
+                // (sparkles when we can issue commands, cloud.slash when
+                // waiting), headline title, footnote body. Sits a touch
+                // above optical center so it doesn't feel marooned in
+                // the middle of a tall, otherwise-blank tablet pane.
+                val canCommand = canIssueCommands(harness)
                 Column(
-                    modifier = Modifier.fillMaxSize().padding(24.dp),
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 36.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    Icon(
+                        if (canCommand) Icons.Default.AutoAwesome else Icons.Default.CloudOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(40.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(14.dp))
                     Text(
-                        if (canIssueCommands(harness)) "No sessions yet" else "Waiting for server",
+                        if (canCommand) "No sessions yet" else "Waiting for server",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        if (canIssueCommands(harness))
+                        if (canCommand)
                             "Tap + below to spin up a new conversation."
                         else
                             "Once we can reach the server, your sessions appear here.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
                     )
                 }
             } else {

@@ -12,6 +12,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import sh.nikhil.swekitty.ui.AppRoot
+import sh.nikhil.swekitty.ui.LocalUseDarkTheme
 
 class MainActivity : ComponentActivity() {
     private val store: SessionStore by viewModels()
@@ -24,14 +25,23 @@ class MainActivity : ComponentActivity() {
         appearance.hydrate(applicationContext)
         handlePairingIntent(intent)
         setContent {
-            CompositionLocalProvider(LocalAppearanceStore provides appearance) {
-                val themeMode by appearance.themeMode.collectAsState()
-                val darkSystem = isSystemInDarkTheme()
-                val useDark = when (themeMode) {
-                    AppearanceStore.ThemeMode.System -> darkSystem
-                    AppearanceStore.ThemeMode.Light -> false
-                    AppearanceStore.ThemeMode.Dark -> true
-                }
+            val themeMode by appearance.themeMode.collectAsState()
+            val darkSystem = isSystemInDarkTheme()
+            val useDark = when (themeMode) {
+                AppearanceStore.ThemeMode.System -> darkSystem
+                AppearanceStore.ThemeMode.Light -> false
+                AppearanceStore.ThemeMode.Dark -> true
+            }
+            // Provide the effective dark flag alongside the appearance
+            // store so SweKittyPalette palette resolution stays in sync
+            // with MaterialTheme — both flip on every effective change,
+            // including sheets / dialogs / any window inheriting this
+            // composition (the prior code read `isSystemInDarkTheme()`
+            // inside palette lookups, which ignored the user override).
+            CompositionLocalProvider(
+                LocalAppearanceStore provides appearance,
+                LocalUseDarkTheme provides useDark,
+            ) {
                 MaterialTheme(colorScheme = if (useDark) darkColorScheme() else lightColorScheme()) {
                     // GlassAppBackground inside AppRoot supplies the canvas; no
                     // opaque Surface wrap so the glass layering reads correctly.

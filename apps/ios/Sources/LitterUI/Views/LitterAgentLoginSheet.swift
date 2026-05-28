@@ -74,6 +74,7 @@ extension LitterUI {
                 }
             }
             .tint(LitterUI.Palette.brand.color)
+            .appearanceColorScheme()
         }
 
         // MARK: Subviews

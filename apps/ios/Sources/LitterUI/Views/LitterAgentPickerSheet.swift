@@ -53,7 +53,7 @@ extension LitterUI {
                             agentRow(
                                 kind: "codex",
                                 label: "Codex",
-                                subtitle: "OpenAI — green accent"
+                                subtitle: "OpenAI — codex"
                             )
                             if !store.harness.canIssueCommands {
                                 Text("Connect to a server first — open Settings to pair.")
@@ -93,6 +93,7 @@ extension LitterUI {
             }
             .presentationDetents([.medium, .large])
             .tint(LitterUI.Palette.brand.color)
+            .appearanceColorScheme()
         }
 
         // MARK: - Subviews

@@ -42,6 +42,11 @@ extension LitterUI {
                     }
                 }
             }
+            // Re-binds the SwiftUI \.colorScheme environment to the
+            // AppearanceStore so picking Light / Dark INSIDE this sheet
+            // updates the sheet itself live, not just the underlying
+            // root view tree.
+            .appearanceColorScheme()
         }
 
         // MARK: Sections

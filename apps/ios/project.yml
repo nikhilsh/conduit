@@ -40,10 +40,14 @@ packages:
   GhosttyVT:
     # Stage 2-unblock of docs/PLAN-TERMINAL-REWRITE.md. Local SPM
     # package at apps/ios/GhosttyVT/ hosts a binaryTarget pointing at
-    # Lakr233/libghostty-spm's prebuilt multi-arch
-    # `GhosttyKit.xcframework.zip` release asset (URL + sha256 pinned
-    # in Package.swift, mirrored in
-    # scripts/fetch-ghostty-kit-xcframework.sh). The new pin replaces
+    # the VENDORED multi-arch xcframework from Lakr233/libghostty-spm
+    # at apps/ios/GhosttyVT/Vendor/GhosttyKit.xcframework.zip. As of
+    # 2026-05-28 we vendor the binary rather than URL-pin against
+    # storage.<version> tags — Lakr233 mutates those tags in place
+    # (storage.1.1.5 deleted, storage.1.2.1 asset renamed), which
+    # broke iOS builds three times in 36 hours. See Package.swift's
+    # header for the bump procedure (run
+    # scripts/fetch-ghostty-kit-xcframework.sh bump <tag>). Replaces
     # the upstream `tip` `ghostty-vt.xcframework.zip` which only
     # shipped an `ios-arm64/` slice (PR #94 had to disable that
     # binaryTarget; the iOS-simulator linker rejected the arm64-only

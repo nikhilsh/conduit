@@ -114,6 +114,7 @@ extension LitterUI {
                     }
                 }
             }
+            .appearanceColorScheme()
         }
 
         private func sectionLabel(_ text: String) -> some View {

@@ -240,6 +240,7 @@ struct SessionsScreen: View {
         } message: { target in
             Text("Removes this session from History. This can't be undone.\n\n\(target.title)")
         }
+        .appearanceColorScheme()
     }
 
     private var searchField: some View {

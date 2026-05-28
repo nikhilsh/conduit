@@ -101,6 +101,7 @@ extension LitterUI {
                 }
             }
             .tint(LitterUI.Palette.brand.color)
+            .appearanceColorScheme()
         }
 
         private func sectionLabel(_ text: String) -> some View {

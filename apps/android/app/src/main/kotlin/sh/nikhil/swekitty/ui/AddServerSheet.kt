@@ -34,6 +34,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import sh.nikhil.swekitty.Endpoint
 import sh.nikhil.swekitty.PairingURL
 import sh.nikhil.swekitty.SessionStore
@@ -54,20 +56,19 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
 
     val endpoint by store.endpoint.collectAsState()
 
-    val scanner = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = SweKittyScanContract(),
-    ) { code ->
-        if (!code.isNullOrBlank()) {
-            val parsed = PairingURL.parse(code)
-            if (parsed != null) {
-                val ep = Endpoint(parsed.endpoint, parsed.token)
-                store.setEndpoint(ep.url, ep.token)
-                store.upsertSavedServer(ep.displayHost, ep, makeDefault = true)
-                store.disconnect()
-                store.connect()
-                onDismiss()
-            }
-        }
+    /**
+     * Common landing for the QR scanner sheet. Returns true when the
+     * code was a valid pairing URL and the sheet should close.
+     */
+    fun applyPairingCode(code: String?): Boolean {
+        if (code.isNullOrBlank()) return false
+        val parsed = PairingURL.parse(code) ?: return false
+        val ep = Endpoint(parsed.endpoint, parsed.token)
+        store.setEndpoint(ep.url, ep.token)
+        store.upsertSavedServer(ep.displayHost, ep, makeDefault = true)
+        store.disconnect()
+        store.connect()
+        return true
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -85,11 +86,15 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
                 icon = { Icon(Icons.Filled.QrCodeScanner, null, tint = Color.White) },
                 tint = SweKittyTheme.accentStrong(),
                 title = "Scan pairing QR",
-                subtitle = "Camera-scan the QR from the broker terminal.",
-            ) { scanner.launch(Unit) }
+                subtitle = "Camera or pick from Photos.",
+            ) { showScanner = true }
             EntryCard(
                 icon = { Icon(Icons.Filled.Wifi, null, tint = Color.White) },
-                tint = SweKittyTheme.codexAccent(),
+                // Semantic "discovery / network" green — previously this
+                // reused codexAccent because that happened to be green,
+                // but codex now ships a monochrome accent so the colors
+                // would collide. Use the palette's `success` green directly.
+                tint = SweKittyTheme.success(),
                 title = "Discover on LAN",
                 subtitle = "Find a broker advertising via mDNS on the same Wi-Fi.",
             ) { showDiscover = true }
@@ -109,6 +114,25 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
         }
     }
 
+    if (showScanner) {
+        // Full-screen dialog so the camera preview owns the whole
+        // window — matches the iOS QRScannerSheet presentation. The
+        // sheet itself handles camera permission and the gallery
+        // fallback, so the host only feeds the resulting code through
+        // the shared pairing handler.
+        Dialog(
+            onDismissRequest = { showScanner = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            QRScannerSheet(
+                onScanned = { code ->
+                    showScanner = false
+                    if (applyPairingCode(code)) onDismiss()
+                },
+                onDismiss = { showScanner = false },
+            )
+        }
+    }
     if (showDiscover) {
         DiscoveryScreen(store, onDismiss = {
             showDiscover = false

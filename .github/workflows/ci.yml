@@ -119,13 +119,19 @@ jobs:
         working-directory: apps/ios
         env:
           SENTRY_DSN_IOS: ${{ secrets.SENTRY_DSN_IOS }}
+        # tee the build output so the warning-capture step below can
+        # extract `: warning:` lines without re-running xcodebuild.
+        # set -o pipefail keeps a real build failure propagating
+        # through tee.
         run: |
+          set -o pipefail
+          mkdir -p build/ci-logs
           xcodebuild -scheme SweKitty \
             -destination 'generic/platform=iOS Simulator' \
             -skipPackagePluginValidation \
             -skipMacroValidation \
             SENTRY_DSN="$SENTRY_DSN_IOS" \
-            build
+            build 2>&1 | tee build/ci-logs/xcodebuild-build.log
       - name: xcodebuild test (SweKittyTests, simulator)
         if: steps.detect.outputs.skip != 'true' && hashFiles('apps/ios/Tests/SweKittyTests/**/*.swift') != ''
         working-directory: apps/ios
@@ -146,13 +152,45 @@ jobs:
             xcrun simctl list devices available >&2
             exit 1
           fi
+          set -o pipefail
+          mkdir -p build/ci-logs
           xcodebuild -scheme SweKitty \
             -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
             -skipPackagePluginValidation \
             -skipMacroValidation \
             -resultBundlePath build/SweKitty.xcresult \
             SENTRY_DSN="$SENTRY_DSN_IOS" \
-            test
+            test 2>&1 | tee build/ci-logs/xcodebuild-test.log
+      - name: Capture Swift compiler warnings
+        if: steps.detect.outputs.skip != 'true' && !cancelled()
+        working-directory: apps/ios
+        # Swift warnings are emitted as `path:line:col: warning: ...`.
+        # We strip the runner's `/Users/runner/.../swe-kitty/` prefix
+        # so file paths read as `apps/ios/Sources/…` — the same shape
+        # Android's extract uses. Excludes anything inside the SPM
+        # checkout (DerivedData/SourcePackages/checkouts) since those
+        # are third-party warnings we can't fix; only first-party
+        # paths land in the summary.
+        run: |
+          mkdir -p build/ci-logs
+          cat build/ci-logs/xcodebuild-build.log build/ci-logs/xcodebuild-test.log 2>/dev/null \
+            | grep -E '^[^[:space:]].*\.swift:[0-9]+:[0-9]+: warning:' \
+            | grep -v 'SourcePackages/checkouts/' \
+            | sed -E 's|^.*/swe-kitty/||' \
+            | sort -u \
+            > build/ci-logs/swift-warnings.txt || true
+          count=$(wc -l < build/ci-logs/swift-warnings.txt | tr -d ' ')
+          {
+            echo "## Swift compiler warnings — $count"
+            echo
+            if [ "$count" -eq 0 ]; then
+              echo "_None — clean build._"
+            else
+              echo '```'
+              cat build/ci-logs/swift-warnings.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload xcresult bundle on test failure
         if: failure() && steps.detect.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
@@ -160,6 +198,17 @@ jobs:
           name: ios-xcresult
           path: apps/ios/build/SweKitty.xcresult
           # 14 days is enough for a PR to land; longer just costs storage.
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Upload Swift warnings extract
+        if: steps.detect.outputs.skip != 'true' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-compiler-warnings
+          path: |
+            apps/ios/build/ci-logs/swift-warnings.txt
+            apps/ios/build/ci-logs/xcodebuild-build.log
+            apps/ios/build/ci-logs/xcodebuild-test.log
           retention-days: 14
           if-no-files-found: ignore
 
@@ -208,7 +257,41 @@ jobs:
         working-directory: apps/android
         env:
           SENTRY_DSN_ANDROID: ${{ secrets.SENTRY_DSN_ANDROID }}
-        run: ./gradlew assembleDebug --no-daemon
+        # `tee` the build log so the warning-capture step below can
+        # extract `w:` lines without re-running gradle. set -o pipefail
+        # so a real assembleDebug failure still propagates the exit
+        # code even though we're piping through tee.
+        run: |
+          set -o pipefail
+          mkdir -p build/ci-logs
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee build/ci-logs/gradle.log
+      - name: Capture Kotlin compiler warnings
+        if: steps.detect.outputs.skip != 'true' && !cancelled()
+        working-directory: apps/android
+        # Kotlin warnings are prefixed with `w:` in gradle output. We
+        # strip the GitHub-Actions timestamp prefix (added by tee on
+        # the runner) and the `file://…` URL prefix to leave clean
+        # `path:line:col message` lines that paste straight into PR
+        # comments. Posts to the job summary so warnings show up on
+        # the PR's Checks tab without digging into raw logs, and
+        # uploads the full extract as an artifact.
+        run: |
+          mkdir -p build/ci-logs
+          grep -E ' w: file://' build/ci-logs/gradle.log \
+            | sed -E 's|^[^w]*w: file://[^/]*/swe-kitty/||' \
+            > build/ci-logs/kotlin-warnings.txt || true
+          count=$(wc -l < build/ci-logs/kotlin-warnings.txt | tr -d ' ')
+          {
+            echo "## Kotlin compiler warnings — $count"
+            echo
+            if [ "$count" -eq 0 ]; then
+              echo "_None — clean build._"
+            else
+              echo '```'
+              cat build/ci-logs/kotlin-warnings.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: gradle unit tests
         if: steps.detect.outputs.skip != 'true' && hashFiles('apps/android/app/src/test/**/*.kt') != ''
         working-directory: apps/android
@@ -226,6 +309,19 @@ jobs:
             apps/android/app/build/reports/tests
             apps/android/app/build/outputs/roborazzi
             apps/android/app/src/test/snapshots
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Upload Kotlin warnings extract
+        if: steps.detect.outputs.skip != 'true' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-compiler-warnings
+          # Pair the raw gradle log with the stripped warnings file
+          # so a follow-up can re-parse if the extraction misses
+          # something (e.g. a new diagnostic format).
+          path: |
+            apps/android/build/ci-logs/kotlin-warnings.txt
+            apps/android/build/ci-logs/gradle.log
           retention-days: 14
           if-no-files-found: ignore
 

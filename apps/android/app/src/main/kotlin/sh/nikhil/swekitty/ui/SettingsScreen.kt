@@ -1,8 +1,6 @@
 package sh.nikhil.swekitty.ui
 
 import sh.nikhil.swekitty.BuildConfig
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -12,10 +10,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
@@ -54,7 +52,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -81,9 +78,12 @@ import sh.nikhil.swekitty.SessionStore
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
+fun SettingsScreen(
+    store: SessionStore,
+    onDismiss: () -> Unit,
+    onOpenLicenses: () -> Unit = {},
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val ctx = LocalContext.current
     val appearance = LocalAppearanceStore.current
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
@@ -121,27 +121,30 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
             )
 
-            // Support
-            SettingsSection("Support") {
-                SettingsRow(
-                    icon = Icons.Filled.Favorite,
-                    title = "Sponsor on GitHub",
-                    subtitle = "Help fund continued development",
-                    onClick = {
-                        ctx.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/sponsors/nikhilsh"))
-                        )
-                    },
-                )
-            }
-
-            // Appearance
-            SettingsSection("Appearance") {
+            // Theme — matches iOS LitterSettings section name (the
+            // wrapper used to be "Appearance" with a single Theme row,
+            // which read as a redundant label). Support / Sponsor on
+            // GitHub moves to the very bottom so the settings sheet
+            // leads with content, not solicitation.
+            SettingsSection("Theme") {
                 SettingsRow(
                     icon = Icons.Filled.Palette,
                     title = "Theme",
                     subtitle = themeMode.label,
                     onClick = { showAppearance = true },
+                )
+            }
+
+            // Agent accounts — promoted to the top of the IA (iOS has
+            // this in its Account section, prominent above Theme). Per-
+            // user OAuth for Claude / ChatGPT, Stage 0/1 spike per
+            // `docs/PLAN-AGENT-OAUTH.md` §F.
+            SettingsSection("Agent accounts") {
+                SettingsRow(
+                    icon = Icons.Filled.Person,
+                    title = "Manage logins",
+                    subtitle = "Sign in to ChatGPT / Claude",
+                    onClick = { showAgentLogin = true },
                 )
             }
 
@@ -382,20 +385,20 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 }
             }
 
-            // Agent accounts — per-user OAuth for Claude / ChatGPT.
-            // Stage 0/1 spike per `docs/PLAN-AGENT-OAUTH.md` §F. Mirror
-            // of the iOS "Agent accounts" entry that opens
-            // `AgentLoginSheet`.
-            SettingsSection("Agent accounts") {
-                SettingsRow(
-                    icon = Icons.Filled.Person,
-                    title = "Manage logins",
-                    subtitle = "Sign in to ChatGPT / Claude",
-                    onClick = { showAgentLogin = true },
+            // Experimental — kept above About so users see the live
+            // toggles before the static identity card (iOS order).
+            SettingsSection("Experimental") {
+                ToggleRow(
+                    icon = Icons.Filled.Science,
+                    title = "Native Terminal (Termux)",
+                    subtitle = "Stage 0 — see PLAN-TERMINAL-REWRITE",
+                    isOn = experimentalNativeTerminal,
+                    onChange = { appearance.setExperimentalNativeTerminal(it) },
                 )
             }
 
-            // About
+            // About — static identity card + a tap-through to the
+            // third-party licenses + trademark attribution screen.
             SettingsSection("About") {
                 KeyValueRow(label = "App", value = "SweKitty")
                 KeyValueRow(
@@ -406,16 +409,12 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                         "${BuildConfig.VERSION_NAME} (dev)"
                     },
                 )
-            }
-
-            // Experimental
-            SettingsSection("Experimental") {
-                ToggleRow(
-                    icon = Icons.Filled.Science,
-                    title = "Native Terminal (Termux)",
-                    subtitle = "Stage 0 — see PLAN-TERMINAL-REWRITE",
-                    isOn = experimentalNativeTerminal,
-                    onChange = { appearance.setExperimentalNativeTerminal(it) },
+                SettingsDivider()
+                SettingsRow(
+                    icon = Icons.Filled.Article,
+                    title = "Licenses",
+                    subtitle = "Open source & trademark attribution",
+                    onClick = onOpenLicenses,
                 )
             }
 
@@ -457,27 +456,32 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
 }
 
 /**
- * A grouped settings section: a Material `titleSmall` header in the
- * primary color above a tonal [Card]. Replaces the iOS-style ALL-CAPS
- * monospace glass label + translucent blur card with native Material 3
- * grouping.
+ * A grouped settings section. Mirrors iOS
+ * `LitterSettingsView.sectionCard` — a small ALL-CAPS monospaced muted
+ * label (11sp bold, `onSurfaceVariant`) above a flatter glass card
+ * (~0.32α surfaceVariant, 14dp radius, no elevation). The earlier
+ * primary-tinted bold header + opaque tonal card looked dated next
+ * to iOS; this keeps the native M3 [Card] for ListItem-style rows
+ * but reads as a quieter grouping.
  */
 @Composable
 internal fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+            title.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
         )
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 content()
