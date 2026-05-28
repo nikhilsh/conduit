@@ -147,13 +147,13 @@ extension LitterUI {
             for item in items {
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
-                        await report("Couldn't read that photo. Try again.")
+                        report("Couldn't read that photo. Try again.")
                         continue
                     }
                     let (filename, mime) = Self.photoMetadata(for: item)
-                    await ingest(kind: .image, filename: filename, mime: mime, bytes: data)
+                    ingest(kind: .image, filename: filename, mime: mime, bytes: data)
                 } catch {
-                    await report("Couldn't read that photo. Try again.")
+                    report("Couldn't read that photo. Try again.")
                 }
             }
         }
@@ -170,9 +170,9 @@ extension LitterUI {
                     }.value
                     let filename = url.lastPathComponent
                     let mime = Self.fileMime(for: url)
-                    await ingest(kind: .file, filename: filename, mime: mime, bytes: data)
+                    ingest(kind: .file, filename: filename, mime: mime, bytes: data)
                 } catch {
-                    await report("Couldn't read \"\(url.lastPathComponent)\". Try again.")
+                    report("Couldn't read \"\(url.lastPathComponent)\". Try again.")
                 }
             }
         }

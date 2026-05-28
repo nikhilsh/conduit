@@ -9,7 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Terminal
@@ -441,7 +441,7 @@ private fun TabPickerRow(
                         Icon(
                             when (t) {
                                 ProjectTab.Terminal -> Icons.Outlined.Terminal
-                                ProjectTab.Chat     -> Icons.Outlined.Chat
+                                ProjectTab.Chat     -> Icons.AutoMirrored.Outlined.Chat
                                 ProjectTab.Browser  -> Icons.Outlined.Public
                             },
                             contentDescription = null,

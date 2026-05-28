@@ -1,7 +1,7 @@
 package sh.nikhil.swekitty.ui
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
@@ -22,6 +22,6 @@ fun MemoryButton(
         onToggle(if (currentMode == BrowserMode.Memory) BrowserMode.Preview else BrowserMode.Memory)
         onJumpToBrowser()
     }) {
-        Icon(Icons.Outlined.Article, contentDescription = "Memory")
+        Icon(Icons.AutoMirrored.Outlined.Article, contentDescription = "Memory")
     }
 }
