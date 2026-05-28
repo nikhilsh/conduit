@@ -34,10 +34,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import sh.nikhil.swekitty.ConversationItem
 import sh.nikhil.swekitty.ConversationNotFoundException
 import sh.nikhil.swekitty.SavedSession
 import sh.nikhil.swekitty.SessionStore
+import uniffi.swe_kitty_core.ConversationItem
 import uniffi.swe_kitty_core.ProjectSession
 
 /**

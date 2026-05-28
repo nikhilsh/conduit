@@ -300,7 +300,7 @@ fun ChatPage(
      * replay a fetched archived transcript without polluting the live
      * log maps. Mirror of iOS `LitterUI.ChatView(session, readOnlyItems:)`.
      */
-    readOnlyItems: List<sh.nikhil.swekitty.ConversationItem>? = null,
+    readOnlyItems: List<ConversationItem>? = null,
 ) {
     val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
     val typedLog by store.conversationLog.collectAsState()
