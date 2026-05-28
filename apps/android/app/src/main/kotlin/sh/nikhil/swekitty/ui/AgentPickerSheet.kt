@@ -129,7 +129,7 @@ private fun AgentStep(
         AgentTile(
             assistant = "codex",
             label = "Codex",
-            subtitle = "OpenAI — green accent, codex",
+            subtitle = "OpenAI — codex",
             tint = SweKittyTheme.codexAccent(),
             enabled = canIssue,
             onTap = { onPick("codex") },

@@ -90,7 +90,11 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
             ) { showScanner = true }
             EntryCard(
                 icon = { Icon(Icons.Filled.Wifi, null, tint = Color.White) },
-                tint = SweKittyTheme.codexAccent(),
+                // Semantic "discovery / network" green — previously this
+                // reused codexAccent because that happened to be green,
+                // but codex now ships a monochrome accent so the colors
+                // would collide. Use the palette's `success` green directly.
+                tint = SweKittyTheme.success(),
                 title = "Discover on LAN",
                 subtitle = "Find a broker advertising via mDNS on the same Wi-Fi.",
             ) { showDiscover = true }

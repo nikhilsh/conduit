@@ -57,6 +57,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sh.nikhil.swekitty.PinnedContext
@@ -580,7 +582,14 @@ fun ChatPage(
         // no live WS to send into — so the composer + quick-reply bar are
         // suppressed entirely (mirrors iOS `LitterChatView` read-only mode).
         if (!readOnly) {
-            HorizontalDivider()
+            // Agent-tinted hairline above the composer — a quiet "you're
+            // talking to X" cue. Pairs with the composer's tinted shadow
+            // (see ConversationComposer's outer modifier) so the cluster
+            // reads as agent-coloured without painting the surface.
+            HorizontalDivider(
+                thickness = 1.5.dp,
+                color = agentAccent.copy(alpha = 0.55f),
+            )
             ConversationComposer(
                 draft = draft,
                 // AI-generated chips from the broker (task #233) are
@@ -1765,6 +1774,20 @@ private fun ConversationComposer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Agent-tinted halo around the composer cluster — pairs with
+            // the tinted divider above and the iOS `.shadow(color:agent…)`
+            // on LitterChatView's composer. The ambient + spot colors push
+            // the dropshadow into the agent accent; elevation stays modest
+            // so the effect reads as ambient mood, not a hard chip.
+            // Sits BEFORE the background fill so the shadow projects
+            // outside the composer's solid backdrop instead of being
+            // covered by it.
+            .shadow(
+                elevation = 10.dp,
+                shape = RectangleShape,
+                ambientColor = agentAccent.copy(alpha = 0.45f),
+                spotColor = agentAccent.copy(alpha = 0.55f),
+            )
             // No color seam where chat meets the keyboard (iOS #236
             // parity): paint the composer cluster with the SAME backdrop
             // as the chat surface (the wrapping `surfaceVariant 0.35f`

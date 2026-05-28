@@ -14,17 +14,23 @@ enum SweKittyPalette {
     // Brand accent — switched from green (#00A86B / #34C759) to
     // Anthropic copper to match the litter visual reference (the
     // entire UI in their screenshots tints orange — badges, +,
-    // user bubble, status, stat numbers). Keep the green available
-    // as `codexAccent` for per-agent tinting where appropriate.
+    // user bubble, status, stat numbers). Per-agent tints below
+    // (`codexAccent`, `hermesAccent`, …) live alongside.
     static let accentStrong    = Pair(light: "#CC785C", dark: "#E89677")
     /// Anthropic copper. Used when the active agent is Claude.
     static let claudeAccent    = Pair(light: "#CC785C", dark: "#E89677")
     /// Anthropic copper — strong variant for high-emphasis surfaces.
     static let claudeAccentStrong = Pair(light: "#A85A3F", dark: "#CC785C")
-    /// OpenAI green. Used when the active agent is Codex.
-    static let codexAccent     = Pair(light: "#10B981", dark: "#34D399")
-    /// OpenAI green — strong variant for high-emphasis surfaces.
-    static let codexAccentStrong  = Pair(light: "#047857", dark: "#10B981")
+    /// OpenAI Codex brand is monochrome (white on dark, dark on light)
+    /// — the green earlier here didn't match marketing. Light theme gets
+    /// a near-black so it stays legible against the light surface; dark
+    /// theme gets an off-white so it doesn't blow out highlights but
+    /// still reads as the white wordmark.
+    static let codexAccent     = Pair(light: "#262626", dark: "#F5F5F5")
+    /// Monochrome Codex — strong variant for high-emphasis surfaces.
+    /// Pushes a touch farther toward pure black / pure white than the
+    /// regular accent so filled avatars + selected states still pop.
+    static let codexAccentStrong  = Pair(light: "#0A0A0A", dark: "#FAFAFA")
     /// Hermes purple. Mythological messenger — a Tailwind purple-500.
     /// No public Hermes adapter brand to anchor to, so this is a
     /// defensible choice that contrasts cleanly with claude/codex.

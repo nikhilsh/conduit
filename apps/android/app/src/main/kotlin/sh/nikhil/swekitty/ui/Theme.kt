@@ -24,8 +24,12 @@ internal object SweKittyPalette {
     val accentStrong    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
     val claudeAccent    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
     val claudeAccentStrong = AdaptiveColor(0xFFA85A3F, 0xFFCC785C)
-    val codexAccent     = AdaptiveColor(0xFF10B981, 0xFF34D399)
-    val codexAccentStrong  = AdaptiveColor(0xFF047857, 0xFF10B981)
+    // Codex brand is monochrome (white wordmark on dark, dark on light)
+    // — the green here didn't match marketing. Light theme gets near-black
+    // for legibility on light surfaces; dark theme gets off-white so it
+    // doesn't blow out highlights but still reads as the white wordmark.
+    val codexAccent     = AdaptiveColor(0xFF262626, 0xFFF5F5F5)
+    val codexAccentStrong  = AdaptiveColor(0xFF0A0A0A, 0xFFFAFAFA)
     // Hermes purple — Tailwind purple-500. No public Hermes adapter
     // brand to anchor to, so this is a defensible choice that contrasts
     // cleanly with claude/codex.
@@ -61,13 +65,17 @@ object SweKittyTheme {
     @Composable @ReadOnlyComposable fun hermesAccent()    : Color = SweKittyPalette.hermesAccent.color()
     @Composable @ReadOnlyComposable fun piAccent()        : Color = SweKittyPalette.piAccent.color()
     @Composable @ReadOnlyComposable fun opencodeAccent()  : Color = SweKittyPalette.opencodeAccent.color()
+    /** Semantic success / network-discovery green. Distinct from any
+     *  agent accent — use for "discover on LAN", "connected", etc. */
+    @Composable @ReadOnlyComposable fun success()         : Color = SweKittyPalette.success.color()
 
     /**
      * Per-agent accent. Each adapter that ships with the harness gets
-     * a distinct hue — Claude copper, Codex green, Hermes purple,
-     * Pi blue, opencode orange. Falls back to the neutral gray
-     * [accent] for unknown agents (rather than the copper brand
-     * accent, so an unknown agent doesn't masquerade as Claude).
+     * a distinct hue — Claude copper, Codex mono (white/black, matching
+     * OpenAI's monochrome brand), Hermes purple, Pi blue, opencode
+     * orange. Falls back to the neutral gray [accent] for unknown
+     * agents (rather than the copper brand accent, so an unknown agent
+     * doesn't masquerade as Claude).
      */
     @Composable @ReadOnlyComposable
     fun accent(forAgent: String): Color = when (forAgent.lowercase()) {
