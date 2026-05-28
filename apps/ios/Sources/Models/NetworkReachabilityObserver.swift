@@ -70,13 +70,13 @@ final class NetworkReachabilityObserver {
     /// the path-update callback after the bounce off the monitor queue.
     private(set) var status: ReachabilityStatus = .unknown
 
-    // `nonisolated(unsafe)` so the (nonisolated) deinit can call
-    // `monitor.cancel()` without crossing the actor boundary. The
-    // monitor is hot-immutable after init and NWPathMonitor itself is
-    // thread-safe for the operations we use (cancel / pathUpdateHandler
-    // delivery on a dedicated queue), so the `unsafe` is justified.
-    private nonisolated(unsafe) let monitor: NWPathMonitor
-    private nonisolated(unsafe) let queue: DispatchQueue
+    // Both `NWPathMonitor` and `DispatchQueue` conform to `Sendable`
+    // (NWPathMonitor since iOS 15, DispatchQueue since GCD), and these
+    // properties are `let` constants. Swift 6 / 26 SDK no longer
+    // requires `nonisolated(unsafe)` here — the compiler can prove
+    // cross-actor access is safe from the Sendable conformance.
+    private let monitor: NWPathMonitor
+    private let queue: DispatchQueue
 
     init(monitor: NWPathMonitor = NWPathMonitor(),
          queue: DispatchQueue = DispatchQueue(label: "swekitty.nwpath"),

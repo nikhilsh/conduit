@@ -404,18 +404,34 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         // Pick the first active foreground window. iOS 26's scene model
-        // makes this the canonical lookup; the only fallback path is a
-        // detached anchor, which iOS treats as "host me yourself".
-        let scenes = UIApplication.shared.connectedScenes
+        // makes this the canonical lookup. If nothing's foreground,
+        // fall through to ANY connected scene's first window, and
+        // finally construct a detached anchor against any connected
+        // UIWindowScene (`UIWindow.init()` was deprecated in iOS 26 —
+        // `init(windowScene:)` is the replacement).
+        let foregroundScenes = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .filter { $0.activationState == .foregroundActive }
-        if let window = scenes.flatMap(\.windows).first(where: \.isKeyWindow) {
+        if let window = foregroundScenes.flatMap(\.windows).first(where: \.isKeyWindow) {
             return window
         }
-        if let window = scenes.flatMap(\.windows).first {
+        if let window = foregroundScenes.flatMap(\.windows).first {
             return window
         }
-        return ASPresentationAnchor()
+        guard let anyScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first
+        else {
+            // Truly unreachable in a running iOS app — by the time OAuth
+            // launches, UIApplication has at least one connected scene.
+            // The deprecated `UIWindow()` would otherwise be the only
+            // way to satisfy the return type without a scene.
+            preconditionFailure("OAuth presentation requested before any UIWindowScene attached")
+        }
+        if let window = anyScene.windows.first {
+            return window
+        }
+        return UIWindow(windowScene: anyScene)
     }
 
     // MARK: - Token exchange

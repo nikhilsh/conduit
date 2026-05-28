@@ -17,8 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.AlertDialog
@@ -147,7 +147,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             // Action row
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 ActionTile(Icons.Default.Palette, "Appearance", Modifier.weight(1f)) { showAppearance = true }
-                ActionTile(Icons.Default.CallSplit, "Fork", Modifier.weight(1f)) { showFork = true }
+                ActionTile(Icons.AutoMirrored.Filled.CallSplit, "Fork", Modifier.weight(1f)) { showFork = true }
                 ActionTile(Icons.Default.Edit, "Rename", Modifier.weight(1f)) {
                     renameDraft = name
                     showRename = true

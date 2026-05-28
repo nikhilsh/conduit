@@ -23,9 +23,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -126,7 +126,7 @@ fun HomeScreen(
             // history entry because its home view IS the live list; Android
             // needs the drawer too for multi-project nav.
             CircleIconButton(Icons.Default.History, "History", onClick = onOpenHistory)
-            CircleIconButton(Icons.Default.List, "Sessions", onClick = onOpenDrawer)
+            CircleIconButton(Icons.AutoMirrored.Filled.List, "Sessions", onClick = onOpenDrawer)
         }
 
         Spacer(Modifier.height(12.dp))
