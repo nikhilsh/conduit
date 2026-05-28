@@ -370,7 +370,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     private func registerTraitObservation() {
         registerForTraitChanges(
             [UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self]
-        ) { (self: GhosttyTerminalView, previousTraits: UITraitCollection) in
+        ) { (self: GhosttyRenderView, previousTraits: UITraitCollection) in
             if previousTraits.preferredContentSizeCategory
                 != self.traitCollection.preferredContentSizeCategory
             {
