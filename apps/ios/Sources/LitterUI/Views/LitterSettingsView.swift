@@ -421,12 +421,32 @@ extension LitterUI {
 
         private var aboutSection: some View {
             sectionCard(title: "About") {
-                LitterUI.valueRow(
-                    icon: "info.circle.fill",
-                    title: "SweKitty",
-                    value: aboutVersion,
-                    subtitle: nil
-                )
+                VStack(spacing: 0) {
+                    LitterUI.valueRow(
+                        icon: "info.circle.fill",
+                        title: "SweKitty",
+                        value: aboutVersion,
+                        subtitle: nil
+                    )
+                    Divider()
+                        .background(LitterUI.Palette.separator.color)
+                        .padding(.leading, 46)
+                    NavigationLink {
+                        LitterUI.LicensesView()
+                    } label: {
+                        LitterUI.ListRow(
+                            icon: "doc.text",
+                            title: "Licenses",
+                            subtitle: "Open source & trademark attribution",
+                            iconTint: LitterUI.Palette.brand.color
+                        ) {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
 

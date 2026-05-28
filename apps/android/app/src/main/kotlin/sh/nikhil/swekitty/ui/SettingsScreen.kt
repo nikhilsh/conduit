@@ -10,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
@@ -77,7 +78,11 @@ import sh.nikhil.swekitty.SessionStore
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
+fun SettingsScreen(
+    store: SessionStore,
+    onDismiss: () -> Unit,
+    onOpenLicenses: () -> Unit = {},
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val appearance = LocalAppearanceStore.current
     val endpoint by store.endpoint.collectAsState()
@@ -392,7 +397,8 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                 )
             }
 
-            // About — static identity card.
+            // About — static identity card + a tap-through to the
+            // third-party licenses + trademark attribution screen.
             SettingsSection("About") {
                 KeyValueRow(label = "App", value = "SweKitty")
                 KeyValueRow(
@@ -402,6 +408,13 @@ fun SettingsScreen(store: SessionStore, onDismiss: () -> Unit) {
                     } else {
                         "${BuildConfig.VERSION_NAME} (dev)"
                     },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = Icons.Filled.Article,
+                    title = "Licenses",
+                    subtitle = "Open source & trademark attribution",
+                    onClick = onOpenLicenses,
                 )
             }
 
