@@ -77,9 +77,6 @@ object SweKittyTheme {
     @Composable @ReadOnlyComposable fun hermesAccent()    : Color = SweKittyPalette.hermesAccent.color()
     @Composable @ReadOnlyComposable fun piAccent()        : Color = SweKittyPalette.piAccent.color()
     @Composable @ReadOnlyComposable fun opencodeAccent()  : Color = SweKittyPalette.opencodeAccent.color()
-    /** Semantic success / network-discovery green. Distinct from any
-     *  agent accent — use for "discover on LAN", "connected", etc. */
-    @Composable @ReadOnlyComposable fun success()         : Color = SweKittyPalette.success.color()
 
     /**
      * Per-agent accent. Each adapter that ships with the harness gets
