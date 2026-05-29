@@ -118,15 +118,23 @@ func (c *codexChatProcess) runTurn(argv []string) {
 			continue
 		}
 		for _, e := range evs {
-			if e.Text == "" {
+			var role, content string
+			switch {
+			case e.Text != "":
+				role, content = "assistant", e.Text
+			case e.ToolName != "":
+				// command_execution etc. → role:"tool" card, same shape
+				// the claude path uses.
+				role, content = "tool", toolCardContent(e.ToolName, e.ToolInput)
+			default:
 				continue
 			}
 			payload, perr := json.Marshal(map[string]any{
 				"type": "view_event",
 				"view": "chat",
 				"event": map[string]any{
-					"role":    "assistant",
-					"content": e.Text,
+					"role":    role,
+					"content": content,
 					"ts":      claudeChatNow().UTC().Format(time.RFC3339Nano),
 					"files":   []any{},
 				},

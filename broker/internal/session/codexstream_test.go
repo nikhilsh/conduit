@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -80,5 +81,28 @@ func TestParseCodexStreamLineCases(t *testing.T) {
 				t.Fatalf("want text %q, got %+v", tc.wantText, evs)
 			}
 		})
+	}
+}
+
+// A completed command_execution item (codex-cli 0.132, captured 2026-05-29)
+// surfaces as a role:"tool" event carrying the command in ToolInput. An
+// in-progress item (no command/exit_code yet) is dropped.
+func TestParseCodexCommandExecution(t *testing.T) {
+	line := `{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/bash -lc 'ls -la'","aggregated_output":"total 0\n","exit_code":0,"status":"completed"}}`
+	evs, _, ok := parseCodexStreamLine([]byte(line))
+	if !ok || len(evs) != 1 {
+		t.Fatalf("want one event, ok=%v evs=%+v", ok, evs)
+	}
+	if evs[0].Role != "tool" || evs[0].ToolName != "command_execution" {
+		t.Fatalf("want tool/command_execution, got role=%q tool=%q", evs[0].Role, evs[0].ToolName)
+	}
+	if got := toolCardContent(evs[0].ToolName, evs[0].ToolInput); !strings.Contains(got, "/bin/bash -lc 'ls -la'") {
+		t.Fatalf("tool card content = %q, want it to include the command", got)
+	}
+
+	// in_progress (no command yet) is not rendered.
+	prog := `{"type":"item.started","item":{"type":"command_execution","command":"","status":"in_progress"}}`
+	if _, _, ok := parseCodexStreamLine([]byte(prog)); ok {
+		t.Fatalf("in-progress command_execution should be dropped")
 	}
 }

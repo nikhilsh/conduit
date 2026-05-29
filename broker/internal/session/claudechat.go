@@ -94,6 +94,14 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			lastAssistantText, lastAssistantTS = "", ""
 			continue
 		}
+		// Surface /compact progress + result as a system chat line — the
+		// stream-json engine reports it via system/status events that
+		// parseClaudeStreamLine ignores, so without this a /compact is
+		// silent in the Chat tab.
+		if msg, ok := claudeCompactNotice(line); ok {
+			publishChatSystem(publish, msg)
+			continue
+		}
 		evs, ok := parseClaudeStreamLine(line)
 		if !ok {
 			continue
@@ -129,6 +137,43 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 		}
 	}
 	return sc.Err()
+}
+
+// claudeCompactNotice decodes a `/compact` progress/result line and returns
+// the user-facing message to surface (and true). claude-code 2.1.156 emits
+// (captured 2026-05-29):
+//
+//	{"type":"system","subtype":"status","status":"compacting", …}
+//	{"type":"system","subtype":"status","status":null,
+//	 "compact_result":"success"|"failed","compact_error":"…", …}
+//
+// Returns ok=false for any other line.
+func claudeCompactNotice(line []byte) (string, bool) {
+	var ev struct {
+		Type          string `json:"type"`
+		Subtype       string `json:"subtype"`
+		Status        string `json:"status"`
+		CompactResult string `json:"compact_result"`
+		CompactError  string `json:"compact_error"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return "", false
+	}
+	if ev.Type != "system" || ev.Subtype != "status" {
+		return "", false
+	}
+	switch {
+	case ev.CompactResult == "success":
+		return "✓ Context compacted.", true
+	case ev.CompactResult == "failed":
+		if strings.TrimSpace(ev.CompactError) != "" {
+			return "Couldn’t compact: " + ev.CompactError, true
+		}
+		return "Couldn’t compact the conversation.", true
+	case ev.Status == "compacting":
+		return "Compacting context…", true
+	}
+	return "", false
 }
 
 // publishChatSystem emits a role:"system" chat view_event (e.g. an

@@ -18,6 +18,11 @@ type codexStreamEvent struct {
 	Item     struct {
 		Type string `json:"type"` // "agent_message" | "command_execution" | …
 		Text string `json:"text"`
+		// command_execution fields (codex-cli 0.132, captured 2026-05-29):
+		// item.completed{item:{type:"command_execution",command,exit_code,status,aggregated_output}}.
+		Command  string `json:"command"`
+		ExitCode *int   `json:"exit_code"` // null while in_progress
+		Status   string `json:"status"`    // "in_progress" | "completed"
 	} `json:"item"`
 }
 
@@ -41,6 +46,18 @@ func parseCodexStreamLine(line []byte) (events []ClaudeChatEvent, threadID strin
 	case "item.completed":
 		if ev.Item.Type == "agent_message" && strings.TrimSpace(ev.Item.Text) != "" {
 			return []ClaudeChatEvent{{Role: "assistant", Text: ev.Item.Text}}, "", true
+		}
+		// Surface a finished shell command as a tool card (the same
+		// role:"tool" rendering claude's tool_use blocks use). Only on
+		// completion (in_progress items carry no exit_code yet).
+		if ev.Item.Type == "command_execution" && strings.TrimSpace(ev.Item.Command) != "" {
+			input, err := json.Marshal(map[string]any{
+				"command":   ev.Item.Command,
+				"exit_code": ev.Item.ExitCode,
+			})
+			if err == nil {
+				return []ClaudeChatEvent{{Role: "tool", ToolName: "command_execution", ToolInput: input}}, "", true
+			}
 		}
 	}
 	return nil, "", false
