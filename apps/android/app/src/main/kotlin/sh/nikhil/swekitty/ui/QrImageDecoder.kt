@@ -3,12 +3,16 @@ package sh.nikhil.swekitty.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.net.Uri
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
+import com.google.zxing.LuminanceSource
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 
 /**
@@ -21,13 +25,28 @@ import com.google.zxing.common.HybridBinarizer
  * Uses `com.google.zxing:core` (transitive via `zxing-android-embedded`)
  * — no new dependency. The bitmap is downsampled with `inSampleSize` so
  * a 4K screenshot doesn't pin a 60MB ARGB buffer for decode.
+ *
+ * Robustness notes (the pairing QR is a clean, generator-produced PNG —
+ * a 1-bit indexed PNG with a tRNS chunk in `rsc.io/qr`'s case — and stock
+ * ZXing decodes it fine on desktop, yet `BitmapFactory` on Android can
+ * hand back pixels that ZXing then can't read):
+ *  - We re-draw the decoded bitmap onto a fresh, opaque, white-filled
+ *    ARGB_8888 canvas before reading pixels. That flattens away the
+ *    quirks of low-bit-depth / indexed / alpha-flagged (premultiplied)
+ *    PNG decodes into clean straight-alpha RGB — the single most
+ *    important step for "clean QR won't scan from gallery".
+ *  - We add a white quiet-zone margin so a tightly-cropped screenshot
+ *    still satisfies ZXing's 4-module border requirement.
+ *  - We try HybridBinarizer (good for camera photos), then
+ *    GlobalHistogramBinarizer (better for clean synthetic QR), and an
+ *    inverted pass (white-on-black / dark-mode screenshots).
  */
 object QrImageDecoder {
 
     /**
-     * Loads [uri] as a (downsampled) bitmap and returns the first QR
-     * payload it can read. Returns null if the URI can't be opened, the
-     * file isn't an image, or the image doesn't contain a QR.
+     * Loads [uri] as a (downsampled, normalized) bitmap and returns the
+     * first QR payload it can read. Returns null if the URI can't be
+     * opened, the file isn't an image, or the image doesn't contain a QR.
      */
     fun decode(context: Context, uri: Uri): String? {
         val bitmap = loadBitmap(context, uri) ?: return null
@@ -50,7 +69,38 @@ object QrImageDecoder {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
-        return resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+        val decoded = resolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        } ?: return null
+        return try {
+            normalize(decoded)
+        } finally {
+            // `normalize` copies into a new bitmap; the raw decode is dead.
+            decoded.recycle()
+        }
+    }
+
+    /**
+     * Flatten [src] onto an opaque white ARGB_8888 canvas (plus a white
+     * quiet-zone margin). This is what makes a 1-bit / indexed /
+     * alpha-flagged PNG decode reliably: whatever odd config
+     * `BitmapFactory` produced, the canvas draw composites it down to
+     * clean opaque RGB that `getPixels` reads correctly, and transparent
+     * pixels resolve to white (background) rather than premultiplied black.
+     */
+    private fun normalize(src: Bitmap): Bitmap {
+        // ~6% margin per side, capped, so the quiet zone is comfortably
+        // >= 4 modules even for a tightly-cropped QR.
+        val margin = (minOf(src.width, src.height) * 0.06f).toInt().coerceIn(8, 64)
+        val out = Bitmap.createBitmap(
+            src.width + margin * 2,
+            src.height + margin * 2,
+            Bitmap.Config.ARGB_8888,
+        )
+        val canvas = Canvas(out)
+        canvas.drawColor(Color.WHITE)
+        canvas.drawBitmap(src, margin.toFloat(), margin.toFloat(), null)
+        return out
     }
 
     private fun sampleSizeFor(width: Int, height: Int, target: Int): Int {
@@ -73,7 +123,20 @@ object QrImageDecoder {
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
         val source = RGBLuminanceSource(width, height, pixels)
-        val binary = BinaryBitmap(HybridBinarizer(source))
+        // Hybrid first (lenient on uneven lighting / camera shots), then a
+        // global-threshold pass (better on clean synthetic QR), then the
+        // inverted source for white-on-black / dark-mode screenshots.
+        return readWith(HybridBinarizer(source))
+            ?: readWith(GlobalHistogramBinarizer(source))
+            ?: invertedOrNull(source)?.let { inv ->
+                readWith(HybridBinarizer(inv)) ?: readWith(GlobalHistogramBinarizer(inv))
+            }
+    }
+
+    private fun invertedOrNull(source: LuminanceSource): LuminanceSource? =
+        runCatching { source.invert() }.getOrNull()
+
+    private fun readWith(binarizer: com.google.zxing.Binarizer): String? {
         val reader = MultiFormatReader().apply {
             setHints(
                 mapOf(
@@ -82,6 +145,6 @@ object QrImageDecoder {
                 )
             )
         }
-        return runCatching { reader.decode(binary).text }.getOrNull()
+        return runCatching { reader.decode(BinaryBitmap(binarizer)).text }.getOrNull()
     }
 }

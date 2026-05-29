@@ -2,7 +2,6 @@ package sh.nikhil.swekitty.ui
 
 import android.content.Intent
 import android.net.Uri
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,6 +33,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
 /**
  * Static attribution data for the Licenses screen. Update by editing
@@ -257,65 +258,75 @@ internal val TRADEMARK_ATTRIBUTIONS: List<TrademarkAttribution> = listOf(
 @Composable
 fun LicensesScreen(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    BackHandler { onDismiss() }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Licenses", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                        )
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            item("intro") {
-                Text(
-                    "SweKitty ships the open-source libraries listed below. " +
-                        "Each is used under its respective license; tap a row for " +
-                        "the upstream source.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    // Settings is a ModalBottomSheet, which lives in its own window above
+    // the activity content. A plain Scaffold here would draw in the
+    // content layer — i.e. *behind* the still-open Settings sheet. Hosting
+    // it in a full-screen Dialog gives it a top-most window of its own, so
+    // it presents over Settings; Back (via onDismissRequest) returns to
+    // Settings, mirroring iOS's NavigationLink push.
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Licenses", fontWeight = FontWeight.SemiBold) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                            )
+                        }
+                    },
                 )
-            }
-
-            LICENSE_GROUPS.forEach { group ->
-                item("hdr-${group.title}") {
-                    LicensesSectionHeader(group.title)
+            },
+        ) { padding ->
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                item("intro") {
+                    Text(
+                        "SweKitty ships the open-source libraries listed below. " +
+                            "Each is used under its respective license; tap a row for " +
+                            "the upstream source.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                items(group.entries, key = { "${group.title}-${it.name}" }) { entry ->
-                    LicenseRow(entry) {
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.url)))
+
+                LICENSE_GROUPS.forEach { group ->
+                    item("hdr-${group.title}") {
+                        LicensesSectionHeader(group.title)
+                    }
+                    items(group.entries, key = { "${group.title}-${it.name}" }) { entry ->
+                        LicenseRow(entry) {
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.url)))
+                        }
                     }
                 }
-            }
 
-            item("trademarks-hdr") {
-                LicensesSectionHeader("Trademark attribution")
-            }
-            items(TRADEMARK_ATTRIBUTIONS, key = { "tm-${it.name}" }) { tm ->
-                TrademarkRow(tm)
-            }
+                item("trademarks-hdr") {
+                    LicensesSectionHeader("Trademark attribution")
+                }
+                items(TRADEMARK_ATTRIBUTIONS, key = { "tm-${it.name}" }) { tm ->
+                    TrademarkRow(tm)
+                }
 
-            item("footer") {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "If you maintain a library listed here and notice an " +
-                        "incorrect attribution, please open an issue at " +
-                        "github.com/nikhilsh/swe-kitty.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                item("footer") {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "If you maintain a library listed here and notice an " +
+                            "incorrect attribution, please open an issue at " +
+                            "github.com/nikhilsh/swe-kitty.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
