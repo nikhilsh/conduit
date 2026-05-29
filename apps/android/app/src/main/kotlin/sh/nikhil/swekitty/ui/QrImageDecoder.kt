@@ -14,6 +14,7 @@ import com.google.zxing.MultiFormatReader
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
+import sh.nikhil.swekitty.Telemetry
 
 /**
  * Decode a QR payload out of an image the user picked from the gallery.
@@ -49,31 +50,77 @@ object QrImageDecoder {
      * opened, the file isn't an image, or the image doesn't contain a QR.
      */
     fun decode(context: Context, uri: Uri): String? {
-        val bitmap = loadBitmap(context, uri) ?: return null
+        // Diagnostics threaded through the pipeline so a failure reports
+        // *where* it failed to Sentry (this path fails by returning null,
+        // not throwing, so it was otherwise invisible). Device-debug for
+        // "No QR code found" on Android.
+        val diag = linkedMapOf<String, String>()
+        diag["uri_scheme"] = uri.scheme ?: "?"
+        runCatching { context.contentResolver.getType(uri) }.getOrNull()?.let { diag["mime"] = it }
         return try {
-            decodeQrFromBitmap(bitmap)
-        } finally {
-            bitmap.recycle()
+            val bitmap = loadBitmap(context, uri, diag)
+            if (bitmap == null) {
+                Telemetry.diagnostic("QR-from-image: failed to load bitmap", extras = diag)
+                return null
+            }
+            val payload = try {
+                decodeQrFromBitmap(bitmap, diag)
+            } finally {
+                bitmap.recycle()
+            }
+            if (payload == null) {
+                Telemetry.diagnostic("QR-from-image: no QR decoded from bitmap", extras = diag)
+            } else {
+                Telemetry.breadcrumb("QR-from-image: decoded", diag)
+            }
+            payload
+        } catch (t: Throwable) {
+            diag["exception"] = t.javaClass.simpleName + ": " + (t.message ?: "")
+            Telemetry.capture(t, "QR-from-image: decode threw", extras = diag)
+            null
         }
     }
 
-    private fun loadBitmap(context: Context, uri: Uri): Bitmap? {
+    private fun loadBitmap(context: Context, uri: Uri, diag: MutableMap<String, String>): Bitmap? {
         val resolver = context.contentResolver
         // Cheap dimensions pass so we can pick a sane inSampleSize and
         // avoid OOM on a high-res phone screenshot.
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            ?: return null
+        val boundsStream = resolver.openInputStream(uri)
+        if (boundsStream == null) {
+            diag["stage"] = "open-stream-null"
+            return null
+        }
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
+        diag["src_w"] = bounds.outWidth.toString()
+        diag["src_h"] = bounds.outHeight.toString()
+        bounds.outMimeType?.let { diag["src_mime"] = it }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            diag["stage"] = "bounds-invalid"
+            return null
+        }
         val sample = sampleSizeFor(bounds.outWidth, bounds.outHeight, target = 1600)
+        diag["sample"] = sample.toString()
         val opts = BitmapFactory.Options().apply {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         val decoded = resolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, opts)
-        } ?: return null
+        }
+        if (decoded == null) {
+            diag["stage"] = "decode-null"
+            return null
+        }
+        diag["dec_w"] = decoded.width.toString()
+        diag["dec_h"] = decoded.height.toString()
+        diag["dec_config"] = decoded.config?.name ?: "?"
+        diag["dec_hasAlpha"] = decoded.hasAlpha().toString()
         return try {
-            normalize(decoded)
+            normalize(decoded).also {
+                diag["norm_w"] = it.width.toString()
+                diag["norm_h"] = it.height.toString()
+            }
         } finally {
             // `normalize` copies into a new bitmap; the raw decode is dead.
             decoded.recycle()
@@ -116,21 +163,28 @@ object QrImageDecoder {
         return sample
     }
 
-    private fun decodeQrFromBitmap(bitmap: Bitmap): String? {
+    private fun decodeQrFromBitmap(bitmap: Bitmap, diag: MutableMap<String, String>): String? {
         val width = bitmap.width
         val height = bitmap.height
-        if (width <= 0 || height <= 0) return null
+        if (width <= 0 || height <= 0) {
+            diag["stage"] = "norm-invalid"
+            return null
+        }
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
         val source = RGBLuminanceSource(width, height, pixels)
         // Hybrid first (lenient on uneven lighting / camera shots), then a
         // global-threshold pass (better on clean synthetic QR), then the
-        // inverted source for white-on-black / dark-mode screenshots.
-        return readWith(HybridBinarizer(source))
-            ?: readWith(GlobalHistogramBinarizer(source))
-            ?: invertedOrNull(source)?.let { inv ->
-                readWith(HybridBinarizer(inv)) ?: readWith(GlobalHistogramBinarizer(inv))
-            }
+        // inverted source for white-on-black / dark-mode screenshots. Record
+        // which pass won (or that all failed) for diagnostics.
+        readWith(HybridBinarizer(source))?.let { diag["decoded_by"] = "hybrid"; return it }
+        readWith(GlobalHistogramBinarizer(source))?.let { diag["decoded_by"] = "global"; return it }
+        invertedOrNull(source)?.let { inv ->
+            readWith(HybridBinarizer(inv))?.let { diag["decoded_by"] = "hybrid-inv"; return it }
+            readWith(GlobalHistogramBinarizer(inv))?.let { diag["decoded_by"] = "global-inv"; return it }
+        }
+        diag["stage"] = "no-qr-all-binarizers"
+        return null
     }
 
     private fun invertedOrNull(source: LuminanceSource): LuminanceSource? =
