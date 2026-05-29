@@ -5,7 +5,7 @@ direction decisions that supersede the older `PLAN-*` docs. The forward-looking
 content that used to be scattered across those plans now lives here; the plans
 themselves are archived once their work ships (see `docs/archive/`).
 
-Last updated: 2026-05-27 (`v0.0.51`).
+Last updated: 2026-05-29.
 
 For wire-level / lifecycle / adapter detail, read the frozen contracts:
 [`WEBSOCKET-PROTOCOL.md`](WEBSOCKET-PROTOCOL.md),
@@ -13,6 +13,39 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 [`AGENT-ADAPTERS.md`](AGENT-ADAPTERS.md),
 [`CHAT-CHANNEL.md`](CHAT-CHANNEL.md),
 [`MEMORY-FORMAT.md`](MEMORY-FORMAT.md).
+
+---
+
+## In review (pending device verification)
+
+These PRs are open and CI-green as of 2026-05-29 but have **not been verified
+on a physical device**. The dev box is CI-compile-only; on-device confirmation
+is required before these land under "Shipped".
+
+- **#261** — Android: pairing QR decodes when picked from the gallery
+  (`BitmapFactory` premultiplied a 1-bit indexed PNG to black; fix normalises
+  onto a white canvas + binarizer fallbacks). Also: Licenses screen z-order
+  fixed — hosted in a full-screen `Dialog` so it presents over the Settings
+  bottom sheet instead of behind it.
+- **#262** — Agent starts in the user-selected folder: `cwd` threaded through
+  Rust core (`SpawnOverride` → WS `cwd=` query param) → broker; apps stop
+  faking it with a terminal `cd`. Per-session ephemeral agent `$HOME` relocated
+  out of the user's repo into broker storage.
+- **#263** — iOS: Liquid Glass home buttons now read as glass — added a
+  brand-tinted `AppBackdrop` (the home background was a flat colour, so glass
+  had nothing to refract) + `.interactive()` on icon/pill glass. Addresses
+  device-bug #28.
+- **#264** — Android: parallel glass bump — `glassCircle`/`glassCapsule` on
+  home buttons + pills, strengthened copper background glows behind button
+  clusters. Also addresses device-bug #28. (No Compose BOM bump; backward-
+  compatible to minSdk 26.)
+
+Device-bug **#28** ("main-menu buttons missing glass") is addressed on both
+platforms in #263/#264, pending device verification.
+
+> **Note:** `docs/MOBILE-PORT-MATRIX.md` currently exists only on the
+> unmerged worktree branch `docs-litter-progress` and should be reconciled to
+> `main` once that branch merges.
 
 ---
 
