@@ -35,23 +35,36 @@ fun GlassAppBackground(modifier: Modifier = Modifier) {
             ),
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+            // Pools of the copper brand accent positioned *behind the button
+            // clusters* — top (header icons) and bottom-center (action bar) —
+            // so the glass surfaces over them have warm colour to refract.
+            // Kept low-opacity so the dark mood is preserved.
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(accent.copy(alpha = 0.14f), Color.Transparent),
-                    center = Offset(size.width * 0.10f, size.height * 0.08f),
-                    radius = size.minDimension * 0.55f,
+                    colors = listOf(accent.copy(alpha = 0.20f), Color.Transparent),
+                    center = Offset(size.width * 0.12f, size.height * 0.07f),
+                    radius = size.minDimension * 0.60f,
                 ),
-                center = Offset(size.width * 0.10f, size.height * 0.08f),
-                radius = size.minDimension * 0.55f,
+                center = Offset(size.width * 0.12f, size.height * 0.07f),
+                radius = size.minDimension * 0.60f,
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(accent.copy(alpha = 0.16f), Color.Transparent),
+                    center = Offset(size.width * 0.5f, size.height * 0.99f),
+                    radius = size.minDimension * 0.65f,
+                ),
+                center = Offset(size.width * 0.5f, size.height * 0.99f),
+                radius = size.minDimension * 0.65f,
             )
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(accent.copy(alpha = 0.08f), Color.Transparent),
-                    center = Offset(size.width * 0.90f, size.height * 0.92f),
-                    radius = size.minDimension * 0.48f,
+                    center = Offset(size.width * 0.92f, size.height * 0.12f),
+                    radius = size.minDimension * 0.42f,
                 ),
-                center = Offset(size.width * 0.90f, size.height * 0.92f),
-                radius = size.minDimension * 0.48f,
+                center = Offset(size.width * 0.92f, size.height * 0.12f),
+                radius = size.minDimension * 0.42f,
             )
         }
     }

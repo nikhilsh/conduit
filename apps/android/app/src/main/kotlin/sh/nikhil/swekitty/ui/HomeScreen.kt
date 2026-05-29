@@ -148,10 +148,14 @@ fun HomeScreen(
                     harness is HarnessState.Connecting || harness is HarnessState.Reconnecting -> SweKittyTheme.warning()
                     else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 }
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = if (isActive) SweKittyTheme.accentStrong().copy(alpha = 0.32f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    modifier = Modifier.clickable { store.selectSavedServer(server.id, autoConnect = true) },
+                // Glass capsule; the active server carries a copper tint
+                // wash so it reads as the selected pill (parallel of the
+                // iOS glass pill treatment).
+                Box(
+                    modifier = Modifier
+                        .glassCapsule(interactive = true, tint = if (isActive) SweKittyTheme.accentStrong() else null)
+                        .clip(RoundedCornerShape(50))
+                        .clickable { store.selectSavedServer(server.id, autoConnect = true) },
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -173,10 +177,11 @@ fun HomeScreen(
                 }
             }
             // Add server pill
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                modifier = Modifier.clickable { onAddServer() },
+            Box(
+                modifier = Modifier
+                    .glassCapsule(interactive = true)
+                    .clip(RoundedCornerShape(50))
+                    .clickable { onAddServer() },
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -532,26 +537,42 @@ private fun SessionMetaRow(
 
 @Composable
 private fun CircleIconButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-        modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClick),
+    // Use the shared glass surface (translucent fill + highlight + stroke)
+    // instead of a flat Surface so the header buttons read as glass over
+    // the brand-tinted background washes — Android parallel of the iOS
+    // Liquid Glass bump (#28).
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .glassCircle()
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
-        }
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = SweKittyTheme.textPrimary(),
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
 @Composable
 private fun CircleActionButton(icon: ImageVector, contentDescription: String, size: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-        modifier = Modifier.size(size).clip(CircleShape).clickable(onClick = onClick),
+    Box(
+        modifier = Modifier
+            .size(size)
+            .glassCircle()
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(22.dp))
-        }
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = SweKittyTheme.textPrimary(),
+            modifier = Modifier.size(22.dp),
+        )
     }
 }
