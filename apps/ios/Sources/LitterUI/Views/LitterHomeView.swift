@@ -143,11 +143,7 @@ extension LitterUI {
                     }
                 },
                 center: {
-                    Image("KittyMark")
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 32, height: 32)
-                        .cornerRadius(7)
+                    LitterUI.AnimatedBrandMark(size: 32)
                         .accessibilityLabel("SweKitty")
                         .accessibilityHint("Press and hold for settings")
                         .onLongPressGesture(minimumDuration: 0.4) {

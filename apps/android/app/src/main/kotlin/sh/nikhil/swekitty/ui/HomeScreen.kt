@@ -111,7 +111,10 @@ fun HomeScreen(
                     onLongClick = onOpenSettings,
                 ),
             ) {
-                Text("SweKitty", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                // Brand mark (was a "SweKitty" text wordmark) — now the
+                // real KittyMark with a subtle breathe, matching iOS.
+                AnimatedBrandMark(size = 32.dp)
+                Spacer(Modifier.height(2.dp))
                 Text(
                     if (endpoint.isComplete) endpoint.displayHost else "no server",
                     style = MaterialTheme.typography.labelSmall,
