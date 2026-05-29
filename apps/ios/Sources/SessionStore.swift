@@ -1042,6 +1042,11 @@ final class SessionStore {
     }
 
     func sendChat(sessionID: String, message: String) {
+        // Slash-command routing: intercept recognised `/`-commands before
+        // they reach the agent. Pass-through commands (Claude only) fall
+        // through to the normal send below; app-handled ones are handled
+        // here and we return early. See docs/SLASH-COMMANDS.md.
+        if handleSlashCommand(sessionID: sessionID, message: message) { return }
         // Bug #2: previously this method returned early when `client`
         // was nil — that swallowed the optimistic local echo *and* the
         // outbound WS write, so typing into the composer simply
@@ -1100,6 +1105,82 @@ final class SessionStore {
                 )
             }
         }
+    }
+
+    /// Routes a recognised `/`-command. Returns true when handled here
+    /// (caller must NOT send to the agent); false when the text isn't a
+    /// command, or is a supported pass-through to deliver verbatim.
+    private func handleSlashCommand(sessionID: String, message: String) -> Bool {
+        let agent = sessions.first(where: { $0.id == sessionID })?.assistant ?? "claude"
+        guard let match = SlashCommandRegistry.classify(message, agent: agent) else { return false }
+        if match.command.clazz == .passThrough {
+            if match.supported { return false } // deliver verbatim to the agent
+            postSystemMessage(sessionID, "“/\(match.command.name)” only works with Claude — this session is running \(agent).")
+            return true
+        }
+        switch match.command.name {
+        case "help":
+            postSystemMessage(sessionID, slashHelpText())
+        case "model":
+            if match.args.isEmpty {
+                postSystemMessage(sessionID, "Usage: /model <name> — forks this session onto a different model.")
+            } else {
+                forkSession(sessionID: sessionID, model: match.args)
+                postSystemMessage(sessionID, "Forking onto model “\(match.args)”…")
+            }
+        case "effort":
+            if match.args.isEmpty {
+                postSystemMessage(sessionID, "Usage: /effort <minimal|low|medium|high> — forks with a different reasoning effort.")
+            } else {
+                forkSession(sessionID: sessionID, reasoningEffort: match.args)
+                postSystemMessage(sessionID, "Forking with reasoning effort “\(match.args)”…")
+            }
+        // The live repeat-a-prompt loop is intentionally not wired yet — an
+        // untested auto-sender hammering the agent is a bad blind ship.
+        // Lands in a follow-up with on-device verification.
+        case "loop":
+            postSystemMessage(sessionID, "“/loop” is recognised; the repeat-a-prompt loop ships in a follow-up update.")
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// Appends a client-only `role:"system"` chat line (e.g. /help output,
+    /// a "not supported" note). Mirrors the optimistic echo in `sendChat`;
+    /// the `local-` id survives the next conversation refresh.
+    private func postSystemMessage(_ sessionID: String, _ text: String) {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = ConversationItem(
+            id: "local-\(UUID().uuidString)",
+            role: "system",
+            kind: "message",
+            status: "done",
+            content: text,
+            ts: now,
+            files: [],
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: []
+        )
+        conversationLog[sessionID, default: []].append(item)
+        let ev = ChatEvent(role: "system", content: text, ts: now, files: [])
+        chatLog[sessionID, default: []].append(ev)
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyChat(sessionId: sessionID, event: ev)
+        }
+    }
+
+    private func slashHelpText() -> String {
+        var out = "Slash commands\n"
+        for c in SlashCommandRegistry.commands {
+            out += "/\(c.name) — \(c.description)\n"
+        }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func resize(sessionID: String, rows: UInt16, cols: UInt16) {

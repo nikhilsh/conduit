@@ -22,6 +22,8 @@ import sh.nikhil.swekitty.auth.OAuthRequest
 import sh.nikhil.swekitty.state.NetworkReachabilityObserver
 import sh.nikhil.swekitty.state.ReachabilityEvent
 import sh.nikhil.swekitty.state.ReachabilityStatus
+import sh.nikhil.swekitty.ui.SlashCommandClass
+import sh.nikhil.swekitty.ui.SlashCommandRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -1433,6 +1435,11 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         // don't linger over the next turn (task #233). Done before the
         // client guard so the chips drop even mid-reconnect.
         clearQuickReplies(sessionId)
+        // Slash-command routing: intercept recognised `/`-commands before
+        // they reach the agent. Pass-through commands (Claude only) fall
+        // through to the normal send below; app-handled ones are handled
+        // here and we return early. See docs/SLASH-COMMANDS.md.
+        if (handleSlashCommand(sessionId, msg)) return
         val c = client ?: return
         // Optimistic local echo — harness doesn't loop user messages back
         // as onChatEvent, so the chat tab would stay empty until the
@@ -1464,6 +1471,78 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         }
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } } }
     }
+
+    /**
+     * Routes a recognised `/`-command. Returns true when the command was
+     * handled here (caller must NOT send it to the agent); false when the
+     * text is not a command, or is a supported pass-through that should be
+     * delivered verbatim. See [SlashCommandRegistry] / docs/SLASH-COMMANDS.md.
+     */
+    private fun handleSlashCommand(sessionId: String, msg: String): Boolean {
+        val agent = _sessions.value.firstOrNull { it.id == sessionId }?.assistant ?: "claude"
+        val match = SlashCommandRegistry.classify(msg, agent) ?: return false
+        if (match.command.clazz == SlashCommandClass.PASS_THROUGH) {
+            if (match.supported) return false // deliver verbatim to the agent
+            postSystemMessage(sessionId, "“/${match.command.name}” only works with Claude — this session is running $agent.")
+            return true
+        }
+        when (match.command.name) {
+            "help" -> postSystemMessage(sessionId, slashHelpText())
+            "model" -> if (match.args.isBlank()) {
+                postSystemMessage(sessionId, "Usage: /model <name> — forks this session onto a different model.")
+            } else {
+                forkSession(sessionId, model = match.args)
+                postSystemMessage(sessionId, "Forking onto model “${match.args}”…")
+            }
+            "effort" -> if (match.args.isBlank()) {
+                postSystemMessage(sessionId, "Usage: /effort <minimal|low|medium|high> — forks with a different reasoning effort.")
+            } else {
+                forkSession(sessionId, reasoningEffort = match.args)
+                postSystemMessage(sessionId, "Forking with reasoning effort “${match.args}”…")
+            }
+            // The live repeat-a-prompt loop is intentionally not wired yet —
+            // an untested auto-sender hammering the agent is a bad blind ship.
+            // Lands in a follow-up with on-device verification.
+            "loop" -> postSystemMessage(sessionId, "“/loop” is recognised; the repeat-a-prompt loop ships in a follow-up update.")
+            else -> return false
+        }
+        return true
+    }
+
+    /** Appends a client-only `role:"system"` chat line (e.g. /help output,
+     *  a "not supported" note). Mirrors the optimistic-echo pattern in
+     *  [sendChat]; the `local-` id survives the next conversation refresh. */
+    private fun postSystemMessage(sessionId: String, text: String) {
+        val ts = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        val item = ConversationItem(
+            id = "local-${java.util.UUID.randomUUID()}",
+            role = "system",
+            kind = "message",
+            status = "done",
+            content = text,
+            ts = ts,
+            files = emptyList(),
+            toolName = null,
+            command = null,
+            exitCode = null,
+            durationMs = null,
+            diffSummary = null,
+            pendingOptions = emptyList(),
+        )
+        _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+            m[sessionId] = (m[sessionId] ?: emptyList()) + item
+        }
+        _chatLog.value = _chatLog.value.toMutableMap().also { m ->
+            m[sessionId] = (m[sessionId] ?: emptyList()) +
+                ChatEvent(role = "system", content = text, ts = ts, files = emptyList())
+        }
+    }
+
+    private fun slashHelpText(): String = buildString {
+        append("Slash commands\n")
+        SlashCommandRegistry.commands.forEach { append("/${it.name} — ${it.description}\n") }
+    }.trim()
 
     /**
      * Upload a composer attachment to the session via the 0x01 binary WS
