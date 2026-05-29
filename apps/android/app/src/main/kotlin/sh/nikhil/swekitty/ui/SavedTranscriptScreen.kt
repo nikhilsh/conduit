@@ -156,6 +156,12 @@ private fun projectSessionFor(session: SavedSession): ProjectSession =
         startedAt = session.firstSeen,
         lastActivityAt = session.lastSeen,
         displayName = null,
+        totalInputTokens = null,
+        totalOutputTokens = null,
+        totalCachedTokens = null,
+        totalCostUsd = null,
+        contextUsedTokens = null,
+        contextWindowTokens = null,
     )
 
 @Composable

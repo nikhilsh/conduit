@@ -1639,7 +1639,13 @@ final class SessionStore {
                 cwd: status.cwd,
                 startedAt: status.startedAt,
                 lastActivityAt: status.lastActivityAt,
-                displayName: status.displayName
+                displayName: status.displayName,
+                totalInputTokens: status.totalInputTokens,
+                totalOutputTokens: status.totalOutputTokens,
+                totalCachedTokens: status.totalCachedTokens,
+                totalCostUsd: status.totalCostUsd,
+                contextUsedTokens: status.contextUsedTokens,
+                contextWindowTokens: status.contextWindowTokens
             )
             statusBySession[sessionID] = status
         }
@@ -2238,7 +2244,13 @@ final class SessionStore {
                 cwd: statusBySession[sessionID]?.cwd,
                 startedAt: statusBySession[sessionID]?.startedAt,
                 lastActivityAt: statusBySession[sessionID]?.lastActivityAt,
-                displayName: statusBySession[sessionID]?.displayName
+                displayName: statusBySession[sessionID]?.displayName,
+                totalInputTokens: nil,
+                totalOutputTokens: nil,
+                totalCachedTokens: nil,
+                totalCostUsd: nil,
+                contextUsedTokens: nil,
+                contextWindowTokens: nil
             )
         )
     }
