@@ -127,7 +127,11 @@ struct NeonCardElevation: Equatable {
 /// combination. Value type — cheap to recompute and inject. Every token
 /// from `makeNeon()` is present as a `Color`, plus gradient + glow
 /// descriptors.
-struct NeonTheme: Equatable {
+///
+/// Not `Equatable`: it carries `appBg: RadialGradient`, which isn't
+/// Equatable, and nothing compares whole themes (the environment
+/// re-injects a freshly resolved value on each appearance change).
+struct NeonTheme {
     // Identity / inputs
     let paletteId: String
     let mode: String       // "dark" | "light"
