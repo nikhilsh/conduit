@@ -44,7 +44,7 @@ extension LitterUI {
 
             NavigationStack {
                 ZStack {
-                    LitterUI.Palette.surface.color.ignoresSafeArea()
+                    LitterUI.AppBackdrop()
                     VStack(spacing: 12) {
                         topRow
                         serverPillStrip

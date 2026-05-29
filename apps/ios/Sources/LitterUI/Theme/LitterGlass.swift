@@ -22,14 +22,20 @@ extension LitterUI {
     /// tinting; the system glass is identical between them.
     struct GlassConfig: Equatable, Sendable {
         var highlightOpacity: Double
+        /// Whether the glass reacts to touch with iOS 26's native
+        /// scale + shimmer (`.regular.interactive()`). On for tappable
+        /// controls (icon buttons, pills) so they read as live glass;
+        /// off for static card surfaces, where per-touch shimmer on a
+        /// full-width row reads as noise.
+        var isInteractive: Bool = false
 
         /// Card surface (HomeView session row, settings row,
         /// SessionInfo stat).
         static let card = GlassConfig(highlightOpacity: 0.12)
         /// Floating control (BottomActionBar, FAB, icon button).
-        static let floating = GlassConfig(highlightOpacity: 0.22)
+        static let floating = GlassConfig(highlightOpacity: 0.22, isInteractive: true)
         /// Subtle / inline pill (ServerPill, ContextChip).
-        static let pill = GlassConfig(highlightOpacity: 0.16)
+        static let pill = GlassConfig(highlightOpacity: 0.16, isInteractive: true)
     }
 
     /// iOS 26's Liquid Glass already renders its own specular edge
@@ -45,13 +51,51 @@ extension LitterUI {
 
         func body(content: Content) -> some View {
             content
-                .glassEffect(.regular, in: shape)
+                .glassEffect(config.isInteractive ? .regular.interactive() : .regular, in: shape)
                 .overlay {
                     if let tint {
                         shape.fill(tint.opacity(0.06))
                     }
                 }
                 .clipShape(shape)
+        }
+    }
+}
+
+extension LitterUI {
+    /// App-wide backdrop for the litter surfaces. A flat fill gives
+    /// Liquid Glass nothing to refract, so the buttons read as flat dark
+    /// discs (#28). We keep the dark `surface` base but float a few soft
+    /// brand-tinted glows behind the header and bottom bar, so the glass
+    /// over them picks up color and actually reads as glass. The dark
+    /// mood is preserved — these are low-opacity pools, not a recolor.
+    struct AppBackdrop: View {
+        var body: some View {
+            ZStack {
+                LitterUI.Palette.surface.color
+                // Warm copper pool behind the top-row icon buttons.
+                RadialGradient(
+                    colors: [LitterUI.Palette.brand.color.opacity(0.22), .clear],
+                    center: .topLeading,
+                    startRadius: 8,
+                    endRadius: 360
+                )
+                // Cool accent pool behind the history button / top-right.
+                RadialGradient(
+                    colors: [LitterUI.Palette.accentStrong.color.opacity(0.10), .clear],
+                    center: .topTrailing,
+                    startRadius: 8,
+                    endRadius: 320
+                )
+                // Copper pool behind the bottom action bar (mic / + / search).
+                RadialGradient(
+                    colors: [LitterUI.Palette.brand.color.opacity(0.20), .clear],
+                    center: .bottom,
+                    startRadius: 8,
+                    endRadius: 380
+                )
+            }
+            .ignoresSafeArea()
         }
     }
 }
