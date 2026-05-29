@@ -664,10 +664,16 @@ private struct LitterEventRow: View {
     let onQuickReply: (String) -> Void
 
     var body: some View {
-        if event.kind == "pending_input" {
+        if event.status.lowercased() == "swapping" {
+            // Transient agent-swap marker — render the inline divider
+            // instead of a full row (it's a transition, not a message).
+            LitterSwapNotice(from: event.sourceAgent ?? "", to: event.targetAgent ?? "")
+        } else if event.kind == "pending_input" {
             LitterPendingInputCard(event: event, onQuickReply: onQuickReply)
         } else if event.kind == "handoff" {
             LitterHandoffCard(event: event)
+        } else if event.kind == "plan" {
+            LitterPlanCard(event: event)
         } else if event.kind == "subagent" {
             LitterSubagentCard(event: event)
         } else if event.role.lowercased() == "tool" {
@@ -2041,34 +2047,24 @@ private struct LitterHandoffCard: View {
         return neon.accent
     }
 
-    // ConversationItem (UniFFI) doesn't carry structured handoff fields
-    // (sourceAgent/targetAgent/phase/taskText/…); the classifier only
-    // marks kind=="handoff" and puts the detail in `content`. Derive the
-    // from→to names from `content` where possible, else fall back to the
-    // generic "agent"/"subagent" labels in `titleRow`. Status drives
-    // working/done. See README §4.2.
-    private var target: String { Self.agentName(in: event.content, role: .target) }
-    private var source: String { Self.agentName(in: event.content, role: .source) }
+    // Structured handoff fields are now surfaced on ConversationItem over
+    // UniFFI (core Tier-1 classifier, see docs/NEON-CORE-FIELDS.md): the
+    // from→to agents, the delegated TASK, and the result summary. Status
+    // drives working/done. See README §4.2.
+    private var target: String { event.targetAgent ?? "" }
+    private var source: String { event.sourceAgent ?? "" }
     private var done: Bool { event.status.lowercased() == "done" }
 
-    private enum HandoffRole { case source, target }
+    /// Delegated instruction (TASK block) — nil when absent/blank.
+    private var taskText: String? {
+        let t = event.taskText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (t?.isEmpty == false) ? t : nil
+    }
 
-    /// Best-effort parse of "… to Y" handoff phrasing from the raw
-    /// content: `target` is the first word after " to ", `source` is the
-    /// first word of the message. Returns "" when not derivable so
-    /// `titleRow` shows its generic fallback rather than wrong data.
-    private static func agentName(in content: String, role: HandoffRole) -> String {
-        func firstWord(_ s: Substring) -> String {
-            String(s.drop { !($0.isLetter || $0.isNumber) }
-                .prefix { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
-        }
-        switch role {
-        case .target:
-            guard let r = content.lowercased().range(of: " to ") else { return "" }
-            return firstWord(content[r.upperBound...])
-        case .source:
-            return firstWord(content[...])
-        }
+    /// Parsed result summary (result block) — nil when absent/blank.
+    private var resultSummary: String? {
+        let r = event.resultSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (r?.isEmpty == false) ? r : nil
     }
 
     var body: some View {
@@ -2088,14 +2084,46 @@ private struct LitterHandoffCard: View {
                         .foregroundStyle(neon.textFaint)
                 }
             }
-            // The §4.2 spec's TASK / nested-progress / result sub-blocks
-            // need structured handoff fields the core classifier doesn't
-            // surface over UniFFI (only kind=="handoff" + the detail in
-            // `content`). Render the delegated detail as the body markdown;
-            // the richer sub-blocks stay ready to wire if core adds the
-            // fields. See README §4.2 + the gap note in the report.
+            // TASK block (dark inset) — the delegated instruction.
+            if let taskText {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("TASK")
+                        .font(neon.mono(9).weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(neon.textFaint)
+                    Text(taskText)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.codeText)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(neon.codeBg))
+            }
+            // Body content (markdown) when present.
             if !event.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 LitterMarkdownBlock(text: event.content, role: .system)
+            }
+            // Result block (top-bordered, faint green wash) — parsed
+            // HANDOFF-OUT summary.
+            if let resultSummary {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(neon.green)
+                        Text("RESULT")
+                            .font(neon.mono(9).weight(.bold))
+                            .tracking(0.8)
+                            .foregroundStyle(neon.textFaint)
+                    }
+                    Text(resultSummary)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.text)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(neon.green.opacity(0.08)))
+                .overlay(alignment: .top) { Rectangle().fill(neon.green.opacity(0.4)).frame(height: 1) }
             }
         }
         .padding(14)
@@ -2217,44 +2245,43 @@ private struct LitterSubagentCard: View {
 //
 // "PLAN" with step bullets: done = filled accent/green + check (glowing),
 // active = ring + dot + "running…", todo = faint ring; done labels are
-// struck through in textDim. There is NO plan kind in the dispatch, so
-// this view is NOT wired into `LitterEventRow` — it's built to spec and
-// reported as an unwired gap (the event model carries `planSteps` /
-// `planDone` / `planActive` and `todos`, but no kind routes to it).
+// struck through in textDim. Wired into `LitterEventRow` on
+// kind=="plan"; driven by `event.planSteps` (core Tier-3 classifier, see
+// docs/NEON-CORE-FIELDS.md).
 struct LitterPlanCard: View {
-    /// All steps, in order.
-    let steps: [String]
-    /// Steps that are complete.
-    let done: Set<String>
-    /// The single in-progress step, if any.
-    let active: String?
+    let event: ConversationItem
     @Environment(\.neonTheme) private var neon
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("PLAN")
-                .font(neon.mono(11).weight(.bold))
-                .tracking(0.8)
-                .foregroundStyle(neon.accent)
-                .neonTextGlow(neon.textGlow?.tinted(neon.accent))
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                    stepRow(step)
+        if event.planSteps.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("PLAN")
+                    .font(neon.mono(11).weight(.bold))
+                    .tracking(0.8)
+                    .foregroundStyle(neon.accent)
+                    .neonTextGlow(neon.textGlow?.tinted(neon.accent))
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(event.planSteps.enumerated()), id: \.offset) { _, step in
+                        stepRow(step)
+                    }
                 }
             }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
     }
 
     @ViewBuilder
-    private func stepRow(_ step: String) -> some View {
-        let isDone = done.contains(step)
-        let isActive = active == step
+    private func stepRow(_ step: PlanStep) -> some View {
+        let state = step.state.lowercased()
+        let isDone = state == "done"
+        let isActive = state == "active"
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             bullet(isDone: isDone, isActive: isActive)
-            Text(step)
+            Text(step.text)
                 .font(neon.sans(14))
                 .strikethrough(isDone, color: neon.textDim)
                 .foregroundStyle(isDone ? neon.textDim : (isActive ? neon.text : neon.textDim))
@@ -2270,18 +2297,18 @@ struct LitterPlanCard: View {
     private func bullet(isDone: Bool, isActive: Bool) -> some View {
         if isDone {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(neon.green)
                 .neonTextGlow(neon.textGlow?.tinted(neon.green))
         } else if isActive {
             Circle()
                 .stroke(neon.accent2, lineWidth: 1.5)
-                .frame(width: 13, height: 13)
-                .overlay(Circle().fill(neon.accent2).frame(width: 5, height: 5))
+                .frame(width: 16, height: 16)
+                .overlay(Circle().fill(neon.accent2).frame(width: 6, height: 6))
         } else {
             Circle()
                 .stroke(neon.border, lineWidth: 1.5)
-                .frame(width: 13, height: 13)
+                .frame(width: 16, height: 16)
         }
     }
 }
