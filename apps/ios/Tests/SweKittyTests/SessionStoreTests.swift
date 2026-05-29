@@ -168,7 +168,13 @@ struct SessionStoreTests {
                 cwd: nil,
                 startedAt: nil,
                 lastActivityAt: nil,
-                displayName: nil
+                displayName: nil,
+                totalInputTokens: nil,
+                totalOutputTokens: nil,
+                totalCachedTokens: nil,
+                totalCostUsd: nil,
+                contextUsedTokens: nil,
+                contextWindowTokens: nil
             )
         ]
 
@@ -234,7 +240,13 @@ struct SessionStoreTests {
             cwd: "/tmp/work",
             startedAt: "2026-05-21T08:00:00Z",
             lastActivityAt: "2026-05-21T08:01:00Z",
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
         store.ingestStatus(status)
 
@@ -257,7 +269,9 @@ struct SessionStoreReadOnlyTests {
         ProjectSession(
             id: id, name: id, assistant: "claude", branch: nil,
             preview: nil, reasoningEffort: nil, cwd: nil,
-            startedAt: nil, lastActivityAt: nil, displayName: nil
+            startedAt: nil, lastActivityAt: nil, displayName: nil,
+            totalInputTokens: nil, totalOutputTokens: nil, totalCachedTokens: nil,
+            totalCostUsd: nil, contextUsedTokens: nil, contextWindowTokens: nil
         )
     }
 
@@ -266,7 +280,9 @@ struct SessionStoreReadOnlyTests {
             session: id, assistant: "claude", phase: phase, health: "green",
             rows: 40, cols: 120, yolo: false, preview: nil, sessionName: nil,
             viewers: 1, reasoningEffort: nil, cwd: nil, startedAt: nil,
-            lastActivityAt: nil, displayName: nil
+            lastActivityAt: nil, displayName: nil,
+            totalInputTokens: nil, totalOutputTokens: nil, totalCachedTokens: nil,
+            totalCostUsd: nil, contextUsedTokens: nil, contextWindowTokens: nil
         )
     }
 
@@ -380,7 +396,9 @@ struct SessionStoreArchiveDeleteTests {
         ProjectSession(
             id: id, name: id, assistant: "claude", branch: nil,
             preview: nil, reasoningEffort: nil, cwd: nil,
-            startedAt: nil, lastActivityAt: nil, displayName: nil
+            startedAt: nil, lastActivityAt: nil, displayName: nil,
+            totalInputTokens: nil, totalOutputTokens: nil, totalCachedTokens: nil,
+            totalCostUsd: nil, contextUsedTokens: nil, contextWindowTokens: nil
         )
     }
 
@@ -434,7 +452,13 @@ struct SessionStoreAITitleTests {
             cwd: nil,
             startedAt: "2026-05-21T08:00:00Z",
             lastActivityAt: nil,
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
     }
 

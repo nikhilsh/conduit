@@ -71,7 +71,13 @@ struct SavedSessionsStoreTests {
             cwd: "/repo",
             startedAt: "2026-05-20T00:00:00Z",
             lastActivityAt: "2026-05-20T00:00:00Z",
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
         store.upsert(
             session: session,
@@ -293,7 +299,13 @@ struct SavedSessionsStoreTests {
             cwd: nil,
             startedAt: "2026-05-20T00:00:00Z",
             lastActivityAt: "2026-05-20T00:00:00Z",
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
     }
 }

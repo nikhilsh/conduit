@@ -68,7 +68,13 @@ struct SessionStoreRustParityTests {
             cwd: "/tmp/work",
             startedAt: "2026-05-21T08:00:00Z",
             lastActivityAt: "2026-05-21T08:01:00Z",
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
         store.ingestStatus(status)
 
@@ -102,7 +108,13 @@ struct SessionStoreRustParityTests {
             cwd: nil,
             startedAt: nil,
             lastActivityAt: nil,
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
         store.ingestStatus(status)
         store.ingestExit(sessionID, 137)
