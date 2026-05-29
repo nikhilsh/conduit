@@ -22,6 +22,8 @@ import sh.nikhil.swekitty.auth.OAuthRequest
 import sh.nikhil.swekitty.state.NetworkReachabilityObserver
 import sh.nikhil.swekitty.state.ReachabilityEvent
 import sh.nikhil.swekitty.state.ReachabilityStatus
+import sh.nikhil.swekitty.ui.SlashCommandClass
+import sh.nikhil.swekitty.ui.SlashCommandRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
