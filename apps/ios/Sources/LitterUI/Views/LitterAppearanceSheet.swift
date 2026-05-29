@@ -25,6 +25,7 @@ extension LitterUI {
                     ScrollView {
                         VStack(spacing: 18) {
                             themeSection
+                            neonSection
                             fontSection
                             fontSizeSection
                         }
@@ -84,6 +85,45 @@ extension LitterUI {
             case .system: return "iphone"
             case .light:  return "sun.max.fill"
             case .dark:   return "moon.fill"
+            }
+        }
+
+        /// Neon Terminal theme controls — palette picker + glow toggle.
+        /// Mode is already handled by `themeSection` above (Neon reuses
+        /// `themeMode` for its light/dark resolution).
+        private var neonSection: some View {
+            @Bindable var appearance = appearance
+            return sectionCard(title: "Neon Terminal") {
+                VStack(spacing: 0) {
+                    ForEach(AppearanceStore.NeonPaletteChoice.allCases) { palette in
+                        Button {
+                            appearance.neonPalette = palette
+                        } label: {
+                            LitterUI.ListRow(
+                                icon: "paintbrush.pointed.fill",
+                                title: palette.label,
+                                subtitle: nil,
+                                iconTint: LitterUI.Palette.brand.color
+                            ) {
+                                if appearance.neonPalette == palette {
+                                    Image(systemName: "checkmark")
+                                        .font(.footnote.weight(.bold))
+                                        .foregroundStyle(LitterUI.Palette.brand.color)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                            .background(LitterUI.Palette.separator.color)
+                            .padding(.leading, 46)
+                    }
+                    LitterUI.toggleRow(
+                        icon: "sparkles",
+                        title: "Glow",
+                        subtitle: "Neon glow on cards & text",
+                        isOn: $appearance.neonGlow
+                    )
+                }
             }
         }
 

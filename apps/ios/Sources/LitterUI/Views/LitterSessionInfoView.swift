@@ -12,6 +12,7 @@ extension LitterUI {
 
     struct SessionInfoView: View {
         @Environment(SessionStore.self) private var store
+        @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
 
@@ -24,7 +25,7 @@ extension LitterUI {
         var body: some View {
             NavigationStack {
                 ZStack {
-                    LitterUI.Palette.surface.color.ignoresSafeArea()
+                    GlassAppBackground()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             hero
@@ -48,7 +49,7 @@ extension LitterUI {
                         Button("Done") { dismiss() }
                     }
                 }
-                .tint(LitterUI.Palette.brand.color)
+                .tint(neon.accent)
                 .sheet(isPresented: $showRename) {
                     LitterUI.RenameSessionSheet(
                         session: session,
@@ -104,23 +105,25 @@ extension LitterUI {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(LitterUI.Palette.success.color)
+                        .fill(neon.green)
                         .frame(width: 10, height: 10)
+                        .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
                     Text(store.displayName(for: session))
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                        .font(neon.sans(22).weight(.bold))
+                        .foregroundStyle(neon.text)
+                        .neonTextGlow(neon.textGlow)
                         .lineLimit(2)
                 }
                 HStack(spacing: 8) {
-                    LitterUI.Chip(label: session.assistant, tint: SweKittyTheme.accent(forAgent: session.assistant))
+                    NeonAgentChip(label: session.assistant, tint: neon.agentTint(forAgent: session.assistant))
                     if let effort = session.reasoningEffort {
-                        LitterUI.Chip(label: effort)
+                        NeonAgentChip(label: effort, tint: neon.textDim)
                     }
                 }
                 if let cwd = session.cwd {
                     Text(cwd)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.mono(11))
+                        .foregroundStyle(neon.textFaint)
                         .lineLimit(2)
                         .truncationMode(.middle)
                 }
@@ -146,12 +149,14 @@ extension LitterUI {
                 VStack(spacing: 8) {
                     Image(systemName: systemImage)
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.brand.color)
+                        .foregroundStyle(neon.accent)
                         .frame(width: 44, height: 44)
-                        .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
+                        .background(Circle().fill(neon.surface))
+                        .overlay(Circle().stroke(neon.borderStrong, lineWidth: 1))
+                        .neonGlowBox(neon.glow ? neon.glowBox : nil)
                     Text(label)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                        .font(neon.sans(11).weight(.semibold))
+                        .foregroundStyle(neon.text)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -168,15 +173,16 @@ extension LitterUI {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(stat.value)
                             .font(LitterUI.Typography.statBig)
-                            .foregroundStyle(LitterUI.Palette.brand.color)
+                            .foregroundStyle(neon.accent)
+                            .neonTextGlow(neon.textGlow)
                         Text(stat.title)
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                            .font(neon.mono(11).weight(.semibold))
+                            .foregroundStyle(neon.textDim)
                             .textCase(.uppercase)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
-                    .litterGlassRoundedRect(cornerRadius: 14, config: .card)
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
                 }
             }
         }
@@ -185,23 +191,24 @@ extension LitterUI {
             let details = LitterUI.SessionInfoViewModel.details(snapshot)
             return Group {
                 if !details.isEmpty {
-                    LitterUI.Card {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text("Details")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                                .textCase(.uppercase)
-                                .padding(.bottom, 8)
-                            ForEach(Array(details.enumerated()), id: \.element.id) { index, detail in
-                                detailRow(detail)
-                                if index < details.count - 1 {
-                                    Divider()
-                                        .background(LitterUI.Palette.separator.color)
-                                        .padding(.vertical, 8)
-                                }
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Details")
+                            .font(neon.mono(11).weight(.bold))
+                            .foregroundStyle(neon.textDim)
+                            .textCase(.uppercase)
+                            .padding(.bottom, 8)
+                        ForEach(Array(details.enumerated()), id: \.element.id) { index, detail in
+                            detailRow(detail)
+                            if index < details.count - 1 {
+                                Divider()
+                                    .background(neon.border)
+                                    .padding(.vertical, 8)
                             }
                         }
                     }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
                 }
             }
         }
@@ -209,38 +216,39 @@ extension LitterUI {
         private func detailRow(_ detail: LitterUI.SessionInfoDetail) -> some View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(detail.label)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.textDim)
                 Spacer(minLength: 12)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(detail.value)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
                         .multilineTextAlignment(.trailing)
                     if let caption = detail.caption {
                         Text(caption)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(LitterUI.Palette.textMuted.color)
+                            .font(neon.mono(11))
+                            .foregroundStyle(neon.textFaint)
                     }
                 }
             }
         }
 
         private var serverCard: some View {
-            LitterUI.Card {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Server")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                        .textCase(.uppercase)
-                    Text(store.endpoint.isComplete ? store.endpoint.displayHost : "—")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
-                    Text(store.harness.badgeLabel)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
-                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Server")
+                    .font(neon.mono(11).weight(.bold))
+                    .foregroundStyle(neon.textDim)
+                    .textCase(.uppercase)
+                Text(store.endpoint.isComplete ? store.endpoint.displayHost : "—")
+                    .font(neon.sans(14).weight(.semibold))
+                    .foregroundStyle(neon.text)
+                Text(store.harness.badgeLabel)
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.textFaint)
             }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
     }
 }

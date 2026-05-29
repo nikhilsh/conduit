@@ -28,6 +28,7 @@ extension LitterUI {
         @Environment(SessionStore.self) private var store
         @Environment(AppearanceStore.self) private var appearance
         @Environment(StreamingRendererCoordinator.self) private var coordinator
+        @Environment(\.neonTheme) private var neon
 
         let session: ProjectSession
 
@@ -192,6 +193,7 @@ extension LitterUI {
                             LitterEventRow(
                                 event: event,
                                 isContinuation: isContinuation,
+                                sessionID: session.id,
                                 onQuickReply: { reply in
                                     store.sendChat(sessionID: session.id, message: reply)
                                 }
@@ -260,7 +262,7 @@ extension LitterUI {
                                 // keyboard) uses the chat surface color, so
                                 // there's no color seam at the composer/keyboard
                                 // inset.
-                                .background(LitterUI.Palette.surface.color)
+                                .background(neon.surfaceSolid)
                         }
                     }
                 }
@@ -386,9 +388,11 @@ extension LitterUI {
             } label: {
                 Image(systemName: "arrow.down")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(LitterUI.Palette.brand.color)
+                    .foregroundStyle(neon.accent)
                     .frame(width: 40, height: 40)
-                    .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
+                    .background(Circle().fill(neon.surfaceSolid))
+                    .overlay(Circle().stroke(neon.borderStrong, lineWidth: 1))
+                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Scroll to latest message")
@@ -433,14 +437,15 @@ extension LitterUI {
                                 store.sendChat(sessionID: session.id, message: reply)
                             } label: {
                                 Text(reply)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .foregroundStyle(LitterUI.Palette.brand.color)
-                                    .litterGlassCapsule(
-                                        tint: LitterUI.Palette.brand.color.opacity(0.18),
-                                        config: .pill
+                                    .font(neon.sans(13).weight(.medium))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .foregroundStyle(neon.accent)
+                                    .background(
+                                        Capsule().fill(neon.surface)
                                     )
+                                    .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
+                                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
                             }
                             .buttonStyle(.plain)
                             .accessibilityHint("Send suggested reply")
@@ -471,8 +476,8 @@ extension LitterUI {
                 // inset cluster (#232/#236).
                 if let attachError {
                     Text(attachError)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(LitterUI.Palette.danger.color)
+                        .font(neon.sans(12).weight(.medium))
+                        .foregroundStyle(neon.red)
                         .padding(.horizontal, 16)
                         .padding(.top, 6)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -491,20 +496,18 @@ extension LitterUI {
             .background(
                 LinearGradient(
                     colors: [
-                        LitterUI.Palette.surface.color.opacity(0),
-                        LitterUI.Palette.surface.color.opacity(0.95)
+                        neon.surfaceSolid.opacity(0),
+                        neon.surfaceSolid.opacity(0.95)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
-            // Agent-tinted glow rising up from the composer — a quiet
-            // "you're talking to X" cue without painting the surface.
-            // Copper-orange for Claude, mono-white for Codex, etc. Low
-            // alpha + soft radius so it reads as ambient, not loud.
+            // Accent-tinted glow rising up from the composer — a quiet
+            // ambient "you're talking to X" cue without painting the
+            // surface. Low alpha + soft radius so it reads as ambient.
             .shadow(
-                color: SweKittyTheme.accent(forAgent: session.assistant)
-                    .opacity(0.35),
+                color: neon.accent.opacity(0.35),
                 radius: 14,
                 x: 0,
                 y: -2
@@ -532,10 +535,15 @@ extension LitterUI {
                 )
                 .focused($composerFocused)
                 .lineLimit(1...4)
-                .font(.system(size: 16, design: LitterUI.Typography.bodyDesign(for: appearance.fontFamily)))
+                .font(neon.sans(16))
+                .foregroundStyle(neon.text)
+                .tint(neon.accent)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .litterGlassCapsule(config: .pill)
+                .background(
+                    Capsule().fill(neon.surface)
+                )
+                .overlay(Capsule().stroke(neon.border, lineWidth: 1))
                 .onSubmit { send() }
 
                 // Send is enabled by a non-empty draft OR at least one
@@ -552,9 +560,12 @@ extension LitterUI {
                                     .controlSize(.small)
                                     .frame(width: 28, height: 28)
                             } else {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .font(.system(size: 28, weight: .semibold))
-                                    .foregroundStyle(LitterUI.Palette.brand.color)
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundStyle(neon.accentText)
+                                    .frame(width: 36, height: 36)
+                                    .background(Circle().fill(neon.accent))
+                                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
                             }
                         }
                     }
@@ -566,10 +577,11 @@ extension LitterUI {
                         showVoiceDictation = true
                     } label: {
                         Image(systemName: "mic.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(neon.textDim)
                             .frame(width: 36, height: 36)
-                            .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
+                            .background(Circle().fill(neon.surface))
+                            .overlay(Circle().stroke(neon.border, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Voice")
@@ -646,6 +658,9 @@ private struct LitterEventRow: View {
     /// True when the immediately preceding event had the same role —
     /// used to suppress the redundant sender label on grouped runs.
     var isContinuation: Bool = false
+    /// Live session id — threaded so the CommandCard's Re-run action can
+    /// resend the command to the right session.
+    var sessionID: String = ""
     let onQuickReply: (String) -> Void
 
     var body: some View {
@@ -656,7 +671,7 @@ private struct LitterEventRow: View {
         } else if event.kind == "subagent" {
             LitterSubagentCard(event: event)
         } else if event.role.lowercased() == "tool" {
-            LitterToolCard(event: event)
+            LitterToolCard(event: event, sessionID: sessionID)
         } else {
             LitterChatMessageRow(event: event, isContinuation: isContinuation)
         }
@@ -684,6 +699,7 @@ private struct LitterChatMessageRow: View {
     /// to visually group consecutive same-sender messages.
     var isContinuation: Bool = false
     @Environment(AppearanceStore.self) private var appearance
+    @Environment(\.neonTheme) private var neon
 
     private var role: LitterRole { LitterRole(event.role) }
 
@@ -692,15 +708,36 @@ private struct LitterChatMessageRow: View {
         VStack(alignment: alignment, spacing: 4) {
             if !isContinuation {
                 Text(roleLabel)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    // Role labels stay mono (terminal-shaped chrome) +
+                    // glow when the label is the accent (user / tool).
+                    .font(neon.mono(11).weight(.bold))
                     .foregroundStyle(roleColor)
                     .textCase(.uppercase)
+                    .neonTextGlow(roleGlow)
             }
-            LitterBlockStack(
-                blocks: ConversationRenderer.blocks(for: event.content),
-                role: role,
-                itemID: event.id
-            )
+            // §2: user messages render in a right-aligned accent pill;
+            // the assistant/system prose renders flat on the canvas (no
+            // heavy bubble), styled inside LitterBlockStack.
+            if role == .user {
+                LitterBlockStack(
+                    blocks: ConversationRenderer.blocks(for: event.content),
+                    role: role,
+                    itemID: event.id
+                )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(neon.accent)
+                )
+                .neonGlowBox(neon.glow ? neon.glowBox : nil)
+            } else {
+                LitterBlockStack(
+                    blocks: ConversationRenderer.blocks(for: event.content),
+                    role: role,
+                    itemID: event.id
+                )
+            }
             if !event.files.isEmpty {
                 LitterFileStrip(files: event.files)
             }
@@ -722,10 +759,18 @@ private struct LitterChatMessageRow: View {
 
     private var roleColor: Color {
         switch role {
-        case .user:      return LitterUI.Palette.brand.color
-        case .assistant: return LitterUI.Palette.textSecondary.color
-        case .system:    return LitterUI.Palette.warning.color
-        case .tool:      return LitterUI.Palette.accentStrong.color
+        case .user:      return neon.accent
+        case .assistant: return neon.textDim
+        case .system:    return neon.yellow
+        case .tool:      return neon.accentBright
+        }
+    }
+
+    /// Accent-tinted role labels glow; muted ones don't.
+    private var roleGlow: NeonTextGlow? {
+        switch role {
+        case .user, .tool: return neon.textGlow?.tinted(roleColor)
+        default:           return nil
         }
     }
 }
@@ -835,7 +880,10 @@ private struct LitterMarkdownBlock: View {
             pieces: pieces,
             role: role,
             basePointSize: appearance.bodyPointSize,
-            design: SweKittyTypography.design(for: appearance.fontFamily)
+            // §2: prose renders in the sans family (NOT mono). The user's
+            // family preference still applies for serif; otherwise the
+            // neon sans intent (system sans / Space Grotesk) governs.
+            design: appearance.fontFamily == .serif ? .serif : .default
         )
         .frame(maxWidth: role == .user ? nil : .infinity, alignment: role == .user ? .trailing : .leading)
         .transition(isStreaming ? .opacity : .identity)
@@ -879,6 +927,7 @@ private struct LitterStructuredMarkdownView: View {
     let role: LitterRole
     let basePointSize: CGFloat
     let design: Font.Design
+    @Environment(\.neonTheme) private var neon
 
     /// Vertical gap between top-level blocks (BUG 1: blocks were bunched
     /// with no rhythm). 10pt reads as a clear paragraph break without
@@ -937,7 +986,7 @@ private struct LitterStructuredMarkdownView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(ordered ? "\(idx + 1)." : "•")
                         .font(.system(size: basePointSize, weight: .regular, design: design))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .foregroundStyle(role == .user ? neon.accentText.opacity(0.8) : neon.textDim)
                         .frame(minWidth: ordered ? 18 : 10, alignment: .trailing)
                     inlineText(item)
                         .font(.system(size: basePointSize, weight: .regular, design: design))
@@ -962,7 +1011,7 @@ private struct LitterStructuredMarkdownView: View {
                             if !header.isEmpty {
                                 Text(header)
                                     .font(.system(size: basePointSize * 0.85, weight: .semibold, design: design))
-                                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                                    .foregroundStyle(neon.textDim)
                             }
                             inlineText(cell)
                                 .font(.system(size: basePointSize, weight: .regular, design: design))
@@ -975,7 +1024,7 @@ private struct LitterStructuredMarkdownView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(LitterUI.Palette.surfaceLight.color.opacity(0.5))
+                        .fill(neon.surface2)
                 )
             }
         }
@@ -1011,9 +1060,10 @@ private struct LitterStructuredMarkdownView: View {
 
     private var foregroundForRole: Color {
         switch role {
-        case .user:      return LitterUI.Palette.brand.color
-        case .system:    return LitterUI.Palette.textSecondary.color
-        default:         return LitterUI.Palette.textBody.color
+        // §2: user prose sits on the accent pill → accentText for contrast.
+        case .user:      return neon.accentText
+        case .system:    return neon.textDim
+        default:         return neon.text
         }
     }
 }
@@ -1027,22 +1077,24 @@ private struct LitterStructuredMarkdownView: View {
 // as the agent's in-progress turn.
 private struct LitterTypingIndicator: View {
     @State private var phase = 0
+    @Environment(\.neonTheme) private var neon
 
     private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("assistant")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                .font(neon.mono(11).weight(.bold))
+                .foregroundStyle(neon.textDim)
                 .textCase(.uppercase)
             HStack(spacing: 5) {
                 ForEach(0..<3, id: \.self) { i in
                     Circle()
-                        .fill(LitterUI.Palette.textSecondary.color)
+                        .fill(neon.accent)
                         .frame(width: 7, height: 7)
                         .scaleEffect(phase == i ? 1.0 : 0.6)
                         .opacity(phase == i ? 1.0 : 0.4)
+                        .neonGlowBox(phase == i ? neon.glowBox?.tinted(neon.accent) : nil)
                         .animation(.easeInOut(duration: 0.3), value: phase)
                 }
             }
@@ -1058,15 +1110,18 @@ private struct LitterTypingIndicator: View {
 private struct LitterCodeBlock: View {
     let language: String?
     let content: String
+    @Environment(\.neonTheme) private var neon
 
     private var resolvedLanguage: String? { SyntaxLanguage.fromFence(language) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let language, !language.isEmpty {
+                // §2: mono-shaped chrome — code language label in mono.
                 Text(language.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .font(neon.mono(10).weight(.bold))
+                    .tracking(0.7)
+                    .foregroundStyle(neon.textDim)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 SyntaxHighlightedCodeBlock(language: resolvedLanguage, content: content)
@@ -1074,12 +1129,9 @@ private struct LitterCodeBlock: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(LitterUI.Palette.codeBackground.color)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(LitterUI.Palette.border.color.opacity(0.55), lineWidth: 0.8)
-        )
+        // §2: code renders on the dark neon code surface. Hairline
+        // border via the shared card-surface rule (glowBox when on).
+        .neonCardSurface(neon, fill: neon.codeBg, cornerRadius: 14)
     }
 }
 
@@ -1087,6 +1139,7 @@ private struct LitterToolSummaryBlock: View {
     let label: String
     let detail: String
     @State private var expanded = false
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1094,10 +1147,10 @@ private struct LitterToolSummaryBlock: View {
                 HStack(spacing: 8) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .foregroundStyle(neon.textDim)
                     Text(label)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .font(neon.sans(13).weight(.medium))
+                        .foregroundStyle(neon.textDim)
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
@@ -1105,8 +1158,8 @@ private struct LitterToolSummaryBlock: View {
             .buttonStyle(.plain)
             if expanded {
                 Text(detail)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(LitterUI.Palette.textBody.color)
+                    .font(neon.mono(12))
+                    .foregroundStyle(neon.codeText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 22)
                     .textSelection(.enabled)
@@ -1134,86 +1187,258 @@ enum LitterToolCardMetrics {
     static let surfaceOpacity: Double = 0.6
 }
 
-private struct LitterToolCard: View {
-    let event: ConversationItem
-    // Device feedback v0.0.47 #2: tool/bash cards open COLLAPSED — just
-    // the header row (label · status · command one-liner · time + a
-    // chevron). Tapping expands to the full COMMAND box + output. State
-    // is per-card @State, so it persists for the session (the card stays
-    // expanded once tapped) while every fresh card starts collapsed.
-    @State private var expanded = false
+// MARK: - Neon tool/command classification (pure, testable)
+//
+// Maps a tool name to an SF Symbol + tint role + human label, and
+// detects whether a tool call is a shell/exec command (which gets the
+// headline CommandCard look, README §4.1) vs a generic tool (the
+// compact ToolCard, §4.5). Kept off SwiftUI so `NeonToolCardLogicTests`
+// can pin the mapping without a view host.
 
-    private var sections: [ToolSection] { ConversationRenderer.toolSections(for: event) }
+/// A tint role resolved against the live `NeonTheme` at render time
+/// (the theme's colours aren't known at parse time). The view maps the
+/// role to a concrete `Color`.
+enum NeonToolTint: Equatable {
+    case purple, blue, claude, green, accent, red
+}
 
-    private var summary: String {
-        if let command = event.command, !command.isEmpty {
-            return String(command.prefix(80))
+enum NeonToolClassifier {
+
+    /// True when the tool call should render as a shell COMMAND card
+    /// (§4.1) — toolName looks like a shell (bash/sh/exec/zsh/shell/
+    /// run/command/terminal) OR there's a non-empty `command` present.
+    static func isCommand(toolName: String?, command: String?) -> Bool {
+        if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
         }
-        let firstLine = event.content
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let firstLine, !firstLine.isEmpty else { return "Tool activity" }
-        return String(firstLine.prefix(80))
+        guard let name = toolName?.lowercased(), !name.isEmpty else { return false }
+        let shellNames = ["bash", "sh", "zsh", "shell", "exec", "run", "command", "terminal", "execute"]
+        return shellNames.contains { name.contains($0) }
     }
 
-    private var headerLabel: String {
-        if let toolName = event.toolName, !toolName.isEmpty {
-            return toolName.uppercased()
+    /// SF Symbol for a tool name (§4.5 icon tile).
+    static func icon(forToolName name: String?) -> String {
+        switch tintRole(forToolName: name) {
+        case .purple: return "magnifyingglass"
+        case .blue:   return "doc.text"
+        case .claude: return "pencil"
+        case .green:  return "terminal"
+        case .red:    return "exclamationmark.triangle"
+        case .accent: return "wrench.and.screwdriver"
         }
-        return event.kind.uppercased()
+    }
+
+    /// Tint role for a tool name: search→purple, read→blue, edit→claude,
+    /// bash/exec→green; otherwise the theme accent.
+    static func tintRole(forToolName name: String?) -> NeonToolTint {
+        guard let lower = name?.lowercased(), !lower.isEmpty else { return .accent }
+        if lower.contains("search") || lower.contains("grep") || lower.contains("find")
+            || lower.contains("glob") { return .purple }
+        if lower.contains("read") || lower.contains("cat") || lower.contains("view")
+            || lower.contains("open") { return .blue }
+        if lower.contains("edit") || lower.contains("write") || lower.contains("patch")
+            || lower.contains("apply") || lower.contains("create") { return .claude }
+        if lower.contains("bash") || lower.contains("sh") || lower.contains("exec")
+            || lower.contains("run") || lower.contains("terminal") || lower.contains("command") {
+            return .green
+        }
+        return .accent
+    }
+
+    /// Human-readable label for the compact card header (§4.5):
+    /// "Searched the codebase", "Read 2 files", etc. Falls back to a
+    /// title-cased tool name.
+    static func humanLabel(toolName: String?, fileCount: Int) -> String {
+        switch tintRole(forToolName: toolName) {
+        case .purple: return "Searched the codebase"
+        case .blue:
+            if fileCount == 1 { return "Read 1 file" }
+            if fileCount > 1 { return "Read \(fileCount) files" }
+            return "Read files"
+        case .claude:
+            if fileCount == 1 { return "Edited 1 file" }
+            if fileCount > 1 { return "Edited \(fileCount) files" }
+            return "Edited files"
+        case .green:  return "Ran a command"
+        case .red:    return "Tool error"
+        case .accent:
+            guard let name = toolName, !name.isEmpty else { return "Tool activity" }
+            return name.prefix(1).uppercased() + name.dropFirst()
+        }
+    }
+}
+
+/// Parsed `+N −M` counts from a `diffSummary` string (§4.4). Accepts the
+/// common shapes the renderer emits — `+12 -3`, `+12/-3`, `12 additions,
+/// 3 deletions`, `12 insertions(+), 3 deletions(-)`.
+struct NeonDiffStat: Equatable {
+    let added: Int?
+    let removed: Int?
+
+    static func parse(_ summary: String?) -> NeonDiffStat {
+        guard let summary, !summary.isEmpty else { return NeonDiffStat(added: nil, removed: nil) }
+        var added: Int?
+        var removed: Int?
+
+        // `+N` / `-N` tokens (handles `+12 -3`, `+12/-3`).
+        let scanner = summary
+        if let r = firstNumber(in: scanner, afterAnyOf: ["+"]) { added = r }
+        if let r = firstNumber(in: scanner, afterAnyOf: ["-", "−"]) { removed = r }
+
+        // Word forms: "12 additions", "3 deletions/removals".
+        if added == nil { added = numberBefore(["addition", "insertion"], in: scanner) }
+        if removed == nil { removed = numberBefore(["deletion", "removal"], in: scanner) }
+
+        return NeonDiffStat(added: added, removed: removed)
+    }
+
+    /// First integer immediately following any of `markers` (e.g. "+12").
+    private static func firstNumber(in text: String, afterAnyOf markers: [String]) -> Int? {
+        let chars = Array(text)
+        for marker in markers {
+            guard let m = marker.first else { continue }
+            var i = 0
+            while i < chars.count {
+                if chars[i] == m {
+                    var j = i + 1
+                    var digits = ""
+                    while j < chars.count, chars[j].isNumber {
+                        digits.append(chars[j]); j += 1
+                    }
+                    if let n = Int(digits) { return n }
+                }
+                i += 1
+            }
+        }
+        return nil
+    }
+
+    /// Integer that precedes one of `words` (e.g. "12 additions").
+    private static func numberBefore(_ words: [String], in text: String) -> Int? {
+        let lower = text.lowercased()
+        for word in words {
+            guard let range = lower.range(of: word) else { continue }
+            let prefix = lower[lower.startIndex..<range.lowerBound]
+            let trailingDigits = prefix.reversed().prefix { $0.isNumber || $0 == " " }
+            let digits = String(trailingDigits).reversed().filter { $0.isNumber }
+            if let n = Int(String(digits)) { return n }
+        }
+        return nil
+    }
+}
+
+extension NeonTheme {
+    /// Resolve a `NeonToolTint` role to a concrete colour from the theme.
+    func color(for tint: NeonToolTint) -> Color {
+        switch tint {
+        case .purple: return purple
+        case .blue:   return blue
+        case .claude: return claude
+        case .green:  return green
+        case .accent: return accent
+        case .red:    return red
+        }
+    }
+}
+
+private struct LitterToolCard: View {
+    let event: ConversationItem
+    var sessionID: String = ""
+
+    var body: some View {
+        // §4.1 vs §4.5: shell/exec calls (or anything carrying a
+        // command) get the headline CommandCard; everything else gets
+        // the compact neon tool row.
+        if NeonToolClassifier.isCommand(toolName: event.toolName, command: ConversationRenderer.extractCommand(from: event)) {
+            LitterNeonCommandCard(event: event, sessionID: sessionID)
+        } else {
+            LitterNeonToolCard(event: event)
+        }
+    }
+}
+
+// MARK: - Neon status helpers (shared by tool / command cards)
+
+/// One of the four card states the design distinguishes (§4.5).
+private enum NeonCardState: Equatable {
+    case running, ok, fail, pending
+
+    init(status: String, exitCode: Int32?) {
+        let s = status.lowercased()
+        if s == "running" || s == "streaming" || s == "working" { self = .running; return }
+        if s == "pending" || s == "thinking" { self = .pending; return }
+        if s == "failed" || s == "error" { self = .fail; return }
+        if let code = exitCode, code != 0 { self = .fail; return }
+        self = .ok
+    }
+
+    func color(_ neon: NeonTheme) -> Color {
+        switch self {
+        case .running: return neon.accent2
+        case .ok:      return neon.green
+        case .fail:    return neon.red
+        case .pending: return neon.claude
+        }
+    }
+}
+
+// MARK: - Compact tool card (§4.5)
+
+private struct LitterNeonToolCard: View {
+    let event: ConversationItem
+    // Device feedback v0.0.47 #2: tool/bash cards open COLLAPSED.
+    @State private var expanded = false
+    @Environment(\.neonTheme) private var neon
+
+    private var sections: [ToolSection] { ConversationRenderer.toolSections(for: event) }
+    private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
+    private var tint: Color { neon.color(for: NeonToolClassifier.tintRole(forToolName: event.toolName)) }
+    private var label: String {
+        NeonToolClassifier.humanLabel(toolName: event.toolName, fileCount: event.files.count)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                // 6pt status dot replaces the wrench.and.screwdriver
-                // glyph per audit §A.2.8 — litter's tool cards are
-                // text-forward (header label + small status indicator)
-                // rather than icon-forward.
-                Circle()
-                    .fill(statusTint)
-                    .frame(width: LitterToolCardMetrics.statusDotSize, height: LitterToolCardMetrics.statusDotSize)
+            HStack(spacing: 10) {
+                // 22pt tinted icon tile.
+                Image(systemName: NeonToolClassifier.icon(forToolName: event.toolName))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(tint)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(tint.opacity(0.16))
+                    )
                 VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
                     HStack(spacing: 6) {
-                        Text(headerLabel)
-                            .font(.caption2.weight(.bold))
-                            .tracking(0.7)
-                            .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                        LitterStatusChip(status: event.status)
-                        if let diffSummary = event.diffSummary, !diffSummary.isEmpty {
-                            Text(diffSummary.uppercased())
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(LitterUI.Palette.surfaceLight.color)
-                                .clipShape(Capsule())
+                        // mono meta + duration (green/red).
+                        if let duration = ConversationRenderer.extractMetadata(from: event).duration,
+                           !duration.isEmpty {
+                            Text(duration)
+                                .font(neon.mono(10.5))
+                                .foregroundStyle(state == .fail ? neon.red : neon.green)
+                        }
+                        if let code = event.exitCode {
+                            Text("exit \(code)")
+                                .font(neon.mono(10.5))
+                                .foregroundStyle(code == 0 ? neon.green : neon.red)
                         }
                     }
-                    // Device feedback v0.0.47 #1: the command one-liner
-                    // is the collapsed card's only command surface. When
-                    // expanded the COMMAND box (`LitterCommandBlock`)
-                    // shows the full command, so this row would duplicate
-                    // it — hide it once expanded to kill the redundant
-                    // plain-text "Bash: …" line the device reported.
-                    if !expanded {
-                        Text(summary)
-                            .font(.footnote)
-                            .foregroundStyle(LitterUI.Palette.textBody.color)
-                            .lineLimit(1)
-                    }
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 if !event.ts.isEmpty {
                     Text(ConversationTimestamp.relative(event.ts))
-                        .font(.caption2)
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.mono(10))
+                        .foregroundStyle(neon.textFaint)
                 }
-                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                Image(systemName: "chevron.down")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .foregroundStyle(neon.textDim)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
             }
             .contentShape(Rectangle())
             .onTapGesture {
@@ -1223,24 +1448,7 @@ private struct LitterToolCard: View {
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
-                        switch section {
-                        case .meta(let meta):
-                            LitterToolMetaBlock(meta: meta)
-                        case .command(let command):
-                            LitterCommandBlock(command: command)
-                        case .files(let files):
-                            LitterFileStrip(files: files)
-                        case .stdout(let text):
-                            LitterLabeledOutputBlock(title: "STDOUT", text: text)
-                        case .stderr(let text):
-                            LitterLabeledOutputBlock(title: "STDERR", text: text)
-                        case .text(let text):
-                            LitterMarkdownBlock(text: text, role: .tool)
-                        case .code(let language, let content):
-                            LitterCodeBlock(language: language, content: content)
-                        case .diff(let diff):
-                            LitterDiffBlock(content: diff)
-                        }
+                        sectionView(section)
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -1249,105 +1457,318 @@ private struct LitterToolCard: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // PLAN-LITTER-VISUAL-PARITY audit §A.2.3 — drop the glass
-        // surface + 0.20-opacity statusTint overlay; tool cards now
-        // render as a flat 0.6-opacity surfaceLight rounded rect, with
-        // the per-status tint reduced to the leading 6pt dot. This
-        // stops the "card inside card inside card" stacking that
-        // happens once a tool card carries a code / diff sub-block.
-        .background(
-            RoundedRectangle(cornerRadius: LitterToolCardMetrics.surfaceCornerRadius, style: .continuous)
-                .fill(LitterUI.Palette.surfaceLight.color.opacity(LitterToolCardMetrics.surfaceOpacity))
-        )
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: LitterToolCardMetrics.surfaceCornerRadius, glowTint: tint)
     }
 
-    private var statusTint: Color {
-        switch event.status.lowercased() {
-        case "running":
-            return LitterUI.Palette.warning.color
-        case "pending":
-            return LitterUI.Palette.brand.color
-        case "failed":
-            return LitterUI.Palette.danger.color
-        default:
-            return LitterUI.Palette.success.color
+    @ViewBuilder
+    private func sectionView(_ section: ToolSection) -> some View {
+        switch section {
+        case .meta(let meta):           LitterToolMetaBlock(meta: meta)
+        case .command(let command):     LitterCommandBlock(command: command)
+        case .files(let files):         LitterFileStrip(files: files)
+        case .stdout(let text):         LitterLabeledOutputBlock(title: "STDOUT", text: text)
+        case .stderr(let text):         LitterLabeledOutputBlock(title: "STDERR", text: text)
+        case .text(let text):           LitterMarkdownBlock(text: text, role: .tool)
+        case .code(let language, let content): LitterCodeBlock(language: language, content: content)
+        case .diff(let diff):           LitterDiffBlock(content: diff, diffSummary: event.diffSummary)
         }
+    }
+}
+
+// MARK: - Command card (§4.1 — the headline)
+
+private struct LitterNeonCommandCard: View {
+    let event: ConversationItem
+    var sessionID: String = ""
+    @State private var expanded = true
+    @State private var blink = false
+    @Environment(\.neonTheme) private var neon
+    @Environment(SessionStore.self) private var store
+
+    private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
+    private var command: String { ConversationRenderer.extractCommand(from: event) ?? event.content }
+    private var sections: [ToolSection] { ConversationRenderer.toolSections(for: event) }
+    private var railColor: Color { state.color(neon) }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left 3px full-height status rail, glowing.
+            Rectangle()
+                .fill(railColor)
+                .frame(width: 3)
+                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(railColor) : nil)
+                .opacity(state == .running ? (blink ? 1.0 : 0.55) : 1.0)
+
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                metaStrip
+                if expanded { output }
+                actionBar
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .neonCardSurface(
+            neon,
+            fill: neon.codeBg,
+            cornerRadius: 14,
+            failed: state == .fail,
+            glowTint: state == .fail ? neon.red : railColor
+        )
+        .onAppear {
+            if state == .running {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { blink = true }
+            }
+        }
+    }
+
+    // Header: `$` + command (mono, ellipsized) + status chip.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("$")
+                .font(neon.mono(13).weight(.bold))
+                .foregroundStyle(railColor)
+                .neonTextGlow(neon.textGlow?.tinted(railColor))
+            Text(command)
+                .font(neon.mono(13))
+                .foregroundStyle(neon.codeText)
+                .lineLimit(expanded ? nil : 1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            statusChip
+            Image(systemName: "chevron.down")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(neon.textDim)
+                .rotationEffect(.degrees(expanded ? 180 : 0))
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() } }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var statusChip: some View {
+        switch state {
+        case .running, .pending:
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(railColor)
+                    .frame(width: 6, height: 6)
+                    .opacity(blink ? 1.0 : 0.4)
+                Text("running")
+                    .font(neon.mono(10.5).weight(.semibold))
+                    .foregroundStyle(railColor)
+            }
+        case .ok, .fail:
+            let code = event.exitCode ?? (state == .fail ? 1 : 0)
+            Text("exit \(code)")
+                .font(neon.mono(10.5).weight(.bold))
+                .foregroundStyle(state == .fail ? neon.red : neon.green)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule().fill((state == .fail ? neon.red : neon.green).opacity(0.18))
+                )
+        }
+    }
+
+    // Meta strip: folder + cwd · host · duration. Each field omitted
+    // gracefully when absent.
+    @ViewBuilder
+    private var metaStrip: some View {
+        let cwd = event.cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = event.host?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let duration = ConversationRenderer.extractMetadata(from: event).duration
+        let hasAny = (cwd?.isEmpty == false) || (host?.isEmpty == false) || (duration?.isEmpty == false)
+        if hasAny {
+            HStack(spacing: 6) {
+                if let cwd, !cwd.isEmpty {
+                    Image(systemName: "folder")
+                        .font(.system(size: 9))
+                        .foregroundStyle(neon.textFaint)
+                    Text(cwd)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if let host, !host.isEmpty {
+                    Text("·").font(neon.mono(10.5)).foregroundStyle(neon.textFaint)
+                    Text(host)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let duration, !duration.isEmpty {
+                    Text(duration)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(state == .fail ? neon.red : neon.textDim)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
+
+    // Output (collapsible): stdout in codeText, stderr in red. Blinking
+    // block cursor while running.
+    private var output: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                switch section {
+                case .stdout(let text):
+                    outputText(text, color: neon.codeText)
+                case .stderr(let text):
+                    outputText(text, color: neon.red, glow: true)
+                case .text(let text):
+                    outputText(text, color: neon.codeText)
+                case .code(let language, let content):
+                    LitterCodeBlock(language: language, content: content)
+                case .diff(let diff):
+                    LitterDiffBlock(content: diff, diffSummary: event.diffSummary)
+                case .files(let files):
+                    LitterFileStrip(files: files)
+                case .meta, .command:
+                    EmptyView()  // already shown in header / meta strip
+                }
+            }
+            if state == .running {
+                Text("\u{2588}")
+                    .font(neon.mono(11.3))
+                    .foregroundStyle(neon.codeText)
+                    .opacity(blink ? 1.0 : 0.0)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: 132, alignment: .topLeading)
+        .clipped()
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+    }
+
+    private func outputText(_ text: String, color: Color, glow: Bool = false) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(text)
+                .font(neon.mono(11.3))
+                .foregroundStyle(color)
+                .neonTextGlow(glow ? neon.textGlow?.tinted(neon.red) : nil)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // Action bar (top-bordered): Copy · Re-run · Open in terminal.
+    private var actionBar: some View {
+        HStack(spacing: 0) {
+            actionButton("Copy", icon: "doc.on.doc") {
+                UIPasteboard.general.string = command
+            }
+            actionDivider
+            actionButton("Re-run", icon: "arrow.clockwise") {
+                // Wired: resend the command as a chat message (the agent
+                // re-executes). SessionStore exposes no direct exec hook,
+                // so this is the closest existing seam.
+                guard !sessionID.isEmpty else { return }
+                store.sendChat(sessionID: sessionID, message: command)
+            }
+            actionDivider
+            actionButton("Open in terminal", icon: "terminal") {
+                // TODO: needs store hook — SessionStore has no "switch to
+                // terminal tab + paste command" action; the tab host owns
+                // that. Left as a no-op stub until that seam exists.
+            }
+        }
+        .overlay(alignment: .top) {
+            Rectangle().fill(neon.border).frame(height: 1)
+        }
+    }
+
+    private func actionButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(title).font(neon.mono(11).weight(.medium))
+            }
+            .foregroundStyle(neon.textDim)
+            .frame(maxWidth: .infinity)
+            .frame(height: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var actionDivider: some View {
+        Rectangle().fill(neon.border).frame(width: 1, height: 20)
     }
 }
 
 private struct LitterStatusChip: View {
     let status: String
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         Text(status.isEmpty ? "DONE" : status.uppercased())
-            .font(.caption2.weight(.bold))
-            .foregroundStyle(foreground)
+            .font(neon.mono(10).weight(.bold))
+            .foregroundStyle(tint)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(background)
-            .clipShape(Capsule())
+            .background(Capsule().fill(tint.opacity(0.18)))
     }
 
-    private var background: Color {
+    private var tint: Color {
         switch status.lowercased() {
-        case "running": return LitterUI.Palette.warning.color.opacity(0.20)
-        case "pending": return LitterUI.Palette.brand.color.opacity(0.20)
-        case "failed":  return LitterUI.Palette.danger.color.opacity(0.20)
-        default:        return LitterUI.Palette.success.color.opacity(0.20)
-        }
-    }
-
-    private var foreground: Color {
-        switch status.lowercased() {
-        case "running": return LitterUI.Palette.warning.color
-        case "pending": return LitterUI.Palette.brand.color
-        case "failed":  return LitterUI.Palette.danger.color
-        default:        return LitterUI.Palette.success.color
+        case "running", "streaming", "working": return neon.accent2
+        case "pending", "thinking":             return neon.claude
+        case "failed", "error":                 return neon.red
+        default:                                return neon.green
         }
     }
 }
 
 private struct LitterCommandBlock: View {
     let command: String
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LitterSectionLabel(title: "COMMAND")
             Text(command)
-                .font(.system(.caption, design: .monospaced).weight(.semibold))
-                .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                .font(neon.mono(12).weight(.semibold))
+                .foregroundStyle(neon.codeText)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(LitterUI.Palette.codeBackground.color)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(neon.codeBg)
+                )
         }
     }
 }
 
 private struct LitterToolMetaBlock: View {
     let meta: ToolMetadata
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         HStack(spacing: 8) {
             if let code = meta.exitCode {
                 Text("EXIT \(code)")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(code == 0 ? LitterUI.Palette.success.color : LitterUI.Palette.danger.color)
+                    .font(neon.mono(10).weight(.bold))
+                    .foregroundStyle(code == 0 ? neon.green : neon.red)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background((code == 0 ? LitterUI.Palette.success.color : LitterUI.Palette.danger.color).opacity(0.18))
-                    .clipShape(Capsule())
+                    .background(Capsule().fill((code == 0 ? neon.green : neon.red).opacity(0.18)))
             }
             if let duration = meta.duration, !duration.isEmpty {
                 Text("DURATION \(duration)")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .font(neon.mono(10).weight(.bold))
+                    .foregroundStyle(neon.textDim)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(LitterUI.Palette.surfaceLight.color)
-                    .clipShape(Capsule())
+                    .background(Capsule().fill(neon.surface2))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1368,17 +1789,19 @@ private struct LitterLabeledOutputBlock: View {
 
 private struct LitterSectionLabel: View {
     let title: String
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         Text(title)
-            .font(.caption2.weight(.bold))
+            .font(neon.mono(10).weight(.bold))
             .tracking(0.7)
-            .foregroundStyle(LitterUI.Palette.textSecondary.color)
+            .foregroundStyle(neon.textDim)
     }
 }
 
 private struct LitterFileStrip: View {
     let files: [ViewEventFile]
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1387,24 +1810,25 @@ private struct LitterFileStrip: View {
                 HStack(spacing: 8) {
                     Image(systemName: "doc.text")
                         .font(.caption)
-                        .foregroundStyle(LitterUI.Palette.brand.color)
+                        .foregroundStyle(neon.blue)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(file.path)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(LitterUI.Palette.textBody.color)
+                            .font(neon.mono(12))
+                            .foregroundStyle(neon.text)
                             .lineLimit(2)
                         if !file.rev.isEmpty {
                             Text("@\(file.rev.prefix(7))")
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                                .font(neon.mono(10))
+                                .foregroundStyle(neon.textFaint)
                         }
                     }
                     Spacer()
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(LitterUI.Palette.surfaceLight.color)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(neon.surface2)
+                )
             }
         }
     }
@@ -1414,7 +1838,11 @@ private struct LitterFileStrip: View {
 
 private struct LitterDiffBlock: View {
     let content: String
+    /// Optional pre-parsed `+N −M` summary (from `diffSummary`). When nil
+    /// the per-file line counts speak for themselves.
+    var diffSummary: String? = nil
     @State private var expandedFileIDs: Set<String> = []
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         let files = ConversationDiffParser.files(from: content)
@@ -1434,21 +1862,25 @@ private struct LitterDiffBlock: View {
                         HStack(spacing: 8) {
                             Image(systemName: expandedFileIDs.contains(file.id) ? "chevron.down" : "chevron.right")
                                 .font(.caption2.weight(.bold))
-                                .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                                .foregroundStyle(neon.textDim)
+                            // §5: edit icon + filename (mono, ellipsized).
+                            Image(systemName: "pencil")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(neon.claude)
                             Text(file.path)
-                                .font(.caption.monospaced().weight(.semibold))
-                                .foregroundStyle(LitterUI.Palette.textBody.color)
+                                .font(neon.mono(12).weight(.semibold))
+                                .foregroundStyle(neon.text)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                             Spacer()
-                            Text("\(file.lines.count) lines")
-                                .font(.caption2)
-                                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                            diffStatBadge(for: file)
                         }
                     }
                     .buttonStyle(.plain)
 
                     if expandedFileIDs.contains(file.id) {
                         let lang = SyntaxLanguage.fromPath(file.path)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(file.lines.enumerated()), id: \.offset) { _, line in
                                 SyntaxHighlightedDiffLine(
                                     line: line,
@@ -1456,18 +1888,18 @@ private struct LitterDiffBlock: View {
                                     tint: color(for: line)
                                 )
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                // §5: tinted gutters — `+` green row bg,
+                                // `-` red row bg, context flat.
+                                .background(rowBackground(for: line))
                                 .textSelection(.enabled)
                             }
                         }
                     }
                 }
                 .padding(12)
-                .background(LitterUI.Palette.codeBackground.color)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                // PLAN-LITTER-VISUAL-PARITY audit §A.2.9 — drop the
-                // 0.8pt border stroke on diff blocks; litter tints
-                // diff lines (green/red/warning) against a flat
-                // surface without an outer rectangle outline.
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(neon.codeBg))
             }
         }
         .onAppear {
@@ -1477,11 +1909,38 @@ private struct LitterDiffBlock: View {
         }
     }
 
+    /// `+N −M` badge — prefers the explicit `diffSummary` over per-file
+    /// line counts (§4.4 header).
+    @ViewBuilder
+    private func diffStatBadge(for file: ConversationDiffFile) -> some View {
+        let stat = NeonDiffStat.parse(diffSummary)
+        if stat.added != nil || stat.removed != nil {
+            HStack(spacing: 6) {
+                if let a = stat.added {
+                    Text("+\(a)").font(neon.mono(10.5).weight(.bold)).foregroundStyle(neon.green)
+                }
+                if let r = stat.removed {
+                    Text("−\(r)").font(neon.mono(10.5).weight(.bold)).foregroundStyle(neon.red)
+                }
+            }
+        } else {
+            Text("\(file.lines.count) lines")
+                .font(neon.mono(10))
+                .foregroundStyle(neon.textFaint)
+        }
+    }
+
+    private func rowBackground(for line: String) -> Color {
+        if line.hasPrefix("+") { return neon.green.opacity(0.12) }
+        if line.hasPrefix("-") { return neon.red.opacity(0.12) }
+        return .clear
+    }
+
     private func color(for line: String) -> Color {
-        if line.hasPrefix("+") { return LitterUI.Palette.success.color }
-        if line.hasPrefix("-") { return LitterUI.Palette.danger.color }
-        if line.hasPrefix("@@") { return LitterUI.Palette.warning.color }
-        return LitterUI.Palette.textBody.color
+        if line.hasPrefix("+") { return neon.green }
+        if line.hasPrefix("-") { return neon.red }
+        if line.hasPrefix("@@") { return neon.yellow }
+        return neon.textDim
     }
 }
 
@@ -1490,6 +1949,7 @@ private struct LitterDiffBlock: View {
 private struct LitterPendingInputCard: View {
     let event: ConversationItem
     let onQuickReply: (String) -> Void
+    @Environment(\.neonTheme) private var neon
 
     private var options: [String] {
         if !event.pendingOptions.isEmpty { return event.pendingOptions }
@@ -1497,114 +1957,237 @@ private struct LitterPendingInputCard: View {
     }
 
     var body: some View {
-        // PLAN-LITTER-VISUAL-PARITY audit §A.2.7 — drop the outer
-        // tinted glass card; render as a flat inline row with a
-        // leading brand-tint dot. The prior "INPUT NEEDED" card read
-        // as an alert (heavy shadow + 18pt tinted glass); litter's
-        // `InlineHandoffView` is a much flatter row that the user
-        // scans past until the options matter. Quick-reply chips
-        // collapse from glass capsules to flat tag-radius (4pt)
-        // pills tinted in brand at 0.10 — matches `tagCornerRadius`
-        // landed in PR 1.
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                Circle()
-                    .fill(LitterUI.Palette.brand.color)
-                    .frame(width: 6, height: 6)
-                    .padding(.top, 6)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text("INPUT NEEDED")
-                            .font(.caption2.weight(.bold))
-                            .tracking(0.7)
-                            .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                        Spacer()
-                        LitterStatusChip(status: event.status)
-                    }
-                    LitterMarkdownBlock(text: event.content, role: .assistant)
-                    if !options.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
-                                ForEach(options, id: \.self) { option in
-                                    Button(option) { onQuickReply(option) }
-                                        .buttonStyle(.plain)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                                .fill(LitterUI.Palette.brand.color.opacity(0.10))
-                                        )
-                                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
-                                        .font(.footnote.weight(.semibold))
-                                }
-                            }
-                        }
+        // §6: claude-tinted wash + 1.5px claude border, glowing. Big
+        // tappable option rows — the first is the filled primary, the
+        // rest bordered with a trailing index number.
+        VStack(alignment: .leading, spacing: 10) {
+            Text("NEEDS YOUR INPUT")
+                .font(neon.mono(11).weight(.bold))
+                .tracking(0.8)
+                .foregroundStyle(neon.claude)
+                .neonTextGlow(neon.textGlow?.tinted(neon.claude))
+            // Prompt in sans.
+            LitterMarkdownBlock(text: event.content, role: .assistant)
+            if !options.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, option in
+                        optionRow(option, index: idx)
                     }
                 }
             }
         }
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(neon.claude.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(neon.claude, lineWidth: 1.5)
+        )
+        .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.claude) : nil)
+    }
+
+    @ViewBuilder
+    private func optionRow(_ option: String, index: Int) -> some View {
+        let isPrimary = index == 0
+        Button { onQuickReply(option) } label: {
+            HStack(spacing: 10) {
+                if isPrimary {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(neon.accentText)
+                }
+                Text(option)
+                    .font(neon.sans(15).weight(isPrimary ? .semibold : .medium))
+                    .foregroundStyle(isPrimary ? neon.accentText : neon.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !isPrimary {
+                    Text("\(index)")
+                        .font(neon.mono(12).weight(.bold))
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isPrimary ? neon.claude : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isPrimary ? Color.clear : neon.border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Send this reply")
     }
 }
 
 private struct LitterHandoffCard: View {
     let event: ConversationItem
+    @Environment(\.neonTheme) private var neon
+
+    /// Resolve an agent name to a neon brand colour (claude/codex/accent).
+    private func agentColor(_ name: String?) -> Color {
+        guard let lower = name?.lowercased(), !lower.isEmpty else { return neon.accent }
+        if lower.contains("claude") { return neon.claude }
+        if lower.contains("codex") || lower.contains("gpt") || lower.contains("openai") { return neon.codex }
+        return neon.accent
+    }
+
+    private var target: String { event.targetAgent ?? "" }
+    private var source: String { event.sourceAgent ?? "" }
+    private var done: Bool { event.phase?.lowercased() == "done" || event.status.lowercased() == "done" }
 
     var body: some View {
-        // Same flat-pill treatment as LitterPendingInputCard above —
-        // PLAN-LITTER-VISUAL-PARITY audit §A.2.7. The prior tinted
-        // glass card read like an alert; agent handoffs are
-        // informative, not actionable, so they should render as a
-        // quiet inline row that lives in the transcript flow.
-        HStack(alignment: .top, spacing: 8) {
-            Circle()
-                .fill(LitterUI.Palette.brand.color)
-                .frame(width: 6, height: 6)
-                .padding(.top, 6)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Text("AGENT HANDOFF")
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.7)
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                    Spacer()
-                    if !event.ts.isEmpty {
-                        Text(ConversationTimestamp.relative(event.ts))
-                            .font(.caption2)
-                            .foregroundStyle(LitterUI.Palette.textMuted.color)
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            // Two agent avatars + chevron (from→to).
+            HStack(spacing: 8) {
+                agentAvatar(source)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(neon.textDim)
+                agentAvatar(target)
+                titleRow
+                Spacer(minLength: 0)
+                if !event.ts.isEmpty {
+                    Text(ConversationTimestamp.relative(event.ts))
+                        .font(neon.mono(10))
+                        .foregroundStyle(neon.textFaint)
                 }
+            }
+            // Task block (dark inset).
+            if let task = event.taskText, !task.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("TASK")
+                        .font(neon.mono(9).weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(neon.textFaint)
+                    Text(task)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.codeText)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(neon.codeBg))
+            }
+            // Nested progress strip.
+            if let progress = event.progress, !progress.isEmpty {
+                Text(progress)
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.textDim)
+            }
+            // Body content (markdown) when present.
+            if !event.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 LitterMarkdownBlock(text: event.content, role: .system)
             }
+            // Result block (top-bordered, faint green wash) when present.
+            if let result = event.resultSummary, !result.isEmpty {
+                Text(result)
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(neon.green.opacity(0.10)))
+                    .overlay(alignment: .top) { Rectangle().fill(neon.green.opacity(0.3)).frame(height: 1) }
+            }
         }
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 15, border: agentColor(target).opacity(0.55), glowTint: agentColor(target))
+    }
+
+    private var titleRow: some View {
+        HStack(spacing: 4) {
+            if !source.isEmpty {
+                Text(source)
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(agentColor(source))
+            }
+            if !source.isEmpty && !target.isEmpty {
+                Text("→").font(neon.mono(12)).foregroundStyle(neon.textDim)
+            }
+            if !target.isEmpty {
+                Text(target)
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(agentColor(target))
+                    .neonTextGlow(neon.textGlow?.tinted(agentColor(target)))
+            }
+            if source.isEmpty && target.isEmpty {
+                Text("Handoff")
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.text)
+            }
+        }
+    }
+
+    private func agentAvatar(_ name: String) -> some View {
+        let color = agentColor(name.isEmpty ? nil : name)
+        return Text(name.isEmpty ? "?" : String(name.prefix(1)).uppercased())
+            .font(neon.mono(12).weight(.bold))
+            .foregroundStyle(color)
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(color.opacity(0.16)))
+            .overlay(Circle().stroke(color.opacity(0.5), lineWidth: 1))
+    }
+}
+
+/// §4.2 SwapNotice — an inline divider shown when an agent swap is
+/// transitioning (swapping → running). The current event model has no
+/// reliable "swapping" phase distinct from a handoff, so this is a small
+/// reusable view that is NOT wired into the dispatch yet. Reported as a
+/// gap; renders correctly if a future phase surfaces it.
+struct LitterSwapNotice: View {
+    let from: String
+    let to: String
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(neon.border).frame(height: 1)
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 10, weight: .bold))
+                Text("\(from) → \(to)")
+                    .font(neon.mono(10.5).weight(.semibold))
+            }
+            .foregroundStyle(neon.accent2)
+            .neonTextGlow(neon.textGlow?.tinted(neon.accent2))
+            Rectangle().fill(neon.border).frame(height: 1)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
 private struct LitterSubagentCard: View {
     let event: ConversationItem
     @State private var expanded = false
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "person.2.fill")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(LitterUI.Palette.warning.color)
+                    .foregroundStyle(neon.purple)
                 Text("SUBAGENT")
-                    .font(.caption2.weight(.bold))
+                    .font(neon.mono(10).weight(.bold))
                     .tracking(0.7)
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .foregroundStyle(neon.textDim)
                 LitterStatusChip(status: event.status)
                 Spacer()
                 if !event.ts.isEmpty {
                     Text(ConversationTimestamp.relative(event.ts))
-                        .font(.caption2)
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.mono(10))
+                        .foregroundStyle(neon.textFaint)
                 }
-                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                Image(systemName: "chevron.down")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .foregroundStyle(neon.textDim)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
             }
             .contentShape(Rectangle())
             .onTapGesture {
@@ -1615,14 +2198,87 @@ private struct LitterSubagentCard: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
                 Text(event.content.split(separator: "\n").first.map(String.init) ?? "Subagent activity")
-                    .font(.footnote)
-                    .foregroundStyle(LitterUI.Palette.textBody.color)
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.textDim)
                     .lineLimit(1)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .litterGlassRoundedRect(cornerRadius: 14, tint: LitterUI.Palette.warning.color.opacity(0.22))
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14, glowTint: neon.purple)
+    }
+}
+
+// MARK: - Plan card (§4.3)
+//
+// "PLAN" with step bullets: done = filled accent/green + check (glowing),
+// active = ring + dot + "running…", todo = faint ring; done labels are
+// struck through in textDim. There is NO plan kind in the dispatch, so
+// this view is NOT wired into `LitterEventRow` — it's built to spec and
+// reported as an unwired gap (the event model carries `planSteps` /
+// `planDone` / `planActive` and `todos`, but no kind routes to it).
+struct LitterPlanCard: View {
+    /// All steps, in order.
+    let steps: [String]
+    /// Steps that are complete.
+    let done: Set<String>
+    /// The single in-progress step, if any.
+    let active: String?
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("PLAN")
+                .font(neon.mono(11).weight(.bold))
+                .tracking(0.8)
+                .foregroundStyle(neon.accent)
+                .neonTextGlow(neon.textGlow?.tinted(neon.accent))
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                    stepRow(step)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+    }
+
+    @ViewBuilder
+    private func stepRow(_ step: String) -> some View {
+        let isDone = done.contains(step)
+        let isActive = active == step
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            bullet(isDone: isDone, isActive: isActive)
+            Text(step)
+                .font(neon.sans(14))
+                .strikethrough(isDone, color: neon.textDim)
+                .foregroundStyle(isDone ? neon.textDim : (isActive ? neon.text : neon.textDim))
+            if isActive {
+                Text("running…")
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(neon.accent2)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func bullet(isDone: Bool, isActive: Bool) -> some View {
+        if isDone {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(neon.green)
+                .neonTextGlow(neon.textGlow?.tinted(neon.green))
+        } else if isActive {
+            Circle()
+                .stroke(neon.accent2, lineWidth: 1.5)
+                .frame(width: 13, height: 13)
+                .overlay(Circle().fill(neon.accent2).frame(width: 5, height: 5))
+        } else {
+            Circle()
+                .stroke(neon.border, lineWidth: 1.5)
+                .frame(width: 13, height: 13)
+        }
     }
 }

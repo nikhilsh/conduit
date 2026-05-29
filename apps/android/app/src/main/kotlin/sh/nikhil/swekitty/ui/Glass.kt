@@ -8,28 +8,33 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
 
 /**
- * Compose mirror of `apps/ios/Sources/Theme/Glass.swift`. The iOS code
- * gates the real Liquid Glass `glassEffect` modifier behind `#available
- * iOS 26`; we always render the fallback (layered tint + gradient
- * highlight + soft stroke + drop shadow). Visual direction matches.
+ * "Neon Terminal" chrome surfaces (Phase 2 reskin).
  *
- * Compose can't easily replicate `.ultraThinMaterial` (a system blur
- * applied to whatever is behind), so we approximate with a translucent
- * tinted surface over the app background. The accent wash in
- * [GlassAppBackground] gives the surfaces something to refract against.
+ * These keep the historical `glass*` modifier names + signatures so the
+ * existing call sites (header rows, key caps, in-session dock, project
+ * list, composer) stay untouched, but they now paint the resolved
+ * [NeonTheme] from [LocalNeonTheme] instead of the old translucent glass
+ * wash: a neon `surface` fill, a neon border, and the theme's box glow
+ * (glow ON) or the soft light-mode card elevation (glow OFF) via the
+ * shared [neonCardSurface] / [neonGlowBox] helpers.
+ *
+ * A `tint` (per-agent accent) recolors both the border and the glow so
+ * agent-tinted controls (the agent pill) still read as branded.
+ *
+ * Compose's single blurred drop-shadow can't reproduce the two-layer CSS
+ * box-glow exactly — fidelity gaps are expected (see NeonComponents).
  */
 
 @Composable
 fun Modifier.glassRect(
     cornerRadiusDp: Float = SweKittyTheme.cardCornerRadiusDp,
     tint: Color? = null,
-): Modifier = glassSurface(
+): Modifier = neonChromeSurface(
     shape = RoundedCornerShape(cornerRadiusDp.dp),
     tint = tint,
 )
@@ -37,7 +42,7 @@ fun Modifier.glassRect(
 @Composable
 fun Modifier.glassRoundedRect(
     cornerRadiusDp: Float = SweKittyTheme.cardCornerRadiusDp,
-): Modifier = glassSurface(
+): Modifier = neonChromeSurface(
     shape = RoundedCornerShape(cornerRadiusDp.dp),
     tint = null,
 )
@@ -46,51 +51,53 @@ fun Modifier.glassRoundedRect(
 fun Modifier.glassCapsule(
     interactive: Boolean = false,
     tint: Color? = null,
-): Modifier = glassSurface(
+): Modifier = neonChromeSurface(
+    // Pills are fully rounded (handoff radius 99) — percent=50 is the
+    // Compose idiom for a capsule of any height.
     shape = RoundedCornerShape(percent = 50),
     tint = tint,
-    highlightOpacity = if (interactive) 0.34f else 0.22f,
-    shadowOpacity = if (interactive) 0.22f else 0.14f,
 )
 
 @Composable
-fun Modifier.glassCircle(tint: Color? = null): Modifier = glassSurface(
+fun Modifier.glassCircle(tint: Color? = null): Modifier = neonChromeSurface(
     shape = CircleShape,
     tint = tint,
-    highlightOpacity = 0.28f,
 )
 
+/**
+ * The shared neon chrome fill used by every `glass*` modifier above. A
+ * neon `surface` background, a neon (or tinted) hairline border, and the
+ * theme glow box (glow ON) / light card elevation (glow OFF). `tint`
+ * recolors the border + glow to a per-agent accent when supplied.
+ */
 @Composable
-private fun Modifier.glassSurface(
+private fun Modifier.neonChromeSurface(
     shape: Shape,
     tint: Color?,
-    highlightOpacity: Float = 0.24f,
-    shadowOpacity: Float = 0.16f,
 ): Modifier {
-    val accent = SweKittyTheme.accentStrong()
-    val border = SweKittyTheme.border()
-    val surfaceLight = SweKittyTheme.surfaceLight()
-    val textPrimary = SweKittyTheme.textPrimary()
-    val baseTint = tint ?: SweKittyPalette.surface.color()
-
-    val stroke = (tint ?: border).copy(alpha = 0.42f)
-    val glow = (tint ?: accent).copy(alpha = highlightOpacity)
-
-    return this
-        .shadow(elevation = 18.dp, shape = shape, ambientColor = textPrimary, spotColor = textPrimary)
-        .clip(shape)
-        // Layer 1: translucent fill so the underlying background bleeds through.
-        .background(color = baseTint.copy(alpha = 0.55f), shape = shape)
-        // Layer 2: top-leading highlight gradient.
-        .background(
-            brush = Brush.linearGradient(
-                colors = listOf(
-                    glow,
-                    surfaceLight.copy(alpha = 0.08f),
-                    Color.Transparent,
-                ),
-            ),
-            shape = shape,
+    val neon = LocalNeonTheme.current
+    val border = tint?.copy(alpha = 0.55f) ?: neon.borderStrong
+    val box = neon.glowBox?.let { gb ->
+        if (tint == null) gb else NeonGlowBox(
+            inner = NeonShadowLayer(gb.inner.radiusDp, tint.copy(alpha = gb.inner.color.alpha)),
+            outer = NeonShadowLayer(gb.outer.radiusDp, tint.copy(alpha = gb.outer.color.alpha)),
         )
-        .border(width = 1.dp, color = stroke, shape = shape)
+    }
+    var m = this
+    if (box != null) {
+        m = m.neonGlowBox(box, shape)
+    } else {
+        neon.cardElevation?.let { elev ->
+            m = m.shadow(
+                elevation = elev.radiusDp.dp,
+                shape = shape,
+                ambientColor = elev.color,
+                spotColor = elev.color,
+            )
+        }
+    }
+    return m
+        .clip(shape)
+        .background(color = neon.surface, shape = shape)
+        .border(width = 1.dp, color = border, shape = shape)
 }

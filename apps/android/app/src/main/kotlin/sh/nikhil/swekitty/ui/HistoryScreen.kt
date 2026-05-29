@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -142,20 +143,29 @@ fun HistoryScreen(
         savedServers.associate { it.id to it.name }
     }
 
+    val neon = LocalNeonTheme.current
+    Box(modifier = Modifier.fillMaxSize()) {
+        GlassAppBackground()
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         "Sessions",
+                        fontFamily = neon.sans,
                         fontWeight = FontWeight.SemiBold,
+                        color = neon.text,
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = neon.accent)
                     }
                 },
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                ),
             )
         },
     ) { padding ->
@@ -163,18 +173,25 @@ fun HistoryScreen(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("Search by name or summary…") },
+                placeholder = { Text("Search by name or summary…", fontFamily = neon.sans, color = neon.textFaint) },
                 leadingIcon = {
-                    Icon(Icons.Filled.Search, contentDescription = null)
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = neon.textDim)
                 },
                 trailingIcon = if (query.isNotEmpty()) {
                     {
                         IconButton(onClick = { query = "" }) {
-                            Icon(Icons.Filled.Cancel, contentDescription = "Clear")
+                            Icon(Icons.Filled.Cancel, contentDescription = "Clear", tint = neon.textDim)
                         }
                     }
                 } else null,
                 singleLine = true,
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = neon.accent,
+                    unfocusedBorderColor = neon.border,
+                    focusedTextColor = neon.text,
+                    unfocusedTextColor = neon.text,
+                    cursorColor = neon.accent,
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -231,6 +248,7 @@ fun HistoryScreen(
             }
         }
     }
+    }
 
     pendingDelete?.let { row ->
         AlertDialog(
@@ -262,6 +280,7 @@ fun HistoryScreen(
 
 @Composable
 private fun HistorySectionHeader(title: String, count: Int) {
+    val neon = LocalNeonTheme.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -272,19 +291,20 @@ private fun HistorySectionHeader(title: String, count: Int) {
         Text(
             title.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = neon.mono,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = neon.accent,
         )
         Text(
             "·",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            color = neon.textFaint,
         )
         Text(
             "$count session${if (count == 1) "" else "s"}",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            fontFamily = neon.mono,
+            color = neon.textDim,
         )
     }
 }
@@ -298,17 +318,17 @@ private fun HistoryRow(
     onTap: () -> Unit,
     onLongPress: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     val statusColor = when (row.status) {
-        SavedSessionStatus.LIVE -> SweKittyTheme.accentStrong()
-        SavedSessionStatus.EXITED -> MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
-        SavedSessionStatus.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        SavedSessionStatus.LIVE -> neon.green
+        SavedSessionStatus.EXITED -> neon.red.copy(alpha = 0.85f)
+        SavedSessionStatus.UNKNOWN -> neon.textFaint
     }
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
             .combinedClickable(
                 onClick = onTap,
                 onLongClick = onLongPress,
@@ -333,7 +353,9 @@ private fun HistoryRow(
                 Text(
                     title,
                     style = MaterialTheme.typography.titleSmall,
+                    fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -344,28 +366,29 @@ private fun HistoryRow(
                     Text(
                         row.agent,
                         style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = neonAgentColor(row.agent, neon),
                     )
                     Text(
                         "·",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        color = neon.textFaint,
                     )
                     val relative = SessionNaming.relativeAgo(row.lastSeen)
                     if (relative.isNotEmpty()) {
                         Text(
                             relative,
                             style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            fontFamily = neon.mono,
+                            color = neon.textFaint,
                         )
                     }
                     if (serverChip != null) {
                         Text(
                             "·",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            color = neon.textFaint,
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -375,12 +398,13 @@ private fun HistoryRow(
                                 Icons.Filled.Storage,
                                 contentDescription = null,
                                 modifier = Modifier.size(11.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                tint = neon.textFaint,
                             )
                             Text(
                                 serverChip,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                fontFamily = neon.mono,
+                                color = neon.textFaint,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -394,6 +418,7 @@ private fun HistoryRow(
 
 @Composable
 private fun EmptyHistoryState() {
+    val neon = LocalNeonTheme.current
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 36.dp),
         verticalArrangement = Arrangement.Center,
@@ -403,19 +428,22 @@ private fun EmptyHistoryState() {
             Icons.Filled.History,
             contentDescription = null,
             modifier = Modifier.size(40.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = neon.accent,
         )
         Spacer(Modifier.height(14.dp))
         Text(
             "No sessions yet",
             style = MaterialTheme.typography.titleMedium,
+            fontFamily = neon.sans,
             fontWeight = FontWeight.SemiBold,
+            color = neon.text,
         )
         Spacer(Modifier.height(6.dp))
         Text(
             "Start one from Home — it'll show up here so you can pick up later.",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = neon.sans,
+            color = neon.textDim,
             textAlign = TextAlign.Center,
         )
     }
@@ -423,6 +451,7 @@ private fun EmptyHistoryState() {
 
 @Composable
 private fun NoMatchesState() {
+    val neon = LocalNeonTheme.current
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 36.dp),
         verticalArrangement = Arrangement.Center,
@@ -432,19 +461,22 @@ private fun NoMatchesState() {
             Icons.AutoMirrored.Filled.HelpOutline,
             contentDescription = null,
             modifier = Modifier.size(36.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = neon.accent,
         )
         Spacer(Modifier.height(14.dp))
         Text(
             "No matches",
             style = MaterialTheme.typography.titleMedium,
+            fontFamily = neon.sans,
             fontWeight = FontWeight.SemiBold,
+            color = neon.text,
         )
         Spacer(Modifier.height(6.dp))
         Text(
             "Try a shorter query — we match against the session summary, id, agent, and cwd.",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = neon.sans,
+            color = neon.textDim,
             textAlign = TextAlign.Center,
         )
     }

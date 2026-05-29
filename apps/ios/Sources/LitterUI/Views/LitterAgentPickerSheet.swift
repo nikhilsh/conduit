@@ -6,7 +6,7 @@ import SwiftUI
 // `AgentPickerSheet`. Visual choices:
 //   - small-caps "PAIRED WITH" / "INITIAL PROMPT" / "AGENT" section
 //     labels (11pt mono, brand-tinted)
-//   - .ultraThinMaterial cards via `litterGlassRoundedRect`
+//   - neon card surfaces via `neonCardSurface(...)`
 //   - per-agent accent on the avatar circle only; row text stays in
 //     `textPrimary` so the buttons read as a list not a rainbow
 //
@@ -18,6 +18,7 @@ import SwiftUI
 extension LitterUI {
     struct AgentPickerSheet: View {
         @Environment(SessionStore.self) private var store
+        @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
         /// Optional context label (e.g. host that was just paired) shown
@@ -36,7 +37,7 @@ extension LitterUI {
         var body: some View {
             NavigationStack {
                 ZStack {
-                    LitterUI.Palette.surface.color.ignoresSafeArea()
+                    GlassAppBackground()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             header
@@ -57,8 +58,8 @@ extension LitterUI {
                             )
                             if !store.harness.canIssueCommands {
                                 Text("Connect to a server first — open Settings to pair.")
-                                    .font(.footnote)
-                                    .foregroundStyle(LitterUI.Palette.textMuted.color)
+                                    .font(neon.sans(13))
+                                    .foregroundStyle(neon.textDim)
                                     .multilineTextAlignment(.center)
                                     .frame(maxWidth: .infinity, alignment: .center)
                                     .padding(.top, 4)
@@ -92,7 +93,8 @@ extension LitterUI {
                 }
             }
             .presentationDetents([.medium, .large])
-            .tint(LitterUI.Palette.brand.color)
+            .presentationCornerRadius(26)
+            .tint(neon.accent)
             .appearanceColorScheme()
         }
 
@@ -109,12 +111,12 @@ extension LitterUI {
                 // them for visual weight.
                 HStack(spacing: 6) {
                     Text("PAIRED WITH")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .font(neon.mono(11).weight(.bold))
                         .tracking(0.6)
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .foregroundStyle(neon.textFaint)
                     Text(note)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.textDim)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -128,28 +130,28 @@ extension LitterUI {
             VStack(alignment: .leading, spacing: 6) {
                 sectionLabel("Initial prompt")
                 Text(prompt)
-                    .font(.footnote)
-                    .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.text)
                     .lineLimit(4)
                     .multilineTextAlignment(.leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .litterGlassRoundedRect(cornerRadius: 14)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
             .accessibilityIdentifier("LitterAgentPickerSheet.initialPrompt")
         }
 
         private func sectionLabel(_ text: String) -> some View {
             Text(text.uppercased())
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(neon.mono(11).weight(.bold))
                 .tracking(0.6)
-                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                .foregroundStyle(neon.textFaint)
         }
 
         private func agentRow(kind: String, label: String, subtitle: String) -> some View {
             let canIssue = store.harness.canIssueCommands
-            let tint = SweKittyTheme.accent(forAgent: kind)
+            let tint = neon.agentTint(forAgent: kind)
             return Button {
                 pickedAgent = kind
             } label: {
@@ -157,20 +159,26 @@ extension LitterUI {
                     AgentAvatar(assistant: kind, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(label)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(neon.text)
                         Text(subtitle)
-                            .font(.caption2)
-                            .foregroundStyle(LitterUI.Palette.textMuted.color)
+                            .font(neon.sans(11))
+                            .foregroundStyle(neon.textDim)
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(tint)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .litterGlassRoundedRect(cornerRadius: 14, tint: tint.opacity(0.18))
+                .neonCardSurface(
+                    neon,
+                    fill: tint.opacity(neon.dark ? 0.14 : 0.10),
+                    cornerRadius: 13,
+                    border: tint.opacity(0.5),
+                    glowTint: tint
+                )
             }
             .buttonStyle(.plain)
             .disabled(!canIssue)
@@ -201,6 +209,7 @@ extension LitterUI {
         let onCreate: (String?) -> Void
 
         @Environment(SessionStore.self) private var store
+        @Environment(\.neonTheme) private var neon
 
         @State private var listing: RemoteDirectoryListing?
         @State private var isLoading = false
@@ -210,7 +219,7 @@ extension LitterUI {
 
         var body: some View {
             ZStack {
-                LitterUI.Palette.surface.color.ignoresSafeArea()
+                GlassAppBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         if !store.recentDirectories.isEmpty {
@@ -227,7 +236,7 @@ extension LitterUI {
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) { bottomBar }
             .task(id: currentPath) { await load() }
-            .tint(LitterUI.Palette.brand.color)
+            .tint(neon.accent)
         }
 
         // MARK: Sections
@@ -243,13 +252,14 @@ extension LitterUI {
                             LitterUI.ListRow(
                                 icon: "clock.arrow.circlepath",
                                 title: displayName(of: path),
-                                subtitle: path
+                                subtitle: path,
+                                iconTint: neon.accent
                             ) {
                                 Image(systemName: "arrow.up.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(LitterUI.Palette.textMuted.color)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(neon.accent)
                             }
-                            .litterGlassRoundedRect(cornerRadius: 14)
+                            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
                         }
                         .buttonStyle(.plain)
                     }
@@ -271,8 +281,8 @@ extension LitterUI {
                     .padding(.vertical, 24)
                 } else if let loadError {
                     Text(loadError)
-                        .font(.footnote)
-                        .foregroundStyle(LitterUI.Palette.danger.color)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.red)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 16)
                 } else {
@@ -290,18 +300,18 @@ extension LitterUI {
                     }
                 } label: {
                     Image(systemName: "chevron.up")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(canGoUp ? LitterUI.Palette.brand.color
-                                                 : LitterUI.Palette.textMuted.color)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(canGoUp ? neon.accent : neon.textFaint)
                         .frame(width: 30, height: 30)
-                        .litterGlassCircle()
+                        .background(Circle().fill(neon.surface))
+                        .overlay(Circle().stroke(neon.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(!canGoUp)
 
                 Text(listing?.path ?? "…")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .font(neon.mono(12).weight(.medium))
+                    .foregroundStyle(neon.textDim)
                     .lineLimit(1)
                     .truncationMode(.head)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -313,8 +323,8 @@ extension LitterUI {
             let folders = (listing?.entries ?? []).filter { $0.is_dir }
             if folders.isEmpty {
                 Text("No sub-folders here.")
-                    .font(.footnote)
-                    .foregroundStyle(LitterUI.Palette.textMuted.color)
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.textDim)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 16)
             } else {
@@ -323,8 +333,8 @@ extension LitterUI {
                         Button {
                             currentPath = entry.path
                         } label: {
-                            LitterUI.navRow(icon: "folder", title: entry.name)
-                                .litterGlassRoundedRect(cornerRadius: 14)
+                            LitterUI.navRow(icon: "folder", title: entry.name, iconTint: neon.accent)
+                                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
                         }
                         .buttonStyle(.plain)
                     }
@@ -341,14 +351,15 @@ extension LitterUI {
                         Image(systemName: "checkmark.circle.fill")
                         Text("Use this folder")
                     }
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(LitterUI.Palette.textOnAccent.color)
+                    .font(neon.sans(15).weight(.semibold))
+                    .foregroundStyle(neon.accentText)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
                     .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(LitterUI.Palette.brand.color)
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(neon.accent)
                     )
+                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
                 }
                 .buttonStyle(.plain)
                 .disabled(listing == nil)
@@ -358,15 +369,15 @@ extension LitterUI {
                     onCreate(nil)
                 } label: {
                     Text("Start without a folder")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .font(neon.sans(13).weight(.medium))
+                        .foregroundStyle(neon.textDim)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 16)
             .padding(.top, 10)
             .padding(.bottom, 12)
-            .background(.ultraThinMaterial)
+            .background(neon.surfaceSolid.opacity(0.96))
         }
 
         // MARK: Helpers
@@ -378,9 +389,9 @@ extension LitterUI {
 
         private func sectionLabel(_ text: String) -> some View {
             Text(text.uppercased())
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(neon.mono(11).weight(.bold))
                 .tracking(0.6)
-                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                .foregroundStyle(neon.textFaint)
         }
 
         private func displayName(of path: String) -> String {

@@ -71,42 +71,46 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
         return true
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    val neon = LocalNeonTheme.current
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Add server", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Add server", style = MaterialTheme.typography.titleMedium, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
             Text(
                 "Pick how this device should reach the swe-kitty server. You can switch servers later from Settings.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = neon.sans,
+                color = neon.textDim,
             )
             EntryCard(
-                icon = { Icon(Icons.Filled.QrCodeScanner, null, tint = Color.White) },
-                tint = SweKittyTheme.accentStrong(),
+                icon = { Icon(Icons.Filled.QrCodeScanner, null, tint = neon.accentText) },
+                tint = neon.accent,
                 title = "Scan pairing QR",
                 subtitle = "Camera or pick from Photos.",
             ) { showScanner = true }
             EntryCard(
-                icon = { Icon(Icons.Filled.Wifi, null, tint = Color.White) },
-                // Semantic "discovery / network" green — previously this
-                // reused codexAccent because that happened to be green,
-                // but codex now ships a monochrome accent so the colors
-                // would collide. Use the palette's `success` green directly.
-                tint = SweKittyTheme.success(),
+                icon = { Icon(Icons.Filled.Wifi, null, tint = neon.accentText) },
+                // Semantic "discovery / network" green.
+                tint = neon.green,
                 title = "Discover on LAN",
                 subtitle = "Find a broker advertising via mDNS on the same Wi-Fi.",
             ) { showDiscover = true }
             EntryCard(
-                icon = { Icon(Icons.Filled.Terminal, null, tint = Color.White) },
-                tint = SweKittyTheme.claudeAccent(),
+                icon = { Icon(Icons.Filled.Terminal, null, tint = neon.accentText) },
+                tint = neon.claude,
                 title = "SSH bootstrap",
                 subtitle = "Cold-start a broker on a remote box you can SSH to.",
             ) { showSsh = true }
             EntryCard(
-                icon = { Icon(Icons.Filled.Link, null, tint = Color.White) },
-                tint = SweKittyTheme.warning(),
+                icon = { Icon(Icons.Filled.Link, null, tint = neon.accentText) },
+                tint = neon.yellow,
                 title = "Paste URL + token",
                 subtitle = "If you already have ws://… + a bearer token.",
             ) { showManual = true }
@@ -161,12 +165,18 @@ private fun EntryCard(
     subtitle: String,
     onTap: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-        color = tint.copy(alpha = 0.12f),
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp))
+            .neonCardSurface(
+                neon = neon,
+                shape = shape,
+                fill = tint.copy(alpha = 0.10f),
+                borderColor = tint.copy(alpha = 0.5f),
+                glowTint = tint,
+            )
             .clickable(onClick = onTap),
     ) {
         Row(
@@ -179,10 +189,10 @@ private fun EntryCard(
             ) { icon() }
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(title, style = MaterialTheme.typography.titleSmall, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, fontFamily = neon.sans, color = neon.textDim)
             }
-            Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Filled.ChevronRight, null, tint = neon.textDim)
         }
     }
 }
@@ -197,10 +207,16 @@ private fun EntryCard(
 fun ManualPairSheet(store: SessionStore, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val endpoint by store.endpoint.collectAsState()
+    val neon = LocalNeonTheme.current
     var url by remember { mutableStateOf(endpoint.url) }
     var token by remember { mutableStateOf(endpoint.token) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -208,7 +224,7 @@ fun ManualPairSheet(store: SessionStore, onDismiss: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Paste URL + token", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Paste URL + token", style = MaterialTheme.typography.titleMedium, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
             OutlinedTextField(
                 value = url,
                 onValueChange = { url = it },

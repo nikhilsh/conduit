@@ -107,7 +107,13 @@ fun SettingsScreen(
     // what's being cleared.
     var pendingForget by remember { mutableStateOf<SavedServer?>(null) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    val neon = LocalNeonTheme.current
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -118,7 +124,9 @@ fun SettingsScreen(
             Text(
                 "Settings",
                 style = MaterialTheme.typography.headlineSmall,
+                fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
+                color = neon.text,
             )
 
             // Theme — matches iOS LitterSettings section name (the
@@ -174,7 +182,7 @@ fun SettingsScreen(
                         Icon(
                             Icons.Filled.FormatSize,
                             contentDescription = null,
-                            tint = SweKittyTheme.accentStrong(),
+                            tint = neon.accent,
                             modifier = Modifier.size(24.dp),
                         )
                         Spacer(Modifier.width(16.dp))
@@ -198,8 +206,8 @@ fun SettingsScreen(
                         steps = (AppearanceStore.BODY_POINT_SIZE_RANGE.endInclusive
                             - AppearanceStore.BODY_POINT_SIZE_RANGE.start).toInt() - 1,
                         colors = SliderDefaults.colors(
-                            thumbColor = SweKittyTheme.accentStrong(),
-                            activeTrackColor = SweKittyTheme.accentStrong(),
+                            thumbColor = neon.accent,
+                            activeTrackColor = neon.accent,
                         ),
                     )
                     Text(
@@ -239,7 +247,7 @@ fun SettingsScreen(
                         Icon(
                             Icons.Filled.FormatSize,
                             contentDescription = null,
-                            tint = SweKittyTheme.accentStrong(),
+                            tint = neon.accent,
                             modifier = Modifier.size(24.dp),
                         )
                         Spacer(Modifier.width(16.dp))
@@ -263,8 +271,8 @@ fun SettingsScreen(
                         steps = (AppearanceStore.TERMINAL_FONT_SIZE_RANGE.endInclusive
                             - AppearanceStore.TERMINAL_FONT_SIZE_RANGE.start).toInt() - 1,
                         colors = SliderDefaults.colors(
-                            thumbColor = SweKittyTheme.accentStrong(),
-                            activeTrackColor = SweKittyTheme.accentStrong(),
+                            thumbColor = neon.accent,
+                            activeTrackColor = neon.accent,
                         ),
                     )
                 }
@@ -288,7 +296,7 @@ fun SettingsScreen(
                             Icon(
                                 Icons.Filled.Apps,
                                 contentDescription = null,
-                                tint = SweKittyTheme.accentStrong(),
+                                tint = neon.accent,
                             )
                         },
                         headlineContent = { Text(server.name) },
@@ -342,7 +350,7 @@ fun SettingsScreen(
                             Icon(
                                 Icons.Filled.Link,
                                 contentDescription = null,
-                                tint = SweKittyTheme.accentStrong(),
+                                tint = neon.accent,
                             )
                         },
                         headlineContent = { Text("Link") },
@@ -466,36 +474,37 @@ fun SettingsScreen(
  */
 @Composable
 internal fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    val neon = LocalNeonTheme.current
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             title.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = neon.mono,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = neon.textDim,
             modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
         )
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        // Neon section card — a neon surface fill + hairline border + the
+        // theme glow, replacing the M3 tonal Card. Rows inside keep their
+        // transparent ListItem backgrounds so they sit on this surface.
+        val shape = RoundedCornerShape(14.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .neonCardSurface(neon = neon, shape = shape, fill = neon.surface),
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                content()
-            }
+            content()
         }
     }
 }
 
-/** Inset divider between rows within a settings [Card]. */
+/** Inset divider between rows within a settings section. */
 @Composable
 private fun SettingsDivider() {
+    val neon = LocalNeonTheme.current
     HorizontalDivider(
         modifier = Modifier.padding(horizontal = 16.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        color = neon.border,
     )
 }
 
@@ -513,20 +522,23 @@ internal fun SettingsRow(
     icon: ImageVector,
     title: String,
     subtitle: String?,
-    iconTint: Color = SweKittyTheme.accentStrong(),
-    titleColor: Color = MaterialTheme.colorScheme.onSurface,
+    iconTint: Color = LocalNeonTheme.current.accent,
+    titleColor: Color = LocalNeonTheme.current.text,
     onClick: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     ListItem(
         modifier = Modifier.clickable(onClick = onClick),
         leadingContent = {
             Icon(icon, contentDescription = null, tint = iconTint)
         },
-        headlineContent = { Text(title, color = titleColor) },
+        headlineContent = { Text(title, color = titleColor, fontFamily = neon.sans) },
         supportingContent = if (!subtitle.isNullOrBlank()) {
             {
                 Text(
                     subtitle,
+                    fontFamily = neon.sans,
+                    color = neon.textDim,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -536,7 +548,7 @@ internal fun SettingsRow(
             Icon(
                 Icons.Filled.ChevronRight,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = neon.textDim,
             )
         },
         colors = transparentListItemColors(),
@@ -551,21 +563,22 @@ internal fun ToggleRow(
     isOn: Boolean,
     onChange: (Boolean) -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     ListItem(
         leadingContent = {
-            Icon(icon, contentDescription = null, tint = SweKittyTheme.accentStrong())
+            Icon(icon, contentDescription = null, tint = neon.accent)
         },
-        headlineContent = { Text(title) },
+        headlineContent = { Text(title, color = neon.text, fontFamily = neon.sans) },
         supportingContent = if (!subtitle.isNullOrBlank()) {
-            { Text(subtitle) }
+            { Text(subtitle, color = neon.textDim, fontFamily = neon.sans) }
         } else null,
         trailingContent = {
             Switch(
                 checked = isOn,
                 onCheckedChange = onChange,
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                    checkedTrackColor = SweKittyTheme.accentStrong(),
+                    checkedThumbColor = neon.accentText,
+                    checkedTrackColor = neon.accent,
                 ),
             )
         },
@@ -580,6 +593,7 @@ internal fun PickerRow(
     isSelected: Boolean,
     onClick: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     ListItem(
         modifier = Modifier.selectable(
             selected = isSelected,
@@ -587,15 +601,15 @@ internal fun PickerRow(
             role = Role.RadioButton,
         ),
         leadingContent = {
-            Icon(icon, contentDescription = null, tint = SweKittyTheme.accentStrong())
+            Icon(icon, contentDescription = null, tint = neon.accent)
         },
-        headlineContent = { Text(title) },
+        headlineContent = { Text(title, color = neon.text, fontFamily = neon.sans) },
         trailingContent = {
             RadioButton(
                 selected = isSelected,
                 onClick = null,
                 colors = RadioButtonDefaults.colors(
-                    selectedColor = SweKittyTheme.accentStrong(),
+                    selectedColor = neon.accent,
                 ),
             )
         },
@@ -605,14 +619,17 @@ internal fun PickerRow(
 
 @Composable
 private fun KeyValueRow(label: String, value: String) {
+    val neon = LocalNeonTheme.current
     ListItem(
         headlineContent = {
-            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, color = neon.textDim, fontFamily = neon.sans)
         },
         trailingContent = {
             Text(
                 value,
                 style = MaterialTheme.typography.bodyMedium,
+                fontFamily = neon.mono,
+                color = neon.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

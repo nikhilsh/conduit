@@ -45,6 +45,7 @@ extension LitterUI {
     struct ProjectView: View {
         @Environment(SessionStore.self) private var store
         @Environment(AppearanceStore.self) private var appearance
+        @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
         let session: ProjectSession
@@ -66,16 +67,16 @@ extension LitterUI {
                 if !isReadOnly {
                     tabStrip
                 }
-                Divider().background(LitterUI.Palette.separator.color)
+                Divider().background(neon.border)
                 content
             }
-            // Full-bleed background for the notch / home-indicator, but
+            // Full-bleed neon canvas for the notch / home-indicator, but
             // scope to `.container` so it does NOT ignore the `.keyboard`
             // region — a default `.ignoresSafeArea()` (regions: .all)
             // here suppressed keyboard avoidance for the chat composer's
             // `.safeAreaInset(.bottom)`, leaving it hidden behind the soft
             // keyboard (device bug #19).
-            .background(LitterUI.Palette.surface.color.ignoresSafeArea(.container, edges: .all))
+            .background(GlassAppBackground().ignoresSafeArea(.container, edges: .all))
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .navigationBar)
             // Dismiss the keyboard on every tab switch. The Terminal tab's
@@ -135,65 +136,67 @@ extension LitterUI {
 
         private var row1: some View {
             HStack(spacing: 10) {
-                Button {
+                headerIcon("chevron.left", weight: .semibold, tint: neon.text, label: "Back") {
                     dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
-                        .frame(width: 32, height: 32)
-                        .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Back")
 
+                // Centered title card: status dot + name + chevron, then
+                // the agent + effort chips — neon card surface, glow on.
                 HStack(spacing: 6) {
                     Circle()
                         .fill(statusColor)
                         .frame(width: 8, height: 8)
+                        .neonGlowBox(neon.glow ? neon.glowBox?.tinted(statusColor) : nil)
                     Text(store.displayName(for: session))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                        .font(neon.sans(15).weight(.semibold))
+                        .foregroundStyle(neon.text)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    LitterUI.Chip(label: session.assistant, tint: agentTint)
+                    NeonAgentChip(label: session.assistant, tint: agentTint)
                     if let effort = session.reasoningEffort {
-                        LitterUI.Chip(label: effort)
+                        NeonAgentChip(label: effort, tint: neon.textDim)
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
 
-                Button {
+                headerIcon("arrow.clockwise", tint: neon.textDim, label: "Refresh") {
                     store.reconnect()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                        .frame(width: 32, height: 32)
-                        .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Refresh")
-
-                Button {
+                headerIcon("info.circle", tint: neon.textDim, label: "Session info") {
                     showInfo = true
-                } label: {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
-                        .frame(width: 32, height: 32)
-                        .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Session info")
             }
+        }
+
+        /// Circular neon icon button used in the header slots.
+        private func headerIcon(
+            _ systemName: String,
+            weight: Font.Weight = .semibold,
+            tint: Color,
+            label: String,
+            action: @escaping () -> Void
+        ) -> some View {
+            Button(action: action) {
+                Image(systemName: systemName)
+                    .font(.system(size: 14, weight: weight))
+                    .foregroundStyle(tint)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(neon.surface))
+                    .overlay(Circle().stroke(neon.borderStrong, lineWidth: 1))
+                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(label)
         }
 
         private var row2: some View {
             HStack {
                 Text(session.cwd ?? "—")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(LitterUI.Palette.textMuted.color)
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.textFaint)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -202,38 +205,30 @@ extension LitterUI {
         private var statusColor: Color {
             let phase = store.statusBySession[session.id]?.phase ?? ""
             switch phase.lowercased() {
-            case "working", "thinking": return LitterUI.Palette.warning.color
-            case "ready", "idle":       return LitterUI.Palette.success.color
-            default:                     return LitterUI.Palette.textMuted.color
+            case "working", "thinking": return neon.yellow
+            case "ready", "idle":       return neon.green
+            default:                     return neon.textFaint
             }
         }
 
         private var agentTint: Color {
-            SweKittyTheme.accent(forAgent: session.assistant)
+            neon.agentTint(forAgent: session.assistant)
         }
 
-        // MARK: Tab strip — slim segmented control
+        // MARK: Tab strip — floating neon segmented pill
 
         private var tabStrip: some View {
-            HStack(spacing: 4) {
-                ForEach(ProjectTab.allCases) { t in
-                    Button {
-                        withAnimation(.easeOut(duration: 0.18)) { tab = t }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: t.systemImage)
-                                .font(.system(size: 10, weight: .semibold))
-                            Text(t.label)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(tab == t ? LitterUI.Palette.textOnAccent.color : LitterUI.Palette.textSecondary.color)
-                        .litterGlassCapsule(tint: tab == t ? LitterUI.Palette.brand.color : nil, config: .pill)
-                    }
-                    .buttonStyle(.plain)
-                }
-                Spacer()
+            HStack {
+                // Chat · Terminal · Browser order (the enum's declaration
+                // order is terminal/chat/browser; the pill presents Chat
+                // first as the default landing tab).
+                NeonSegmentedPill(
+                    segments: [ProjectTab.chat, .terminal, .browser].map {
+                        NeonSegmentedPill<ProjectTab>.Segment(id: $0, label: $0.label, systemImage: $0.systemImage)
+                    },
+                    selection: $tab
+                )
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 8)

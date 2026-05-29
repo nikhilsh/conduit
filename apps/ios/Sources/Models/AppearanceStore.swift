@@ -52,6 +52,33 @@ final class AppearanceStore {
         }
     }
 
+    /// Palette choice for the "Neon Terminal" theme system. RawValues
+    /// are the stable persistence ids and match `NeonPalette` /
+    /// Android `NeonPalette.id` one-for-one. The resolved tokens live in
+    /// `NeonTheme.resolve(...)`; the effective dark/light comes from
+    /// `themeMode` (reused — there is no separate neon mode setting).
+    enum NeonPaletteChoice: String, CaseIterable, Identifiable {
+        case ice
+        case synth
+        case matrix
+        case amber
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .ice:    return "Ice"
+            case .synth:  return "Synthwave"
+            case .matrix: return "Matrix"
+            case .amber:  return "Amber CRT"
+            }
+        }
+
+        /// Bridge to the resolved-token enum in `NeonTheme.swift`. Kept
+        /// as a 1:1 rawValue mapping so the model layer (+ its tests)
+        /// doesn't have to depend on the Theme layer's type.
+        var neonPalette: NeonPalette { NeonPalette(rawValue: rawValue) ?? .ice }
+    }
+
     enum ThemeMode: String, CaseIterable, Identifiable {
         case system
         case light
@@ -99,6 +126,12 @@ final class AppearanceStore {
         /// Color theme rawValue for the native (libghostty) terminal.
         /// Only consumed on the `experimentalNativeTerminal` path.
         static let ghosttyTerminalTheme = "swekitty.appearance.ghosttyTerminalTheme"
+        /// Palette choice for the Neon Terminal theme system
+        /// (`NeonPaletteChoice` rawValue). Resolved into tokens by
+        /// `NeonTheme.resolve(...)` and injected via `\.neonTheme`.
+        static let neonPalette = "swekitty.appearance.neonPalette"
+        /// Glow on/off toggle for the Neon Terminal theme system.
+        static let neonGlow = "swekitty.appearance.neonGlow"
     }
 
     /// Clamp range for the native-terminal font size. Lower bound keeps a
@@ -174,6 +207,21 @@ final class AppearanceStore {
         didSet { defaults.set(ghosttyTerminalTheme.rawValue, forKey: Keys.ghosttyTerminalTheme) }
     }
 
+    /// Neon Terminal palette choice. Persisted by rawValue; resolved
+    /// into a `NeonTheme` at the app root and injected via the
+    /// `\.neonTheme` environment. The effective dark/light is taken
+    /// from `themeMode` (no separate neon mode setting).
+    var neonPalette: NeonPaletteChoice {
+        didSet { defaults.set(neonPalette.rawValue, forKey: Keys.neonPalette) }
+    }
+
+    /// Neon Terminal glow on/off. Persisted; flows into
+    /// `NeonTheme.resolve(...)` so later card work can render (or skip)
+    /// the layered glow shadows.
+    var neonGlow: Bool {
+        didSet { defaults.set(neonGlow, forKey: Keys.neonGlow) }
+    }
+
     /// Base point size the typography ramp (`SweKittyTypography`)
     /// scales off. Setter clamps into [bodyPointSizeRange] so an
     /// out-of-range value (corrupted defaults, future migration) can't
@@ -221,6 +269,9 @@ final class AppearanceStore {
             .clamped(to: Self.ghosttyFontSizeRange)
         self.ghosttyTerminalTheme = (defaults.string(forKey: Keys.ghosttyTerminalTheme)
             .flatMap(GhosttyTerminalTheme.init(rawValue:))) ?? .ghosttyDark
+        self.neonPalette = (defaults.string(forKey: Keys.neonPalette)
+            .flatMap(NeonPaletteChoice.init(rawValue:))) ?? .ice
+        self.neonGlow = defaults.object(forKey: Keys.neonGlow) as? Bool ?? true
     }
 
     /// SwiftUI `.font` value to use for chat body text.

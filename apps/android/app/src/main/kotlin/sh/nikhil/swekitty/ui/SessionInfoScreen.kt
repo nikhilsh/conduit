@@ -93,7 +93,13 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var forkModel by remember(showFork) { mutableStateOf(forkModelInherit) }
     var modelMenuExpanded by remember(showFork) { mutableStateOf(false) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    val neon = LocalNeonTheme.current
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -102,10 +108,10 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             // Hero
-            Surface(
-                shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                modifier = Modifier.fillMaxWidth(),
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
@@ -120,26 +126,29 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                             Text(
                                 name,
                                 style = MaterialTheme.typography.titleMedium,
+                                fontFamily = neon.sans,
                                 fontWeight = FontWeight.Bold,
+                                color = neon.text,
                             )
                             status?.phase?.takeIf { it.isNotBlank() }?.let { phase ->
                                 Text(
                                     phase,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontFamily = neon.mono,
+                                    color = neon.textDim,
                                 )
                             }
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        AgentPill(session.assistant, tint = SweKittyTheme.accent(forAgent = session.assistant))
-                        session.branch?.takeIf { it.isNotBlank() }?.let { AgentPill(it, tint = MaterialTheme.colorScheme.surfaceVariant) }
+                        AgentPill(session.assistant, tint = neonAgentColor(session.assistant, neon))
+                        session.branch?.takeIf { it.isNotBlank() }?.let { AgentPill(it, tint = neon.accent2) }
                     }
                     Text(
                         session.id,
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
                     )
                 }
             }
@@ -159,15 +168,15 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 Text(
                     "STATS",
                     style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = neon.mono,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = neon.textDim,
                     modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
                 )
-                Surface(
-                    shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    modifier = Modifier.fillMaxWidth(),
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
@@ -203,15 +212,15 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                     Text(
                         "DETAILS",
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = neon.mono,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = neon.textDim,
                         modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
                     )
-                    Surface(
-                        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                        modifier = Modifier.fillMaxWidth(),
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
                     ) {
                         Column(
                             modifier = Modifier.padding(14.dp),
@@ -228,23 +237,23 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                     Text(
                         "SERVER USAGE",
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = neon.mono,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = neon.textDim,
                         modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
                     )
-                    Surface(
-                        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                        modifier = Modifier.fillMaxWidth(),
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
-                            Text("Preview · port ${preview.port}", style = MaterialTheme.typography.bodyMedium)
+                            Text("Preview · port ${preview.port}", style = MaterialTheme.typography.bodyMedium, fontFamily = neon.sans, color = neon.text)
                             Text(
                                 preview.url,
                                 style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = neon.mono,
+                                color = neon.textDim,
                             )
                         }
                     }

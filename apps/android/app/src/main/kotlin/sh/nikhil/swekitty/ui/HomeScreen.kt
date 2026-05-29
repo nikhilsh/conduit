@@ -90,6 +90,8 @@ fun HomeScreen(
     // session being ended without re-resolving displayNames.
     var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
 
+    val neon = LocalNeonTheme.current
+
     Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
         // Top row. Litter parity put settings behind a hidden long-press
         // on the title — undiscoverable in practice (user feedback
@@ -118,7 +120,8 @@ fun HomeScreen(
                 Text(
                     if (endpoint.isComplete) endpoint.displayHost else "no server",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -146,17 +149,16 @@ fun HomeScreen(
                 // green with the broker down. Drive it from the live
                 // connection state for the active server.
                 val dotColor = when {
-                    !isActive -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    harness is HarnessState.Live || harness is HarnessState.Linked -> SweKittyTheme.accentStrong()
-                    harness is HarnessState.Connecting || harness is HarnessState.Reconnecting -> SweKittyTheme.warning()
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    !isActive -> neon.textFaint
+                    harness is HarnessState.Live || harness is HarnessState.Linked -> neon.green
+                    harness is HarnessState.Connecting || harness is HarnessState.Reconnecting -> neon.yellow
+                    else -> neon.textFaint
                 }
-                // Glass capsule; the active server carries a copper tint
-                // wash so it reads as the selected pill (parallel of the
-                // iOS glass pill treatment).
+                // Neon capsule; the active server carries an accent tint
+                // wash + glow so it reads as the selected pill.
                 Box(
                     modifier = Modifier
-                        .glassCapsule(interactive = true, tint = if (isActive) SweKittyTheme.accentStrong() else null)
+                        .glassCapsule(interactive = true, tint = if (isActive) neon.accent else null)
                         .clip(RoundedCornerShape(50))
                         .clickable { store.selectSavedServer(server.id, autoConnect = true) },
                 ) {
@@ -173,7 +175,9 @@ fun HomeScreen(
                         Text(
                             server.name,
                             style = MaterialTheme.typography.titleSmall,
+                            fontFamily = neon.sans,
                             fontWeight = FontWeight.SemiBold,
+                            color = if (isActive) neon.accent else neon.text,
                             maxLines = 1,
                         )
                     }
@@ -191,8 +195,8 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp))
-                    Text("server", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp), tint = neon.accent)
+                    Text("server", style = MaterialTheme.typography.titleSmall, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -218,14 +222,15 @@ fun HomeScreen(
                         if (canCommand) Icons.Default.AutoAwesome else Icons.Default.CloudOff,
                         contentDescription = null,
                         modifier = Modifier.size(40.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = neon.accent,
                     )
                     Spacer(Modifier.height(14.dp))
                     Text(
                         if (canCommand) "No sessions yet" else "Waiting for server",
                         style = MaterialTheme.typography.titleMedium,
+                        fontFamily = neon.sans,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = neon.text,
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -234,7 +239,8 @@ fun HomeScreen(
                         else
                             "Once we can reach the server, your sessions appear here.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = neon.sans,
+                        color = neon.textDim,
                         textAlign = TextAlign.Center,
                     )
                 }
@@ -278,16 +284,22 @@ fun HomeScreen(
                         // status dot brought inside the card rather than
                         // floating at the list's left edge. Selection bumps
                         // the fill so it still stands out without an icon swap.
-                        Surface(
-                            shape = RoundedCornerShape(LitterHomeRowMetrics.cardCornerRadius.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(
-                                alpha = if (isSelected)
-                                    LitterHomeRowMetrics.selectedRowOpacity
-                                else
-                                    LitterHomeRowMetrics.restingRowOpacity,
-                            ),
+                        // Neon session card: a neon surface fill, an
+                        // agent-tinted hairline (brighter when selected),
+                        // and the theme glow. Replaces the M3
+                        // surfaceVariant slab.
+                        val rowShape = RoundedCornerShape(LitterHomeRowMetrics.cardCornerRadius.dp)
+                        val agentTint = neonAgentColor(session.assistant, neon)
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .neonCardSurface(
+                                    neon = neon,
+                                    shape = rowShape,
+                                    fill = neon.surface,
+                                    borderColor = if (isSelected) agentTint.copy(alpha = 0.7f) else neon.border,
+                                    glowTint = if (isSelected) agentTint else null,
+                                )
                                 .combinedClickable(
                                     onClick = { store.select(session.id) },
                                     onLongClick = {
@@ -311,7 +323,7 @@ fun HomeScreen(
                                     modifier = Modifier
                                         .size(LitterHomeRowMetrics.indicatorSize.dp)
                                         .background(
-                                            color = if (isRunning) SweKittyTheme.accentStrong() else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            color = if (isRunning) neon.green else neon.textFaint,
                                             shape = CircleShape,
                                         ),
                                 )
@@ -323,8 +335,9 @@ fun HomeScreen(
                                     Text(
                                         rowTitle,
                                         style = MaterialTheme.typography.titleSmall,
+                                        fontFamily = neon.sans,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface,
+                                        color = neon.text,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -344,7 +357,8 @@ fun HomeScreen(
                                         Text(
                                             preview,
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                            fontFamily = neon.sans,
+                                            color = neon.textFaint,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
@@ -368,22 +382,21 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
         ) {
             CircleActionButton(Icons.Default.Mic, "Voice", size = 44.dp, onClick = onVoice)
-            Surface(
-                shape = CircleShape,
-                color = SweKittyTheme.accentStrong(),
+            Box(
                 modifier = Modifier
                     .size(44.dp)
+                    .then(neon.glowBox?.let { Modifier.neonGlowBox(it, CircleShape) } ?: Modifier)
                     .clip(CircleShape)
+                    .background(neon.accent, CircleShape)
                     .clickable(onClick = onNewSession),
+                contentAlignment = Alignment.Center,
             ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = "New session",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "New session",
+                    tint = neon.accentText,
+                    modifier = Modifier.size(22.dp),
+                )
             }
             CircleActionButton(Icons.Default.Search, "Search", size = 44.dp, onClick = onSearch)
         }
@@ -486,12 +499,13 @@ private fun SessionMetaRow(
     running: Boolean,
     relativeTime: String,
 ) {
+    val neon = LocalNeonTheme.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // Agent chip — tinted capsule with the agent name.
-        val tint = SweKittyTheme.accent(forAgent = agent)
+        // Agent chip — neon-tinted capsule with the agent name.
+        val tint = neonAgentColor(agent, neon)
         Surface(
             shape = RoundedCornerShape(50),
             color = tint.copy(alpha = 0.18f),
@@ -500,8 +514,9 @@ private fun SessionMetaRow(
                 agent,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                 style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = tint,
                 maxLines = 1,
             )
         }
@@ -510,15 +525,15 @@ private fun SessionMetaRow(
             modifier = Modifier
                 .size(6.dp)
                 .background(
-                    color = if (running) SweKittyTheme.accentStrong()
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    color = if (running) neon.green else neon.textFaint,
                     shape = CircleShape,
                 ),
         )
         Text(
             statusLabel,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = neon.mono,
+            color = neon.textDim,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -526,12 +541,13 @@ private fun SessionMetaRow(
             Text(
                 "·",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                color = neon.textFaint,
             )
             Text(
                 relativeTime,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                fontFamily = neon.mono,
+                color = neon.textFaint,
                 maxLines = 1,
             )
         }
@@ -544,6 +560,7 @@ private fun CircleIconButton(icon: ImageVector, contentDescription: String, onCl
     // instead of a flat Surface so the header buttons read as glass over
     // the brand-tinted background washes — Android parallel of the iOS
     // Liquid Glass bump (#28).
+    val neon = LocalNeonTheme.current
     Box(
         modifier = Modifier
             .size(40.dp)
@@ -555,7 +572,7 @@ private fun CircleIconButton(icon: ImageVector, contentDescription: String, onCl
         Icon(
             icon,
             contentDescription = contentDescription,
-            tint = SweKittyTheme.textPrimary(),
+            tint = neon.accent,
             modifier = Modifier.size(18.dp),
         )
     }
@@ -563,6 +580,7 @@ private fun CircleIconButton(icon: ImageVector, contentDescription: String, onCl
 
 @Composable
 private fun CircleActionButton(icon: ImageVector, contentDescription: String, size: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
+    val neon = LocalNeonTheme.current
     Box(
         modifier = Modifier
             .size(size)
@@ -574,7 +592,7 @@ private fun CircleActionButton(icon: ImageVector, contentDescription: String, si
         Icon(
             icon,
             contentDescription = contentDescription,
-            tint = SweKittyTheme.textPrimary(),
+            tint = neon.accent,
             modifier = Modifier.size(22.dp),
         )
     }

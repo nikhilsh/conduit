@@ -82,21 +82,30 @@ fun SavedTranscriptScreen(
 
     val title = session.summary.takeIf { it.isNotBlank() } ?: session.id
 
+    val neon = LocalNeonTheme.current
+    Box(modifier = Modifier.fillMaxSize()) {
+        GlassAppBackground()
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
                         title,
+                        fontFamily = neon.sans,
                         fontWeight = FontWeight.SemiBold,
+                        color = neon.text,
                         maxLines = 1,
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = neon.accent)
                     }
                 },
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                ),
             )
         },
     ) { padding ->
@@ -106,7 +115,7 @@ fun SavedTranscriptScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(color = SweKittyTheme.accentStrong())
+                    CircularProgressIndicator(color = neon.accent)
                 }
                 is LoadState.Loaded -> if (s.items.isEmpty()) {
                     InfoState(
@@ -135,6 +144,7 @@ fun SavedTranscriptScreen(
             }
         }
     }
+    }
 }
 
 /**
@@ -160,6 +170,7 @@ private fun projectSessionFor(session: SavedSession): ProjectSession =
 
 @Composable
 private fun InfoState(icon: ImageVector, title: String, message: String) {
+    val neon = LocalNeonTheme.current
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 36.dp),
         verticalArrangement = Arrangement.Center,
@@ -169,19 +180,22 @@ private fun InfoState(icon: ImageVector, title: String, message: String) {
             icon,
             contentDescription = null,
             modifier = Modifier.size(40.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = neon.accent,
         )
         Spacer(Modifier.height(14.dp))
         Text(
             title,
             style = MaterialTheme.typography.titleMedium,
+            fontFamily = neon.sans,
             fontWeight = FontWeight.SemiBold,
+            color = neon.text,
         )
         Spacer(Modifier.height(6.dp))
         Text(
             message,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = neon.sans,
+            color = neon.textDim,
             textAlign = TextAlign.Center,
         )
     }

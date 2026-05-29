@@ -16,6 +16,7 @@ import SwiftUI
 struct SavedTranscriptView: View {
     @Environment(SessionStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.neonTheme) private var neon
     @Environment(\.dismiss) private var dismiss
 
     let session: SavedSession
@@ -31,12 +32,12 @@ struct SavedTranscriptView: View {
 
     var body: some View {
         ZStack {
-            LitterUI.Palette.surface.color.ignoresSafeArea()
+            GlassAppBackground()
 
             switch state {
             case .loading:
                 ProgressView()
-                    .tint(LitterUI.Palette.brand.color)
+                    .tint(neon.accent)
             case .loaded(let items):
                 if items.isEmpty {
                     emptyTranscript
@@ -51,7 +52,7 @@ struct SavedTranscriptView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .tint(LitterUI.Palette.brand.color)
+        .tint(neon.accent)
         .task { await load() }
         .appearanceColorScheme()
     }
@@ -124,13 +125,14 @@ struct SavedTranscriptView: View {
         VStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 40, weight: .light))
-                .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                .foregroundStyle(neon.accent)
+                .neonTextGlow(neon.textGlow)
             Text(title)
-                .font(.headline)
-                .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                .font(neon.sans(17).weight(.semibold))
+                .foregroundStyle(neon.text)
             Text(message)
-                .font(.footnote)
-                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                .font(neon.sans(13))
+                .foregroundStyle(neon.textDim)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 36)
         }

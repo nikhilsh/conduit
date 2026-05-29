@@ -12,7 +12,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import sh.nikhil.swekitty.ui.AppRoot
+import sh.nikhil.swekitty.ui.LocalNeonTheme
 import sh.nikhil.swekitty.ui.LocalUseDarkTheme
+import sh.nikhil.swekitty.ui.NeonTheme
 
 class MainActivity : ComponentActivity() {
     private val store: SessionStore by viewModels()
@@ -32,6 +34,17 @@ class MainActivity : ComponentActivity() {
                 AppearanceStore.ThemeMode.Light -> false
                 AppearanceStore.ThemeMode.Dark -> true
             }
+            // Resolve the Neon Terminal theme from the user's palette +
+            // glow choices and the same effective-dark flag MaterialTheme
+            // uses. Provided alongside the appearance store so any
+            // composable below can read LocalNeonTheme.current.
+            val neonPalette by appearance.neonPalette.collectAsState()
+            val neonGlow by appearance.neonGlow.collectAsState()
+            val neonTheme = NeonTheme.resolve(
+                palette = sh.nikhil.swekitty.ui.NeonPalette.fromId(neonPalette.id),
+                dark = useDark,
+                glow = neonGlow,
+            )
             // Provide the effective dark flag alongside the appearance
             // store so SweKittyPalette palette resolution stays in sync
             // with MaterialTheme — both flip on every effective change,
@@ -41,6 +54,7 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(
                 LocalAppearanceStore provides appearance,
                 LocalUseDarkTheme provides useDark,
+                LocalNeonTheme provides neonTheme,
             ) {
                 MaterialTheme(colorScheme = if (useDark) darkColorScheme() else lightColorScheme()) {
                     // GlassAppBackground inside AppRoot supplies the canvas; no

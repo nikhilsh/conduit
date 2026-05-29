@@ -181,9 +181,12 @@ fun DiscoveryScreen(
         onDismiss()
     }
 
+    val neon = LocalNeonTheme.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
     ) {
         LazyColumn(
             modifier = Modifier
@@ -243,9 +246,11 @@ fun DiscoveryScreen(
 
 @Composable
 private fun Header() {
-    Surface(
-        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    val neon = LocalNeonTheme.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -254,12 +259,15 @@ private fun Header() {
             Text(
                 "SweKitty on your network",
                 style = MaterialTheme.typography.titleMedium,
+                fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
+                color = neon.text,
             )
             Text(
                 "Browsing for _swe-kitty._tcp advertisers. The broker must be running with --local on the same Wi-Fi.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = neon.sans,
+                color = neon.textDim,
             )
         }
     }
@@ -267,11 +275,13 @@ private fun Header() {
 
 @Composable
 private fun SectionLabel(text: String) {
+    val neon = LocalNeonTheme.current
     Text(
         text = text,
         style = MaterialTheme.typography.labelLarge,
+        fontFamily = neon.sans,
         fontWeight = FontWeight.SemiBold,
-        color = SweKittyTheme.textSecondary(),
+        color = neon.textDim,
         modifier = Modifier.padding(start = 4.dp, top = 4.dp),
     )
 }
@@ -283,16 +293,18 @@ private fun SavedServerRow(
     isActive: Boolean,
     onTap: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = if (isActive) {
-            SweKittyTheme.accentStrong().copy(alpha = 0.18f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-        },
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .neonCardSurface(
+                neon = neon,
+                shape = shape,
+                fill = if (isActive) neon.accent.copy(alpha = 0.14f) else neon.surface,
+                borderColor = if (isActive) neon.accent.copy(alpha = 0.6f) else neon.border,
+                glowTint = if (isActive) neon.accent else null,
+            )
             .clickable(onClick = onTap),
     ) {
         Row(
@@ -302,20 +314,21 @@ private fun SavedServerRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
-                Text(name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(name, style = MaterialTheme.typography.titleSmall, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
                 Text(
                     host,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
                 )
             }
             if (isActive) {
                 Text(
                     "Active",
                     style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
                     fontWeight = FontWeight.SemiBold,
-                    color = SweKittyTheme.accentStrong(),
+                    color = neon.accent,
                 )
             }
         }
@@ -327,27 +340,32 @@ private fun NearbyEmptyState(
     onScanQR: () -> Unit,
     onManualAdd: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+    val neon = LocalNeonTheme.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp), color = neon.accent)
                 Spacer(Modifier.width(10.dp))
                 Text(
                     "No nearby servers — scan QR or add manually",
                     style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
                 )
             }
             Text(
                 "mDNS doesn't cross subnets — phone and broker must share the LAN. If you've just started the broker, give it a few seconds.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = neon.sans,
+                color = neon.textDim,
             )
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -370,12 +388,12 @@ private fun NearbyEmptyState(
 
 @Composable
 private fun DiscoveredRow(row: DiscoveredEntry, onTap: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
             .clickable(onClick = onTap),
     ) {
         Row(
@@ -387,23 +405,24 @@ private fun DiscoveredRow(row: DiscoveredEntry, onTap: () -> Unit) {
             Icon(
                 Icons.Outlined.Wifi,
                 contentDescription = null,
-                tint = SweKittyTheme.accentStrong(),
+                tint = neon.accent,
                 modifier = Modifier.size(24.dp),
             )
             Spacer(Modifier.width(12.dp))
             Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
-                Text(row.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(row.name, style = MaterialTheme.typography.titleSmall, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
                 Text(
                     "${row.host}:${row.port}",
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
                 )
                 if (!row.version.isNullOrBlank()) {
                     Text(
                         "v${row.version}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
                     )
                 }
             }

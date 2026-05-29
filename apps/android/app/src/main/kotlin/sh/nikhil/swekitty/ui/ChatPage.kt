@@ -7,30 +7,40 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Create
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
@@ -42,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,15 +63,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import sh.nikhil.swekitty.PinnedContext
 import sh.nikhil.swekitty.SessionStore
 import kotlinx.coroutines.launch
@@ -68,6 +85,15 @@ import uniffi.swe_kitty_core.ChatEvent
 import uniffi.swe_kitty_core.ConversationItem
 import uniffi.swe_kitty_core.ProjectSession
 import uniffi.swe_kitty_core.ViewEventFile
+
+/**
+ * Lets the neon command card reach the live [SessionStore] + current
+ * session id to wire its "Re-run" action (terminal write) without
+ * threading them through every card signature. Provided by [ChatPage]
+ * where both are in scope; null in detached previews / read-only opens.
+ */
+internal val LocalSessionStore = compositionLocalOf<SessionStore?> { null }
+internal val LocalSessionId = compositionLocalOf<String?> { null }
 
 private sealed class ConversationRole(
     val label: String,
@@ -490,7 +516,13 @@ fun ChatPage(
         }
     }
 
-    CompositionLocalProvider(LocalParsedMarkdownCache provides markdownCache) {
+    CompositionLocalProvider(
+        LocalParsedMarkdownCache provides markdownCache,
+        // Read-only transcripts have no live WS to write into, so don't
+        // expose the store there — the command card's Re-run stays disabled.
+        LocalSessionStore provides (if (readOnly) null else store),
+        LocalSessionId provides session.id,
+    ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
@@ -781,21 +813,22 @@ internal fun markdownRevision(
 
 @Composable
 private fun EmptyConversationCard(assistant: String) {
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
+            .padding(horizontal = 16.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("No conversation yet", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Send a message to $assistant. Replies appear here as structured turns; the Terminal tab still shows the raw TUI if you want to peek at the unparsed stream.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Text("No conversation yet", style = MaterialTheme.typography.titleMedium, fontFamily = neon.sans, color = neon.text)
+        Text(
+            "Send a message to $assistant. Replies appear here as structured turns; the Terminal tab still shows the raw TUI if you want to peek at the unparsed stream.",
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = neon.sans,
+            color = neon.textDim,
+        )
     }
 }
 
@@ -825,163 +858,430 @@ private fun ConversationEventRow(
         ConversationRole.Assistant ->
             ConversationBubble(ev, ConversationRole.Assistant, agentAccent, Modifier, alignEnd = false, isContinuation = isContinuation)
         ConversationRole.Tool -> ConversationToolCard(ev)
-        ConversationRole.System -> Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Outlined.Info,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(12.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                ev.content,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-                maxLines = 2,
-            )
+        ConversationRole.System -> {
+            val neon = LocalNeonTheme.current
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Outlined.Info,
+                    contentDescription = null,
+                    tint = neon.textFaint,
+                    modifier = Modifier.size(12.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    ev.content,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.sans,
+                    color = neon.textFaint,
+                    maxLines = 2,
+                )
+            }
         }
     }
+}
+
+/**
+ * Small uppercase neon label (monospaced). Applies a soft text-glow halo
+ * via a layered shadow when the theme has [NeonTheme.textGlow] (dark +
+ * glow on); a plain tinted label otherwise. Compose has no native text
+ * shadow blur stacking, so this is a single-layer approximation of the
+ * two-layer CSS text glow — fidelity gap vs. the web reference.
+ */
+@Composable
+private fun NeonLabel(
+    text: String,
+    color: Color,
+    neon: NeonTheme,
+    style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.labelSmall,
+) {
+    val glow = neon.textGlow
+    val shadow = if (glow != null) {
+        androidx.compose.ui.graphics.Shadow(
+            color = glow.outer.color,
+            offset = Offset.Zero,
+            blurRadius = glow.outer.radiusDp,
+        )
+    } else {
+        null
+    }
+    Text(
+        text = text,
+        style = style.copy(shadow = shadow),
+        color = color,
+        fontFamily = neon.mono,
+        fontWeight = FontWeight.Bold,
+    )
+}
+
+/** A small filled status dot. When [pulsing], it breathes via an infinite alpha. */
+@Composable
+private fun NeonStatusDot(color: Color, pulsing: Boolean, size: Dp = 8.dp) {
+    val alpha = if (pulsing) {
+        val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "neonDot")
+        val a by transition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = androidx.compose.animation.core.tween(700),
+                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+            ),
+            label = "neonDotAlpha",
+        )
+        a
+    } else {
+        1f
+    }
+    Box(
+        modifier = Modifier
+            .size(size)
+            .graphicsLayer { this.alpha = alpha }
+            .background(color, CircleShape),
+    )
 }
 
 @Composable
 private fun PendingInputCard(
     ev: ConversationItem,
-    agentAccent: Color,
+    @Suppress("UNUSED_PARAMETER") agentAccent: Color,
     onQuickReply: (String) -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     val options = remember(ev) {
         ev.pendingOptions.takeIf { it.isNotEmpty() }
             ?: ConversationRenderer.extractPendingOptions(ev.content)
     }
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.28f)),
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            // §4.6: claude-tinted wash, 1.5dp claude border, glowing.
+            .neonCardSurface(
+                neon = neon,
+                shape = shape,
+                fill = neon.claude.copy(alpha = if (neon.dark) 0.12f else 0.10f),
+                borderWidth = 1.5.dp,
+                borderColor = neon.claude,
+                glowTint = neon.claude,
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Info, null, tint = agentAccent, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("INPUT NEEDED", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.width(6.dp))
-                StatusChip(ev.status)
-            }
-            MarkdownBlock(ev.content, ConversationRole.Assistant)
-            if (options.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    options.forEach { option ->
-                        AssistChip(onClick = { onQuickReply(option) }, label = { Text(option) })
-                        Spacer(Modifier.width(2.dp))
-                    }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Info, null, tint = neon.claude, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            NeonLabel("NEEDS YOUR INPUT", neon.claude, neon)
+            Spacer(Modifier.width(6.dp))
+            NeonStatusChip(ev.status, neon)
+        }
+        // Prompt prose in sans.
+        MarkdownBlock(ev.content, ConversationRole.Assistant)
+        if (options.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEachIndexed { idx, option ->
+                    NeonPendingOptionRow(
+                        text = option,
+                        index = idx,
+                        primary = idx == 0,
+                        neon = neon,
+                        onClick = { onQuickReply(option) },
+                    )
                 }
             }
         }
     }
 }
 
+/**
+ * A big tappable pending-option row (§4.6). The first option is filled
+ * claude + a check; the rest are bordered with a trailing index. Min 44dp
+ * touch target.
+ */
 @Composable
-private fun HandoffCard(ev: ConversationItem) {
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)),
+private fun NeonPendingOptionRow(
+    text: String,
+    index: Int,
+    primary: Boolean,
+    neon: NeonTheme,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .clip(shape)
+            .then(
+                if (primary) Modifier.background(neon.claude)
+                else Modifier.border(1.dp, neon.claude.copy(alpha = 0.55f), shape),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Info,
-                    null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "AGENT HANDOFF",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.weight(1f))
-                if (ev.ts.isNotEmpty()) {
-                    Text(ConversationTimestamp.relative(ev.ts), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                }
-            }
+        if (primary) {
+            Icon(Icons.Filled.Check, null, tint = neon.accentText, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(
+            text,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = neon.sans,
+            color = if (primary) neon.accentText else neon.text,
+        )
+        if (!primary) {
             Text(
-                ev.content,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                "${index + 1}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textFaint,
             )
         }
     }
 }
 
+// Per-agent neon brand colour for handoff avatars / names now lives in
+// NeonComponents.kt as the shared top-level `neonAgentColor`, reused by
+// the home list + sheets so chrome and chat agree.
+
+/**
+ * Tiny circular agent avatar (first letter), tinted to the agent brand.
+ * [glow] applies a soft halo for the handoff target.
+ */
 @Composable
-private fun SubagentCard(ev: ConversationItem) {
-    var expanded by remember { mutableStateOf(false) }
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.28f)),
+private fun NeonAgentAvatar(agent: String?, neon: NeonTheme, glow: Boolean) {
+    val color = neonAgentColor(agent, neon)
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .then(if (glow) Modifier.neonGlowBox(neon.glowBox?.let {
+                NeonGlowBox(
+                    NeonShadowLayer(it.inner.radiusDp, color.copy(alpha = it.inner.color.alpha)),
+                    NeonShadowLayer(it.outer.radiusDp, color.copy(alpha = it.outer.color.alpha)),
+                )
+            }, CircleShape) else Modifier)
+            .clip(CircleShape)
+            .background(color.copy(alpha = 0.20f))
+            .border(1.dp, color, CircleShape),
+        contentAlignment = Alignment.Center,
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Outlined.SmartToy,
-                    null,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "SUBAGENT",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold,
-                )
+        Text(
+            (agent?.firstOrNull()?.uppercase() ?: "?"),
+            style = MaterialTheme.typography.labelMedium,
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.Bold,
+            color = color,
+        )
+    }
+}
+
+@Composable
+private fun HandoffCard(ev: ConversationItem) {
+    val neon = LocalNeonTheme.current
+    // Best-effort from→to parse out of the content first line (e.g.
+    // "claude → codex" / "claude -> codex"). Falls back to a single agent.
+    val (fromAgent, toAgent) = remember(ev.content) {
+        val first = ev.content.lineSequence().firstOrNull().orEmpty()
+        val parts = first.split("→", "->", " to ").map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.size >= 2) parts[0] to parts[1] else (null to parts.firstOrNull())
+    }
+    val targetColor = neonAgentColor(toAgent, neon)
+    val running = ev.status.equals("running", true) || ev.status.equals("pending", true)
+    val shape = RoundedCornerShape(15.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface, borderColor = targetColor, glowTint = targetColor)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (fromAgent != null) {
+                NeonAgentAvatar(fromAgent, neon, glow = false)
                 Spacer(Modifier.width(6.dp))
-                StatusChip(ev.status)
-                Spacer(Modifier.weight(1f))
-                if (ev.ts.isNotEmpty()) {
-                    Text(
-                        ev.ts,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
-                AssistChip(
-                    onClick = { expanded = !expanded },
-                    label = { Text(if (expanded) "Hide" else "Show") },
+                Icon(Icons.Outlined.KeyboardArrowRight, null, tint = neon.textDim, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+            }
+            NeonAgentAvatar(toAgent, neon, glow = true)
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                NeonLabel(
+                    (toAgent ?: "AGENT").uppercase(),
+                    targetColor,
+                    neon,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Text(
+                    "subagent · ${if (running) "working…" else "done"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
                 )
             }
-            if (expanded) {
+            NeonStatusChip(ev.status, neon)
+        }
+        // TASK inset block — the handoff content/brief.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(neon.codeBg)
+                .padding(10.dp),
+        ) {
+            Text(
+                ev.content,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = neon.sans,
+                color = neon.text,
+            )
+        }
+        if (running) {
+            // Nested progress strip.
+            androidx.compose.material3.LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().clip(CircleShape),
+                color = targetColor,
+                trackColor = neon.border,
+            )
+        }
+    }
+}
+
+/**
+ * §4.2 SwapNotice — an inline divider shown when a turn is swapping to a
+ * new agent. ConversationItem has no dedicated "swapping" status carried
+ * to the client today, so this is exposed for PHASE 2 wiring but is NOT
+ * currently rendered by the dispatcher.
+ */
+@Composable
+private fun SwapNotice(fromAgent: String?, toAgent: String?) {
+    val neon = LocalNeonTheme.current
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f), color = neon.border)
+        Text(
+            "${fromAgent ?: "?"} → ${toAgent ?: "?"}",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = neon.mono,
+            color = neonAgentColor(toAgent, neon),
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f), color = neon.border)
+    }
+}
+
+@Composable
+private fun SubagentCard(ev: ConversationItem) {
+    val neon = LocalNeonTheme.current
+    var expanded by remember { mutableStateOf(false) }
+    val running = ev.status.equals("running", true) || ev.status.equals("pending", true)
+    val shape = RoundedCornerShape(15.dp)
+    val chevron by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        label = "subagentChevron",
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface, glowTint = neon.purple)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(neon.purple.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.SmartToy, null, tint = neon.purple, modifier = Modifier.size(14.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            NeonLabel("SUBAGENT", neon.purple, neon)
+            Spacer(Modifier.width(6.dp))
+            NeonStatusChip(ev.status, neon)
+            Spacer(Modifier.weight(1f))
+            Icon(
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = neon.textDim,
+                modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = chevron },
+            )
+        }
+        if (running) {
+            androidx.compose.material3.LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().clip(CircleShape),
+                color = neon.purple,
+                trackColor = neon.border,
+            )
+        }
+        Text(
+            if (expanded) ev.content
+            else (ev.content.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "Subagent activity"),
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = neon.sans,
+            color = neon.text,
+            maxLines = if (expanded) Int.MAX_VALUE else 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * §4.3 PLAN card. There is no `plan` ConversationItem kind, and no tool
+ * payload in the current data model is reliably plan/todo-shaped at the
+ * dispatch site, so this composable is provided but NOT wired into
+ * [ConversationEventRow]. PHASE 2 / the broker would need to surface a
+ * plan kind (or a todo tool call) to feed it real steps —
+ * [isNeonPlanShaped] is the gate to use. Rendering nothing here avoids
+ * fabricating plan data.
+ */
+private data class NeonPlanStep(val text: String, val state: NeonPlanState)
+private enum class NeonPlanState { DONE, ACTIVE, TODO }
+
+@Composable
+private fun PlanCard(steps: List<NeonPlanStep>) {
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        NeonLabel("PLAN", neon.accent, neon)
+        steps.forEach { step ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when (step.state) {
+                    NeonPlanState.DONE -> Box(
+                        modifier = Modifier.size(16.dp).clip(CircleShape).background(neon.green),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Filled.Check, null, tint = neon.accentText, modifier = Modifier.size(11.dp)) }
+                    NeonPlanState.ACTIVE -> Box(
+                        modifier = Modifier.size(16.dp).clip(CircleShape).border(2.dp, neon.accent2, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) { NeonStatusDot(neon.accent2, pulsing = true, size = 6.dp) }
+                    NeonPlanState.TODO -> Box(
+                        modifier = Modifier.size(16.dp).clip(CircleShape).border(2.dp, neon.textFaint, CircleShape),
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
                 Text(
-                    ev.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            } else {
-                Text(
-                    ev.content.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "Subagent activity",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
+                    step.text + if (step.state == NeonPlanState.ACTIVE) "  running…" else "",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        textDecoration = if (step.state == NeonPlanState.DONE)
+                            androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+                    ),
+                    fontFamily = neon.sans,
+                    color = if (step.state == NeonPlanState.DONE) neon.textDim else neon.text,
                 )
             }
         }
@@ -1005,6 +1305,7 @@ private fun ConversationBubble(
     // rounded surface; ASSISTANT messages flow full-width with no
     // container. `alignEnd` drives the horizontal alignment so the
     // dispatch site stays the source of truth for which role trails.
+    val neon = LocalNeonTheme.current
     val roleLabel = when (role) {
         ConversationRole.User -> "YOU"
         ConversationRole.Assistant -> "ASSISTANT"
@@ -1012,8 +1313,8 @@ private fun ConversationBubble(
         ConversationRole.System -> "SYSTEM"
     }
     val labelColor = when (role) {
-        ConversationRole.User -> agentAccent
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+        ConversationRole.User -> neon.accent
+        else -> neon.textDim
     }
     // Continuation rows sit closer to the previous message: the
     // LazyColumn's 12dp item spacing minus 8dp offset = 4dp effective gap.
@@ -1025,31 +1326,33 @@ private fun ConversationBubble(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         if (!isContinuation) {
-            Text(
-                roleLabel,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                color = labelColor,
-            )
+            NeonLabel(roleLabel, labelColor, neon)
         }
         if (role == ConversationRole.User) {
-            // Right-aligned, content-sized surface. `fillMaxWidth(0.82f)`
-            // caps long turns at ~82% so they don't span edge-to-edge;
-            // `wrapContentWidth(End)` shrinks the surface to its content and
-            // pins it to the trailing edge so short turns hug the right.
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                modifier = Modifier.fillMaxWidth(0.82f).wrapContentWidth(Alignment.End),
+            // Right-aligned, content-sized pill. `neon.accent` fill +
+            // `neon.accentText` foreground, pill radius — the §2 user
+            // bubble. `fillMaxWidth(0.82f)` caps long turns; `wrapContentWidth`
+            // shrinks to content + pins trailing so short turns hug the right.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.82f)
+                    .wrapContentWidth(Alignment.End)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(neon.accent),
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     ConversationRenderer.blocks(ev.content).forEach { block ->
                         when (block) {
-                            is ConversationBlock.Markdown -> MarkdownBlock(block.text, role)
+                            is ConversationBlock.Markdown ->
+                                Text(
+                                    block.text,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = neon.sans,
+                                    color = neon.accentText,
+                                )
                             is ConversationBlock.Code -> CodeBlock(block.language, block.content)
                         }
                     }
@@ -1075,7 +1378,8 @@ private fun ConversationBubble(
  * out of phase via an infinite transition.
  */
 @Composable
-private fun TypingIndicatorRow(assistant: String, accent: Color) {
+private fun TypingIndicatorRow(assistant: String, @Suppress("UNUSED_PARAMETER") accent: Color) {
+    val neon = LocalNeonTheme.current
     val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "typing")
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -1085,7 +1389,7 @@ private fun TypingIndicatorRow(assistant: String, accent: Color) {
         Icon(
             Icons.Outlined.SmartToy,
             contentDescription = null,
-            tint = accent,
+            tint = neon.accent2,
             modifier = Modifier.size(14.dp),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1106,14 +1410,15 @@ private fun TypingIndicatorRow(assistant: String, accent: Color) {
                     modifier = Modifier
                         .size(6.dp)
                         .graphicsLayer { alpha = dotAlpha }
-                        .background(MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
+                        .background(neon.accent2, CircleShape),
                 )
             }
         }
         Text(
             "$assistant is typing…",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = neon.sans,
+            color = neon.textDim,
         )
     }
 }
@@ -1131,18 +1436,21 @@ private fun RoleIcon(role: ConversationRole, tint: Color = role.accent) {
 
 @Composable
 private fun MarkdownBlock(text: String, role: ConversationRole) {
+    val neon = LocalNeonTheme.current
     val appearance = sh.nikhil.swekitty.LocalAppearanceStore.current
     val fontChoice by appearance.fontFamily.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
+    // §2: PROSE renders in neon.sans (NOT mono) unless the user has
+    // explicitly forced a monospaced reading font in Appearance.
     val resolvedFont = if (fontChoice == sh.nikhil.swekitty.AppearanceStore.FontFamily.Monospaced) {
-        FontFamily.Monospace
+        neon.mono
     } else {
-        FontFamily.Default
+        neon.sans
     }
     val onColor = if (role == ConversationRole.System) {
-        MaterialTheme.colorScheme.onSurfaceVariant
+        neon.textDim
     } else {
-        MaterialTheme.colorScheme.onSurface
+        neon.text
     }
 
     // Android parity of the iOS chat-polish change: agent markdown was
@@ -1293,12 +1601,13 @@ private fun MarkdownQuote(
     bodyPointSize: Float,
     font: FontFamily,
 ) {
+    val neon = LocalNeonTheme.current
     Row(modifier = Modifier.height(IntrinsicSize.Min)) {
         Box(
             modifier = Modifier
                 .width(3.dp)
                 .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(2.dp)),
+                .background(neon.accent.copy(alpha = 0.6f), RoundedCornerShape(2.dp)),
         )
         Spacer(Modifier.width(10.dp))
         Text(
@@ -1310,7 +1619,7 @@ private fun MarkdownQuote(
                 ),
             ),
             fontFamily = font,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = neon.textDim,
         )
     }
 }
@@ -1328,11 +1637,12 @@ private fun MarkdownTable(
     font: FontFamily,
     onColor: Color,
 ) {
+    val neon = LocalNeonTheme.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         block.rows.forEach { row ->
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                color = neon.surface,
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1380,31 +1690,26 @@ private fun MarkdownTable(
 
 @Composable
 private fun CodeBlock(language: String?, content: String) {
+    val neon = LocalNeonTheme.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!language.isNullOrBlank()) {
-            Text(
-                language.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Bold,
-            )
+            NeonLabel(language.uppercase(), neon.textDim, neon)
         }
         SelectionContainer {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                        RoundedCornerShape(14.dp),
-                    )
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(neon.codeBg)
+                    .border(1.dp, neon.border, RoundedCornerShape(14.dp))
                     .padding(12.dp)
                     .horizontalScroll(rememberScrollState()),
             ) {
                 Text(
                     text = content,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = neon.mono,
+                    color = neon.codeText,
                 )
             }
         }
@@ -1413,122 +1718,399 @@ private fun CodeBlock(language: String?, content: String) {
 
 @Composable
 private fun ConversationToolCard(ev: ConversationItem) {
-    // Tool/bash cards start COLLAPSED (iOS #236 parity): the header row
-    // alone — label · status · command one-liner · time + chevron — until
-    // the user taps to reveal the full COMMAND box + output. Per-card
-    // state, so expanding one keeps it open for the session while every
-    // new card still arrives collapsed.
+    // §4.1 vs §4.5: bash/exec tool calls (or any with a shell command)
+    // get the COMMAND headline card; everything else gets the compact
+    // tool card. Both keep ConversationRenderer.toolSections intact for
+    // the expanded body.
+    if (isNeonCommandCard(ev.toolName, ev.command)) {
+        NeonCommandCard(ev)
+    } else {
+        NeonToolCard(ev)
+    }
+}
+
+/** Icon + tint for a tool family (§4.5 tile colours). */
+@Composable
+private fun toolTileIcon(kind: NeonToolKind, neon: NeonTheme): Pair<ImageVector, Color> = when (kind) {
+    NeonToolKind.SEARCH -> Icons.Outlined.Search to neon.purple
+    NeonToolKind.READ -> Icons.Outlined.Visibility to neon.blue
+    NeonToolKind.EDIT -> Icons.Outlined.Create to neon.claude
+    NeonToolKind.BASH -> Icons.Outlined.Terminal to neon.green
+    NeonToolKind.GENERIC -> Icons.Outlined.Build to neon.accent2
+}
+
+/** Human label for a tool family, used as the §4.5 header. */
+private fun toolHumanLabel(ev: ConversationItem, kind: NeonToolKind): String {
+    ev.toolName?.takeIf { it.isNotBlank() }?.let { return it }
+    return when (kind) {
+        NeonToolKind.SEARCH -> "Search"
+        NeonToolKind.READ -> "Read"
+        NeonToolKind.EDIT -> "Edit"
+        NeonToolKind.BASH -> "Run"
+        NeonToolKind.GENERIC -> ev.kind.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/**
+ * §4.5 compact tool card: a 22dp tinted icon tile, human label, mono meta
+ * + duration, a rotating chevron, expanding to the mono output on codeBg.
+ */
+@Composable
+private fun NeonToolCard(ev: ConversationItem) {
+    val neon = LocalNeonTheme.current
     var expanded by remember { mutableStateOf(false) }
     val sections = remember(ev) { ConversationRenderer.toolSections(ev) }
-    val summary = remember(ev) {
-        val cmd = ev.command?.takeIf { it.isNotBlank() }?.take(80)
-        cmd ?: ev.content.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.take(80)
-            ?: "Tool activity"
-    }
-    val headerLabel = ev.toolName?.takeIf { it.isNotBlank() }?.uppercase() ?: ev.kind.uppercase()
-
-    Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)),
+    val kind = remember(ev.toolName) { neonToolKind(ev.toolName) }
+    val (icon, tint) = toolTileIcon(kind, neon)
+    val durationText = ev.durationMs?.let { formatNeonDuration(it) }
+    val exit = ev.exitCode?.toInt()
+    val failed = ev.status.equals("failed", true) || (exit != null && exit != 0)
+    val chevron by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        label = "toolChevron",
+    )
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface, failed = failed)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(tint.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, null, tint = tint, modifier = Modifier.size(14.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    toolHumanLabel(ev, kind),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val meta = buildList {
+                    if (exit != null) add("exit $exit")
+                    durationText?.let { add(it) }
+                }.joinToString(" · ")
+                if (meta.isNotEmpty()) {
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                        fontFamily = neon.mono,
+                        color = if (failed) neon.red else neon.green,
+                        maxLines = 1,
+                    )
+                }
+            }
+            ev.diffSummary?.takeIf { it.isNotBlank() }?.let { ds ->
+                NeonLabel(ds.uppercase(), neon.textDim, neon)
+                Spacer(Modifier.width(8.dp))
+            }
+            NeonStatusChip(ev.status, neon)
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = neon.textDim,
+                modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = chevron },
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                sections.forEach { section -> NeonToolSection(section) }
+            }
+        }
+    }
+}
+
+/** Dispatch a parsed [ToolSection] to its neon composable. */
+@Composable
+private fun NeonToolSection(section: ToolSection) {
+    when (section) {
+        is ToolSection.Meta -> ToolMetaRow(section.exitCode, section.duration)
+        is ToolSection.Command -> CommandBlock(section.command)
+        is ToolSection.Files -> FileStrip(section.files)
+        is ToolSection.Stdout -> LabeledOutputBlock("STDOUT", section.text)
+        is ToolSection.Stderr -> LabeledOutputBlock("STDERR", section.text)
+        is ToolSection.Text -> MarkdownBlock(section.text, ConversationRole.Tool)
+        is ToolSection.Code -> CodeBlock(section.language, section.content)
+        is ToolSection.Diff -> DiffBlock(section.content)
+    }
+}
+
+/**
+ * §4.1 COMMAND headline card. Container codeBg, 14dp radius, 1dp border
+ * (red on fail), state-tinted glow; a 3dp full-height left status rail;
+ * a header with mono `$` + command; a meta strip; collapsible output with
+ * a blinking cursor while running; and an action bar (Copy / Re-run /
+ * Open in terminal).
+ */
+@Composable
+private fun NeonCommandCard(ev: ConversationItem) {
+    val neon = LocalNeonTheme.current
+    val store = LocalSessionStore.current
+    val sessionId = LocalSessionId.current
+    val clipboard = LocalClipboardManager.current
+    var expanded by remember { mutableStateOf(true) }
+
+    val sections = remember(ev) { ConversationRenderer.toolSections(ev) }
+    val command = remember(ev) {
+        ev.command?.takeIf { it.isNotBlank() }
+            ?: sections.filterIsInstance<ToolSection.Command>().firstOrNull()?.command
+            ?: ev.content.lineSequence().firstOrNull()?.trim().orEmpty()
+    }
+    val exit = ev.exitCode?.toInt()
+    val running = ev.status.equals("running", true) || ev.status.equals("pending", true)
+    val failed = ev.status.equals("failed", true) || (exit != null && exit != 0)
+    val railColor = when {
+        running -> neon.accent2
+        failed -> neon.red
+        else -> neon.green
+    }
+    val durationText = ev.durationMs?.let { formatNeonDuration(it) }
+    val shape = RoundedCornerShape(14.dp)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.codeBg, failed = failed, glowTint = railColor)
+            .clip(shape)
+            .height(IntrinsicSize.Min),
+    ) {
+        // Left 3dp full-height status rail.
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(railColor),
+        )
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 11.dp, end = 12.dp, top = 10.dp, bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Outlined.Build, null, tint = ConversationRole.Tool.accent, modifier = Modifier.size(16.dp))
+            // Header: $ prompt + command, status chip on the right.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("$", style = MaterialTheme.typography.bodyMedium, fontFamily = neon.mono, color = railColor)
                 Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            headerLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        StatusChip(ev.status)
-                        ev.diffSummary?.takeIf { it.isNotBlank() }?.let { ds ->
-                            Spacer(Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                            ) {
-                                Text(
-                                    ds.uppercase(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                )
-                            }
-                        }
-                    }
-                    // The command one-liner lives in the collapsed header
-                    // only; once expanded the COMMAND box (below) already
-                    // shows it verbatim, so we drop the plain duplicate
-                    // (iOS #236 parity).
-                    if (!expanded) {
-                        Text(summary, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                    }
-                }
-                if (ev.ts.isNotEmpty()) {
-                    Text(ConversationTimestamp.relative(ev.ts), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                    Spacer(Modifier.width(8.dp))
-                }
-                AssistChip(
-                    onClick = { expanded = !expanded },
-                    label = { Text(if (expanded) "Hide" else "Show") },
+                Text(
+                    command,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { expanded = !expanded },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.mono,
+                    color = neon.codeText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                Spacer(Modifier.width(8.dp))
+                if (running) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        NeonStatusDot(neon.accent2, pulsing = true, size = 6.dp)
+                        Text("running", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono, color = neon.accent2)
+                    }
+                } else {
+                    val ok = !failed
+                    val label = if (exit != null) "exit $exit" else if (ok) "exit 0" else "exit 1"
+                    Row(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background((if (ok) neon.green else neon.red).copy(alpha = 0.14f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = neon.mono,
+                            fontWeight = FontWeight.Bold,
+                            color = if (ok) neon.green else neon.red,
+                        )
+                    }
+                }
             }
 
+            // Meta strip — folder + cwd · host · duration. Fields omitted
+            // gracefully when absent. (cwd/host aren't carried on
+            // ConversationItem today, so this typically shows duration only.)
+            val metaPieces = buildList {
+                durationText?.let { add(it) }
+            }
+            if (metaPieces.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Folder, null, tint = neon.textFaint, modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        metaPieces.joinToString("  ·  "),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                        fontFamily = neon.mono,
+                        color = if (failed) neon.red else neon.textDim,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    )
+                }
+            }
+
+            // Output (collapsible, ~132dp max).
             androidx.compose.animation.AnimatedVisibility(
                 visible = expanded,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically(),
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    sections.forEach { section ->
-                        when (section) {
-                            is ToolSection.Meta -> ToolMetaRow(section.exitCode, section.duration)
-                            is ToolSection.Command -> CommandBlock(section.command)
-                            is ToolSection.Files -> FileStrip(section.files)
-                            is ToolSection.Stdout -> LabeledOutputBlock("STDOUT", section.text)
-                            is ToolSection.Stderr -> LabeledOutputBlock("STDERR", section.text)
-                            is ToolSection.Text -> MarkdownBlock(section.text, ConversationRole.Tool)
-                            is ToolSection.Code -> CodeBlock(section.language, section.content)
-                            is ToolSection.Diff -> DiffBlock(section.content)
-                        }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    NeonCommandOutput(sections, running, neon)
+                }
+            }
+
+            // Action bar (top-bordered): Copy / Re-run / Open in terminal.
+            HorizontalDivider(color = neon.border, thickness = 1.dp)
+            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                NeonActionButton("Copy", neon) {
+                    clipboard.setText(AnnotatedString(command))
+                }
+                NeonActionButton("Re-run", neon, enabled = sessionId != null && store != null) {
+                    // Wired to SessionStore.sendInput (terminal write): send
+                    // the command + newline into the live session's TUI.
+                    if (sessionId != null && store != null && command.isNotBlank()) {
+                        store.sendInput(sessionId, (command + "\n").toByteArray())
                     }
                 }
+                // TODO(neon): no SessionStore action navigates to / focuses the
+                // Terminal tab from a card; needs a tab-switch hook (PHASE 2).
+                NeonActionButton("Open in terminal", neon, enabled = false) { /* stub */ }
+            }
+        }
+    }
+}
+
+/** Renders the command card's output region: stdout codeText, stderr red. */
+@Composable
+private fun NeonCommandOutput(sections: List<ToolSection>, running: Boolean, neon: NeonTheme) {
+    val outputs = sections.filter {
+        it is ToolSection.Stdout || it is ToolSection.Stderr ||
+            it is ToolSection.Text || it is ToolSection.Code || it is ToolSection.Diff
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 132.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            outputs.forEach { section ->
+                when (section) {
+                    is ToolSection.Stdout -> NeonOutputLines(section.text, neon.codeText, neon)
+                    is ToolSection.Stderr -> NeonOutputLines(section.text, neon.red, neon, glow = true)
+                    is ToolSection.Text -> NeonOutputLines(section.text, neon.codeText, neon)
+                    is ToolSection.Code -> NeonOutputLines(section.content, neon.codeText, neon)
+                    is ToolSection.Diff -> DiffBlock(section.content)
+                    else -> Unit
+                }
+            }
+            if (running) {
+                NeonBlinkingCursor(neon)
             }
         }
     }
 }
 
 @Composable
-private fun CommandBlock(command: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun NeonOutputLines(text: String, color: Color, neon: NeonTheme, glow: Boolean = false) {
+    val shadow = if (glow && neon.textGlow != null) {
+        androidx.compose.ui.graphics.Shadow(color = color.copy(alpha = 0.5f), blurRadius = 8f)
+    } else {
+        null
+    }
+    SelectionContainer {
         Text(
-            "COMMAND",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
+            text,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.3.sp, shadow = shadow),
+            fontFamily = neon.mono,
+            color = color,
         )
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        ) {
-            SelectionContainer {
+    }
+}
+
+/** A blinking block cursor for the running command output. */
+@Composable
+private fun NeonBlinkingCursor(neon: NeonTheme) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "cursor")
+    val a by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(500),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "cursorAlpha",
+    )
+    Box(
+        modifier = Modifier
+            .padding(top = 2.dp)
+            .size(width = 8.dp, height = 14.dp)
+            .graphicsLayer { alpha = a }
+            .background(neon.accent2),
+    )
+}
+
+/** A small text action button for the command card action bar. */
+@Composable
+private fun NeonActionButton(label: String, neon: NeonTheme, enabled: Boolean = true, onClick: () -> Unit) {
+    Text(
+        label,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 4.dp),
+        style = MaterialTheme.typography.labelMedium,
+        fontFamily = neon.mono,
+        color = if (enabled) neon.accent else neon.textFaint,
+    )
+}
+
+/** ms → "120ms" / "1.4s" / "1.4min". Mirrors the renderer's formatter. */
+private fun formatNeonDuration(ms: ULong): String {
+    val msLong = ms.toLong()
+    if (msLong < 1_000) return "${msLong}ms"
+    val seconds = msLong / 1_000.0
+    if (seconds < 60) return String.format("%.1fs", seconds)
+    return String.format("%.1fmin", seconds / 60.0)
+}
+
+@Composable
+private fun CommandBlock(command: String) {
+    val neon = LocalNeonTheme.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        NeonLabel("COMMAND", neon.textDim, neon)
+        SelectionContainer {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(neon.codeBg)
+                    .border(1.dp, neon.border, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                Text("$ ", style = MaterialTheme.typography.bodySmall, fontFamily = neon.mono, color = neon.accent2)
                 Text(
                     command,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = neon.mono,
+                    color = neon.codeText,
                 )
             }
         }
@@ -1537,67 +2119,90 @@ private fun CommandBlock(command: String) {
 
 @Composable
 private fun ToolMetaRow(exitCode: Int?, duration: String?) {
+    val neon = LocalNeonTheme.current
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (exitCode != null) {
             val ok = exitCode == 0
-            Surface(shape = CircleShape, color = if (ok) Color(0x2222C55E) else Color(0x22EF4444)) {
-                Text(
-                    "EXIT $exitCode",
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (ok) Color(0xFF22C55E) else Color(0xFFEF4444),
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            val c = if (ok) neon.green else neon.red
+            Text(
+                "EXIT $exitCode",
+                modifier = Modifier.clip(CircleShape).background(c.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = c,
+                fontWeight = FontWeight.Bold,
+            )
         }
         if (!duration.isNullOrBlank()) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)) {
-                Text(
-                    "DURATION $duration",
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            Text(
+                "DURATION $duration",
+                modifier = Modifier.clip(CircleShape).background(neon.surface).padding(horizontal = 8.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textDim,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
 
 @Composable
 private fun LabeledOutputBlock(title: String, text: String) {
+    val neon = LocalNeonTheme.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
-        )
-        CodeBlock(language = null, content = text)
+        NeonLabel(title, if (title == "STDERR") neon.red else neon.textDim, neon)
+        SelectionContainer {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(neon.codeBg)
+                    .border(1.dp, neon.border, RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+                    .horizontalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = neon.mono,
+                    color = if (title == "STDERR") neon.red else neon.codeText,
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun StatusChip(status: String) {
+    NeonStatusChip(status, LocalNeonTheme.current)
+}
+
+/** Neon status pill — running=accent2, pending=blue, failed=red, else green. */
+@Composable
+private fun NeonStatusChip(status: String, neon: NeonTheme) {
     val normalized = status.lowercase().ifEmpty { "done" }
-    val bg = when (normalized) {
-        "running" -> Color(0x22F39C3D)
-        "pending" -> Color(0x2238BDF8)
-        "failed" -> Color(0x22EF4444)
-        else -> Color(0x2222C55E)
-    }
     val fg = when (normalized) {
-        "running" -> Color(0xFFF39C3D)
-        "pending" -> Color(0xFF38BDF8)
-        "failed" -> Color(0xFFEF4444)
-        else -> Color(0xFF22C55E)
+        "running" -> neon.accent2
+        "pending" -> neon.blue
+        "failed" -> neon.red
+        else -> neon.green
     }
-    Surface(shape = CircleShape, color = bg) {
+    Row(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(fg.copy(alpha = 0.14f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (normalized == "running") {
+            NeonStatusDot(fg, pulsing = true, size = 6.dp)
+        }
         Text(
             normalized.uppercase(),
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
             style = MaterialTheme.typography.labelSmall,
             color = fg,
+            fontFamily = neon.mono,
             fontWeight = FontWeight.Bold,
         )
     }
@@ -1605,29 +2210,25 @@ private fun StatusChip(status: String) {
 
 @Composable
 private fun FileStrip(files: List<ViewEventFile>) {
+    val neon = LocalNeonTheme.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            "FILES",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
-        )
+        NeonLabel("FILES", neon.textDim, neon)
         files.forEach { file ->
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(neon.surface)
+                    .border(1.dp, neon.border, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Outlined.Info, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Column {
-                        Text(file.path, style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace)
-                        if (file.rev.isNotEmpty()) {
-                            Text("@${file.rev.take(7)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                Icon(Icons.Outlined.Description, null, tint = neon.blue, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text(file.path, style = MaterialTheme.typography.labelMedium, fontFamily = neon.mono, color = neon.text)
+                    if (file.rev.isNotEmpty()) {
+                        Text("@${file.rev.take(7)}", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono, color = neon.textDim)
                     }
                 }
             }
@@ -1639,12 +2240,6 @@ private fun FileStrip(files: List<ViewEventFile>) {
 private fun DiffBlock(content: String) {
     val files = remember(content) { parseDiffFiles(content) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            "DIFF",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
-        )
         files.forEach { file ->
             DiffFileGroup(file)
         }
@@ -1659,54 +2254,60 @@ private data class DiffFileSection(
 
 @Composable
 private fun DiffFileGroup(file: DiffFileSection) {
+    val neon = LocalNeonTheme.current
     var expanded by remember(file.id) { mutableStateOf(true) }
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    val stat = remember(file.id) {
+        parseNeonDiffStat(null, file.lines.joinToString("\n"))
+    }
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.codeBg)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        // Header: edit icon + filename + +N green / −M red.
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AssistChip(
-                    onClick = { expanded = !expanded },
-                    label = { Text(if (expanded) "Hide" else "Show") },
-                )
+            Icon(Icons.Outlined.Create, null, tint = neon.claude, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                file.path,
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = neon.mono,
+                color = neon.codeText,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (stat != null) {
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    file.path,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "${file.lines.size} lines",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text("+${stat.added}", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono, color = neon.green)
+                Spacer(Modifier.width(6.dp))
+                Text("−${stat.removed}", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono, color = neon.red)
             }
+        }
 
-            if (expanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    file.lines.forEach { line ->
-                        Text(
-                            line,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = when {
-                                line.startsWith("+") -> Color(0xFF2E7D32)
-                                line.startsWith("-") -> MaterialTheme.colorScheme.error
-                                line.startsWith("@@") -> Color(0xFFE65100)
-                                else -> MaterialTheme.colorScheme.onSurface
-                            },
-                        )
+        if (expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                file.lines.forEach { line ->
+                    val (bg, fg) = when {
+                        line.startsWith("+++") || line.startsWith("---") -> neon.surface to neon.textDim
+                        line.startsWith("+") -> neon.green.copy(alpha = 0.12f) to neon.green
+                        line.startsWith("-") || line.startsWith("−") -> neon.red.copy(alpha = 0.12f) to neon.red
+                        line.startsWith("@@") -> neon.accent2.copy(alpha = 0.12f) to neon.accent2
+                        else -> Color.Transparent to neon.textDim
                     }
+                    Text(
+                        line.ifEmpty { " " },
+                        modifier = Modifier.fillMaxWidth().background(bg).padding(horizontal = 6.dp, vertical = 1.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = neon.mono,
+                        color = fg,
+                    )
                 }
             }
         }
@@ -1757,7 +2358,7 @@ private fun parseDiffFiles(content: String): List<DiffFileSection> {
 private fun ConversationComposer(
     draft: String,
     quickReplies: List<String>,
-    agentAccent: Color,
+    @Suppress("UNUSED_PARAMETER") agentAccent: Color,
     currentAssistant: String,
     pinnedContexts: List<PinnedContext>,
     pendingAttachments: List<ComposerAttachment>,
@@ -1770,23 +2371,19 @@ private fun ConversationComposer(
     onQuickReply: (String) -> Unit,
     onSend: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     val hasDraft = draft.trim().isNotEmpty()
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // Agent-tinted halo around the composer cluster — pairs with
-            // the tinted divider above and the iOS `.shadow(color:agent…)`
-            // on LitterChatView's composer. The ambient + spot colors push
-            // the dropshadow into the agent accent; elevation stays modest
-            // so the effect reads as ambient mood, not a hard chip.
-            // Sits BEFORE the background fill so the shadow projects
-            // outside the composer's solid backdrop instead of being
-            // covered by it.
+            // Accent-tinted halo around the composer cluster (neon glow
+            // colour). Sits BEFORE the background fill so the shadow
+            // projects outside the composer's solid backdrop.
             .shadow(
                 elevation = 10.dp,
                 shape = RectangleShape,
-                ambientColor = agentAccent.copy(alpha = 0.45f),
-                spotColor = agentAccent.copy(alpha = 0.55f),
+                ambientColor = neon.accent.copy(alpha = 0.45f),
+                spotColor = neon.accent.copy(alpha = 0.55f),
             )
             // No color seam where chat meets the keyboard (iOS #236
             // parity): paint the composer cluster with the SAME backdrop
@@ -1796,7 +2393,7 @@ private fun ConversationComposer(
             // this the band above the keyboard showed the bare window
             // background — a visible mismatched stripe between the chat
             // list and the keyboard.
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .background(neon.panel)
             // Lift the whole composer cluster (quick-reply chips + pinned
             // context + the input row) above the soft keyboard. The
             // Activity's `adjustResize` shrinks the window when the IME is
@@ -1824,9 +2421,17 @@ private fun ConversationComposer(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 quickReplies.forEach { reply ->
-                    AssistChip(
-                        onClick = { onQuickReply(reply) },
-                        label = { Text(reply) },
+                    Text(
+                        reply,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(neon.surface)
+                            .border(1.dp, neon.borderStrong, RoundedCornerShape(50))
+                            .clickable { onQuickReply(reply) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontFamily = neon.sans,
+                        color = neon.accent,
                     )
                 }
             }
@@ -1851,21 +2456,21 @@ private fun ConversationComposer(
             }
         }
 
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-            modifier = Modifier.fillMaxWidth(),
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(26.dp))
+                .background(neon.surface)
+                .border(1.dp, neon.borderStrong, RoundedCornerShape(26.dp))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
                 FilledIconButton(
                     onClick = onAttachClick,
                     colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        containerColor = neon.surface2,
+                        contentColor = neon.accent,
                     ),
                     modifier = Modifier.size(36.dp),
                 ) {
@@ -1875,16 +2480,18 @@ private fun ConversationComposer(
                     value = draft,
                     onValueChange = onDraftChange,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = neon.text,
+                        fontFamily = neon.sans,
                     ),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(agentAccent),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(neon.accent),
                     decorationBox = { inner ->
                         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp)) {
                             if (draft.isEmpty()) {
                                 Text(
                                     "Message $currentAssistant…",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontFamily = neon.sans,
+                                    color = neon.textFaint,
                                 )
                             }
                             inner()
@@ -1898,8 +2505,8 @@ private fun ConversationComposer(
                 FilledIconButton(
                     onClick = onExpandClick,
                     colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        containerColor = neon.surface2,
+                        contentColor = neon.textDim,
                     ),
                     modifier = Modifier.size(36.dp),
                 ) {
@@ -1917,14 +2524,14 @@ private fun ConversationComposer(
                     FilledIconButton(
                         onClick = onSend,
                         colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                            containerColor = agentAccent,
+                            containerColor = neon.accent,
+                            contentColor = neon.accentText,
                         ),
                         modifier = Modifier.size(36.dp),
                     ) {
                         Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Send")
                     }
                 }
-            }
         }
     }
 }

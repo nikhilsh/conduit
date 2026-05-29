@@ -1,5 +1,6 @@
 package sh.nikhil.swekitty.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -157,9 +158,10 @@ fun ProjectScreen(
 
         Spacer(Modifier.height(10.dp))
 
+        val neon = LocalNeonTheme.current
         Surface(
-            shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            shape = RoundedCornerShape(neon.radiusDp.dp),
+            color = neon.surface,
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
             if (isReadOnly) {
@@ -359,6 +361,7 @@ private fun AgentPill(
     accent: androidx.compose.ui.graphics.Color,
     onTap: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     Row(
         modifier = Modifier
             .glassCapsule(interactive = true, tint = accent.copy(alpha = 0.32f))
@@ -371,20 +374,22 @@ private fun AgentPill(
         Text(
             pill.agentName,
             style = MaterialTheme.typography.titleSmall,
+            fontFamily = neon.sans,
             fontWeight = FontWeight.SemiBold,
-            color = SweKittyTheme.textPrimary(),
+            color = neon.text,
         )
         Text(
             pill.reasoningEffort,
             style = MaterialTheme.typography.labelMedium,
+            fontFamily = neon.mono,
             fontWeight = FontWeight.Medium,
-            color = SweKittyTheme.textSecondary(),
+            color = neon.textDim,
         )
         if (pill.showsChevron) {
             Icon(
                 Icons.Default.ExpandMore,
                 contentDescription = null,
-                tint = SweKittyTheme.textSecondary(),
+                tint = neon.textDim,
                 modifier = Modifier.size(14.dp),
             )
         }
@@ -399,11 +404,12 @@ private fun AgentPill(
  */
 @Composable
 private fun PathRow(model: ProjectHeaderModel) {
+    val neon = LocalNeonTheme.current
     Text(
         model.captionLabel,
         style = MaterialTheme.typography.labelSmall,
-        fontFamily = FontFamily.Monospace,
-        color = SweKittyTheme.textMuted(),
+        fontFamily = neon.mono,
+        color = neon.textFaint,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,
@@ -422,33 +428,61 @@ private fun TabPickerRow(
     selected: Int,
     onSelect: (Int) -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .glassRoundedRect(cornerRadiusDp = SweKittyTheme.smallCornerRadiusDp)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+    // Neon underlined top tabs (Android idiom): a transparent TabRow over
+    // the header surface, an accent-glow underline indicator on the
+    // active tab, and neon-token text/icon tints. The default M3 divider
+    // is replaced by a faint neon hairline so the strip reads as one rail.
+    // Neon underlined top tabs (Android idiom): a transparent TabRow over
+    // the header surface, the default M3 indicator recolored to
+    // `neon.accent` (glow on the accent line is approximated by the
+    // accent fill + the dark-mode wash behind it — Compose can't easily
+    // glow the default indicator), and a faint neon hairline divider so
+    // the strip reads as one rail.
+    // The default M3 indicator already positions + animates itself under
+    // the selected tab; we recolor it (and the tab content) to
+    // `neon.accent` via `contentColor`, and replace the default divider
+    // with a faint neon hairline so the strip reads as one rail. A
+    // hand-rolled offset indicator needs `tabIndicatorOffset`, which isn't
+    // exposed in this Compose Material3 version — fidelity gap: the neon
+    // glow halo on the underline is not rendered (the accent fill + dark
+    // wash behind it approximate the lit underline).
+    val neon = LocalNeonTheme.current
+    TabRow(
+        selectedTabIndex = selected,
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        contentColor = neon.accent,
+        modifier = Modifier.fillMaxWidth(),
+        divider = {
+            androidx.compose.material3.HorizontalDivider(color = neon.border, thickness = 1.dp)
+        },
     ) {
-        TabRow(
-            selectedTabIndex = selected,
-            containerColor = androidx.compose.ui.graphics.Color.Transparent,
-        ) {
-            ProjectTab.entries.forEachIndexed { i, t ->
-                Tab(
-                    selected = selected == i,
-                    onClick = { onSelect(i) },
-                    text = { Text(t.label, fontWeight = FontWeight.SemiBold) },
-                    icon = {
-                        Icon(
-                            when (t) {
-                                ProjectTab.Terminal -> Icons.Outlined.Terminal
-                                ProjectTab.Chat     -> Icons.AutoMirrored.Outlined.Chat
-                                ProjectTab.Browser  -> Icons.Outlined.Public
-                            },
-                            contentDescription = null,
-                        )
-                    },
-                )
-            }
+        ProjectTab.entries.forEachIndexed { i, t ->
+            val active = selected == i
+            Tab(
+                selected = active,
+                onClick = { onSelect(i) },
+                selectedContentColor = neon.accent,
+                unselectedContentColor = neon.textDim,
+                text = {
+                    Text(
+                        t.label,
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (active) neon.accent else neon.textDim,
+                    )
+                },
+                icon = {
+                    Icon(
+                        when (t) {
+                            ProjectTab.Terminal -> Icons.Outlined.Terminal
+                            ProjectTab.Chat     -> Icons.AutoMirrored.Outlined.Chat
+                            ProjectTab.Browser  -> Icons.Outlined.Public
+                        },
+                        contentDescription = null,
+                        tint = if (active) neon.accent else neon.textDim,
+                    )
+                },
+            )
         }
     }
 }
@@ -457,6 +491,7 @@ private fun TabPickerRow(
 private fun HeaderCircleButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
     // `glassCircle` already clips to CircleShape; we add `clickable`
     // after so the ripple respects the rounded edge.
+    val neon = LocalNeonTheme.current
     Box(
         modifier = Modifier
             .size(32.dp)
@@ -468,7 +503,7 @@ private fun HeaderCircleButton(icon: ImageVector, contentDescription: String, on
             icon,
             contentDescription = contentDescription,
             modifier = Modifier.size(16.dp),
-            tint = SweKittyTheme.accentStrong(),
+            tint = neon.accent,
         )
     }
 }

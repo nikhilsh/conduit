@@ -1,5 +1,7 @@
 package sh.nikhil.swekitty.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -59,9 +61,15 @@ fun AgentPickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val harness by store.harness.collectAsState()
+    val neon = LocalNeonTheme.current
     var pickedAgent by remember { mutableStateOf<String?>(null) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
         val agent = pickedAgent
         if (agent == null) {
             AgentStep(
@@ -89,6 +97,7 @@ private fun AgentStep(
     canIssue: Boolean,
     onPick: (String) -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -96,24 +105,30 @@ private fun AgentStep(
         Text(
             "New session",
             style = MaterialTheme.typography.titleMedium,
+            fontFamily = neon.sans,
             fontWeight = FontWeight.SemiBold,
+            color = neon.text,
         )
         if (!headerNote.isNullOrBlank()) {
-            Surface(
-                shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
                     Text(
                         "Paired with",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = neon.mono,
+                        color = neon.textDim,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
                         headerNote,
                         style = MaterialTheme.typography.titleSmall,
+                        fontFamily = neon.sans,
                         fontWeight = FontWeight.SemiBold,
+                        color = neon.text,
                     )
                 }
             }
@@ -122,7 +137,7 @@ private fun AgentStep(
             assistant = "claude",
             label = "Claude",
             subtitle = "Powered by Anthropic",
-            tint = SweKittyTheme.claudeAccent(),
+            tint = neon.claude,
             enabled = canIssue,
             onTap = { onPick("claude") },
         )
@@ -130,7 +145,7 @@ private fun AgentStep(
             assistant = "codex",
             label = "Codex",
             subtitle = "Powered by OpenAI",
-            tint = SweKittyTheme.codexAccent(),
+            tint = neon.codex,
             enabled = canIssue,
             onTap = { onPick("codex") },
         )
@@ -138,7 +153,8 @@ private fun AgentStep(
             Text(
                 "Connect to a server first — open Settings to pair.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = neon.sans,
+                color = neon.textDim,
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -165,6 +181,7 @@ private fun DirectoryStep(
         isLoading = false
     }
 
+    val neon = LocalNeonTheme.current
     // Bound the sheet height so the scrollable browse list takes the
     // available space and the action bar stays pinned to the bottom.
     Column(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.92f)) {
@@ -178,7 +195,9 @@ private fun DirectoryStep(
             Text(
                 "Working directory",
                 style = MaterialTheme.typography.titleMedium,
+                fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
+                color = neon.text,
             )
 
             if (recent.isNotEmpty()) {
@@ -205,7 +224,7 @@ private fun DirectoryStep(
                 loadError != null -> Text(
                     loadError!!,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = neon.red,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
                 )
 
@@ -215,7 +234,7 @@ private fun DirectoryStep(
                         Text(
                             "No sub-folders here.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = neon.textDim,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
                         )
                     } else {
@@ -237,17 +256,22 @@ private fun DirectoryStep(
             Button(
                 onClick = { onCreate(listing?.path) },
                 enabled = listing != null,
-                shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = neon.accent,
+                    contentColor = neon.accentText,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Filled.CheckCircle, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Use this folder", fontWeight = FontWeight.SemiBold)
+                Text("Use this folder", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
             }
             TextButton(onClick = { onCreate(null) }) {
                 Text(
                     "Start without a folder",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = neon.sans,
+                    color = neon.textDim,
                 )
             }
         }
@@ -256,11 +280,13 @@ private fun DirectoryStep(
 
 @Composable
 private fun SectionLabel(text: String) {
+    val neon = LocalNeonTheme.current
     Text(
         text.uppercase(),
         style = MaterialTheme.typography.labelSmall,
+        fontFamily = neon.mono,
         fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = neon.textDim,
     )
 }
 
@@ -269,33 +295,33 @@ private fun Breadcrumb(
     listing: RemoteDirectoryListing?,
     onUp: (String) -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     val canGoUp = listing != null &&
         listing.parent.isNotEmpty() &&
         listing.parent != listing.path
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (canGoUp) 0.45f else 0.18f),
+        Box(
             modifier = Modifier
                 .size(30.dp)
                 .clip(CircleShape)
+                .background(neon.surface, CircleShape)
+                .border(1.dp, neon.border, CircleShape)
                 .clickable(enabled = canGoUp) { listing?.parent?.let(onUp) },
+            contentAlignment = Alignment.Center,
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Filled.ArrowUpward,
-                    contentDescription = "Up one folder",
-                    modifier = Modifier.size(16.dp),
-                    tint = if (canGoUp) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Icon(
+                Icons.Filled.ArrowUpward,
+                contentDescription = "Up one folder",
+                modifier = Modifier.size(16.dp),
+                tint = if (canGoUp) neon.accent else neon.textFaint,
+            )
         }
         Spacer(Modifier.width(8.dp))
         Text(
             listing?.path ?: "…",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = neon.mono,
+            color = neon.textDim,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -304,57 +330,60 @@ private fun Breadcrumb(
 
 @Composable
 private fun RecentRow(path: String, onTap: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp))
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
             .clickable(onClick = onTap),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.History, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+            Icon(Icons.Filled.History, null, modifier = Modifier.size(20.dp), tint = neon.accent)
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     displayName(path),
                     style = MaterialTheme.typography.titleSmall,
+                    fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
                 )
                 Text(
                     path,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Icon(Icons.Filled.ArrowOutward, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Filled.ArrowOutward, null, modifier = Modifier.size(16.dp), tint = neon.textDim)
         }
     }
 }
 
 @Composable
 private fun FolderRow(name: String, onTap: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp))
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
             .clickable(onClick = onTap),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.Folder, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+            Icon(Icons.Filled.Folder, null, modifier = Modifier.size(20.dp), tint = neon.accent)
             Spacer(Modifier.width(12.dp))
-            Text(name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(name, style = MaterialTheme.typography.titleSmall, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text, modifier = Modifier.weight(1f))
+            Icon(Icons.Filled.ChevronRight, null, tint = neon.textDim)
         }
     }
 }
@@ -374,12 +403,18 @@ private fun AgentTile(
     enabled: Boolean,
     onTap: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
-        color = tint.copy(alpha = if (enabled) 0.16f else 0.06f),
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp))
+            .neonCardSurface(
+                neon = neon,
+                shape = shape,
+                fill = tint.copy(alpha = if (enabled) 0.14f else 0.05f),
+                borderColor = tint.copy(alpha = if (enabled) 0.5f else 0.2f),
+                glowTint = if (enabled) tint else null,
+            )
             .clickable(enabled = enabled, onClick = onTap),
     ) {
         Row(
@@ -389,14 +424,15 @@ private fun AgentTile(
             AgentAvatar(assistant = assistant, size = 44.dp)
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(label, style = MaterialTheme.typography.titleMedium, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = neon.sans,
+                    color = neon.textDim,
                 )
             }
-            Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Filled.ChevronRight, null, tint = neon.textDim)
         }
     }
 }

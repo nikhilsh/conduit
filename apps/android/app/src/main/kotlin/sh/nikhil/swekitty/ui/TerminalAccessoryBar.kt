@@ -1,5 +1,7 @@
 package sh.nikhil.swekitty.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -9,11 +11,13 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -140,6 +144,8 @@ private fun KeyCap(
     key: TerminalAccessoryKey,
     onSend: (ByteArray) -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
+    val capShape = RoundedCornerShape(10.dp)
     val sendBytes = { onSend(key.bytes.copyOf()) }
     Box(
         contentAlignment = Alignment.Center,
@@ -150,7 +156,13 @@ private fun KeyCap(
             // padding for all caps — over-padding the wide labels was
             // what clipped the first two keys.
             .defaultMinSize(minWidth = if (key.wide) 56.dp else 40.dp, minHeight = 36.dp)
-            .glassCapsule(interactive = true)
+            // Neon key cap: a darker code-surface fill with a neon
+            // hairline border — reads as a terminal key, mono label tinted
+            // to the accent. No glow on each cap (the row would shimmer);
+            // the accent border carries the neon feel.
+            .clip(capShape)
+            .background(if (neon.dark) neon.surface2 else neon.codeBg, capShape)
+            .border(1.dp, neon.border, capShape)
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .semantics { contentDescription = key.label }
             .then(
@@ -189,9 +201,9 @@ private fun KeyCap(
         Text(
             text = key.label,
             style = MaterialTheme.typography.titleMedium,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = neon.mono,
             fontWeight = FontWeight.Medium,
-            color = SweKittyTheme.textPrimary(),
+            color = neon.accent,
             // Caps are single-line; never wrap or clip the label so the
             // first two (wide) keys stay fully legible.
             maxLines = 1,

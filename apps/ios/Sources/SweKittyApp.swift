@@ -48,6 +48,14 @@ struct SweKittyApp: App {
                     .environment(store)
                     .environment(appearance)
                     .environment(StreamingRendererCoordinator.shared)
+                    // Resolve + inject the Neon Terminal theme. The
+                    // effective dark/light is `themeMode` resolved
+                    // against the live \.colorScheme (System → follow
+                    // OS), so the injected tokens stay in sync with the
+                    // `.preferredColorScheme` override below. Lives in a
+                    // small wrapper because `App` can't read
+                    // \.colorScheme itself — only a View can.
+                    .modifier(NeonThemeInjector(appearance: appearance))
                     .preferredColorScheme(appearance.themeMode.colorScheme)
                     .onAppear {
                         // Windows usually aren't connected when
@@ -98,6 +106,32 @@ struct SweKittyApp: App {
                 .easeOut(duration: AnimatedSplashModel.crossFadeDuration),
                 value: showSplash
             )
+        }
+    }
+
+    /// Resolves `AppearanceStore` (neon palette + glow) and the
+    /// effective dark/light into a `NeonTheme` and injects it via
+    /// `\.neonTheme`. A `ViewModifier` (rather than inline in the App
+    /// body) so it can read the live `\.colorScheme` — needed to resolve
+    /// `themeMode == .system` to the OS appearance, matching how
+    /// `.preferredColorScheme(themeMode.colorScheme)` drives the tree.
+    private struct NeonThemeInjector: ViewModifier {
+        let appearance: AppearanceStore
+        @Environment(\.colorScheme) private var systemScheme
+
+        func body(content: Content) -> some View {
+            let dark: Bool
+            switch appearance.themeMode {
+            case .system: dark = systemScheme == .dark
+            case .light:  dark = false
+            case .dark:   dark = true
+            }
+            let theme = NeonTheme.resolve(
+                palette: appearance.neonPalette.neonPalette,
+                dark: dark,
+                glow: appearance.neonGlow
+            )
+            return content.neonTheme(theme)
         }
     }
 

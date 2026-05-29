@@ -23,6 +23,7 @@ extension LitterUI {
         @Environment(SessionStore.self) private var store
         @Environment(AppearanceStore.self) private var appearance
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.neonTheme) private var neon
 
         @State private var showSettings = false
         @State private var showAddServer = false
@@ -44,7 +45,7 @@ extension LitterUI {
 
             NavigationStack {
                 ZStack {
-                    LitterUI.AppBackdrop()
+                    GlassAppBackground()
                     VStack(spacing: 12) {
                         topRow
                         serverPillStrip
@@ -121,7 +122,7 @@ extension LitterUI {
                         store.connect()
                     }
                 }
-                .tint(LitterUI.Palette.brand.color)
+                .tint(neon.accent)
             }
         }
 
@@ -175,11 +176,11 @@ extension LitterUI {
                         // server (green=connected, amber=connecting/retrying,
                         // muted=down/idle).
                         let dotColor: Color = {
-                            guard isActive else { return LitterUI.Palette.textMuted.color }
+                            guard isActive else { return neon.textFaint }
                             switch store.harness {
-                            case .live, .linked: return LitterUI.Palette.success.color
-                            case .connecting, .reconnecting: return LitterUI.Palette.warning.color
-                            case .disconnected, .failed: return LitterUI.Palette.textMuted.color
+                            case .live, .linked: return neon.green
+                            case .connecting, .reconnecting: return neon.yellow
+                            case .disconnected, .failed: return neon.textFaint
                             }
                         }()
                         Button {
@@ -189,17 +190,17 @@ extension LitterUI {
                                 Circle()
                                     .fill(dotColor)
                                     .frame(width: 6, height: 6)
+                                    .neonGlowBox(isActive && neon.glow ? neon.glowBox?.tinted(dotColor) : nil)
                                 Text(server.name)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                                    .font(neon.sans(12).weight(.semibold))
+                                    .foregroundStyle(isActive ? neon.accent : neon.text)
                                     .lineLimit(1)
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .litterGlassCapsule(
-                                tint: isActive ? LitterUI.Palette.brand.color.opacity(0.4) : nil,
-                                config: .pill
-                            )
+                            .background(Capsule().fill(neon.surface))
+                            .overlay(Capsule().stroke(isActive ? neon.borderStrong : neon.border, lineWidth: 1))
+                            .neonGlowBox(isActive && neon.glow ? neon.glowBox : nil)
                         }
                         .buttonStyle(.plain)
                     }
@@ -211,12 +212,13 @@ extension LitterUI {
                             Image(systemName: "plus")
                                 .font(.system(size: 11, weight: .bold))
                             Text("server")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(neon.sans(12).weight(.semibold))
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
-                        .litterGlassCapsule(config: .pill)
+                        .foregroundStyle(neon.textDim)
+                        .background(Capsule().fill(neon.surface))
+                        .overlay(Capsule().stroke(neon.border, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }
@@ -296,13 +298,14 @@ extension LitterUI {
                     Spacer(minLength: 24)
                     Image(systemName: LitterUI.HomeViewModel.emptySymbol(snap))
                         .font(.system(size: 40, weight: .light))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .foregroundStyle(neon.accent)
+                        .neonTextGlow(neon.textGlow)
                     Text(LitterUI.HomeViewModel.emptyTitle(snap))
-                        .font(.headline)
-                        .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                        .font(neon.sans(17).weight(.semibold))
+                        .foregroundStyle(neon.text)
                     Text(LitterUI.HomeViewModel.emptyBody(snap))
-                        .font(.footnote)
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.textDim)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 36)
                     Spacer()
@@ -345,7 +348,7 @@ extension LitterUI {
                                     } label: {
                                         Label("Archive", systemImage: "archivebox")
                                     }
-                                    .tint(LitterUI.Palette.textSecondary.color)
+                                    .tint(neon.textDim)
                                 }
                             }
                             .contextMenu {
@@ -382,7 +385,7 @@ extension LitterUI {
                     LitterUI.PillButton(
                         systemImage: "plus",
                         size: 44,
-                        tint: LitterUI.Palette.brand.color,
+                        tint: neon.accent,
                         isProminent: true
                     ) {
                         if store.harness.canIssueCommands {
@@ -442,6 +445,10 @@ enum HomeRowMetrics {
 
 private struct HomeRowView: View {
     let row: LitterUI.HomeRow
+    @Environment(\.neonTheme) private var neon
+
+    /// Agent-tinted leading rail / glow for the row.
+    private var agentTint: Color { neon.agentTint(forAgent: row.agent) }
 
     var body: some View {
         HStack(spacing: HomeRowMetrics.dotTextSpacing) {
@@ -454,8 +461,8 @@ private struct HomeRowView: View {
                 // Prominent friendly name. 13pt semibold per audit §A.1.1
                 // (litter-faithful density); single line, truncating.
                 Text(row.title)
-                    .font(.system(size: HomeRowMetrics.titlePointSize, weight: .semibold))
-                    .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                    .font(neon.sans(HomeRowMetrics.titlePointSize).weight(.semibold))
+                    .foregroundStyle(neon.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 secondaryLine
@@ -466,11 +473,12 @@ private struct HomeRowView: View {
         .padding(.horizontal, HomeRowMetrics.cardHorizontalPadding)
         .padding(.vertical, HomeRowMetrics.cardVerticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .litterGlassRoundedRect(
+        .neonCardSurface(
+            neon,
+            fill: row.isSelected ? agentTint.opacity(neon.dark ? 0.18 : 0.12) : neon.surface,
             cornerRadius: HomeRowMetrics.cardCornerRadius,
-            tint: row.isSelected
-                ? LitterUI.Palette.brand.color.opacity(HomeRowMetrics.selectedTintOpacity)
-                : nil
+            border: row.isSelected ? agentTint.opacity(0.55) : neon.borderStrong,
+            glowTint: row.isSelected ? agentTint : nil
         )
         .contentShape(RoundedRectangle(cornerRadius: HomeRowMetrics.cardCornerRadius, style: .continuous))
     }
@@ -485,36 +493,36 @@ private struct HomeRowView: View {
         switch row.kind {
         case .creatingPlaceholder:
             Text(row.statusText)
-                .font(.system(size: HomeRowMetrics.subtitlePointSize, weight: .regular, design: .monospaced))
-                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                .font(neon.mono(HomeRowMetrics.subtitlePointSize))
+                .foregroundStyle(neon.textFaint)
                 .lineLimit(1)
         case .session:
             HStack(spacing: 5) {
                 if !row.agent.isEmpty {
                     Text(row.agent)
-                        .font(.system(size: HomeRowMetrics.subtitlePointSize, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .font(neon.mono(HomeRowMetrics.subtitlePointSize).weight(.semibold))
+                        .foregroundStyle(agentTint)
                 }
                 statusDot
                     .frame(width: 5, height: 5)
                 Text(row.statusText)
-                    .font(.system(size: HomeRowMetrics.subtitlePointSize, weight: .regular))
+                    .font(neon.sans(HomeRowMetrics.subtitlePointSize))
                     .foregroundStyle(statusColor)
                 if !row.relativeTime.isEmpty {
                     Text("·")
-                        .font(.system(size: HomeRowMetrics.subtitlePointSize))
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.sans(HomeRowMetrics.subtitlePointSize))
+                        .foregroundStyle(neon.textFaint)
                     Text(row.relativeTime)
-                        .font(.system(size: HomeRowMetrics.subtitlePointSize, weight: .regular, design: .monospaced))
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.mono(HomeRowMetrics.subtitlePointSize))
+                        .foregroundStyle(neon.textFaint)
                 }
                 if let dir = row.workingDir {
                     Text("·")
-                        .font(.system(size: HomeRowMetrics.subtitlePointSize))
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.sans(HomeRowMetrics.subtitlePointSize))
+                        .foregroundStyle(neon.textFaint)
                     Text(dirLeaf(dir))
-                        .font(.system(size: HomeRowMetrics.subtitlePointSize, weight: .regular, design: .monospaced))
-                        .foregroundStyle(LitterUI.Palette.textMuted.color)
+                        .font(neon.mono(HomeRowMetrics.subtitlePointSize))
+                        .foregroundStyle(neon.textFaint)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -533,8 +541,8 @@ private struct HomeRowView: View {
     private var activityPreviewLine: some View {
         if case .session = row.kind, !row.lastActivityPreview.isEmpty {
             Text(row.lastActivityPreview)
-                .font(.system(size: HomeRowMetrics.subtitlePointSize, weight: .regular))
-                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                .font(neon.sans(HomeRowMetrics.subtitlePointSize))
+                .foregroundStyle(neon.textDim)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
@@ -548,9 +556,7 @@ private struct HomeRowView: View {
 
     /// Run-state tint shared by the status word and its inline dot.
     private var statusColor: Color {
-        row.isRunning
-            ? LitterUI.Palette.accentStrong.color
-            : LitterUI.Palette.textMuted.color
+        row.isRunning ? neon.green : neon.textFaint
     }
 
     private var statusDot: some View {
@@ -565,16 +571,16 @@ private struct HomeRowView: View {
             // indicator frame so the row vertical rhythm doesn't break.
             ProgressView()
                 .controlSize(.mini)
+                .tint(neon.accent)
         case .session:
-            // 7pt filled circle per audit §A.1.7 — accent when the agent
-            // is running, muted once it has exited. Driven by run state,
-            // not selection (device bug #9): every running session shows
-            // green, not just the attached one. Selection is conveyed by
-            // the row's background fill.
+            // 7pt filled circle per audit §A.1.7 — green when the agent
+            // is running (with a neon glow), muted once it has exited.
+            // Driven by run state, not selection (device bug #9): every
+            // running session shows green, not just the attached one.
+            // Selection is conveyed by the row's background fill.
             Circle()
-                .fill(row.isRunning
-                      ? LitterUI.Palette.accentStrong.color
-                      : LitterUI.Palette.textMuted.color.opacity(0.5))
+                .fill(row.isRunning ? neon.green : neon.textFaint.opacity(0.5))
+                .neonGlowBox(row.isRunning && neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
         }
     }
 }

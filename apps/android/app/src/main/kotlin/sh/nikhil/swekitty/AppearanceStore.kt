@@ -31,6 +31,26 @@ class AppearanceStore : ViewModel() {
     }
 
     /**
+     * Palette choice for the "Neon Terminal" theme system. Enum-name
+     * persistence is by the stable [id] string (not [name]) so it
+     * matches iOS `NeonPaletteChoice` / `NeonPalette` and the Compose
+     * `NeonPalette.id` one-for-one. Tokens are resolved by
+     * `sh.nikhil.swekitty.ui.NeonTheme.resolve(...)`; the effective
+     * dark/light is reused from [themeMode] (no separate neon mode).
+     */
+    enum class NeonPalette(val id: String, val label: String) {
+        Ice("ice", "Ice"),
+        Synth("synth", "Synthwave"),
+        Matrix("matrix", "Matrix"),
+        Amber("amber", "Amber CRT");
+
+        companion object {
+            fun fromId(id: String?): NeonPalette =
+                entries.firstOrNull { it.id == id } ?: Ice
+        }
+    }
+
+    /**
      * Color theme for the terminal renderer. Mirrors iOS
      * `GhosttyVT.GhosttyTheme` / `AppearanceStore.GhosttyTerminalTheme`
      * one-for-one — same five curated themes, and the concrete
@@ -95,6 +115,22 @@ class AppearanceStore : ViewModel() {
     private val _terminalTheme = MutableStateFlow(TerminalTheme.GhosttyDark)
     val terminalTheme: StateFlow<TerminalTheme> = _terminalTheme.asStateFlow()
 
+    /**
+     * Neon Terminal palette choice. Default [NeonPalette.Ice], matching
+     * iOS. Persisted by [NeonPalette.id]; resolved into a [NeonTheme]
+     * and provided via `LocalNeonTheme` in MainActivity.
+     */
+    private val _neonPalette = MutableStateFlow(NeonPalette.Ice)
+    val neonPalette: StateFlow<NeonPalette> = _neonPalette.asStateFlow()
+
+    /**
+     * Neon Terminal glow on/off. Default `true`, matching iOS. Flows
+     * into `NeonTheme.resolve(...)` so later card work can render (or
+     * skip) the layered glow shadows.
+     */
+    private val _neonGlow = MutableStateFlow(true)
+    val neonGlow: StateFlow<Boolean> = _neonGlow.asStateFlow()
+
     private var prefs: SharedPreferences? = null
 
     fun hydrate(ctx: Context) {
@@ -115,6 +151,8 @@ class AppearanceStore : ViewModel() {
         _terminalTheme.value = p.getString(KEY_TERMINAL_THEME, null)
             ?.let { runCatching { TerminalTheme.valueOf(it) }.getOrNull() }
             ?: TerminalTheme.GhosttyDark
+        _neonPalette.value = NeonPalette.fromId(p.getString(KEY_NEON_PALETTE, null))
+        _neonGlow.value = p.getBoolean(KEY_NEON_GLOW, true)
     }
 
     fun setFontFamily(value: FontFamily) {
@@ -162,6 +200,18 @@ class AppearanceStore : ViewModel() {
         prefs?.edit()?.putString(KEY_TERMINAL_THEME, value.name)?.apply()
     }
 
+    /** Set the Neon Terminal palette; persisted by stable [NeonPalette.id]. */
+    fun setNeonPalette(value: NeonPalette) {
+        _neonPalette.value = value
+        prefs?.edit()?.putString(KEY_NEON_PALETTE, value.id)?.apply()
+    }
+
+    /** Set the Neon Terminal glow flag. */
+    fun setNeonGlow(value: Boolean) {
+        _neonGlow.value = value
+        prefs?.edit()?.putBoolean(KEY_NEON_GLOW, value)?.apply()
+    }
+
     companion object {
         /** Clamp range for [bodyPointSize] (matches iOS). */
         val BODY_POINT_SIZE_RANGE: ClosedFloatingPointRange<Float> = 12f..18f
@@ -187,6 +237,8 @@ class AppearanceStore : ViewModel() {
         private const val KEY_BODY_POINT_SIZE = "bodyPointSize"
         private const val KEY_TERMINAL_FONT_SIZE = "terminalFontSize"
         private const val KEY_TERMINAL_THEME = "terminalTheme"
+        private const val KEY_NEON_PALETTE = "neonPalette"
+        private const val KEY_NEON_GLOW = "neonGlow"
     }
 }
 

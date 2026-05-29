@@ -15,13 +15,14 @@ import Foundation
 //
 // Visual style:
 //   - small-caps "SAVED" / "NEARBY" section labels
-//   - .ultraThinMaterial cards (`litterGlassRoundedRect`)
+//   - neon card surfaces (`neonCardSurface(...)`)
 //   - footnote-sized row titles, mono caption secondary
 //   - pull-to-refresh re-runs the mDNS browse
 
 extension LitterUI {
     struct DiscoveryView: View {
         @Environment(SessionStore.self) private var store
+        @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
         @State private var browser = LANDiscoveryBrowser()
@@ -31,7 +32,7 @@ extension LitterUI {
         var body: some View {
             NavigationStack {
                 ZStack {
-                    LitterUI.Palette.surface.color.ignoresSafeArea()
+                    GlassAppBackground()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             header
@@ -76,21 +77,21 @@ extension LitterUI {
                     LitterManualPairSheet().environment(store)
                 }
             }
-            .tint(LitterUI.Palette.brand.color)
+            .tint(neon.accent)
         }
 
         private var header: some View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("SweKitty on your network")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(LitterUI.Palette.textPrimary.color)
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.text)
                 Text("Saved servers up top, plus anything advertising `_swe-kitty._tcp` on this Wi-Fi. Pull down to rescan.")
-                    .font(.caption2)
-                    .foregroundStyle(LitterUI.Palette.textMuted.color)
+                    .font(neon.sans(11))
+                    .foregroundStyle(neon.textDim)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .litterGlassRoundedRect(cornerRadius: 14)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
         }
 
         @ViewBuilder
@@ -116,23 +117,28 @@ extension LitterUI {
             return HStack(spacing: 12) {
                 Image(systemName: isActive ? "checkmark.circle.fill" : "circle.dashed")
                     .font(.title3)
-                    .foregroundStyle(isActive ? LitterUI.Palette.success.color : LitterUI.Palette.textMuted.color)
+                    .foregroundStyle(isActive ? neon.green : neon.textFaint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(LitterUI.Palette.textBody.color)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
                     Text(server.endpoint.displayHost)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .font(neon.mono(11))
+                        .foregroundStyle(neon.textDim)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(LitterUI.Palette.textMuted.color)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(neon.accent)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .litterGlassRoundedRect(cornerRadius: 14)
+            .neonCardSurface(
+                neon,
+                fill: isActive ? neon.accent.opacity(neon.dark ? 0.14 : 0.10) : neon.surface,
+                cornerRadius: 13,
+                glowTint: isActive ? neon.accent : nil
+            )
         }
 
         @ViewBuilder
@@ -148,10 +154,12 @@ extension LitterUI {
                         browser.restart()
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(LitterUI.Palette.brand.color)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(neon.accent)
                             .frame(width: 28, height: 28)
-                            .litterGlassCircle(tint: LitterUI.Palette.surfaceLight.color, config: .floating)
+                            .background(Circle().fill(neon.surface))
+                            .overlay(Circle().stroke(neon.borderStrong, lineWidth: 1))
+                            .neonGlowBox(neon.glow ? neon.glowBox : nil)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Rescan for nearby servers")
@@ -170,37 +178,38 @@ extension LitterUI {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     Image(systemName: "wifi.exclamationmark")
-                        .font(.footnote)
-                        .foregroundStyle(LitterUI.Palette.warning.color)
+                        .font(.system(size: 13))
+                        .foregroundStyle(neon.yellow)
                     Text("No nearby servers")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(LitterUI.Palette.textBody.color)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
                 }
                 Text("Make sure the broker is on the same Wi-Fi, or scan a QR. mDNS doesn't cross subnets.")
-                    .font(.caption2)
-                    .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                    .font(neon.sans(11))
+                    .foregroundStyle(neon.textDim)
                 HStack(spacing: 8) {
                     Button {
                         showQRScanner = true
                     } label: {
                         Label("Scan QR", systemImage: "qrcode.viewfinder")
-                            .font(.caption.weight(.semibold))
+                            .font(neon.sans(12).weight(.semibold))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .foregroundStyle(LitterUI.Palette.textOnAccent.color)
-                            .background(LitterUI.Palette.brand.color.opacity(0.85))
-                            .clipShape(Capsule())
+                            .foregroundStyle(neon.accentText)
+                            .background(Capsule().fill(neon.accent))
+                            .neonGlowBox(neon.glow ? neon.glowBox : nil)
                     }
                     .buttonStyle(.plain)
                     Button {
                         showManualPair = true
                     } label: {
                         Label("Manual add", systemImage: "link")
-                            .font(.caption.weight(.semibold))
+                            .font(neon.sans(12).weight(.semibold))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .foregroundStyle(LitterUI.Palette.textPrimary.color)
-                            .litterGlassCapsule(config: .pill)
+                            .foregroundStyle(neon.text)
+                            .background(Capsule().fill(neon.surface))
+                            .overlay(Capsule().stroke(neon.border, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }
@@ -208,7 +217,7 @@ extension LitterUI {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .litterGlassRoundedRect(cornerRadius: 14)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
         }
 
         @ViewBuilder
@@ -216,18 +225,18 @@ extension LitterUI {
             HStack(spacing: 12) {
                 Image(systemName: "wifi.circle.fill")
                     .font(.title3)
-                    .foregroundStyle(LitterUI.Palette.brand.color)
+                    .foregroundStyle(neon.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.name)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(LitterUI.Palette.textBody.color)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
                     Text("\(row.host):\(row.port)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(LitterUI.Palette.textSecondary.color)
+                        .font(neon.mono(11))
+                        .foregroundStyle(neon.textDim)
                     if let v = row.version, !v.isEmpty {
                         Text("v\(v)")
-                            .font(.caption2)
-                            .foregroundStyle(LitterUI.Palette.textMuted.color)
+                            .font(neon.sans(11))
+                            .foregroundStyle(neon.textFaint)
                     }
                 }
                 Spacer()
@@ -235,25 +244,25 @@ extension LitterUI {
                     connect(row)
                 } label: {
                     Text("Pair")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(LitterUI.Palette.textOnAccent.color)
+                        .font(neon.sans(12).weight(.semibold))
+                        .foregroundStyle(neon.accentText)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 6)
-                        .background(LitterUI.Palette.brand.color)
-                        .clipShape(Capsule())
+                        .background(Capsule().fill(neon.accent))
+                        .neonGlowBox(neon.glow ? neon.glowBox : nil)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .litterGlassRoundedRect(cornerRadius: 14)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
         }
 
         private func sectionLabel(_ text: String) -> some View {
             Text(text.uppercased())
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(neon.mono(11).weight(.bold))
                 .tracking(0.6)
-                .foregroundStyle(LitterUI.Palette.textMuted.color)
+                .foregroundStyle(neon.textFaint)
                 .padding(.leading, 4)
         }
 

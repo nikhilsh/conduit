@@ -38,9 +38,11 @@ fun ContextChip(
     context: PinnedContext,
     onRemove: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     Surface(
         shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+        color = neon.accent.copy(alpha = 0.16f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, neon.accent.copy(alpha = 0.45f)),
         modifier = Modifier.semantics { contentDescription = "Pinned: ${context.label}" },
     ) {
         Row(
@@ -50,14 +52,15 @@ fun ContextChip(
             Icon(
                 iconFor(context.kind),
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = neon.accent,
                 modifier = Modifier.size(14.dp),
             )
             Spacer(Modifier.width(6.dp))
             Text(
                 context.label,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                fontFamily = neon.mono,
+                color = neon.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -68,7 +71,7 @@ fun ContextChip(
                 Icon(
                     Icons.Outlined.Close,
                     contentDescription = "Remove ${context.label}",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = neon.textDim,
                     modifier = Modifier.size(14.dp),
                 )
             }

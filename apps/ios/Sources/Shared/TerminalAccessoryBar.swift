@@ -90,6 +90,21 @@ final class TerminalAccessoryBar: UIInputView {
     private let scroll = UIScrollView()
     private let row = UIStackView()
 
+    // MARK: Neon key-cap palette
+    //
+    // The bar rides the system keyboard's blurred backdrop, which is dark
+    // in dark mode / light in light mode. We can't read the SwiftUI
+    // `\.neonTheme` environment from a UIKit `UIInputView`, so the caps use
+    // fixed neon-terminal tones that read on either backdrop: a dark
+    // code-surface cap (mono glyph) with a bright cyan accent label, and an
+    // accent fill on press. The cyan matches the default Ice palette's
+    // bright accent (#22d3ee) so the bar reads as part of the neon chrome.
+    private static let capFill = UIColor(red: 0x0c / 255, green: 0x13 / 255, blue: 0x22 / 255, alpha: 0.92)
+    private static let capStroke = UIColor(red: 0x22 / 255, green: 0xd3 / 255, blue: 0xee / 255, alpha: 0.28)
+    private static let capText = UIColor(red: 0xd6 / 255, green: 0xe6 / 255, blue: 0xff / 255, alpha: 1.0)
+    private static let capAccent = UIColor(red: 0x22 / 255, green: 0xd3 / 255, blue: 0xee / 255, alpha: 1.0)
+    private static let capAccentText = UIColor(red: 0x03 / 255, green: 0x12 / 255, blue: 0x1a / 255, alpha: 1.0)
+
     /// Drives press-and-hold auto-repeat for the currently-held key.
     /// One timer at a time — UIKit delivers touch events serially per
     /// button, and only one accessory key can be held under a finger.
@@ -146,11 +161,17 @@ final class TerminalAccessoryBar: UIInputView {
     }
 
     private func makeButton(for key: Key) -> UIButton {
-        var config = UIButton.Configuration.gray()
+        // Neon terminal key cap: dark code-surface fill, cyan hairline
+        // border, mono glyph in code-text. The shell-symbol + nav caps
+        // stay neutral; on press the cap flips to the bright accent fill
+        // (handled via the configurationUpdateHandler below).
+        var config = UIButton.Configuration.plain()
         config.title = key.label
         config.cornerStyle = .medium
-        config.baseForegroundColor = .label
-        config.background.backgroundColor = UIColor.label.withAlphaComponent(0.10)
+        config.baseForegroundColor = Self.capText
+        config.background.backgroundColor = Self.capFill
+        config.background.strokeColor = Self.capStroke
+        config.background.strokeWidth = 1
         // Uniform horizontal padding for every cap. The wide keys earn
         // their extra room from a larger minimum width below, not from
         // fatter insets — over-padding multi-glyph labels (esc/tab) was
@@ -168,6 +189,22 @@ final class TerminalAccessoryBar: UIInputView {
         let bytes = key.bytes
         let button = UIButton(configuration: config)
         button.accessibilityLabel = key.label
+        // Accent the cap while it's held: bright neon fill + dark glyph,
+        // reverting to the dark code surface on release. Mirrors the
+        // accent-on-press cue the SwiftUI neon buttons use.
+        button.configurationUpdateHandler = { btn in
+            guard var cfg = btn.configuration else { return }
+            if btn.isHighlighted {
+                cfg.background.backgroundColor = Self.capAccent
+                cfg.background.strokeColor = Self.capAccent
+                cfg.baseForegroundColor = Self.capAccentText
+            } else {
+                cfg.background.backgroundColor = Self.capFill
+                cfg.background.strokeColor = Self.capStroke
+                cfg.baseForegroundColor = Self.capText
+            }
+            btn.configuration = cfg
+        }
         // Never let the scroll view's stack squeeze a cap below its
         // intrinsic title+inset width — that truncation was clipping the
         // first two (wide) keys to a stray mid-glyph. Hug the content and
