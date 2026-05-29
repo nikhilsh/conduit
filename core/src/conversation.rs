@@ -5,7 +5,7 @@
 //! the same patterns twice. New agent dialects (Codex menus, Claude tool
 //! prompts, etc.) get a single place to extend.
 
-use crate::views::{ChatEvent, ConversationItem};
+use crate::views::{ChatEvent, ConversationItem, PlanStep};
 
 /// Build a typed conversation item from a chat event.
 ///
@@ -22,10 +22,30 @@ pub fn item_from_chat_event(event: &ChatEvent, idx: usize) -> ConversationItem {
     } else {
         None
     };
-    let kind = classify_kind(&role, &event.content, diff_summary.is_some());
+    let kind = classify_kind(
+        &role,
+        &event.content,
+        diff_summary.is_some(),
+        tool_name.as_deref(),
+    );
     let status = classify_status(&event.content, exit_code);
     let pending_options = if kind == "pending_input" {
         extract_pending_options(&event.content)
+    } else {
+        Vec::new()
+    };
+
+    // Tier 1: handoff from→to / TASK / result, parsed from `content` only
+    // when the item is classified as a handoff. Left None otherwise.
+    let handoff = if kind == "handoff" {
+        parse_handoff(&event.content)
+    } else {
+        HandoffParts::default()
+    };
+
+    // Tier 3: parse the checklist when the item is a plan.
+    let plan_steps = if kind == "plan" {
+        parse_plan_steps(&event.content)
     } else {
         Vec::new()
     };
@@ -44,6 +64,11 @@ pub fn item_from_chat_event(event: &ChatEvent, idx: usize) -> ConversationItem {
         duration_ms,
         diff_summary,
         pending_options,
+        source_agent: handoff.source,
+        target_agent: handoff.target,
+        task_text: handoff.task,
+        result_summary: handoff.result,
+        plan_steps,
     }
 }
 
@@ -138,9 +163,12 @@ fn normalized_role(role: &str) -> String {
     }
 }
 
-fn classify_kind(role: &str, content: &str, has_diff: bool) -> String {
+fn classify_kind(role: &str, content: &str, has_diff: bool, tool_name: Option<&str>) -> String {
     if looks_like_pending_input(content) {
         return "pending_input".to_string();
+    }
+    if looks_like_plan(content, tool_name) {
+        return "plan".to_string();
     }
     if looks_like_handoff(content) {
         return "handoff".to_string();
@@ -169,7 +197,12 @@ fn classify_status(content: &str, exit_code: Option<i32>) -> String {
         };
     }
     let lower = content.to_ascii_lowercase();
-    if lower.contains("running") || lower.contains("in progress") {
+    // Tier 3: a transient agent-swap state that precedes "running". Only
+    // emitted for unambiguous swap phrasing; everything else falls through
+    // to the existing vocabulary unchanged.
+    if looks_like_swapping(&lower) {
+        "swapping".to_string()
+    } else if lower.contains("running") || lower.contains("in progress") {
         "running".to_string()
     } else if lower.contains("failed") || lower.contains("error") || lower.contains("exception") {
         "failed".to_string()
@@ -349,6 +382,209 @@ fn looks_like_handoff(text: &str) -> bool {
     (lower.contains("handing off") || lower.contains("handoff")) && lower.contains("to ")
 }
 
+/// Mirror of the client `isNeonPlanShaped` gate (Android `NeonComponents.kt`,
+/// iOS `LitterChatView`): a tool name containing "todo"/"plan", or content
+/// with a markdown checkbox line (`- [ ]` / `- [x]`). Kept in lock-step so
+/// core and the shells agree on what counts as a plan.
+fn looks_like_plan(content: &str, tool_name: Option<&str>) -> bool {
+    if let Some(name) = tool_name {
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("todo") || lower.contains("plan") {
+            return true;
+        }
+    }
+    content.lines().any(|line| checkbox_state(line).is_some())
+}
+
+/// Parse the `state` of a markdown checkbox line, returning the rest of the
+/// line as the step text. `[x]`/`[X]` → done, `[ ]` → todo. Returns `None`
+/// for non-checkbox lines.
+fn checkbox_state(line: &str) -> Option<(&'static str, &str)> {
+    let trimmed = line.trim_start();
+    let rest = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix('-'))
+        .or_else(|| trimmed.strip_prefix('*'))?;
+    let rest = rest.trim_start();
+    let inner = rest.strip_prefix('[')?;
+    let mark = inner.chars().next()?;
+    let after = inner.strip_prefix(mark)?.strip_prefix(']')?;
+    let state = match mark {
+        'x' | 'X' => "done",
+        ' ' => "todo",
+        _ => return None,
+    };
+    Some((state, after.trim()))
+}
+
+fn parse_plan_steps(content: &str) -> Vec<PlanStep> {
+    content
+        .lines()
+        .filter_map(checkbox_state)
+        .filter(|(_, text)| !text.is_empty())
+        .map(|(state, text)| PlanStep {
+            text: text.to_string(),
+            state: state.to_string(),
+        })
+        .collect()
+}
+
+/// True for unambiguous agent-swap phrasing. Deliberately narrow so it
+/// doesn't shadow the generic running/done states for ordinary content.
+fn looks_like_swapping(lower: &str) -> bool {
+    lower.contains("swapping agent")
+        || lower.contains("swapping to ")
+        || lower.contains("swapping in ")
+        || lower.contains("switching agent")
+        || lower.contains("agent swap")
+}
+
+#[derive(Default)]
+struct HandoffParts {
+    source: Option<String>,
+    target: Option<String>,
+    task: Option<String>,
+    result: Option<String>,
+}
+
+/// Best-effort parse of a `handoff` item's structured fields from `content`.
+///
+/// Two shapes are supported and combined:
+///   * The HANDOFF-OUT brief HTML (`data-section="handoff"`): `From: X` /
+///     `To: Y` lines drive source/target, and the `handoff-body` text
+///     becomes `result`.
+///   * Free-text "… to Y: <instruction>" phrasing: `target` is the first
+///     word after " to ", `source` is the first word of the message when it
+///     reads like an agent name, and the post-colon tail is the `task`.
+fn parse_handoff(content: &str) -> HandoffParts {
+    let mut parts = HandoffParts::default();
+
+    // Structured HANDOFF-OUT brief, if present.
+    for raw in content.lines() {
+        let line = strip_tags(raw);
+        let lower = line.to_ascii_lowercase();
+        if parts.source.is_none() {
+            if let Some(rest) = lower.strip_prefix("from:") {
+                let name = first_agent_word(&line[line.len() - rest.len()..]);
+                if !name.is_empty() {
+                    parts.source = Some(name);
+                }
+            }
+        }
+        if parts.target.is_none() {
+            if let Some(rest) = lower.strip_prefix("to:") {
+                let name = first_agent_word(&line[line.len() - rest.len()..]);
+                if !name.is_empty() {
+                    parts.target = Some(name);
+                }
+            }
+        }
+    }
+    if content.contains("data-section=\"handoff\"")
+        || content.contains("data-fill=\"handoff-body\"")
+    {
+        if let Some(body) = extract_handoff_body(content) {
+            parts.result = Some(body);
+        }
+    }
+
+    // Free-text "X … to Y: <task>" fallback for fields not already filled.
+    if parts.target.is_none() {
+        if let Some(r) = content.to_ascii_lowercase().find(" to ") {
+            let name = first_agent_word(&content[r + 4..]);
+            if !name.is_empty() {
+                parts.target = Some(name);
+            }
+        }
+    }
+    if parts.source.is_none() {
+        let first = first_agent_word(content);
+        // Skip the leading verb in "Handing off to …" style messages.
+        if !first.is_empty() && !is_handoff_verb(&first) {
+            parts.source = Some(first);
+        }
+    }
+    // Only parse a free-text TASK when this isn't an HTML brief: a brief's
+    // body prose can contain incidental " to " phrases that would yield a
+    // bogus task. A brief carries its detail in `result` instead.
+    if parts.task.is_none() && parts.result.is_none() {
+        if let Some(task) = task_after_target(content) {
+            parts.task = Some(task);
+        }
+    }
+
+    parts
+}
+
+/// First identifier-ish token (letters/digits/-/_) of `s`, skipping any
+/// leading non-alphanumeric noise. Mirrors the iOS `firstWord` helper.
+fn first_agent_word(s: &str) -> String {
+    s.chars()
+        .skip_while(|c| !(c.is_ascii_alphanumeric()))
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect()
+}
+
+fn is_handoff_verb(word: &str) -> bool {
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "handing" | "handoff" | "handoff-out" | "switching" | "swapping"
+    )
+}
+
+/// The delegated instruction: text after the first colon that follows the
+/// " to <target>" phrase. `None` when there is no such colon or it is empty.
+fn task_after_target(content: &str) -> Option<String> {
+    let lower = content.to_ascii_lowercase();
+    let to_pos = lower.find(" to ")?;
+    let after_to = &content[to_pos + 4..];
+    let colon = after_to.find(':')?;
+    let tail = after_to[colon + 1..].trim();
+    if tail.is_empty() {
+        None
+    } else {
+        Some(tail.to_string())
+    }
+}
+
+/// Extract the human text of the `<section data-section="handoff">` (or its
+/// `handoff-body`) with tags removed and whitespace collapsed.
+fn extract_handoff_body(content: &str) -> Option<String> {
+    let start = content
+        .find("data-fill=\"handoff-body\"")
+        .or_else(|| content.find("data-section=\"handoff\""))?;
+    let region = &content[start..];
+    // Stop at the closing section/div tag when present so we don't sweep in
+    // unrelated trailing markup.
+    let end = region
+        .find("</section>")
+        .or_else(|| region.rfind("</div>"))
+        .unwrap_or(region.len());
+    let text = strip_tags(&region[..end]);
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        None
+    } else {
+        Some(collapsed)
+    }
+}
+
+/// Remove HTML tags from a line, leaving the text content.
+fn strip_tags(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_tag = false;
+    for c in line.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
 fn looks_like_subagent(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("subagent") || lower.contains("sub-agent") || lower.contains("spawning agent")
@@ -524,5 +760,96 @@ mod tests {
     fn pending_options_empty_when_not_pending() {
         let item = item_from_chat_event(&ev("assistant", "Just a message"), 0);
         assert!(item.pending_options.is_empty());
+    }
+
+    #[test]
+    fn handoff_free_text_source_target_task() {
+        let item = item_from_chat_event(
+            &ev(
+                "system",
+                "claude handing off to codex: finish wiring session.rs to transport",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "handoff");
+        assert_eq!(item.source_agent.as_deref(), Some("claude"));
+        assert_eq!(item.target_agent.as_deref(), Some("codex"));
+        assert_eq!(
+            item.task_text.as_deref(),
+            Some("finish wiring session.rs to transport")
+        );
+        assert!(item.result_summary.is_none());
+    }
+
+    #[test]
+    fn handoff_skips_leading_verb_as_source() {
+        // "Handing off to codex: …" — first word is the verb, not an agent.
+        let item = item_from_chat_event(
+            &ev("system", "Handing off to codex: I finished the refactor"),
+            0,
+        );
+        assert_eq!(item.kind, "handoff");
+        assert!(item.source_agent.is_none());
+        assert_eq!(item.target_agent.as_deref(), Some("codex"));
+        assert_eq!(item.task_text.as_deref(), Some("I finished the refactor"));
+    }
+
+    #[test]
+    fn handoff_html_brief_result_and_agents() {
+        let content = r#"Handoff brief
+<section data-section="handoff">
+  <p data-fill="handoff-from">From: claude</p>
+  <p data-fill="handoff-to">To: codex</p>
+  <div data-fill="handoff-body"><p>Finished transport.rs; next was going to wire session.rs to it. Watch the ping/pong timer.</p></div>
+</section>"#;
+        let item = item_from_chat_event(&ev("system", content), 0);
+        assert_eq!(item.kind, "handoff");
+        assert_eq!(item.source_agent.as_deref(), Some("claude"));
+        assert_eq!(item.target_agent.as_deref(), Some("codex"));
+        // The brief's body becomes the result; the incidental " to " inside
+        // "going to wire" must NOT leak into task_text.
+        assert!(item.task_text.is_none());
+        let result = item.result_summary.expect("result parsed");
+        assert!(result.contains("Finished transport.rs"));
+        assert!(result.contains("ping/pong timer"));
+    }
+
+    #[test]
+    fn plan_kind_from_checkbox_list() {
+        let item = item_from_chat_event(
+            &ev(
+                "assistant",
+                "Plan:\n- [x] scaffold module\n- [ ] wire the classifier\n* [ ] write tests",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "plan");
+        assert_eq!(item.plan_steps.len(), 3);
+        assert_eq!(item.plan_steps[0].text, "scaffold module");
+        assert_eq!(item.plan_steps[0].state, "done");
+        assert_eq!(item.plan_steps[1].text, "wire the classifier");
+        assert_eq!(item.plan_steps[1].state, "todo");
+        assert_eq!(item.plan_steps[2].state, "todo");
+    }
+
+    #[test]
+    fn plan_kind_from_tool_name() {
+        let item = item_from_chat_event(&ev("tool", "TodoWrite: updating the task list"), 0);
+        assert_eq!(item.kind, "plan");
+        // No checkbox lines → no parsed steps, but still classified as a plan.
+        assert!(item.plan_steps.is_empty());
+    }
+
+    #[test]
+    fn non_plan_has_empty_plan_steps() {
+        let item = item_from_chat_event(&ev("assistant", "- a plain bullet\n- another"), 0);
+        assert_ne!(item.kind, "plan");
+        assert!(item.plan_steps.is_empty());
+    }
+
+    #[test]
+    fn status_swapping_from_swap_phrasing() {
+        let item = item_from_chat_event(&ev("system", "Swapping agent: claude → codex"), 0);
+        assert_eq!(item.status, "swapping");
     }
 }

@@ -958,7 +958,7 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_connect(`ptr`: Pointer,`delegate`: Long,
     ): Long
-    fun uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`cwd`: RustBuffer.ByValue,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_disconnect(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1267,7 +1267,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 57151.toShort()) {
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 59560.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_disconnect() != 65142.toShort()) {
@@ -2217,7 +2217,7 @@ public interface SweKittyClientInterface {
     
     suspend fun `connect`(`delegate`: SweKittyDelegate)
     
-    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?): kotlin.String
+    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?): kotlin.String
     
     fun `disconnect`()
     
@@ -2407,12 +2407,12 @@ open class SweKittyClient: Disposable, AutoCloseable, SweKittyClientInterface {
     
     @Throws(SweKittyException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?) : kotlin.String {
+    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?) : kotlin.String {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
             UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(
                 thisPtr,
-                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),
+                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),FfiConverterOptionalString.lower(`cwd`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -2834,7 +2834,12 @@ data class ConversationItem (
     var `exitCode`: kotlin.Int?, 
     var `durationMs`: kotlin.ULong?, 
     var `diffSummary`: kotlin.String?, 
-    var `pendingOptions`: List<kotlin.String>
+    var `pendingOptions`: List<kotlin.String>, 
+    var `sourceAgent`: kotlin.String?, 
+    var `targetAgent`: kotlin.String?, 
+    var `taskText`: kotlin.String?, 
+    var `resultSummary`: kotlin.String?, 
+    var `planSteps`: List<PlanStep>
 ) {
     
     companion object
@@ -2859,6 +2864,11 @@ public object FfiConverterTypeConversationItem: FfiConverterRustBuffer<Conversat
             FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypePlanStep.read(buf),
         )
     }
 
@@ -2875,7 +2885,12 @@ public object FfiConverterTypeConversationItem: FfiConverterRustBuffer<Conversat
             FfiConverterOptionalInt.allocationSize(value.`exitCode`) +
             FfiConverterOptionalULong.allocationSize(value.`durationMs`) +
             FfiConverterOptionalString.allocationSize(value.`diffSummary`) +
-            FfiConverterSequenceString.allocationSize(value.`pendingOptions`)
+            FfiConverterSequenceString.allocationSize(value.`pendingOptions`) +
+            FfiConverterOptionalString.allocationSize(value.`sourceAgent`) +
+            FfiConverterOptionalString.allocationSize(value.`targetAgent`) +
+            FfiConverterOptionalString.allocationSize(value.`taskText`) +
+            FfiConverterOptionalString.allocationSize(value.`resultSummary`) +
+            FfiConverterSequenceTypePlanStep.allocationSize(value.`planSteps`)
     )
 
     override fun write(value: ConversationItem, buf: ByteBuffer) {
@@ -2892,6 +2907,43 @@ public object FfiConverterTypeConversationItem: FfiConverterRustBuffer<Conversat
             FfiConverterOptionalULong.write(value.`durationMs`, buf)
             FfiConverterOptionalString.write(value.`diffSummary`, buf)
             FfiConverterSequenceString.write(value.`pendingOptions`, buf)
+            FfiConverterOptionalString.write(value.`sourceAgent`, buf)
+            FfiConverterOptionalString.write(value.`targetAgent`, buf)
+            FfiConverterOptionalString.write(value.`taskText`, buf)
+            FfiConverterOptionalString.write(value.`resultSummary`, buf)
+            FfiConverterSequenceTypePlanStep.write(value.`planSteps`, buf)
+    }
+}
+
+
+
+data class PlanStep (
+    var `text`: kotlin.String, 
+    var `state`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePlanStep: FfiConverterRustBuffer<PlanStep> {
+    override fun read(buf: ByteBuffer): PlanStep {
+        return PlanStep(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PlanStep) = (
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterString.allocationSize(value.`state`)
+    )
+
+    override fun write(value: PlanStep, buf: ByteBuffer) {
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterString.write(value.`state`, buf)
     }
 }
 
@@ -4344,6 +4396,34 @@ public object FfiConverterSequenceTypeConversationItem: FfiConverterRustBuffer<L
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeConversationItem.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypePlanStep: FfiConverterRustBuffer<List<PlanStep>> {
+    override fun read(buf: ByteBuffer): List<PlanStep> {
+        val len = buf.getInt()
+        return List<PlanStep>(len) {
+            FfiConverterTypePlanStep.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<PlanStep>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypePlanStep.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<PlanStep>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypePlanStep.write(it, buf)
         }
     }
 }

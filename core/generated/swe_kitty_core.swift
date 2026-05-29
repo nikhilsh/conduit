@@ -814,7 +814,7 @@ public protocol SweKittyClientProtocol : AnyObject {
     
     func connect(delegate: SweKittyDelegate) async throws 
     
-    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?) async throws  -> String
+    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?) async throws  -> String
     
     func disconnect() 
     
@@ -956,13 +956,13 @@ open func connect(delegate: SweKittyDelegate)async throws  {
         )
 }
     
-open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?)async throws  -> String {
+open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model)
+                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model),FfiConverterOptionString.lower(cwd)
                 )
             },
             pollFunc: ffi_swe_kitty_core_rust_future_poll_rust_buffer,
@@ -1436,10 +1436,15 @@ public struct ConversationItem {
     public var durationMs: UInt64?
     public var diffSummary: String?
     public var pendingOptions: [String]
+    public var sourceAgent: String?
+    public var targetAgent: String?
+    public var taskText: String?
+    public var resultSummary: String?
+    public var planSteps: [PlanStep]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, role: String, kind: String, status: String, content: String, ts: String, files: [ViewEventFile], toolName: String?, command: String?, exitCode: Int32?, durationMs: UInt64?, diffSummary: String?, pendingOptions: [String]) {
+    public init(id: String, role: String, kind: String, status: String, content: String, ts: String, files: [ViewEventFile], toolName: String?, command: String?, exitCode: Int32?, durationMs: UInt64?, diffSummary: String?, pendingOptions: [String], sourceAgent: String?, targetAgent: String?, taskText: String?, resultSummary: String?, planSteps: [PlanStep]) {
         self.id = id
         self.role = role
         self.kind = kind
@@ -1453,6 +1458,11 @@ public struct ConversationItem {
         self.durationMs = durationMs
         self.diffSummary = diffSummary
         self.pendingOptions = pendingOptions
+        self.sourceAgent = sourceAgent
+        self.targetAgent = targetAgent
+        self.taskText = taskText
+        self.resultSummary = resultSummary
+        self.planSteps = planSteps
     }
 }
 
@@ -1499,6 +1509,21 @@ extension ConversationItem: Equatable, Hashable {
         if lhs.pendingOptions != rhs.pendingOptions {
             return false
         }
+        if lhs.sourceAgent != rhs.sourceAgent {
+            return false
+        }
+        if lhs.targetAgent != rhs.targetAgent {
+            return false
+        }
+        if lhs.taskText != rhs.taskText {
+            return false
+        }
+        if lhs.resultSummary != rhs.resultSummary {
+            return false
+        }
+        if lhs.planSteps != rhs.planSteps {
+            return false
+        }
         return true
     }
 
@@ -1516,6 +1541,11 @@ extension ConversationItem: Equatable, Hashable {
         hasher.combine(durationMs)
         hasher.combine(diffSummary)
         hasher.combine(pendingOptions)
+        hasher.combine(sourceAgent)
+        hasher.combine(targetAgent)
+        hasher.combine(taskText)
+        hasher.combine(resultSummary)
+        hasher.combine(planSteps)
     }
 }
 
@@ -1539,7 +1569,12 @@ public struct FfiConverterTypeConversationItem: FfiConverterRustBuffer {
                 exitCode: FfiConverterOptionInt32.read(from: &buf), 
                 durationMs: FfiConverterOptionUInt64.read(from: &buf), 
                 diffSummary: FfiConverterOptionString.read(from: &buf), 
-                pendingOptions: FfiConverterSequenceString.read(from: &buf)
+                pendingOptions: FfiConverterSequenceString.read(from: &buf), 
+                sourceAgent: FfiConverterOptionString.read(from: &buf), 
+                targetAgent: FfiConverterOptionString.read(from: &buf), 
+                taskText: FfiConverterOptionString.read(from: &buf), 
+                resultSummary: FfiConverterOptionString.read(from: &buf), 
+                planSteps: FfiConverterSequenceTypePlanStep.read(from: &buf)
         )
     }
 
@@ -1557,6 +1592,11 @@ public struct FfiConverterTypeConversationItem: FfiConverterRustBuffer {
         FfiConverterOptionUInt64.write(value.durationMs, into: &buf)
         FfiConverterOptionString.write(value.diffSummary, into: &buf)
         FfiConverterSequenceString.write(value.pendingOptions, into: &buf)
+        FfiConverterOptionString.write(value.sourceAgent, into: &buf)
+        FfiConverterOptionString.write(value.targetAgent, into: &buf)
+        FfiConverterOptionString.write(value.taskText, into: &buf)
+        FfiConverterOptionString.write(value.resultSummary, into: &buf)
+        FfiConverterSequenceTypePlanStep.write(value.planSteps, into: &buf)
     }
 }
 
@@ -1573,6 +1613,72 @@ public func FfiConverterTypeConversationItem_lift(_ buf: RustBuffer) throws -> C
 #endif
 public func FfiConverterTypeConversationItem_lower(_ value: ConversationItem) -> RustBuffer {
     return FfiConverterTypeConversationItem.lower(value)
+}
+
+
+public struct PlanStep {
+    public var text: String
+    public var state: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(text: String, state: String) {
+        self.text = text
+        self.state = state
+    }
+}
+
+
+
+extension PlanStep: Equatable, Hashable {
+    public static func ==(lhs: PlanStep, rhs: PlanStep) -> Bool {
+        if lhs.text != rhs.text {
+            return false
+        }
+        if lhs.state != rhs.state {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(text)
+        hasher.combine(state)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePlanStep: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PlanStep {
+        return
+            try PlanStep(
+                text: FfiConverterString.read(from: &buf), 
+                state: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PlanStep, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterString.write(value.state, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePlanStep_lift(_ buf: RustBuffer) throws -> PlanStep {
+    return try FfiConverterTypePlanStep.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePlanStep_lower(_ value: PlanStep) -> RustBuffer {
+    return FfiConverterTypePlanStep.lower(value)
 }
 
 
@@ -3537,6 +3643,31 @@ fileprivate struct FfiConverterSequenceTypeConversationItem: FfiConverterRustBuf
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypePlanStep: FfiConverterRustBuffer {
+    typealias SwiftType = [PlanStep]
+
+    public static func write(_ value: [PlanStep], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePlanStep.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PlanStep] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PlanStep]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePlanStep.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeProjectSession: FfiConverterRustBuffer {
     typealias SwiftType = [ProjectSession]
 
@@ -3739,7 +3870,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_connect() != 53401) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 11612) {
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_create_session() != 59560) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_disconnect() != 65142) {

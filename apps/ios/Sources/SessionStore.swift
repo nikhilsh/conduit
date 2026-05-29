@@ -584,7 +584,12 @@ final class SessionStore {
                 exitCode: nil,
                 durationMs: nil,
                 diffSummary: nil,
-                pendingOptions: []
+                pendingOptions: [],
+                sourceAgent: nil,
+                targetAgent: nil,
+                taskText: nil,
+                resultSummary: nil,
+                planSteps: []
             )
         }
     }
@@ -1074,7 +1079,12 @@ final class SessionStore {
             exitCode: nil,
             durationMs: nil,
             diffSummary: nil,
-            pendingOptions: []
+            pendingOptions: [],
+            sourceAgent: nil,
+            targetAgent: nil,
+            taskText: nil,
+            resultSummary: nil,
+            planSteps: []
         )
         conversationLog[sessionID, default: []].append(item)
         let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
@@ -1166,7 +1176,12 @@ final class SessionStore {
             exitCode: nil,
             durationMs: nil,
             diffSummary: nil,
-            pendingOptions: []
+            pendingOptions: [],
+            sourceAgent: nil,
+            targetAgent: nil,
+            taskText: nil,
+            resultSummary: nil,
+            planSteps: []
         )
         conversationLog[sessionID, default: []].append(item)
         let ev = ChatEvent(role: "system", content: text, ts: now, files: [])

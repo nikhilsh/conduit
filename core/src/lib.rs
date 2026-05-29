@@ -23,8 +23,8 @@ use uuid::Uuid;
 pub use store::{SessionLifecycleCore, SessionStoreCore};
 pub use transport::ConnectionHealth;
 pub use views::{
-    BrowserViewState, ChatEvent, ChatViewState, ConversationItem, PreviewInfo, ProjectSession,
-    ProjectSessionState, SessionStatus, TerminalViewState, ViewEventFile,
+    BrowserViewState, ChatEvent, ChatViewState, ConversationItem, PlanStep, PreviewInfo,
+    ProjectSession, ProjectSessionState, SessionStatus, TerminalViewState, ViewEventFile,
 };
 
 uniffi::include_scaffolding!("swe_kitty_core");

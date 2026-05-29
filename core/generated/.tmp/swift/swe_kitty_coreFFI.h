@@ -463,7 +463,7 @@ uint64_t uniffi_swe_kitty_core_fn_method_swekittyclient_connect(void*_Nonnull pt
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SWE_KITTY_CORE_FN_METHOD_SWEKITTYCLIENT_CREATE_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_SWE_KITTY_CORE_FN_METHOD_SWEKITTYCLIENT_CREATE_SESSION
-uint64_t uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch
+uint64_t uniffi_swe_kitty_core_fn_method_swekittyclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch, RustBuffer reasoning_effort, RustBuffer model, RustBuffer cwd
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SWE_KITTY_CORE_FN_METHOD_SWEKITTYCLIENT_DISCONNECT

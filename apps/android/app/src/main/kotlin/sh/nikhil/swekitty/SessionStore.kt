@@ -1461,6 +1461,11 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             durationMs = null,
             diffSummary = null,
             pendingOptions = emptyList(),
+            sourceAgent = null,
+            targetAgent = null,
+            taskText = null,
+            resultSummary = null,
+            planSteps = emptyList(),
         )
         _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + item
@@ -1530,6 +1535,11 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             durationMs = null,
             diffSummary = null,
             pendingOptions = emptyList(),
+            sourceAgent = null,
+            targetAgent = null,
+            taskText = null,
+            resultSummary = null,
+            planSteps = emptyList(),
         )
         _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + item
@@ -1668,6 +1678,11 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                             durationMs = null,
                             diffSummary = null,
                             pendingOptions = emptyList(),
+                            sourceAgent = null,
+                            targetAgent = null,
+                            taskText = null,
+                            resultSummary = null,
+                            planSteps = emptyList(),
                         )
                     )
                 }

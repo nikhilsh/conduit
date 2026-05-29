@@ -240,7 +240,12 @@ struct SessionSearchTests {
                     exitCode: nil,
                     durationMs: nil,
                     diffSummary: nil,
-                    pendingOptions: []
+                    pendingOptions: [],
+                    sourceAgent: nil,
+                    targetAgent: nil,
+                    taskText: nil,
+                    resultSummary: nil,
+                    planSteps: []
                 )
             }
         }

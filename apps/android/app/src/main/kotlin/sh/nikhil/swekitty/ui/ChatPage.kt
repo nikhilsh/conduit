@@ -755,6 +755,11 @@ internal fun mergedConversation(
                 durationMs = null,
                 diffSummary = null,
                 pendingOptions = emptyList(),
+                sourceAgent = null,
+                targetAgent = null,
+                taskText = null,
+                resultSummary = null,
+                planSteps = emptyList(),
             )
         }
     }

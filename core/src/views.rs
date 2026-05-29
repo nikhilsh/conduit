@@ -18,6 +18,18 @@ pub struct ViewEventFile {
     pub rev: String,
 }
 
+/// One step of a `kind == "plan"` item's checklist (§4.3 PlanCard).
+///
+/// `state` is stringly-typed for cheap UniFFI evolution and is one of
+/// `done` | `active` | `todo`. The markdown-checkbox parser only emits
+/// `done` (`[x]`) and `todo` (`[ ]`); `active` is reserved for a future
+/// structured todo producer that can mark the in-flight step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanStep {
+    pub text: String,
+    pub state: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PreviewInfo {
     pub port: u16,
@@ -120,4 +132,19 @@ pub struct ConversationItem {
     /// "[A]pprove / [E]dit / [R]eject", etc. Empty when no menu detected.
     #[serde(default)]
     pub pending_options: Vec<String>,
+    /// Tier 1 handoff fields (`kind == "handoff"` only) — parsed from
+    /// `content` so the §4.2 HandoffCard renders from→to / TASK / result
+    /// without re-parsing in the shell. `None` when not derivable.
+    #[serde(default)]
+    pub source_agent: Option<String>,
+    #[serde(default)]
+    pub target_agent: Option<String>,
+    #[serde(default)]
+    pub task_text: Option<String>,
+    #[serde(default)]
+    pub result_summary: Option<String>,
+    /// Parsed checklist for `kind == "plan"` items (§4.3 PlanCard). Empty
+    /// for every other kind.
+    #[serde(default)]
+    pub plan_steps: Vec<PlanStep>,
 }

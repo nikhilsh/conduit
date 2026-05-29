@@ -31,6 +31,11 @@ class MergedConversationTest {
             durationMs = null,
             diffSummary = null,
             pendingOptions = emptyList(),
+            sourceAgent = null,
+            targetAgent = null,
+            taskText = null,
+            resultSummary = null,
+            planSteps = emptyList(),
         )
 
     private fun chat(role: String, content: String, ts: String): ChatEvent =

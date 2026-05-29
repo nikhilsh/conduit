@@ -34,6 +34,11 @@ class ActivityPreviewTest {
         durationMs = null,
         diffSummary = null,
         pendingOptions = emptyList(),
+        sourceAgent = null,
+        targetAgent = null,
+        taskText = null,
+        resultSummary = null,
+        planSteps = emptyList(),
     )
 
     // ---------- activityPreview (pure string helper) ----------

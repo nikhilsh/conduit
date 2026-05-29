@@ -62,6 +62,11 @@ dictionary ChatEvent {
     sequence<ViewEventFile> files;
 };
 
+dictionary PlanStep {
+    string text;
+    string state;
+};
+
 dictionary ConversationItem {
     string id;
     string role;
@@ -76,6 +81,11 @@ dictionary ConversationItem {
     u64? duration_ms;
     string? diff_summary;
     sequence<string> pending_options;
+    string? source_agent;
+    string? target_agent;
+    string? task_text;
+    string? result_summary;
+    sequence<PlanStep> plan_steps;
 };
 
 // -- SessionStoreCore reducer surface (see core/src/store/mod.rs) --
