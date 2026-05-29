@@ -31,6 +31,7 @@ type codexChatProcess struct {
 	env     []string // commandEnv
 	extra   []string // reasoning-effort / model override flags (may be nil)
 	publish func([]byte)
+	onUsage func(usageDelta) // folds each turn.completed's token usage
 
 	mu       sync.Mutex
 	threadID string
@@ -38,8 +39,8 @@ type codexChatProcess struct {
 	running  *exec.Cmd // the in-flight turn, if any (killed on Close)
 }
 
-func newCodexChatProcess(binary, dir string, env, extra []string, publish func([]byte)) *codexChatProcess {
-	return &codexChatProcess{binary: binary, dir: dir, env: env, extra: extra, publish: publish}
+func newCodexChatProcess(binary, dir string, env, extra []string, publish func([]byte), onUsage func(usageDelta)) *codexChatProcess {
+	return &codexChatProcess{binary: binary, dir: dir, env: env, extra: extra, publish: publish, onUsage: onUsage}
 }
 
 // codexTurnArgv builds the argv for one turn. The first turn (empty
@@ -113,6 +114,13 @@ func (c *codexChatProcess) runTurn(argv []string) {
 				c.threadID = tid
 			}
 			c.mu.Unlock()
+		}
+		// turn.completed carries the turn's token usage (no cost/window);
+		// parseCodexStreamLine returns ok=false for it, so fold it here.
+		if c.onUsage != nil {
+			if u, uok := parseCodexUsage(sc.Bytes()); uok {
+				c.onUsage(u)
+			}
 		}
 		if !ok {
 			continue

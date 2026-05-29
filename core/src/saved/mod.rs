@@ -279,6 +279,12 @@ mod tests {
             started_at: Some("2026-05-20T00:00:00Z".to_string()),
             last_activity_at: Some("2026-05-20T01:00:00Z".to_string()),
             display_name: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cached_tokens: None,
+            total_cost_usd: None,
+            context_used_tokens: None,
+            context_window_tokens: None,
         };
         ProjectSessionState::new(session)
     }

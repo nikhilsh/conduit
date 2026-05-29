@@ -7,7 +7,8 @@ use crate::conversation::item_from_chat_event;
 ///
 /// The transport emits transient `status` / `view_event` frames; mobile shells
 /// can fold them into this session summary and the richer view state below.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Not `Eq`: total_cost_usd is an f64 (cost has no exact integer form).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectSession {
     pub id: String,
     pub name: String,
@@ -36,6 +37,21 @@ pub struct ProjectSession {
     /// workspace folder). `None` until the user runs a rename.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Per-session token/cost usage (cumulative) + point-in-time context
+    /// gauge, surfaced in SessionInfo. `total_cost_usd` /
+    /// `context_window_tokens` are claude-only.
+    #[serde(default)]
+    pub total_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_cached_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub context_used_tokens: Option<u64>,
+    #[serde(default)]
+    pub context_window_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -60,7 +76,8 @@ pub struct BrowserViewState {
 /// Reducer-friendly per-session state that keeps the three mobile views in one
 /// place. The current public client API does not return this directly yet, but
 /// this is the model the callbacks naturally update toward.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Not `Eq`: contains SessionStatus / ProjectSession (f64 cost).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectSessionState {
     pub session: ProjectSession,
     pub status: Option<SessionStatus>,
@@ -124,6 +141,26 @@ impl ProjectSessionState {
         if status.last_activity_at.is_some() {
             self.session.last_activity_at = status.last_activity_at.clone();
         }
+        // Usage / context gauge — last frame wins (they only grow / track
+        // the latest turn).
+        if status.total_input_tokens.is_some() {
+            self.session.total_input_tokens = status.total_input_tokens;
+        }
+        if status.total_output_tokens.is_some() {
+            self.session.total_output_tokens = status.total_output_tokens;
+        }
+        if status.total_cached_tokens.is_some() {
+            self.session.total_cached_tokens = status.total_cached_tokens;
+        }
+        if status.total_cost_usd.is_some() {
+            self.session.total_cost_usd = status.total_cost_usd;
+        }
+        if status.context_used_tokens.is_some() {
+            self.session.context_used_tokens = status.context_used_tokens;
+        }
+        if status.context_window_tokens.is_some() {
+            self.session.context_window_tokens = status.context_window_tokens;
+        }
         self.terminal.rows = status.rows;
         self.terminal.cols = status.cols;
         self.status = Some(status);
@@ -177,6 +214,12 @@ mod tests {
             started_at: None,
             last_activity_at: None,
             display_name: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cached_tokens: None,
+            total_cost_usd: None,
+            context_used_tokens: None,
+            context_window_tokens: None,
         };
         let mut state = ProjectSessionState::new(session);
         state.push_chat_event(ChatEvent {

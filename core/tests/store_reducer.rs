@@ -23,6 +23,12 @@ fn project(id: &str, assistant: &str) -> ProjectSession {
         started_at: None,
         last_activity_at: None,
         display_name: None,
+        total_input_tokens: None,
+        total_output_tokens: None,
+        total_cached_tokens: None,
+        total_cost_usd: None,
+        context_used_tokens: None,
+        context_window_tokens: None,
     }
 }
 
@@ -58,6 +64,12 @@ fn status(
         started_at: None,
         last_activity_at: None,
         display_name: None,
+        total_input_tokens: None,
+        total_output_tokens: None,
+        total_cached_tokens: None,
+        total_cost_usd: None,
+        context_used_tokens: None,
+        context_window_tokens: None,
     }
 }
 

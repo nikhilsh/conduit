@@ -159,6 +159,12 @@ impl SessionStoreCore {
                     .display_name
                     .clone()
                     .or_else(|| status.session_name.clone()),
+                total_input_tokens: status.total_input_tokens,
+                total_output_tokens: status.total_output_tokens,
+                total_cached_tokens: status.total_cached_tokens,
+                total_cost_usd: status.total_cost_usd,
+                context_used_tokens: status.context_used_tokens,
+                context_window_tokens: status.context_window_tokens,
             })
         });
         state.apply_status(status);
@@ -332,6 +338,12 @@ mod tests {
             started_at: None,
             last_activity_at: None,
             display_name: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cached_tokens: None,
+            total_cost_usd: None,
+            context_used_tokens: None,
+            context_window_tokens: None,
         }
     }
 
@@ -361,6 +373,12 @@ mod tests {
             started_at: None,
             last_activity_at: None,
             display_name: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cached_tokens: None,
+            total_cost_usd: None,
+            context_used_tokens: None,
+            context_window_tokens: None,
         }
     }
 

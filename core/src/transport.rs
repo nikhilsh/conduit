@@ -737,6 +737,18 @@ async fn handle_text(
         #[serde(default)]
         display_name: Option<String>,
         #[serde(default)]
+        total_input_tokens: Option<u64>,
+        #[serde(default)]
+        total_output_tokens: Option<u64>,
+        #[serde(default)]
+        total_cached_tokens: Option<u64>,
+        #[serde(default)]
+        total_cost_usd: Option<f64>,
+        #[serde(default)]
+        context_used_tokens: Option<u64>,
+        #[serde(default)]
+        context_window_tokens: Option<u64>,
+        #[serde(default)]
         code: Option<i32>,
         #[serde(default)]
         view: Option<String>,
@@ -774,6 +786,12 @@ async fn handle_text(
                 started_at: env.started_at,
                 last_activity_at: env.last_activity_at,
                 display_name: env.display_name,
+                total_input_tokens: env.total_input_tokens,
+                total_output_tokens: env.total_output_tokens,
+                total_cached_tokens: env.total_cached_tokens,
+                total_cost_usd: env.total_cost_usd,
+                context_used_tokens: env.context_used_tokens,
+                context_window_tokens: env.context_window_tokens,
             };
             delegate.on_status(status);
             if let Some(p) = env.preview {

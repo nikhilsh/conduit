@@ -86,7 +86,13 @@ struct SavedTranscriptView: View {
             cwd: session.cwd,
             startedAt: session.firstSeen,
             lastActivityAt: session.lastSeen,
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
     }
 

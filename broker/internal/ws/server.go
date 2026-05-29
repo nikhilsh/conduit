@@ -431,6 +431,23 @@ func (c *client) sendStatus(assistant string, created bool) error {
 		payload["session_name"] = name
 		payload["display_name"] = name
 	}
+	// Per-session token/cost usage + context gauge (info sheet). Optional;
+	// only once a turn has reported usage. Cost/context-window are claude
+	// only (codex reports neither), so emit them only when present.
+	if u := c.sess.Usage(); u.HasUsage {
+		payload["total_input_tokens"] = u.InputTokens
+		payload["total_output_tokens"] = u.OutputTokens
+		payload["total_cached_tokens"] = u.CachedTokens
+		if u.CostUSD > 0 {
+			payload["total_cost_usd"] = u.CostUSD
+		}
+		if u.ContextUsedTokens > 0 {
+			payload["context_used_tokens"] = u.ContextUsedTokens
+		}
+		if u.ContextWindowTokens > 0 {
+			payload["context_window_tokens"] = u.ContextWindowTokens
+		}
+	}
 	return c.writeJSON(payload)
 }
 

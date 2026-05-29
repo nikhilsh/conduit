@@ -28,6 +28,12 @@ dictionary SessionStatus {
     string? started_at;
     string? last_activity_at;
     string? display_name;
+    u64? total_input_tokens = null;
+    u64? total_output_tokens = null;
+    u64? total_cached_tokens = null;
+    f64? total_cost_usd = null;
+    u64? context_used_tokens = null;
+    u64? context_window_tokens = null;
 };
 
 dictionary ProjectSession {
@@ -41,6 +47,12 @@ dictionary ProjectSession {
     string? started_at;
     string? last_activity_at;
     string? display_name;
+    u64? total_input_tokens = null;
+    u64? total_output_tokens = null;
+    u64? total_cached_tokens = null;
+    f64? total_cost_usd = null;
+    u64? context_used_tokens = null;
+    u64? context_window_tokens = null;
 };
 
 dictionary ChatEvent {

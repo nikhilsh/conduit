@@ -270,7 +270,13 @@ struct SessionSearchTests {
             cwd: nil,
             startedAt: nil,
             lastActivityAt: lastActivity,
-            displayName: nil
+            displayName: nil,
+            totalInputTokens: nil,
+            totalOutputTokens: nil,
+            totalCachedTokens: nil,
+            totalCostUsd: nil,
+            contextUsedTokens: nil,
+            contextWindowTokens: nil
         )
     }
 }

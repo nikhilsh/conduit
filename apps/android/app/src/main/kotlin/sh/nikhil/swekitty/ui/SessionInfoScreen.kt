@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -218,6 +219,73 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             details.forEach { detail -> DetailRow(detail) }
+                        }
+                    }
+                }
+            }
+
+            // Per-session token/cost usage + a context gauge, from the live
+            // status (broker-accumulated). Cost + context bar are claude-only
+            // (codex reports neither); the card hides until usage lands.
+            run {
+                val inputTokens = status?.totalInputTokens?.toLong() ?: 0L
+                val outputTokens = status?.totalOutputTokens?.toLong() ?: 0L
+                if (inputTokens > 0 || outputTokens > 0) {
+                    Column {
+                        Text(
+                            "USAGE & CONTEXT",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                UsageRow("Input", formatTokens(inputTokens))
+                                UsageRow("Output", formatTokens(outputTokens))
+                                val cached = status?.totalCachedTokens?.toLong() ?: 0L
+                                if (cached > 0) UsageRow("Cached", formatTokens(cached))
+                                status?.totalCostUsd?.let { cost ->
+                                    if (cost > 0) UsageRow("Cost", String.format("$%.4f", cost))
+                                }
+                                val used = status?.contextUsedTokens?.toLong() ?: 0L
+                                val window = status?.contextWindowTokens?.toLong() ?: 0L
+                                if (used > 0 && window > 0) {
+                                    val pct = (used.toFloat() / window).coerceIn(0f, 1f)
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                        ) {
+                                            Text(
+                                                "Context",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                            Text(
+                                                "${formatTokens(used)} / ${formatTokens(window)} · ${(pct * 100).toInt()}%",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                            )
+                                        }
+                                        LinearProgressIndicator(
+                                            progress = { pct },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            color = SweKittyTheme.accentStrong(),
+                                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -452,6 +520,34 @@ private fun DetailRow(detail: SessionDetails.Detail) {
             }
         }
     }
+}
+
+@Composable
+private fun UsageRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** Compact token count: 33842 → "33.8k", 1_000_000 → "1.0M". */
+private fun formatTokens(n: Long): String = when {
+    n >= 1_000_000 -> String.format("%.1fM", n / 1_000_000.0)
+    n >= 1_000 -> String.format("%.1fk", n / 1_000.0)
+    else -> n.toString()
 }
 
 @Composable

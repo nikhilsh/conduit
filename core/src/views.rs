@@ -24,7 +24,8 @@ pub struct PreviewInfo {
     pub url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Not `Eq`: total_cost_usd is an f64 (cost has no exact integer form).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionStatus {
     pub session: String,
     pub assistant: String,
@@ -58,6 +59,25 @@ pub struct SessionStatus {
     /// folder) intact for path display.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Per-session token/cost usage (cumulative across turns) + a
+    /// point-in-time context gauge. Populated from each turn's usage event
+    /// (claude `result` / codex `turn.completed`). `total_cost_usd` and
+    /// `context_window_tokens` are claude-only (codex reports neither).
+    #[serde(default)]
+    pub total_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_cached_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_cost_usd: Option<f64>,
+    /// The latest turn's prompt size (input + cached) — current context
+    /// occupancy, not a lifetime sum.
+    #[serde(default)]
+    pub context_used_tokens: Option<u64>,
+    /// The model's max context window (e.g. 1_000_000), for the % gauge.
+    #[serde(default)]
+    pub context_window_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

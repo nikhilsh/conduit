@@ -58,33 +58,43 @@ type Session struct {
 	lastDroppedAt time.Time
 	switchFn      func(string) error
 
-	repoRoot          string
-	kittyRoot         string
-	sessionDir        string
-	worktreeDir       string
-	scrollbackPath    string
-	memoryPath        string
-	metaPath          string
-	handoffPath       string
-	handoffOutPath    string
-	checkpointEvery   time.Duration
-	watchdogEvery     time.Duration
-	stallAfter        time.Duration
-	handoffTimeout    time.Duration
-	workspaceDir      string
-	requestedCWD      string
-	reasonCode        string
-	exitCode          int
-	hooks             agents.Hooks
-	phase             string
-	health            string
-	lastOutput        time.Time
-	lastCheckpoint    time.Time
-	startedAt         time.Time
-	handoffHTML       string
-	checkpointMu      sync.Mutex
-	lastMemoryModTime time.Time
-	swapping          bool
+	repoRoot        string
+	kittyRoot       string
+	sessionDir      string
+	worktreeDir     string
+	scrollbackPath  string
+	memoryPath      string
+	metaPath        string
+	handoffPath     string
+	handoffOutPath  string
+	checkpointEvery time.Duration
+	watchdogEvery   time.Duration
+	stallAfter      time.Duration
+	handoffTimeout  time.Duration
+	workspaceDir    string
+	requestedCWD    string
+	reasonCode      string
+	exitCode        int
+	hooks           agents.Hooks
+	phase           string
+	health          string
+	lastOutput      time.Time
+	lastCheckpoint  time.Time
+	startedAt       time.Time
+	// Per-session token/cost usage, folded from each turn's usage event
+	// (claude `result` / codex `turn.completed`). Guarded by mu; surfaced
+	// via Usage() into the status frame. See usage.go.
+	totalInputTokens    uint64
+	totalOutputTokens   uint64
+	totalCachedTokens   uint64
+	totalCostUSD        float64
+	contextUsedTokens   uint64
+	contextWindowTokens uint64
+	hasUsage            bool
+	handoffHTML         string
+	checkpointMu        sync.Mutex
+	lastMemoryModTime   time.Time
+	swapping            bool
 	// displayName is the human-readable session label set by a
 	// successful `rename_session` JSON control. Mirrors the docs in
 	// `WEBSOCKET-PROTOCOL.md` §3.3: last-writer-wins, no ack, broadcast
@@ -387,6 +397,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.PublishText,
 			gen,
 			s.titleGen,
+			s.accumulateUsage,
 		)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
@@ -396,7 +407,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	case "codex":
 		// codex via per-turn exec/resume; constructed lazily (spawns on
 		// first Send). Same publish path; PTY is a shell.
-		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), opts.override.extraArgsFor(adapter.Name), s.PublishText)
+		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), opts.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage)
 	default:
 		s.scraper = newChatScraper(s.PublishText)
 		go s.scraper.run(s.closed)
