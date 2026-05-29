@@ -847,12 +847,21 @@ private fun ConversationEventRow(
     isContinuation: Boolean = false,
     onQuickReply: (String) -> Unit,
 ) {
+    if (ev.status.lowercase() == "swapping") {
+        // Transient agent-swap marker — inline divider, not a full row.
+        SwapNotice(fromAgent = ev.sourceAgent, toAgent = ev.targetAgent)
+        return
+    }
     if (ev.kind == "pending_input") {
         PendingInputCard(ev, agentAccent, onQuickReply)
         return
     }
     if (ev.kind == "handoff") {
         HandoffCard(ev)
+        return
+    }
+    if (ev.kind == "plan") {
+        PlanCard(ev)
         return
     }
     if (ev.kind == "subagent") {
@@ -1089,13 +1098,12 @@ private fun NeonAgentAvatar(agent: String?, neon: NeonTheme, glow: Boolean) {
 @Composable
 private fun HandoffCard(ev: ConversationItem) {
     val neon = LocalNeonTheme.current
-    // Best-effort from→to parse out of the content first line (e.g.
-    // "claude → codex" / "claude -> codex"). Falls back to a single agent.
-    val (fromAgent, toAgent) = remember(ev.content) {
-        val first = ev.content.lineSequence().firstOrNull().orEmpty()
-        val parts = first.split("→", "->", " to ").map { it.trim() }.filter { it.isNotEmpty() }
-        if (parts.size >= 2) parts[0] to parts[1] else (null to parts.firstOrNull())
-    }
+    // Structured handoff fields now arrive on ConversationItem over UniFFI
+    // (core Tier-1 classifier, see docs/NEON-CORE-FIELDS.md).
+    val fromAgent = ev.sourceAgent?.takeIf { it.isNotBlank() }
+    val toAgent = ev.targetAgent?.takeIf { it.isNotBlank() }
+    val taskText = ev.taskText?.takeIf { it.isNotBlank() }
+    val resultSummary = ev.resultSummary?.takeIf { it.isNotBlank() }
     val targetColor = neonAgentColor(toAgent, neon)
     val running = ev.status.equals("running", true) || ev.status.equals("pending", true)
     val shape = RoundedCornerShape(15.dp)
@@ -1131,14 +1139,27 @@ private fun HandoffCard(ev: ConversationItem) {
             }
             NeonStatusChip(ev.status, neon)
         }
-        // TASK inset block — the handoff content/brief.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(neon.codeBg)
-                .padding(10.dp),
-        ) {
+        // TASK inset block — the delegated instruction.
+        if (taskText != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(neon.codeBg)
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                NeonLabel("TASK", neon.textFaint, neon, style = MaterialTheme.typography.labelSmall)
+                Text(
+                    taskText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.sans,
+                    color = neon.codeText,
+                )
+            }
+        }
+        // Body content (markdown) when present.
+        if (ev.content.isNotBlank()) {
             Text(
                 ev.content,
                 style = MaterialTheme.typography.bodyMedium,
@@ -1153,6 +1174,29 @@ private fun HandoffCard(ev: ConversationItem) {
                 color = targetColor,
                 trackColor = neon.border,
             )
+        }
+        // Result block (top-bordered, faint green wash) — parsed summary.
+        if (resultSummary != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(neon.green.copy(alpha = 0.08f))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Check, null, tint = neon.green, modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(5.dp))
+                    NeonLabel("RESULT", neon.textFaint, neon, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(
+                    resultSummary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.sans,
+                    color = neon.text,
+                )
+            }
         }
     }
 }
@@ -1242,19 +1286,14 @@ private fun SubagentCard(ev: ConversationItem) {
 }
 
 /**
- * §4.3 PLAN card. There is no `plan` ConversationItem kind, and no tool
- * payload in the current data model is reliably plan/todo-shaped at the
- * dispatch site, so this composable is provided but NOT wired into
- * [ConversationEventRow]. PHASE 2 / the broker would need to surface a
- * plan kind (or a todo tool call) to feed it real steps —
- * [isNeonPlanShaped] is the gate to use. Rendering nothing here avoids
- * fabricating plan data.
+ * §4.3 PLAN card. Wired into [ConversationEventRow] on kind=="plan";
+ * driven by `ev.planSteps` (core Tier-3 classifier, see
+ * docs/NEON-CORE-FIELDS.md). Each [PlanStep] carries a `state` string
+ * ("done"|"active"|"todo"). Renders nothing when there are no steps.
  */
-private data class NeonPlanStep(val text: String, val state: NeonPlanState)
-private enum class NeonPlanState { DONE, ACTIVE, TODO }
-
 @Composable
-private fun PlanCard(steps: List<NeonPlanStep>) {
+private fun PlanCard(ev: ConversationItem) {
+    if (ev.planSteps.isEmpty()) return
     val neon = LocalNeonTheme.current
     val shape = RoundedCornerShape(neon.radiusDp.dp)
     Column(
@@ -1265,30 +1304,33 @@ private fun PlanCard(steps: List<NeonPlanStep>) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         NeonLabel("PLAN", neon.accent, neon)
-        steps.forEach { step ->
+        ev.planSteps.forEach { step ->
+            val state = step.state.lowercase()
+            val isDone = state == "done"
+            val isActive = state == "active"
             Row(verticalAlignment = Alignment.CenterVertically) {
-                when (step.state) {
-                    NeonPlanState.DONE -> Box(
+                when {
+                    isDone -> Box(
                         modifier = Modifier.size(16.dp).clip(CircleShape).background(neon.green),
                         contentAlignment = Alignment.Center,
                     ) { Icon(Icons.Filled.Check, null, tint = neon.accentText, modifier = Modifier.size(11.dp)) }
-                    NeonPlanState.ACTIVE -> Box(
+                    isActive -> Box(
                         modifier = Modifier.size(16.dp).clip(CircleShape).border(2.dp, neon.accent2, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) { NeonStatusDot(neon.accent2, pulsing = true, size = 6.dp) }
-                    NeonPlanState.TODO -> Box(
+                    else -> Box(
                         modifier = Modifier.size(16.dp).clip(CircleShape).border(2.dp, neon.textFaint, CircleShape),
                     )
                 }
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    step.text + if (step.state == NeonPlanState.ACTIVE) "  running…" else "",
+                    step.text + if (isActive) "  running…" else "",
                     style = MaterialTheme.typography.bodyMedium.copy(
-                        textDecoration = if (step.state == NeonPlanState.DONE)
+                        textDecoration = if (isDone)
                             androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
                     ),
                     fontFamily = neon.sans,
-                    color = if (step.state == NeonPlanState.DONE) neon.textDim else neon.text,
+                    color = if (isDone) neon.textDim else neon.text,
                 )
             }
         }
