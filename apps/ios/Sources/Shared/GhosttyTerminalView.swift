@@ -328,6 +328,11 @@ final class GhosttyRenderView: UIView, UIKeyInput {
                 link.invalidate()
                 return
             }
+            // Never draw while off-window: a `ghostty_surface_draw` here is
+            // the exact CA-commit-into-torn-down-surface window we're
+            // closing (the surface/layer may be mid-teardown around a tab
+            // switch).
+            guard view.window != nil else { return }
             #if canImport(GhosttyVT)
             view.terminal?.draw()
             // libghostty recomputes its grid on its own tick, so the grid
@@ -1198,6 +1203,21 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     }
     #endif
 
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        // Leaving the window (e.g. a tab switch): close the
+        // use-after-free window BEFORE anything can free the surface. First
+        // stop the draw pump so no further `ghostty_surface_draw` fires,
+        // then detach libghostty's IOSurfaceLayer so CoreAnimation won't
+        // commit it (and message the surface mailbox) during its next
+        // transaction. We do NOT free the surface here — the view may
+        // return to a window, and `didMoveToWindow` re-attaches/re-wakes it.
+        if newWindow == nil {
+            stopFrameDisplayLink()
+            ghosttySublayer?.removeFromSuperlayer()
+        }
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         // Toggle visibility/focus so libghostty paints (and shows a live
@@ -1262,7 +1282,23 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     }
 
     deinit {
+        // Deterministic teardown order so we never rely on ARC release
+        // ordering between the CADisplayLink, the IOSurfaceLayer, and the
+        // GhosttySurface (the use-after-free Sentry caught:
+        // `EXC_BAD_ACCESS` in `apprt.surface.Mailbox.push` under
+        // `CA::Context::commit_transaction`).
+        // 1. Stop the draw pump (no more `ghostty_surface_draw`).
         frameDisplayLink?.invalidate()
+        frameDisplayLink = nil
+        frameDisplayLinkProxy = nil
+        // 2. Detach libghostty's render layer so CoreAnimation can't commit
+        //    it into a surface that's about to free.
+        ghosttySublayer?.removeFromSuperlayer()
+        // 3. Free the surface explicitly, with the pump stopped + layer
+        //    detached.
+        #if canImport(GhosttyVT)
+        terminal?.teardown()
+        #endif
         NotificationCenter.default.removeObserver(self)
     }
 

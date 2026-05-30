@@ -395,46 +395,6 @@ final class SessionStore {
         }
         refreshRecentDirectories()
         installNetworkAndLifecycleHooks()
-        seedSessionsFromSaved()
-    }
-
-    /// Cold-launch seed: populate the home list from persisted History
-    /// rows so the app doesn't flash "No sessions yet" while the
-    /// WebSocket reconnects. `refreshSessions` later overwrites
-    /// `sessions` with the authoritative live list once the broker
-    /// responds (it only replaces when the listing is non-empty), so
-    /// these placeholders are short-lived. `recent()` already drops
-    /// tombstoned ids and sorts newest-first.
-    private func seedSessionsFromSaved() {
-        guard sessions.isEmpty else { return }
-        sessions = SavedSessionsStore.shared.recent().map(Self.projectSession(from:))
-    }
-
-    /// Build a placeholder `ProjectSession` from a persisted
-    /// `SavedSession`, carrying only the fields the two types share
-    /// (id, agent→assistant, summary→name, cwd, first/last-seen
-    /// timestamps). Mirrors `SavedTranscriptView.projectSession` so the
-    /// (UniFFI-generated) memberwise init stays in lockstep; the
-    /// live-only token/cost fields are nil for an offline placeholder.
-    private static func projectSession(from saved: SavedSession) -> ProjectSession {
-        ProjectSession(
-            id: saved.id,
-            name: saved.summary.isEmpty ? saved.id : saved.summary,
-            assistant: saved.agent,
-            branch: nil,
-            preview: nil,
-            reasoningEffort: nil,
-            cwd: saved.cwd,
-            startedAt: saved.firstSeen,
-            lastActivityAt: saved.lastSeen,
-            displayName: nil,
-            totalInputTokens: nil,
-            totalOutputTokens: nil,
-            totalCachedTokens: nil,
-            totalCostUsd: nil,
-            contextUsedTokens: nil,
-            contextWindowTokens: nil
-        )
     }
 
     // No deinit cleanup: SessionStore lives for the app's lifetime
