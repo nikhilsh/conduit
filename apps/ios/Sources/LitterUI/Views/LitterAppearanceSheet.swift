@@ -33,6 +33,7 @@ extension LitterUI {
                         VStack(spacing: 18) {
                             themeSection
                             neonSection
+                            previewChip
                             fontSection
                             fontSizeSection
                         }
@@ -96,57 +97,19 @@ extension LitterUI {
             }
         }
 
-        /// Neon Terminal theme controls — palette picker + glow toggle.
-        /// Mode is already handled by `themeSection` above (Neon reuses
-        /// `themeMode` for its light/dark resolution). Mirrors the
-        /// section in `LitterSettingsView`.
+        /// Neon Terminal theme controls — accent-palette swatch picker +
+        /// glow toggle (shared with `LitterSettingsView` via
+        /// `LitterUI.NeonPalettePickerContent`). Mode is handled by
+        /// `themeSection` above (Neon reuses `themeMode` for light/dark).
         private var neonSection: some View {
-            @Bindable var appearance = appearance
-            return sectionCard(title: "Neon Terminal") {
-                VStack(spacing: 0) {
-                    ForEach(AppearanceStore.NeonPaletteChoice.allCases) { palette in
-                        Button {
-                            appearance.neonPalette = palette
-                        } label: {
-                            LitterUI.ListRow(
-                                icon: "paintbrush.pointed.fill",
-                                title: palette.label,
-                                subtitle: nil,
-                                iconTint: paletteSwatch(palette)
-                            ) {
-                                if appearance.neonPalette == palette {
-                                    Image(systemName: "checkmark")
-                                        .font(.footnote.weight(.bold))
-                                        .foregroundStyle(neon.accent)
-                                        .neonTextGlow(neon.textGlow)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        Divider()
-                            .background(neon.border)
-                            .padding(.leading, 46)
-                    }
-                    LitterUI.toggleRow(
-                        icon: "sparkles",
-                        title: "Glow",
-                        subtitle: "Neon glow on cards & text",
-                        isOn: $appearance.neonGlow
-                    )
-                }
+            sectionCard(title: "Neon Terminal") {
+                LitterUI.NeonPalettePickerContent()
             }
         }
 
-        /// Preview tint for a palette row's leading icon — resolves each
-        /// palette's accent against the active dark/light mode so the
-        /// swatch reads as that palette's colour, not the current one.
-        private func paletteSwatch(_ palette: AppearanceStore.NeonPaletteChoice) -> Color {
-            let resolved = NeonTheme.resolve(
-                palette: palette.neonPalette,
-                dark: neon.dark,
-                glow: neon.glow
-            )
-            return resolved.accent
+        /// Live `$ swe-kitty --theme <id>` preview chip (shared component).
+        private var previewChip: some View {
+            LitterUI.NeonThemePreviewChip()
         }
 
         private var fontSection: some View {
