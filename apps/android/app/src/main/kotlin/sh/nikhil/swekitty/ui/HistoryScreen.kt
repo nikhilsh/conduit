@@ -101,6 +101,8 @@ fun HistoryScreen(
     store: SessionStore,
     onDismiss: () -> Unit,
     onOpenTranscript: (SavedSession) -> Unit,
+    // Inline tablet section pane (no back chrome) when true.
+    embedded: Boolean = false,
 ) {
     val savedSessions by store.savedSessions.collectAsState()
     val deletedIds by store.deletedIds.collectAsState()
@@ -159,8 +161,10 @@ fun HistoryScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = neon.accent)
+                    if (!embedded) {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = neon.accent)
+                        }
                     }
                 },
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
