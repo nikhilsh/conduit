@@ -25,6 +25,10 @@ extension LitterUI {
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
+        /// Hosted inline as a tablet section pane (not a sheet) → drop the
+        /// "Close" affordance.
+        var embedded: Bool = false
+
         @State private var browser = LANDiscoveryBrowser()
         @State private var showQRScanner = false
         @State private var showManualPair = false
@@ -55,8 +59,10 @@ extension LitterUI {
                 .navigationTitle("Discover")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Close") { dismiss() }
+                    if !embedded {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Close") { dismiss() }
+                        }
                     }
                 }
                 .onAppear { browser.start() }
