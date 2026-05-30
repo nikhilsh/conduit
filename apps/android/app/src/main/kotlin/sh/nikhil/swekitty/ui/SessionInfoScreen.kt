@@ -59,7 +59,7 @@ import uniffi.swe_kitty_core.ProjectSession
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: () -> Unit) {
+fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: () -> Unit, embedded: Boolean = false) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val statuses by store.statusBySession.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
@@ -95,12 +95,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var modelMenuExpanded by remember(showFork) { mutableStateOf(false) }
 
     val neon = LocalNeonTheme.current
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = neon.surfaceSolid,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
+    val content: @Composable () -> Unit = {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -279,6 +274,19 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             }
 
             Spacer(Modifier.height(12.dp))
+        }
+    }
+
+    if (embedded) {
+        content()
+    } else {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = neon.surfaceSolid,
+            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        ) {
+            content()
         }
     }
 
