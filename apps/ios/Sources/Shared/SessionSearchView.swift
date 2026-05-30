@@ -49,7 +49,7 @@ struct SessionSearchView: View {
             }
             .navigationTitle("All Sessions")
             .navigationBarTitleDisplayMode(.inline)
-            .tint(SweKittyTheme.accentStrong)
+            .neonAccentTint()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }

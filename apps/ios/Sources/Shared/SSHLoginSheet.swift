@@ -49,7 +49,7 @@ struct SSHLoginSheet: View {
             }
             .navigationTitle("Add via SSH")
             .navigationBarTitleDisplayMode(.inline)
-            .tint(SweKittyTheme.accentStrong)
+            .neonAccentTint()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
