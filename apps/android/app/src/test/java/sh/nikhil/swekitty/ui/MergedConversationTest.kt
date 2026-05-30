@@ -112,17 +112,21 @@ class MergedConversationTest {
 
     @Test fun userTurnBeforeAssistantWhenTsStringLexicographicallyGreater() {
         // The device bug: the user turn is EARLIER in time but its ts STRING
-        // sorts AFTER the assistant's lexicographically (offset form
-        // "+00:00" vs the assistant's trailing "Z"). A raw-string sort would
-        // wrongly put the assistant greeting first; the epoch-normalized
-        // sort must keep the user turn ahead of the reply it triggered.
-        // The merge path is forced by one chatLog item not in the typed log.
+        // sorts AFTER the assistant's lexicographically. A +09:00 offset makes
+        // the user instant actually 2025-12-31T15:00:59Z (well before the
+        // assistant's 2026-01-01T00:00:01Z), yet the raw string
+        // "…00:00:59+09:00" compares GREATER than "…00:00:01Z" (seconds 59 > 01).
+        // A raw-string sort would wrongly put the assistant greeting first; the
+        // epoch-normalized sort must keep the user turn ahead of the reply it
+        // triggered. The merge path is forced by one chatLog item not in the
+        // typed log.
         val conversation = listOf(
-            item("user", "hi there", "2026-01-01T00:00:00+00:00", id = "u1"),
+            item("user", "hi there", "2026-01-01T00:00:59+09:00", id = "u1"),
             item("assistant", "hello!", "2026-01-01T00:00:01Z", id = "a1"),
         )
-        // Sanity: the bug precondition — user ts string > assistant ts string.
-        assertTrue("2026-01-01T00:00:00+00:00" > "2026-01-01T00:00:01Z")
+        // Sanity: the bug precondition — user ts string > assistant ts string,
+        // even though the user instant is chronologically earlier.
+        assertTrue("2026-01-01T00:00:59+09:00" > "2026-01-01T00:00:01Z")
 
         val chatLog = listOf(
             chat("assistant", "anything else?", "2026-01-01T00:00:02Z"),

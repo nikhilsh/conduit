@@ -422,7 +422,7 @@ final class SessionStore {
             name: saved.summary.isEmpty ? saved.id : saved.summary,
             assistant: saved.agent,
             branch: nil,
-            preview: saved.summary.isEmpty ? nil : saved.summary,
+            preview: nil,
             reasoningEffort: nil,
             cwd: saved.cwd,
             startedAt: saved.firstSeen,
