@@ -392,14 +392,14 @@ private fun LicenseRow(entry: LicenseEntry, onOpen: () -> Unit) {
 private fun LicenseBadge(label: String) {
     Surface(
         shape = RoundedCornerShape(50),
-        color = SweKittyTheme.accentStrong().copy(alpha = 0.18f),
+        color = LocalNeonTheme.current.accent.copy(alpha = 0.18f),
     ) {
         Text(
             label,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
-            color = SweKittyTheme.accentStrong(),
+            color = LocalNeonTheme.current.accent,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
         )

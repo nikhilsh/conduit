@@ -5,33 +5,25 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 
 /**
- * Free-function entry points for the per-agent accent map. The
- * canonical map lives on [SweKittyTheme] (mirror of iOS
- * `SweKittyTheme.accent(forAgent:)`); these are thin convenience
- * wrappers so call sites that don't already import the theme object
- * can write `agentAccent("claude")` directly.
- *
- * Mirrors `apps/ios/Sources/Views/AgentAvatar.swift`'s neighbouring
- * `SweKittyTheme.accent(forAgent:)` usage pattern. Per
- * MOBILE-FEATURE-BACKLOG item 9 (multi-agent visual identity), the
- * map ships five branded hues + a neutral fallback:
- *
- *  - claude   -> #CC785C  (Anthropic copper)
- *  - codex    -> #10B981  (emerald)
- *  - hermes   -> #A855F7  (purple)
- *  - pi       -> #3B82F6  (blue)
- *  - opencode -> #F97316  (orange)
- *  - default  -> #4A4A4A  (neutral gray)
+ * Free-function entry points for the per-agent accent map, resolved
+ * against the active Neon palette ([neonAgentColor] over
+ * [LocalNeonTheme]). Replaces the legacy copper-brand
+ * `SweKittyTheme.accent(forAgent:)` so agents follow the selected
+ * palette: claude stays orange, codex takes the palette accent, hermes
+ * purple, pi blue, others the secondary accent — matching the design
+ * bundle's "agent colours constant so agents stay recognizable" rule
+ * (and the iOS `neon.agentTint(forAgent:)`).
  */
 @Composable
 @ReadOnlyComposable
-fun agentAccent(agent: String): Color = SweKittyTheme.accent(forAgent = agent)
+fun agentAccent(agent: String): Color = neonAgentColor(agent, LocalNeonTheme.current)
 
 /**
- * High-emphasis variant of [agentAccent]. Use for filled avatars or
- * any chrome that needs to read clearly against the
- * `textOnAccent` foreground. See [SweKittyTheme.accentStrong].
+ * High-emphasis variant of [agentAccent]. The Neon palette carries a
+ * single per-agent hue (no separate "strong" tier), so this resolves to
+ * the same [neonAgentColor]; kept as a distinct entry point for call
+ * sites (filled avatars) that document the high-emphasis intent.
  */
 @Composable
 @ReadOnlyComposable
-fun agentAccentStrong(agent: String): Color = SweKittyTheme.accentStrong(forAgent = agent)
+fun agentAccentStrong(agent: String): Color = neonAgentColor(agent, LocalNeonTheme.current)

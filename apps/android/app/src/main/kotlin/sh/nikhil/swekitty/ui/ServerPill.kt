@@ -62,7 +62,7 @@ fun ServerPill(
     onForget: (() -> Unit)? = null,
 ) {
     val tint: Color = if (model.isActive) {
-        SweKittyTheme.accentStrong().copy(alpha = 0.32f)
+        LocalNeonTheme.current.accent.copy(alpha = 0.32f)
     } else {
         SweKittyTheme.surface().copy(alpha = 0.65f)
     }

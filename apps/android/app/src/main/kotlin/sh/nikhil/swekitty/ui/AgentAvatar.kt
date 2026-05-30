@@ -53,7 +53,7 @@ fun AgentAvatar(
     modifier: Modifier = Modifier,
     size: Dp = 24.dp,
 ) {
-    val fill = SweKittyTheme.accentStrong(forAgent = assistant)
+    val fill = agentAccentStrong(assistant)
     val onAccent = SweKittyTheme.textOnAccent()
     val logoRes = agentLogoRes(assistant)
     val glyph = agentGlyph(assistant)

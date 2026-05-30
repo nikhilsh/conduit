@@ -332,7 +332,7 @@ fun ChatPage(
      */
     readOnlyItems: List<ConversationItem>? = null,
 ) {
-    val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
+    val agentAccent = neonAgentColor(session.assistant, LocalNeonTheme.current)
     val typedLog by store.conversationLog.collectAsState()
     val fallbackLog by store.chatLog.collectAsState()
     val aiQuickReplies by store.quickReplies.collectAsState()

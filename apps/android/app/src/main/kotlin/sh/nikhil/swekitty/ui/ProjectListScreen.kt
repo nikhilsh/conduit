@@ -280,9 +280,9 @@ fun HarnessStatusStrip(
             }
             if (harness is HarnessState.Failed || harness is HarnessState.Disconnected) {
                 TextButton(onClick = onReconnect) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, tint = SweKittyTheme.accentStrong())
+                    Icon(Icons.Default.Refresh, contentDescription = null, tint = LocalNeonTheme.current.accent)
                     Spacer(Modifier.width(4.dp))
-                    Text("Reconnect", color = SweKittyTheme.accentStrong())
+                    Text("Reconnect", color = LocalNeonTheme.current.accent)
                 }
             }
         }
@@ -408,7 +408,7 @@ private fun SessionRow(
     //  - failed   → errorContainer
     //  - else     → surfaceVariant tonal card
     val containerColor = when {
-        selected -> SweKittyTheme.accentStrong().copy(alpha = 0.16f)
+        selected -> LocalNeonTheme.current.accent.copy(alpha = 0.16f)
         isFailed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
         else     -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     }
@@ -450,7 +450,7 @@ private fun SessionRow(
                             .size(10.dp)
                             .clip(CircleShape)
                             .background(
-                                if (isRunning) SweKittyTheme.accentStrong()
+                                if (isRunning) LocalNeonTheme.current.accent
                                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                             ),
                     )

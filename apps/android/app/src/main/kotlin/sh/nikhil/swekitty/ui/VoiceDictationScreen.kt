@@ -113,17 +113,17 @@ fun VoiceDictationScreen(onTranscript: (String) -> Unit, onDismiss: () -> Unit) 
                     Box(
                         modifier = Modifier
                             .size(140.dp)
-                            .background(SweKittyTheme.accentStrong().copy(alpha = 0.18f), CircleShape),
+                            .background(LocalNeonTheme.current.accent.copy(alpha = 0.18f), CircleShape),
                     )
                     Box(
                         modifier = Modifier
                             .size(96.dp)
-                            .background(SweKittyTheme.accentStrong().copy(alpha = 0.35f), CircleShape),
+                            .background(LocalNeonTheme.current.accent.copy(alpha = 0.35f), CircleShape),
                     )
                     Box(
                         modifier = Modifier
                             .size(64.dp)
-                            .background(SweKittyTheme.accentStrong(), CircleShape),
+                            .background(LocalNeonTheme.current.accent, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
@@ -165,7 +165,7 @@ fun VoiceDictationScreen(onTranscript: (String) -> Unit, onDismiss: () -> Unit) 
                 val canSend = displayTranscript.isNotBlank()
                 Surface(
                     shape = RoundedCornerShape(24.dp),
-                    color = if (canSend) SweKittyTheme.accentStrong() else SweKittyTheme.accentStrong().copy(alpha = 0.5f),
+                    color = if (canSend) LocalNeonTheme.current.accent else LocalNeonTheme.current.accent.copy(alpha = 0.5f),
                     modifier = Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).clickable(enabled = canSend) {
                         transcriber.stop()
                         onTranscript(displayTranscript)

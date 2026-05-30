@@ -289,7 +289,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                         LinearProgressIndicator(
                                             progress = { pct },
                                             modifier = Modifier.fillMaxWidth(),
-                                            color = SweKittyTheme.accentStrong(),
+                                            color = LocalNeonTheme.current.accent,
                                             trackColor = MaterialTheme.colorScheme.surfaceVariant,
                                         )
                                     }
@@ -495,7 +495,7 @@ private fun ActionTile(icon: ImageVector, title: String, modifier: Modifier = Mo
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Icon(icon, contentDescription = null, tint = SweKittyTheme.accentStrong())
+            Icon(icon, contentDescription = null, tint = LocalNeonTheme.current.accent)
             Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -567,7 +567,7 @@ private fun StatTile(value: String, label: String) {
             style = MaterialTheme.typography.titleLarge.copy(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
-                color = SweKittyTheme.accentStrong(),
+                color = LocalNeonTheme.current.accent,
             ),
         )
         Text(

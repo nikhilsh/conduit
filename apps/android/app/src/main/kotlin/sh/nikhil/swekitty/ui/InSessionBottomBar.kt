@@ -186,7 +186,7 @@ fun InSessionBottomBar(
             DockCircleButton(
                 icon = InSessionBottomBarModel.Control.NewSession.icon,
                 label = InSessionBottomBarModel.Control.NewSession.accessibilityLabel,
-                tint = SweKittyTheme.accentStrong(),
+                tint = LocalNeonTheme.current.accent,
                 onClick = onNewSession,
             )
         }
@@ -221,7 +221,7 @@ private fun DockCircleButton(
  */
 @Composable
 private fun VoiceFab(onClick: () -> Unit) {
-    val accent = SweKittyTheme.accentStrong()
+    val accent = LocalNeonTheme.current.accent
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
