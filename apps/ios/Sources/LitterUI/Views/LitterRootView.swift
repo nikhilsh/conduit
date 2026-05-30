@@ -76,9 +76,15 @@ extension LitterUI {
 
         @ViewBuilder private var sectionContent: some View {
             switch section {
-            case .home:     LitterUI.HomeView()
-            case .settings: LitterUI.SettingsView(embedded: true)
-            default:        sessionsSplit
+            case .home:
+                LitterUI.TabletHome { id in
+                    store.selectedSessionID = id
+                    sectionRaw = LitterUI.TabletSection.sessions.rawValue
+                }
+            case .settings:
+                LitterUI.SettingsView(embedded: true)
+            default:
+                sessionsSplit
             }
         }
 
