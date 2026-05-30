@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -162,7 +163,10 @@ fun AnimatedSplash(
             ),
         ),
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        // Opaque base UNDER the glass/neon background so the home screen
+        // (rendered behind this AnimatedVisibility overlay) can't bleed
+        // through and collide with the wordmark / "Loading…" caption.
+        Box(modifier = Modifier.fillMaxSize().background(SweKittyTheme.background())) {
             GlassAppBackground()
             Column(
                 modifier = Modifier.fillMaxSize(),

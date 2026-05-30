@@ -109,4 +109,28 @@ class MergedConversationTest {
         assertEquals("tool", merged[0].kind)
         assertTrue(merged[0].id.startsWith("chatlog-"))
     }
+
+    @Test fun userTurnBeforeAssistantWhenTsStringLexicographicallyGreater() {
+        // The device bug: the user turn is EARLIER in time but its ts STRING
+        // sorts AFTER the assistant's lexicographically (offset form
+        // "+00:00" vs the assistant's trailing "Z"). A raw-string sort would
+        // wrongly put the assistant greeting first; the epoch-normalized
+        // sort must keep the user turn ahead of the reply it triggered.
+        // The merge path is forced by one chatLog item not in the typed log.
+        val conversation = listOf(
+            item("user", "hi there", "2026-01-01T00:00:00+00:00", id = "u1"),
+            item("assistant", "hello!", "2026-01-01T00:00:01Z", id = "a1"),
+        )
+        // Sanity: the bug precondition — user ts string > assistant ts string.
+        assertTrue("2026-01-01T00:00:00+00:00" > "2026-01-01T00:00:01Z")
+
+        val chatLog = listOf(
+            chat("assistant", "anything else?", "2026-01-01T00:00:02Z"),
+        )
+        val merged = mergedConversation(conversation, chatLog)
+        assertEquals(3, merged.size)
+        assertEquals("u1", merged[0].id)
+        assertEquals("a1", merged[1].id)
+        assertEquals("anything else?", merged[2].content)
+    }
 }

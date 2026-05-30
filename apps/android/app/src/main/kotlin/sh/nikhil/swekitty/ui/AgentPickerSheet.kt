@@ -177,7 +177,14 @@ private fun DirectoryStep(
         loadError = null
         runCatching { store.listDirectories(currentPath) }
             .onSuccess { listing = it }
-            .onFailure { loadError = "Couldn't list this folder." }
+            .onFailure { e ->
+                // Surface the real broker error (truncated) instead of a bare
+                // generic line so folder-list failures are diagnosable
+                // on-device. listDirectories now checks the HTTP status, so
+                // e.message carries the broker's actual reply.
+                val detail = e.message?.takeIf { it.isNotBlank() }?.take(200)
+                loadError = if (detail != null) "Couldn't list this folder. $detail" else "Couldn't list this folder."
+            }
         isLoading = false
     }
 

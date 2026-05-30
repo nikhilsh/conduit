@@ -28,6 +28,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.UUID
 import uniffi.swe_kitty_core.ChatEvent
 import uniffi.swe_kitty_core.ConnectionHealth
@@ -288,6 +290,26 @@ internal object PinnedContextReducer {
         return if (next.isEmpty()) map - sessionId else map + (sessionId to next)
     }
 }
+
+/**
+ * Normalize a conversation `ts` string to epoch millis for ordering.
+ * The local user echo stamps ISO_INSTANT ("…Z") while broker items may
+ * use an offset form, so comparing the raw strings lexicographically can
+ * put a later assistant reply above an earlier user turn (device bug:
+ * agent replies appearing before user messages). Tries [Instant.parse]
+ * then [OffsetDateTime.parse]; unparseable → 0L (sorts first, with the
+ * caller's original index breaking the tie so arrival order is kept).
+ */
+fun tsEpochMillis(ts: String): Long =
+    try {
+        Instant.parse(ts).toEpochMilli()
+    } catch (_: Exception) {
+        try {
+            OffsetDateTime.parse(ts).toInstant().toEpochMilli()
+        } catch (_: Exception) {
+            0L
+        }
+    }
 
 /**
  * v1 store: wraps SweKittyClient and bridges Rust delegate callbacks back onto
@@ -1585,6 +1607,18 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             connectTimeout = 7_000
             readTimeout = 7_000
         }
+        // Android's HttpURLConnection.getInputStream() THROWS on any non-2xx,
+        // which swallowed the broker's real error (e.g. permission denied /
+        // bad path) into the generic "Couldn't list this folder" message in
+        // AgentPickerSheet. Check the status first (iOS parity), read
+        // errorStream on failure, and surface the broker's body so the
+        // failure is diagnosable on-device.
+        val code = conn.responseCode
+        if (code !in 200..299) {
+            val errBody = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            conn.disconnect()
+            error("Harness replied $code: ${errBody.take(300)}")
+        }
         conn.inputStream.bufferedReader().use { reader ->
             val raw = reader.readText()
             val obj = JSONObject(raw)
@@ -1799,7 +1833,16 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 val stillPending = existing.filter {
                     it.id.startsWith("local-") && "${it.role}|${it.content}" !in serverFingerprints
                 }
-                val merged = (items + stillPending).sortedBy { it.ts }
+                // Sort by NORMALIZED epoch millis, not the raw `ts` string.
+                // The local user echo stamps ISO_INSTANT ("…Z") while server
+                // items can carry an offset form, so a lexicographic string
+                // sort interleaves the assistant reply above the user turn
+                // that preceded it (device bug: replies before messages).
+                // Stable: unparseable ts → 0L, original index breaks ties.
+                val merged = (items + stillPending)
+                    .withIndex()
+                    .sortedWith(compareBy({ tsEpochMillis(it.value.ts) }, { it.index }))
+                    .map { it.value }
                 _conversationLog.value = _conversationLog.value + (sessionId to merged)
             }
     }

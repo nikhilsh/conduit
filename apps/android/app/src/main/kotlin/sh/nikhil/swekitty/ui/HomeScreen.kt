@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -92,7 +93,7 @@ fun HomeScreen(
 
     val neon = LocalNeonTheme.current
 
-    Column(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(top = 8.dp)) {
         // Top row. Litter parity put settings behind a hidden long-press
         // on the title — undiscoverable in practice (user feedback
         // 2026-05-23). Restore a visible gear in the leading slot; the

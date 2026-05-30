@@ -116,7 +116,7 @@ fun ProjectScreen(
         keyboardController?.hide()
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp).padding(top = 8.dp)) {
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 10.dp).padding(top = 8.dp)) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

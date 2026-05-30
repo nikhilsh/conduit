@@ -764,8 +764,16 @@ internal fun mergedConversation(
         }
     }
     if (synthetic.isEmpty()) return conversation
-    // Sort by ts (PR #111 contract — typed log is ts-sorted).
-    return (conversation + synthetic).sortedBy { it.ts }
+    // Sort by NORMALIZED epoch millis, not the raw `ts` STRING. The local
+    // user echo stamps ISO_INSTANT ("…Z") while broker items can carry an
+    // offset form, so a lexicographic string sort interleaves an assistant
+    // greeting above the user turn that preceded it (device bug: replies
+    // before messages). Stable: unparseable ts → 0L, original index breaks
+    // ties so arrival order is preserved.
+    return (conversation + synthetic)
+        .withIndex()
+        .sortedWith(compareBy({ sh.nikhil.swekitty.tsEpochMillis(it.value.ts) }, { it.index }))
+        .map { it.value }
 }
 
 /**
