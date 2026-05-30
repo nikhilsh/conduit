@@ -94,7 +94,7 @@ extension LitterUI {
             VStack(alignment: .leading, spacing: 0) {
                 providerRow(
                     icon: "person.crop.circle.badge.checkmark",
-                    tint: SweKittyTheme.accent(forAgent: "codex"),
+                    tint: neon.agentTint(forAgent: "codex"),
                     title: "Login with ChatGPT",
                     subtitle: "Codex / ChatGPT OAuth · auth.openai.com",
                     enabled: !isWorking,
@@ -105,7 +105,7 @@ extension LitterUI {
                     .padding(.vertical, 6)
                 providerRow(
                     icon: "ant.circle",
-                    tint: SweKittyTheme.accent(forAgent: "claude"),
+                    tint: neon.agentTint(forAgent: "claude"),
                     title: "Login with Claude",
                     subtitle: "Claude OAuth · claude.ai",
                     enabled: !isWorking,
