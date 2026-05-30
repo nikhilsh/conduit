@@ -23,6 +23,9 @@ struct SessionSearchView: View {
     /// `dismiss` directly, which races sheet dismissal on iPhone and
     /// drops the push.
     var onSelect: ((String) -> Void)? = nil
+    /// Hosted inline as a tablet section pane (not a sheet) → drop the
+    /// "Close" affordance.
+    var embedded: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -52,8 +55,10 @@ struct SessionSearchView: View {
             .navigationBarTitleDisplayMode(.inline)
             .neonAccentTint()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                if !embedded {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { dismiss() }
+                    }
                 }
             }
         }

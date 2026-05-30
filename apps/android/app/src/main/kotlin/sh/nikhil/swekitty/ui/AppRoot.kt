@@ -75,8 +75,7 @@ fun AppRoot(store: SessionStore) {
                 Row(modifier = Modifier.fillMaxSize()) {
                     NeonTabletActivityBar(section = tabletSection) { picked ->
                         when (picked) {
-                            TabletSection.Home, TabletSection.Sessions, TabletSection.Settings, TabletSection.Boxes -> tabletSection = picked
-                            TabletSection.History -> showHistory = true
+                            TabletSection.Home, TabletSection.Sessions, TabletSection.Settings, TabletSection.Boxes, TabletSection.History -> tabletSection = picked
                         }
                     }
                     VerticalDivider(color = neon.border)
@@ -99,6 +98,13 @@ fun AppRoot(store: SessionStore) {
                                 onDismiss = { tabletSection = TabletSection.Sessions },
                                 onScanQR = { showAddServer = true },
                                 onManualAdd = { showAddServer = true },
+                                embedded = true,
+                            )
+                        } else if (tabletSection == TabletSection.History) {
+                            HistoryScreen(
+                                store = store,
+                                onDismiss = { tabletSection = TabletSection.Sessions },
+                                onOpenTranscript = { row -> transcriptTarget = row },
                                 embedded = true,
                             )
                         } else {
