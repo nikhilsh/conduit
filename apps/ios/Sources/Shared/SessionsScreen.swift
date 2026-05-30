@@ -214,7 +214,7 @@ struct SessionsScreen: View {
         }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
-        .tint(SweKittyTheme.accentStrong)
+        .neonAccentTint()
         .navigationDestination(item: $transcriptTarget) { target in
             SavedTranscriptView(session: target.session).environment(store)
         }
@@ -293,7 +293,7 @@ struct SessionsScreen: View {
                                 } label: {
                                     Label("Resume", systemImage: "arrow.uturn.forward")
                                 }
-                                .tint(SweKittyTheme.accentStrong)
+                                .neonAccentTint()
                             }
                     }
                 } header: {

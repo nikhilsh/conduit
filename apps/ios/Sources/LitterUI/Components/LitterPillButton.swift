@@ -23,6 +23,7 @@ extension LitterUI {
         var tint: Color? = nil
         var isProminent: Bool = false
         let action: () -> Void
+        @Environment(\.neonTheme) private var neon
 
         var body: some View {
             Button(action: action) {
@@ -31,7 +32,7 @@ extension LitterUI {
                     .frame(width: size, height: size)
             }
             .modifier(LiquidGlassButtonStyleModifier(isProminent: isProminent))
-            .tint(tint ?? LitterUI.Palette.brand.color)
+            .tint(tint ?? neon.accent)
         }
     }
 }

@@ -85,7 +85,7 @@ extension LitterUI {
                             .padding(.vertical, 12)
                             .litterGlassRoundedRect(cornerRadius: 14)
                         }
-                        .tint(LitterUI.Palette.brand.color)
+                        .neonAccentTint()
                         Text("Default keeps the current model. Pick an alias to fork onto a different one.")
                             .font(.caption2)
                             .foregroundStyle(LitterUI.Palette.textMuted.color)
@@ -97,7 +97,7 @@ extension LitterUI {
                 }
                 .navigationTitle("Fork session")
                 .navigationBarTitleDisplayMode(.inline)
-                .tint(LitterUI.Palette.brand.color)
+                .neonAccentTint()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { dismiss() }

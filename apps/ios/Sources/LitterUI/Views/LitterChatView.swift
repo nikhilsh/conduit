@@ -734,9 +734,9 @@ private struct LitterChatMessageRow: View {
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(neon.accent)
+                        .fill(neon.accent2)
                 )
-                .neonGlowBox(neon.glow ? neon.glowBox : nil)
+                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent2) : nil)
             } else {
                 LitterBlockStack(
                     blocks: ConversationRenderer.blocks(for: event.content),
@@ -765,7 +765,7 @@ private struct LitterChatMessageRow: View {
 
     private var roleColor: Color {
         switch role {
-        case .user:      return neon.accent
+        case .user:      return neon.accent2
         case .assistant: return neon.textDim
         case .system:    return neon.yellow
         case .tool:      return neon.accentBright

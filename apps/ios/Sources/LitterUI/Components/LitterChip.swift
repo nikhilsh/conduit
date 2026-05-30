@@ -18,6 +18,7 @@ extension LitterUI {
         var systemImage: String? = nil
         var tint: Color? = nil
         var isSelected: Bool = false
+        @Environment(\.neonTheme) private var neon
 
         var body: some View {
             HStack(spacing: 6) {
@@ -43,7 +44,7 @@ extension LitterUI {
 
         private var capsuleTint: Color? {
             if isSelected {
-                return tint ?? LitterUI.Palette.brand.color
+                return tint ?? neon.accent
             }
             return tint
         }

@@ -189,7 +189,7 @@ fun AnimatedSplash(
                 )
                 Text(
                     AnimatedSplashModel.loadingCaption,
-                    color = SweKittyTheme.accentStrong().copy(alpha = 0.80f),
+                    color = LocalNeonTheme.current.accent.copy(alpha = 0.80f),
                     fontWeight = FontWeight.Medium,
                     fontSize = 13.sp,
                     modifier = Modifier.padding(top = 6.dp),

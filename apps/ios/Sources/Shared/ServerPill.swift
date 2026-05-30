@@ -20,6 +20,7 @@ struct ServerPill: View {
     var onForget: (() -> Void)? = nil
     var onRename: (() -> Void)? = nil
     var onAdopt: (() -> Void)? = nil
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         Button(action: onTap) {
@@ -53,14 +54,14 @@ struct ServerPill: View {
             .background(
                 Capsule()
                     .fill(model.isActive
-                          ? SweKittyTheme.accentStrong.opacity(0.12)
+                          ? neon.accent.opacity(0.12)
                           : Color.clear)
             )
             .overlay(
                 Capsule()
                     .stroke(
                         model.isActive
-                            ? SweKittyTheme.accentStrong.opacity(ServerPillStroke.activeOpacity)
+                            ? neon.accent.opacity(ServerPillStroke.activeOpacity)
                             : SweKittyTheme.textMuted.opacity(ServerPillStroke.inactiveOpacity),
                         lineWidth: model.isActive ? ServerPillStroke.activeWidth : ServerPillStroke.inactiveWidth
                     )

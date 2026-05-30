@@ -54,7 +54,7 @@ extension LitterUI {
                 }
                 .navigationTitle("Rename session")
                 .navigationBarTitleDisplayMode(.inline)
-                .tint(LitterUI.Palette.brand.color)
+                .neonAccentTint()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { dismiss() }

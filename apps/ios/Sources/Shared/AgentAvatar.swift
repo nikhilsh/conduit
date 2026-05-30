@@ -17,6 +17,7 @@ import UIKit
 struct AgentAvatar: View {
     let assistant: String
     var size: CGFloat = 24
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         ZStack {
@@ -32,7 +33,7 @@ struct AgentAvatar: View {
                     .padding(size * 0.16)
             } else {
                 Circle()
-                    .fill(SweKittyTheme.accentStrong(forAgent: assistant))
+                    .fill(neon.agentTint(forAgent: assistant))
                 if let symbol = AgentAvatar.symbol(forAgent: assistant) {
                     // Claude / Codex get a distinctive brand glyph; other
                     // agents keep the monogram.

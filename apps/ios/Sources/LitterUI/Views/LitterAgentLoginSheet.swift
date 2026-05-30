@@ -28,6 +28,7 @@ extension LitterUI {
     struct AgentLoginSheet: View {
         @Environment(SessionStore.self) private var store
         @Environment(\.dismiss) private var dismiss
+        @Environment(\.neonTheme) private var neon
 
         @State private var isWorking = false
         @State private var statusMessage: String?
@@ -49,7 +50,7 @@ extension LitterUI {
                             intro
                             providersCard
                             if let statusMessage {
-                                statusPill(text: statusMessage, tint: LitterUI.Palette.brand.color)
+                                statusPill(text: statusMessage, tint: neon.accent)
                             }
                             if let errorMessage {
                                 statusPill(text: errorMessage, tint: LitterUI.Palette.danger.color)
@@ -73,7 +74,7 @@ extension LitterUI {
                     }
                 }
             }
-            .tint(LitterUI.Palette.brand.color)
+            .neonAccentTint()
             .appearanceColorScheme()
         }
 
@@ -93,7 +94,7 @@ extension LitterUI {
             VStack(alignment: .leading, spacing: 0) {
                 providerRow(
                     icon: "person.crop.circle.badge.checkmark",
-                    tint: SweKittyTheme.accent(forAgent: "codex"),
+                    tint: neon.agentTint(forAgent: "codex"),
                     title: "Login with ChatGPT",
                     subtitle: "Codex / ChatGPT OAuth · auth.openai.com",
                     enabled: !isWorking,
@@ -104,7 +105,7 @@ extension LitterUI {
                     .padding(.vertical, 6)
                 providerRow(
                     icon: "ant.circle",
-                    tint: SweKittyTheme.accent(forAgent: "claude"),
+                    tint: neon.agentTint(forAgent: "claude"),
                     title: "Login with Claude",
                     subtitle: "Claude OAuth · claude.ai",
                     enabled: !isWorking,

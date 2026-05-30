@@ -100,7 +100,7 @@ extension LitterUI {
                         .onDisappear { if store.endpoint.isComplete { dismiss() } }
                 }
             }
-            .tint(LitterUI.Palette.brand.color)
+            .neonAccentTint()
             .appearanceColorScheme()
         }
 
@@ -119,7 +119,7 @@ extension LitterUI {
                 HStack(spacing: 14) {
                     Image(systemName: icon)
                         .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(LitterUI.Palette.brand.color)
+                        .neonAccentForeground()
                         .frame(width: LitterAddServerSheetMetrics.iconSize)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
@@ -158,6 +158,7 @@ enum LitterAddServerSheetMetrics {
 struct LitterManualPairSheet: View {
     @Environment(SessionStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.neonTheme) private var neon
 
     @State private var url: String = ""
     @State private var token: String = ""
@@ -209,7 +210,7 @@ struct LitterManualPairSheet: View {
                             .foregroundStyle(LitterUI.Palette.textOnAccent.color)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
-                            .background(LitterUI.Palette.brand.color)
+                            .background(neon.accent)
                             .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -234,7 +235,7 @@ struct LitterManualPairSheet: View {
                 token = store.endpoint.token
             }
         }
-        .tint(LitterUI.Palette.brand.color)
+        .neonAccentTint()
     }
 
     private func save() {

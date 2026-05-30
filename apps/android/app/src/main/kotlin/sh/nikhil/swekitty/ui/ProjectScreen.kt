@@ -95,7 +95,7 @@ fun ProjectScreen(
     val headerModel = remember(session, status, lifecycle) {
         ProjectHeaderModel.from(session, status, ProjectHeaderModel.lifecycleLabel(lifecycle))
     }
-    val agentAccent = SweKittyTheme.accent(forAgent = session.assistant)
+    val agentAccent = neonAgentColor(session.assistant, LocalNeonTheme.current)
     val ctx = LocalContext.current
     val appearance = LocalAppearanceStore.current
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
@@ -126,7 +126,7 @@ fun ProjectScreen(
         ) {
             ControlsRow(
                 model = headerModel,
-                agentAccent = SweKittyTheme.accent(forAgent = session.assistant),
+                agentAccent = agentAccent,
                 menuExpanded = menuExpanded,
                 onAgentTap = { menuExpanded = true },
                 onMenuDismiss = { menuExpanded = false },

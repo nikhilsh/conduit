@@ -9,6 +9,7 @@ struct VoiceDictationSheet: View {
     let onTranscript: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.neonTheme) private var neon
 
     @StateObject private var transcriber = VoiceTranscriber()
     @State private var captured: String = ""
@@ -62,7 +63,7 @@ struct VoiceDictationSheet: View {
                                 .foregroundStyle(SweKittyTheme.textOnAccent)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
-                                .background(SweKittyTheme.accentStrong)
+                                .background(neon.accent)
                                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                         }
                         .buttonStyle(.plain)
@@ -75,7 +76,7 @@ struct VoiceDictationSheet: View {
             }
             .navigationTitle("Voice")
             .navigationBarTitleDisplayMode(.inline)
-            .tint(SweKittyTheme.accentStrong)
+            .neonAccentTint()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
@@ -120,7 +121,7 @@ struct VoiceDictationSheet: View {
                         ? CGFloat(8 + base * envelope * 70)
                         : CGFloat(8)
                     Capsule()
-                        .fill(SweKittyTheme.accentStrong)
+                        .fill(neon.accent)
                         .frame(width: 5, height: height)
                         .opacity(isLive ? 0.95 : 0.45)
                 }

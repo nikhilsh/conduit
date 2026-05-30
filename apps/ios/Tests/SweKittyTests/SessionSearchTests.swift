@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftUI
 @testable import SweKitty
 
 /// Stage 5 — sessions-across-servers search. The actual filter lives
@@ -207,9 +208,9 @@ struct SessionSearchTests {
         // `AttributedString` carries the highlight metadata; the
         // view applies it via the accent color + bold weight. Empty
         // matches return nil so the view falls back to plain text.
-        let attr = SessionSearchIndex.attributedSnippet(snippet: "the database matters", needle: "database")
+        let attr = SessionSearchIndex.attributedSnippet(snippet: "the database matters", needle: "database", tint: .red)
         #expect(attr != nil)
-        let nothing = SessionSearchIndex.attributedSnippet(snippet: "no match here", needle: "absent")
+        let nothing = SessionSearchIndex.attributedSnippet(snippet: "no match here", needle: "absent", tint: .red)
         #expect(nothing == nil)
     }
 

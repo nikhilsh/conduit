@@ -13,6 +13,7 @@ struct SessionSearchView: View {
     @Environment(SessionStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.neonTheme) private var neon
 
     @State private var query: String = ""
 
@@ -49,7 +50,7 @@ struct SessionSearchView: View {
             }
             .navigationTitle("All Sessions")
             .navigationBarTitleDisplayMode(.inline)
-            .tint(SweKittyTheme.accentStrong)
+            .neonAccentTint()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
@@ -148,7 +149,7 @@ struct SessionSearchView: View {
     private func serverChip(for result: SessionSearchResult) -> some View {
         HStack(spacing: 4) {
             Circle()
-                .fill(SweKittyTheme.accentStrong.opacity(0.65))
+                .fill(neon.accent.opacity(0.65))
                 .frame(width: 6, height: 6)
             Text(result.serverName)
                 .font(.caption2.weight(.semibold))
@@ -157,7 +158,7 @@ struct SessionSearchView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .glassCapsule(tint: SweKittyTheme.accentStrong.opacity(0.18))
+        .glassCapsule(tint: neon.accent.opacity(0.18))
         .accessibilityLabel("Server \(result.serverName)")
     }
 
@@ -167,7 +168,7 @@ struct SessionSearchView: View {
     /// the snippet (e.g. the match came from session-name only).
     private func highlightedSnippet(_ snippet: String, needle: String) -> some View {
         Group {
-            if let attributed = SessionSearchIndex.attributedSnippet(snippet: snippet, needle: needle) {
+            if let attributed = SessionSearchIndex.attributedSnippet(snippet: snippet, needle: needle, tint: neon.accent) {
                 Text(attributed)
                     .font(.caption)
                     .foregroundStyle(SweKittyTheme.textMuted)
@@ -366,7 +367,7 @@ struct SessionSearchIndex: Equatable {
     /// accent-tinted using `AttributedString`. Returns nil when the
     /// needle isn't found in the snippet (caller falls back to a
     /// plain `Text`).
-    static func attributedSnippet(snippet: String, needle: String) -> AttributedString? {
+    static func attributedSnippet(snippet: String, needle: String, tint: Color) -> AttributedString? {
         guard !needle.isEmpty else { return nil }
         let lower = snippet.lowercased()
         guard let range = lower.range(of: needle) else { return nil }
@@ -377,7 +378,7 @@ struct SessionSearchIndex: Equatable {
         let nsEnd = lower.distance(from: lower.startIndex, to: range.upperBound)
         let start = attributed.index(attributed.startIndex, offsetByCharacters: nsStart)
         let end = attributed.index(attributed.startIndex, offsetByCharacters: nsEnd)
-        attributed[start..<end].foregroundColor = SweKittyTheme.accentStrong
+        attributed[start..<end].foregroundColor = tint
         attributed[start..<end].font = .caption.weight(.semibold)
         return attributed
     }

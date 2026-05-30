@@ -225,7 +225,7 @@ private fun ProviderRow(
         Icon(
             Icons.Filled.AccountCircle,
             contentDescription = null,
-            tint = if (enabled) SweKittyTheme.accentStrong() else MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (enabled) LocalNeonTheme.current.accent else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(22.dp),
         )
         Spacer(Modifier.width(12.dp))

@@ -221,7 +221,7 @@ private fun PeekPillStrip(
 @Composable
 private fun PeekPill(session: ProjectSession, isActive: Boolean, onClick: () -> Unit) {
     val initial = session.assistant.take(1).uppercase()
-    val tint = SweKittyTheme.accent(forAgent = session.assistant)
+    val tint = agentAccent(session.assistant)
     val capsuleTint = if (isActive) tint.copy(alpha = 0.48f) else tint.copy(alpha = 0.22f)
     Box(
         contentAlignment = Alignment.Center,
@@ -345,14 +345,14 @@ private fun EmptyState(onNewSession: () -> Unit) {
                 Icon(
                     Icons.Filled.Add,
                     contentDescription = null,
-                    tint = SweKittyTheme.accentStrong(),
+                    tint = LocalNeonTheme.current.accent,
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
                     "New session",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = SweKittyTheme.accentStrong(),
+                    color = LocalNeonTheme.current.accent,
                 )
             }
         }

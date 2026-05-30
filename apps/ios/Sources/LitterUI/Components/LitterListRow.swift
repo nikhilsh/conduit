@@ -18,15 +18,19 @@ extension LitterUI {
         let icon: String
         let title: String
         var subtitle: String? = nil
-        var iconTint: Color = LitterUI.Palette.brand.color
+        /// Leading-icon tint. `nil` (the default) resolves to the active
+        /// Neon palette accent — replacing the legacy copper brand default
+        /// so settings rows / toggles follow the selected palette.
+        var iconTint: Color? = nil
         @ViewBuilder var trailing: () -> Trailing
+        @Environment(\.neonTheme) private var neon
 
         var body: some View {
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.body)
                     .frame(width: 20)
-                    .foregroundStyle(iconTint)
+                    .foregroundStyle(iconTint ?? neon.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.system(size: 15, weight: .semibold))
@@ -54,7 +58,7 @@ extension LitterUI {
         icon: String,
         title: String,
         subtitle: String? = nil,
-        iconTint: Color = LitterUI.Palette.brand.color
+        iconTint: Color? = nil
     ) -> some View {
         ListRow(icon: icon, title: title, subtitle: subtitle, iconTint: iconTint) {
             Image(systemName: "chevron.right")
@@ -63,18 +67,31 @@ extension LitterUI {
         }
     }
 
-    /// Toggle row.
+    /// Toggle row. The switch tints to the active Neon palette accent
+    /// (via [NeonTintedToggle]) instead of the legacy copper brand.
     static func toggleRow(
         icon: String,
         title: String,
         subtitle: String? = nil,
         isOn: Binding<Bool>,
-        iconTint: Color = LitterUI.Palette.brand.color
+        iconTint: Color? = nil
     ) -> some View {
         ListRow(icon: icon, title: title, subtitle: subtitle, iconTint: iconTint) {
+            NeonTintedToggle(isOn: isOn)
+        }
+    }
+
+    /// A `Toggle` whose accent follows the active Neon palette. Wraps the
+    /// switch so the tint can read `\.neonTheme` from the environment
+    /// (the static row factories can't, being plain functions).
+    struct NeonTintedToggle: View {
+        let isOn: Binding<Bool>
+        @Environment(\.neonTheme) private var neon
+
+        var body: some View {
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .tint(LitterUI.Palette.brand.color)
+                .tint(neon.accent)
         }
     }
 
@@ -84,7 +101,7 @@ extension LitterUI {
         title: String,
         value: String,
         subtitle: String? = nil,
-        iconTint: Color = LitterUI.Palette.brand.color
+        iconTint: Color? = nil
     ) -> some View {
         ListRow(icon: icon, title: title, subtitle: subtitle, iconTint: iconTint) {
             Text(value)

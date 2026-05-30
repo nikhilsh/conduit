@@ -17,6 +17,7 @@ extension LitterUI {
     struct SessionsRail: View {
         @Environment(SessionStore.self) private var store
         @Environment(AppearanceStore.self) private var appearance
+        @Environment(\.neonTheme) private var neon
 
         @State private var showSettings = false
         @State private var showAddServer = false
@@ -40,7 +41,7 @@ extension LitterUI {
             .sheet(isPresented: $showAddServer) {
                 LitterUI.AddServerSheet()
             }
-            .tint(LitterUI.Palette.brand.color)
+            .neonAccentTint()
         }
 
         // MARK: Subviews
@@ -88,7 +89,7 @@ extension LitterUI {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                             .litterGlassCapsule(
-                                tint: isActive ? LitterUI.Palette.brand.color.opacity(0.4) : nil,
+                                tint: isActive ? neon.accent.opacity(0.4) : nil,
                                 config: .pill
                             )
                         }
@@ -190,6 +191,7 @@ extension LitterUI {
 
 private struct RailRowView: View {
     let row: LitterUI.HomeRow
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         HStack(spacing: 10) {
@@ -211,7 +213,7 @@ private struct RailRowView: View {
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(row.isSelected
-                      ? LitterUI.Palette.brand.color.opacity(0.18)
+                      ? neon.accent.opacity(0.18)
                       : Color.clear)
         )
         .contentShape(Rectangle())
@@ -242,7 +244,7 @@ private struct RailRowView: View {
             Image(systemName: row.isSelected ? "circle.fill" : "circle")
                 .font(.caption)
                 .foregroundStyle(row.isSelected
-                                 ? LitterUI.Palette.brand.color
+                                 ? neon.accent
                                  : LitterUI.Palette.textMuted.color.opacity(0.5))
         }
     }

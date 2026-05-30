@@ -45,7 +45,7 @@ extension LitterUI {
             HStack(spacing: 6) {
                 Image(systemName: attachment.kind.systemImage)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(LitterUI.Palette.brand.color)
+                    .neonAccentForeground()
                 VStack(alignment: .leading, spacing: 1) {
                     Text(attachment.filename)
                         .font(.system(size: 12, weight: .medium))

@@ -13,7 +13,6 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -42,8 +41,8 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
     val themeMode by appearance.themeMode.collectAsState()
     val fontFamily by appearance.fontFamily.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
-    val neonPalette by appearance.neonPalette.collectAsState()
     val neonGlow by appearance.neonGlow.collectAsState()
+    val neon = LocalNeonTheme.current
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -76,38 +75,26 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
                 }
             }
 
-            // Neon Terminal theme controls — palette picker + glow
-            // toggle. Mode is already handled by the Theme section above
-            // (Neon reuses themeMode for its light/dark resolution).
-            // Mirrors the iOS LitterAppearanceSheet "Neon Terminal"
-            // section.
+            // Neon Terminal theme controls — accent-palette swatch picker
+            // + glow toggle, then a live preview chip. Mode is handled by
+            // the Theme section above (Neon reuses themeMode for its
+            // light/dark resolution). Mirrors the iOS
+            // LitterUI.NeonPalettePickerContent + NeonThemePreviewChip.
             SettingsSection("Neon Terminal") {
-                AppearanceStore.NeonPalette.values().forEachIndexed { idx, choice ->
-                    PickerRow(
-                        icon = Icons.Filled.Palette,
-                        title = choice.label,
-                        isSelected = neonPalette == choice,
-                        onClick = { appearance.setNeonPalette(choice) },
-                    )
-                    if (idx < AppearanceStore.NeonPalette.values().lastIndex) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                        )
-                    }
-                }
+                NeonAccentPalettePicker(appearance)
                 HorizontalDivider(
                     modifier = Modifier.padding(horizontal = 16.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    color = neon.border,
                 )
                 ToggleRow(
                     icon = Icons.Filled.Star,
-                    title = "Glow",
-                    subtitle = "Neon glow on cards & text",
+                    title = "Glow & scanlines",
+                    subtitle = if (neon.dark) "neon halos · on dark" else "neon halos · dimmed in light",
                     isOn = neonGlow,
                     onChange = { appearance.setNeonGlow(it) },
                 )
             }
+            NeonThemePreviewChip(appearance)
 
             SettingsSection("Chat Body Font") {
                 AppearanceStore.FontFamily.values().forEachIndexed { idx, choice ->
@@ -159,8 +146,8 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
                         steps = (AppearanceStore.BODY_POINT_SIZE_RANGE.endInclusive
                             - AppearanceStore.BODY_POINT_SIZE_RANGE.start).toInt() - 1,
                         colors = androidx.compose.material3.SliderDefaults.colors(
-                            thumbColor = SweKittyTheme.accentStrong(),
-                            activeTrackColor = SweKittyTheme.accentStrong(),
+                            thumbColor = neon.accent,
+                            activeTrackColor = neon.accent,
                         ),
                     )
                     Text(
