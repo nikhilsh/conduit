@@ -38,6 +38,7 @@ extension LitterUI {
     struct LicensesView: View {
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.neonTheme) private var neon
 
         var body: some View {
             ZStack {
@@ -87,7 +88,7 @@ extension LitterUI {
             }
             .navigationTitle("Licenses")
             .navigationBarTitleDisplayMode(.inline)
-            .tint(LitterUI.Palette.brand.color)
+            .neonAccentTint()
             .appearanceColorScheme()
         }
 
@@ -138,11 +139,11 @@ extension LitterUI {
         private func licenseBadge(_ label: String) -> some View {
             Text(label)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(LitterUI.Palette.brand.color)
+                .neonAccentForeground()
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(
-                    LitterUI.Palette.brand.color.opacity(0.18),
+                    neon.accent.opacity(0.18),
                     in: Capsule()
                 )
         }

@@ -64,7 +64,7 @@ extension LitterUI {
                     LitterUI.EmptyDetail()
                 }
             }
-            .tint(LitterUI.Palette.brand.color)
+            .neonAccentTint()
         }
     }
 }
