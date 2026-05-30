@@ -1294,10 +1294,22 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // 2. Detach libghostty's render layer so CoreAnimation can't commit
         //    it into a surface that's about to free.
         ghosttySublayer?.removeFromSuperlayer()
-        // 3. Free the surface explicitly, with the pump stopped + layer
-        //    detached.
+        // 3. Free the surface on the NEXT main-runloop turn — never
+        //    synchronously here. `deinit` can run *inside* CoreAnimation's
+        //    commit (`CA::Context::commit_transaction`), and freeing the
+        //    libghostty surface mid-commit is the exact use-after-free
+        //    Sentry caught (`apprt.surface.Mailbox.push`, APPLE-IOS-S, and
+        //    the `object.Object.getProperty` variants APPLE-IOS-Q/-P).
+        //    The layer is already detached (step 2), so capturing the
+        //    handle and tearing it down one turn later lets any in-flight
+        //    transaction commit first. `GhosttySurface.teardown()` is
+        //    idempotent, so the deferred call is safe even if the view is
+        //    long gone by then.
         #if canImport(GhosttyVT)
-        terminal?.teardown()
+        if let term = terminal {
+            terminal = nil
+            DispatchQueue.main.async { term.teardown() }
+        }
         #endif
         NotificationCenter.default.removeObserver(self)
     }
