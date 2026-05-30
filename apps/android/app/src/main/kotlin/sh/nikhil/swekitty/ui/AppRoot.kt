@@ -134,6 +134,17 @@ fun AppRoot(store: SessionStore) {
                                         )
                                     }
                                 }
+                                sessions.firstOrNull { it.id == selectedId }?.let { sel ->
+                                    VerticalDivider(color = neon.border)
+                                    Box(modifier = Modifier.width(360.dp).fillMaxHeight()) {
+                                        SessionInfoScreen(
+                                            store = store,
+                                            session = sel,
+                                            onDismiss = {},
+                                            embedded = true,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

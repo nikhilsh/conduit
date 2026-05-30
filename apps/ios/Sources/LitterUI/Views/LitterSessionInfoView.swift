@@ -17,6 +17,9 @@ extension LitterUI {
         @Environment(\.colorScheme) private var colorScheme
 
         let session: ProjectSession
+        /// Hosted inline as the tablet Sessions right pane (not a sheet) →
+        /// drop the "Done" affordance.
+        var embedded: Bool = false
 
         @State private var showRename = false
         @State private var showAppearance = false
@@ -42,12 +45,14 @@ extension LitterUI {
                 .navigationTitle("Session")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        // Plain Button per PLAN-LITTER-VISUAL-PARITY
-                        // audit §A.3.5 — drop the explicit brand
-                        // overlay; the navigation `.tint(...)` below
-                        // already paints the link in the accent.
-                        Button("Done") { dismiss() }
+                    if !embedded {
+                        ToolbarItem(placement: .confirmationAction) {
+                            // Plain Button per PLAN-LITTER-VISUAL-PARITY
+                            // audit §A.3.5 — drop the explicit brand
+                            // overlay; the navigation `.tint(...)` below
+                            // already paints the link in the accent.
+                            Button("Done") { dismiss() }
+                        }
                     }
                 }
                 .tint(neon.accent)
