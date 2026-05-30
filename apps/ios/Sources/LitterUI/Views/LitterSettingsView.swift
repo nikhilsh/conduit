@@ -20,6 +20,11 @@ extension LitterUI {
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
 
+        /// When true the screen is hosted inline as a tablet section pane
+        /// (not a sheet), so the "Done" affordance is dropped — there's
+        /// nothing to dismiss.
+        var embedded: Bool = false
+
         @State private var showAddServer = false
         @State private var showAgentLogin = false
         /// Saved-server pending deletion (drives the confirmation alert
@@ -55,15 +60,17 @@ extension LitterUI {
                 .navigationBarTitleDisplayMode(.inline)
                 .tint(neon.accent)
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        // Plain Button (no copper-tint overlay) per
-                        // PLAN-LITTER-VISUAL-PARITY audit §A.3.5 — litter
-                        // uses a flat `.confirmationAction` link, not a
-                        // tinted capsule. The surrounding NavigationStack
-                        // `.tint(neon.accent)` still
-                        // picks up the accent colour on the link itself,
-                        // we just stop double-painting it.
-                        Button("Done") { dismiss() }
+                    if !embedded {
+                        ToolbarItem(placement: .confirmationAction) {
+                            // Plain Button (no copper-tint overlay) per
+                            // PLAN-LITTER-VISUAL-PARITY audit §A.3.5 — litter
+                            // uses a flat `.confirmationAction` link, not a
+                            // tinted capsule. The surrounding NavigationStack
+                            // `.tint(neon.accent)` still
+                            // picks up the accent colour on the link itself,
+                            // we just stop double-painting it.
+                            Button("Done") { dismiss() }
+                        }
                     }
                 }
                 .sheet(isPresented: $showAddServer) {

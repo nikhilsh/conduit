@@ -53,7 +53,6 @@ extension LitterUI {
 
         @State private var showHistory = false
         @State private var showBoxes = false
-        @State private var showSettings = false
 
         private var section: LitterUI.TabletSection {
             LitterUI.TabletSection(rawValue: sectionRaw) ?? .sessions
@@ -63,10 +62,9 @@ extension LitterUI {
             HStack(spacing: 0) {
                 LitterUI.TabletActivityBar(section: section) { picked in
                     switch picked {
-                    case .home, .sessions: sectionRaw = picked.rawValue
-                    case .history:         showHistory = true
-                    case .boxes:           showBoxes = true
-                    case .settings:        showSettings = true
+                    case .home, .sessions, .settings: sectionRaw = picked.rawValue
+                    case .history:                    showHistory = true
+                    case .boxes:                      showBoxes = true
                     }
                 }
                 sectionContent
@@ -74,13 +72,13 @@ extension LitterUI {
             }
             .sheet(isPresented: $showHistory) { SessionSearchView() }
             .sheet(isPresented: $showBoxes) { LitterUI.DiscoveryView() }
-            .sheet(isPresented: $showSettings) { LitterUI.SettingsView() }
         }
 
         @ViewBuilder private var sectionContent: some View {
             switch section {
-            case .home: LitterUI.HomeView()
-            default:    sessionsSplit
+            case .home:     LitterUI.HomeView()
+            case .settings: LitterUI.SettingsView(embedded: true)
+            default:        sessionsSplit
             }
         }
 
