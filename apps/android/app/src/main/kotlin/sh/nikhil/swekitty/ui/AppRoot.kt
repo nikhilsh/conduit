@@ -84,16 +84,10 @@ fun AppRoot(store: SessionStore) {
                     VerticalDivider(color = neon.border)
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                         if (tabletSection == TabletSection.Home) {
-                            HomeScreen(
-                                store = store,
-                                onOpenSettings = { showSettings = true },
-                                onOpenDrawer = {},
-                                onOpenHistory = { showHistory = true },
-                                onAddServer = { showAddServer = true },
-                                onNewSession = onNewSession,
-                                onSearch = { showSearch = true },
-                                onVoice = { showVoice = true },
-                            )
+                            NeonTabletHome(store = store) { id ->
+                                store.select(id)
+                                tabletSection = TabletSection.Sessions
+                            }
                         } else {
                             Row(modifier = Modifier.fillMaxSize()) {
                                 Box(modifier = Modifier.width(300.dp).fillMaxHeight()) {
