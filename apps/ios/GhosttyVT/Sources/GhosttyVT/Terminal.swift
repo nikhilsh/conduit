@@ -870,11 +870,29 @@ public final class GhosttySurface {
         GhosttyApp.shared.tick()
     }
 
-    deinit {
+    /// Idempotent, explicit teardown of the libghostty surface. Frees the
+    /// `ghostty_surface_t` deterministically instead of relying on ARC
+    /// deinit ordering vs. the host view's CADisplayLink + CALayer (a
+    /// use-after-free window: CoreAnimation could commit the surface's
+    /// layer after the surface freed, messaging the freed surface mailbox —
+    /// `EXC_BAD_ACCESS` in `apprt.surface.Mailbox.push` under
+    /// `CA::Context::commit_transaction`).
+    ///
+    /// `_surface` is touched on the main thread only (the host view drives
+    /// draw/feed/resize/focus from the main runloop + CADisplayLink), so no
+    /// lock is needed. We set `_surface = nil` FIRST so any later
+    /// draw()/feed()/etc. no-op via their existing `guard let surface`
+    /// guards, THEN unregister + free. Safe to call twice (returns early
+    /// once `_surface` is nil).
+    public func teardown() {
+        guard let surface = _surface else { return }
+        _surface = nil
         GhosttyApp.unregisterSurface(key: _clipboardKey)
-        if let surface = _surface {
-            ghostty_surface_free(surface)
-        }
+        ghostty_surface_free(surface)
+    }
+
+    deinit {
+        teardown()
     }
 
     /// Forward a chunk of PTY bytes into libghostty's parser. Main-thread
@@ -1241,6 +1259,17 @@ public final class Terminal {
     public func refresh() {
         #if canImport(libghostty)
         surface?.refresh()
+        #endif
+    }
+
+    /// Explicit, deterministic teardown of the underlying libghostty
+    /// surface. The host view calls this on its own teardown (after it has
+    /// stopped the draw pump + detached the render layer) so the surface is
+    /// freed in a controlled order rather than via ARC deinit. Idempotent.
+    public func teardown() {
+        #if canImport(libghostty)
+        surface?.teardown()
+        surface = nil
         #endif
     }
 
