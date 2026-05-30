@@ -49,6 +49,10 @@ extension LitterUI {
         @Environment(\.dismiss) private var dismiss
 
         let session: ProjectSession
+        /// Tablet 3-pane centre: render chat only (no tab strip) — the
+        /// Terminal / Browser / Info surfaces live in the sibling right
+        /// pane (`LitterUI.TabletRightPane`). Phone / default = full tabs.
+        var chatOnly: Bool = false
 
         @State private var tab: ProjectTab = .chat
         @State private var showInfo = false
@@ -64,7 +68,7 @@ extension LitterUI {
         var body: some View {
             VStack(spacing: 0) {
                 header
-                if !isReadOnly {
+                if !isReadOnly && !chatOnly {
                     tabStrip
                 }
                 Divider().background(neon.border)
@@ -243,6 +247,10 @@ extension LitterUI {
             // collapses straight to the transcript.
             if isReadOnly {
                 LitterUI.ChatView(session: session, forceReadOnly: true)
+            } else if chatOnly {
+                // Tablet 3-pane centre: chat only; Terminal/Browser/Info
+                // live in the right pane (LitterUI.TabletRightPane).
+                LitterUI.ChatView(session: session, isActive: true)
             } else {
                 liveContent
             }

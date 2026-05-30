@@ -98,21 +98,21 @@ extension LitterUI {
             } detail: {
                 if let id = store.selectedSessionID,
                    let session = store.sessions.first(where: { $0.id == id }) {
-                    // Tablet 3-pane: chat detail + an inline Session Info
-                    // right pane (the design's no-modal-on-tablet Info).
-                    // ProjectView is untouched (keeps its Chat/Terminal/
-                    // Browser tabs centre); the Terminal/Browser-in-right-
-                    // pane restructure is device-gated.
+                    // Tablet 3-pane (design's TabletSessionView): chat-only
+                    // centre + a right pane with Terminal / Browser / Info
+                    // tabs. ProjectView(chatOnly:) drops its own tab strip;
+                    // the right pane reuses the same terminal/browser/info
+                    // surfaces. Phone uses ProjectView's full tabs (chatOnly
+                    // defaults false).
                     HStack(spacing: 0) {
-                        LitterUI.ProjectView(session: session)
+                        LitterUI.ProjectView(session: session, chatOnly: true)
                             // Keying on session id forces SwiftUI to
                             // discard the previous detail's `@State`
-                            // (e.g. selected tab) when the user picks a
-                            // different session.
+                            // when the user picks a different session.
                             .id(session.id)
                         Divider().background(neon.border)
-                        LitterUI.SessionInfoView(session: session, embedded: true)
-                            .frame(width: 360)
+                        LitterUI.TabletRightPane(session: session)
+                            .frame(width: 392)
                             .id(session.id)
                     }
                 } else {
