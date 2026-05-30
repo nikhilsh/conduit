@@ -98,14 +98,23 @@ extension LitterUI {
             } detail: {
                 if let id = store.selectedSessionID,
                    let session = store.sessions.first(where: { $0.id == id }) {
-                    LitterUI.ProjectView(session: session)
-                        // Keying on session id forces SwiftUI to
-                        // discard the previous detail's `@State`
-                        // (e.g. selected tab) when the user picks a
-                        // different session — otherwise the new
-                        // session inherits the prior one's tab and
-                        // header animation state.
-                        .id(session.id)
+                    // Tablet 3-pane: chat detail + an inline Session Info
+                    // right pane (the design's no-modal-on-tablet Info).
+                    // ProjectView is untouched (keeps its Chat/Terminal/
+                    // Browser tabs centre); the Terminal/Browser-in-right-
+                    // pane restructure is device-gated.
+                    HStack(spacing: 0) {
+                        LitterUI.ProjectView(session: session)
+                            // Keying on session id forces SwiftUI to
+                            // discard the previous detail's `@State`
+                            // (e.g. selected tab) when the user picks a
+                            // different session.
+                            .id(session.id)
+                        Divider().background(neon.border)
+                        LitterUI.SessionInfoView(session: session, embedded: true)
+                            .frame(width: 360)
+                            .id(session.id)
+                    }
                 } else {
                     LitterUI.EmptyDetail()
                 }
