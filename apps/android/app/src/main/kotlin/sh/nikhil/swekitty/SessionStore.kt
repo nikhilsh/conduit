@@ -312,6 +312,35 @@ fun tsEpochMillis(ts: String): Long =
     }
 
 /**
+ * Order conversation items chronologically by `ts`, correctly placing
+ * live in-flight items that don't carry a timestamp yet.
+ *
+ * The previous `compareBy({ tsEpochMillis(ts) }, { index })` re-sort
+ * collapsed an unparseable / empty `ts` to `0L` — the SMALLEST possible
+ * key — which shoved the agent's freshly-streamed reply (and its command
+ * card) to the TOP of the log, above the user's own prompt that triggered
+ * it (device bug: agent chat appears before the user chat).
+ *
+ * The data model is the key insight: every PERSISTED item carries a real
+ * nanosecond RFC3339 timestamp, and the only items with an empty/unparseable
+ * `ts` are the LIVE, not-yet-persisted items of the in-flight turn — i.e.
+ * the newest things in the log. So an unparseable `ts` sorts as
+ * [Long.MAX_VALUE] ("just now / still arriving"), which keeps the local user
+ * echo (a real, slightly-earlier ISO timestamp) ahead of the streaming reply
+ * it kicked off, while persisted history stays in true chronological order.
+ * Stable: equal keys break the tie on original arrival index.
+ */
+fun <T> List<T>.sortedByConversationTs(ts: (T) -> String): List<T> =
+    withIndex()
+        .sortedWith(
+            compareBy(
+                { val ms = tsEpochMillis(ts(it.value)); if (ms > 0L) ms else Long.MAX_VALUE },
+                { it.index },
+            ),
+        )
+        .map { it.value }
+
+/**
  * v1 store: wraps SweKittyClient and bridges Rust delegate callbacks back onto
  * the main dispatcher as StateFlow updates. Replaced by Hilt-style DI in v2.
  */
@@ -1594,7 +1623,15 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         runCatching { withContext(Dispatchers.IO) { c.sendFile(sessionId, filename, mime, payload) } }
     }
 
-    suspend fun listDirectories(path: String?): RemoteDirectoryListing {
+    suspend fun listDirectories(path: String?): RemoteDirectoryListing = withContext(Dispatchers.IO) {
+        // MUST run on Dispatchers.IO: the caller is a `LaunchedEffect`, which
+        // runs on the Main dispatcher, and the blocking HttpURLConnection
+        // calls below (`responseCode` / `getInputStream`) perform network on
+        // whatever thread they're on. On Main that throws
+        // `NetworkOnMainThreadException` — a RuntimeException with a NULL
+        // message — which AgentPickerSheet rendered as the bare "Couldn't
+        // list this folder." (no broker detail), making the folder browser
+        // look broken on Android while iOS (async URLSession) worked fine.
         val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
         val url = if (path.isNullOrBlank()) {
             URL("$base/api/fs/list")
@@ -1635,7 +1672,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                     )
                 }
             }
-            return RemoteDirectoryListing(
+            RemoteDirectoryListing(
                 path = obj.optString("path", path ?: "~"),
                 parent = obj.optString("parent", path ?: "~"),
                 entries = entries,
@@ -1658,7 +1695,10 @@ class SessionStore : ViewModel(), SweKittyDelegate {
      * Throws [ConversationNotFoundException] on 404 — sessions created
      * before the #196 redeploy never wrote a `conversation.jsonl`.
      */
-    suspend fun fetchConversation(sessionID: String): List<ConversationItem> {
+    suspend fun fetchConversation(sessionID: String): List<ConversationItem> = withContext(Dispatchers.IO) {
+        // Dispatchers.IO for the same reason as [listDirectories]: the
+        // blocking HttpURLConnection calls below must never run on the Main
+        // dispatcher (NetworkOnMainThreadException).
         val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
         val url = URL("$base/api/session/conversation/${java.net.URLEncoder.encode(sessionID, "UTF-8")}")
         val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -1680,7 +1720,7 @@ class SessionStore : ViewModel(), SweKittyDelegate {
             val raw = reader.readText()
             val obj = JSONObject(raw)
             val arr = obj.optJSONArray("items") ?: JSONArray()
-            return buildList {
+            return@withContext buildList {
                 for (i in 0 until arr.length()) {
                     val e = arr.getJSONObject(i)
                     val role = e.optString("role", "")
@@ -1833,16 +1873,13 @@ class SessionStore : ViewModel(), SweKittyDelegate {
                 val stillPending = existing.filter {
                     it.id.startsWith("local-") && "${it.role}|${it.content}" !in serverFingerprints
                 }
-                // Sort by NORMALIZED epoch millis, not the raw `ts` string.
-                // The local user echo stamps ISO_INSTANT ("…Z") while server
-                // items can carry an offset form, so a lexicographic string
-                // sort interleaves the assistant reply above the user turn
-                // that preceded it (device bug: replies before messages).
-                // Stable: unparseable ts → 0L, original index breaks ties.
-                val merged = (items + stillPending)
-                    .withIndex()
-                    .sortedWith(compareBy({ tsEpochMillis(it.value.ts) }, { it.index }))
-                    .map { it.value }
+                // Splice the local user echo into the server log in true
+                // chronological order. Carry-forward sort: an item whose ts
+                // we can't parse keeps its arrival position instead of
+                // collapsing to 0L and jumping above the user turn that
+                // preceded it (device bug: agent reply rendered before the
+                // user's prompt). See [sortedByConversationTs].
+                val merged = (items + stillPending).sortedByConversationTs { it.ts }
                 _conversationLog.value = _conversationLog.value + (sessionId to merged)
             }
     }

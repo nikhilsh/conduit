@@ -140,8 +140,15 @@ extension LitterUI {
 
         private var row1: some View {
             HStack(spacing: 10) {
-                headerIcon("chevron.left", weight: .semibold, tint: neon.text, label: "Back") {
-                    dismiss()
+                // Tablet 3-pane centre (chatOnly): the sessions rail owns
+                // navigation and the right pane owns Session Info, so the
+                // back chevron and the ⓘ info button here are dead/redundant
+                // — hide them. Phone keeps both (back pops the nav stack; ⓘ
+                // is the only route to Session Info).
+                if !chatOnly {
+                    headerIcon("chevron.left", weight: .semibold, tint: neon.text, label: "Back") {
+                        dismiss()
+                    }
                 }
 
                 // Centered title card: status dot + name + chevron, then
@@ -169,8 +176,10 @@ extension LitterUI {
                 headerIcon("arrow.clockwise", tint: neon.textDim, label: "Refresh") {
                     store.reconnect()
                 }
-                headerIcon("info.circle", tint: neon.textDim, label: "Session info") {
-                    showInfo = true
+                if !chatOnly {
+                    headerIcon("info.circle", tint: neon.textDim, label: "Session info") {
+                        showInfo = true
+                    }
                 }
             }
         }

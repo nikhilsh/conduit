@@ -77,7 +77,10 @@ fun NeonTabletRightPane(store: SessionStore, session: ProjectSession) {
             }
         }
         HorizontalDivider(color = neon.border)
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        // Sit all three surfaces on the neon canvas so the Info tab (whose
+        // embedded content carries no background of its own) matches the
+        // pane chrome instead of floating on whatever is painted behind.
+        Box(modifier = Modifier.weight(1f).fillMaxWidth().background(neon.bg)) {
             when (tab) {
                 RightPaneTab.Terminal ->
                     if (experimentalNativeTerminal) TermuxTerminalView(store, session)

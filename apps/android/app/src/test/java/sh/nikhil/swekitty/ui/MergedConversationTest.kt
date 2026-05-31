@@ -110,6 +110,28 @@ class MergedConversationTest {
         assertTrue(merged[0].id.startsWith("chatlog-"))
     }
 
+    @Test fun liveReplyWithoutTimestampStaysBelowUserEcho() {
+        // Device bug (Android tablet, v0.0.67): the user's prompt rendered
+        // BELOW the agent's streamed reply + its command card. The live,
+        // not-yet-persisted reply items arrive with an EMPTY `ts`; the old
+        // sort mapped empty → 0L (the OLDEST possible key) and shoved them
+        // to the TOP, above the user echo (which carries a real ISO ts).
+        // Empty ts must sort as the NEWEST so the echo that triggered the
+        // reply stays above the in-flight reply. Arrival order is preserved
+        // among the no-ts items (stable on index).
+        val conversation = listOf(
+            item("tool", "ls -la", "", id = "t1"),
+            item("assistant", "the dir is empty", "", id = "a1"),
+            item("user", "ls", "2026-05-31T00:00:10Z", id = "u1"),
+        )
+        // A synthetic chat event (also tsless) forces the merge/sort path.
+        val chatLog = listOf(chat("assistant", "anything else?", ""))
+        val merged = mergedConversation(conversation, chatLog)
+        assertEquals("u1", merged[0].id)
+        assertEquals(listOf("u1", "t1", "a1"), merged.take(3).map { it.id })
+        assertEquals("anything else?", merged.last().content)
+    }
+
     @Test fun userTurnBeforeAssistantWhenTsStringLexicographicallyGreater() {
         // The device bug: the user turn is EARLIER in time but its ts STRING
         // sorts AFTER the assistant's lexicographically. A +09:00 offset makes

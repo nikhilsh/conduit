@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.swekitty.PinnedContext
 import sh.nikhil.swekitty.SessionStore
+import sh.nikhil.swekitty.sortedByConversationTs
 import kotlinx.coroutines.launch
 import uniffi.swe_kitty_core.ChatEvent
 import uniffi.swe_kitty_core.ConversationItem
@@ -764,16 +765,13 @@ internal fun mergedConversation(
         }
     }
     if (synthetic.isEmpty()) return conversation
-    // Sort by NORMALIZED epoch millis, not the raw `ts` STRING. The local
-    // user echo stamps ISO_INSTANT ("…Z") while broker items can carry an
-    // offset form, so a lexicographic string sort interleaves an assistant
-    // greeting above the user turn that preceded it (device bug: replies
-    // before messages). Stable: unparseable ts → 0L, original index breaks
-    // ties so arrival order is preserved.
-    return (conversation + synthetic)
-        .withIndex()
-        .sortedWith(compareBy({ sh.nikhil.swekitty.tsEpochMillis(it.value.ts) }, { it.index }))
-        .map { it.value }
+    // Interleave the synthesized chat-event items into the typed log in true
+    // chronological order. Carry-forward sort (see [sortedByConversationTs]):
+    // a chat event whose `ts` we can't parse keeps its arrival position
+    // instead of collapsing to 0L and jumping above the user turn that
+    // preceded it (device bug: agent reply / command card rendered before
+    // the user's own prompt).
+    return (conversation + synthetic).sortedByConversationTs { it.ts }
 }
 
 /**

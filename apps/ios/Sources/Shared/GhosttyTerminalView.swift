@@ -139,6 +139,17 @@ struct GhosttyTerminalView: UIViewRepresentable {
             view.lastFedByteCount = buf.count
         }
     }
+
+    /// SwiftUI removed this view (tab switch away from Terminal in the
+    /// tablet 3-pane, session close, navigation pop). `dismantleUIView`
+    /// runs at a deterministic SwiftUI-update point — crucially NOT from
+    /// inside a CoreAnimation commit, unlike ARC `deinit`, which the Sentry
+    /// stack (`CA::Context::commit_transaction` → `apprt.surface.Mailbox.push`)
+    /// shows can fire mid-flush. Tearing the surface down here, before the
+    /// view is released, closes the use-after-free window deterministically.
+    static func dismantleUIView(_ view: GhosttyRenderView, coordinator: ()) {
+        view.prepareForRemoval()
+    }
 }
 
 /// Native iOS UIView that renders the Ghostty terminal grid via
@@ -1294,36 +1305,45 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         frameDisplayLinkProxy = nil
     }
 
-    deinit {
-        // Deterministic teardown order so we never rely on ARC release
-        // ordering between the CADisplayLink, the IOSurfaceLayer, and the
-        // GhosttySurface (the use-after-free Sentry caught:
-        // `EXC_BAD_ACCESS` in `apprt.surface.Mailbox.push` under
-        // `CA::Context::commit_transaction`).
+    /// Deterministic teardown. Invoked from `dismantleUIView` (SwiftUI
+    /// removal — a known-safe point, not inside a CoreAnimation commit) and
+    /// again from `deinit` (idempotent backstop). Order matters so we never
+    /// rely on ARC release ordering between the CADisplayLink, the
+    /// IOSurfaceLayer(s), and the GhosttySurface — the use-after-free Sentry
+    /// caught (`EXC_BAD_ACCESS` in `apprt.surface.Mailbox.push` under
+    /// `CA::Context::commit_transaction`).
+    func prepareForRemoval() {
         // 1. Stop the draw pump (no more `ghostty_surface_draw`).
-        frameDisplayLink?.invalidate()
-        frameDisplayLink = nil
-        frameDisplayLinkProxy = nil
-        // 2. Detach libghostty's render layer so CoreAnimation can't commit
-        //    it into a surface that's about to free.
-        ghosttySublayer?.removeFromSuperlayer()
+        stopFrameDisplayLink()
+        // 2. Detach EVERY layer libghostty parented on us — not just the
+        //    captured `ghosttySublayer`. libghostty can attach its
+        //    IOSurfaceLayer directly via `[[uiview layer] addSublayer:]`
+        //    (the belt-and-suspenders case in `sizeGhosttyLayer`), and any
+        //    such stray layer left attached here would be committed by the
+        //    next system `CATransaction` flush INTO the surface we're about
+        //    to free — the exact `apprt.surface.Mailbox.push` UAF
+        //    (APPLE-IOS-S) that detaching only the captured layer missed.
+        ghosttySublayer = nil
+        layer.sublayers?.forEach { $0.removeFromSuperlayer() }
         // 3. Free the surface on the NEXT main-runloop turn — never
-        //    synchronously here. `deinit` can run *inside* CoreAnimation's
-        //    commit (`CA::Context::commit_transaction`), and freeing the
-        //    libghostty surface mid-commit is the exact use-after-free
-        //    Sentry caught (`apprt.surface.Mailbox.push`, APPLE-IOS-S, and
-        //    the `object.Object.getProperty` variants APPLE-IOS-Q/-P).
-        //    The layer is already detached (step 2), so capturing the
-        //    handle and tearing it down one turn later lets any in-flight
+        //    synchronously here. Teardown can run *inside* CoreAnimation's
+        //    commit, and freeing the libghostty surface mid-commit is the
+        //    exact use-after-free (APPLE-IOS-S, and the
+        //    `object.Object.getProperty` variants APPLE-IOS-Q/-P). The
+        //    layers are already detached (step 2), so capturing the handle
+        //    and tearing it down one turn later lets any in-flight
         //    transaction commit first. `GhosttySurface.teardown()` is
-        //    idempotent, so the deferred call is safe even if the view is
-        //    long gone by then.
+        //    idempotent, so a second call from `deinit` is harmless.
         #if canImport(GhosttyVT)
         if let term = terminal {
             terminal = nil
             DispatchQueue.main.async { term.teardown() }
         }
         #endif
+    }
+
+    deinit {
+        prepareForRemoval()
         NotificationCenter.default.removeObserver(self)
     }
 

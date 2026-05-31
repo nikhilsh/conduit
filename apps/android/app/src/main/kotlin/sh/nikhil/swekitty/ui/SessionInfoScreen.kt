@@ -428,6 +428,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
 
 @Composable
 private fun AgentPill(label: String, tint: androidx.compose.ui.graphics.Color) {
+    val neon = LocalNeonTheme.current
     Surface(
         shape = RoundedCornerShape(50),
         color = tint.copy(alpha = 0.30f),
@@ -437,12 +438,17 @@ private fun AgentPill(label: String, tint: androidx.compose.ui.graphics.Color) {
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
+            // Explicit neon text colour: don't lean on Material `onSurface`,
+            // which flips to near-black under a light palette and renders the
+            // pill label as black-on-dark on the neon Info card.
+            color = neon.text,
         )
     }
 }
 
 @Composable
 private fun ActionTile(icon: ImageVector, title: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val neon = LocalNeonTheme.current
     Surface(
         shape = RoundedCornerShape(SweKittyTheme.cardCornerRadiusDp.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
@@ -453,8 +459,10 @@ private fun ActionTile(icon: ImageVector, title: String, modifier: Modifier = Mo
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Icon(icon, contentDescription = null, tint = LocalNeonTheme.current.accent)
-            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+            Icon(icon, contentDescription = null, tint = neon.accent)
+            // Explicit neon text colour (see AgentPill) so the tile label
+            // never collapses to Material near-black on the neon surface.
+            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = neon.text)
         }
     }
 }

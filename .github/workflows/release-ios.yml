@@ -140,6 +140,54 @@ jobs:
           path.write_text(text)
           PY
 
+      # Stamp the marketing version + build number so each release is a
+      # DISTINCT Sentry release. Both were hardcoded ("0.0.1" / "13"), so
+      # every shipped IPA reported as `sh.nikhil.swekitty@0.0.1+13` and crash
+      # reports could not be attributed to a release — we couldn't tell
+      # whether a terminal crash came from a pre- or post-fix build. The tag
+      # drives CFBundleShortVersionString; github.run_number is a monotonic
+      # CFBundleVersion. Non-semver tags (manual-…) leave the marketing
+      # version untouched but still get a unique build number.
+      - name: Stamp app version + build number from release tag
+        working-directory: apps/ios
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          tag = (os.environ.get("RELEASE_TAG") or "").strip()
+          build = (os.environ.get("BUILD_NUMBER") or "").strip() or "1"
+          path = Path("project.yml")
+          text = path.read_text()
+
+          m = re.match(r'^v?(\d+\.\d+\.\d+)$', tag)
+          if m:
+              marketing = m.group(1)
+              text, n1 = re.subn(
+                  r'MARKETING_VERSION: "[^"]*"',
+                  f'MARKETING_VERSION: "{marketing}"',
+                  text, count=1,
+              )
+              if n1 != 1:
+                  raise SystemExit("MARKETING_VERSION key not found in project.yml")
+              print(f"MARKETING_VERSION -> {marketing}")
+          else:
+              print(f"release tag {tag!r} is not semver — leaving MARKETING_VERSION as-is")
+
+          text, n2 = re.subn(
+              r'CURRENT_PROJECT_VERSION: "[^"]*"',
+              f'CURRENT_PROJECT_VERSION: "{build}"',
+              text, count=1,
+          )
+          if n2 != 1:
+              raise SystemExit("CURRENT_PROJECT_VERSION key not found in project.yml")
+          print(f"CURRENT_PROJECT_VERSION -> {build}")
+          path.write_text(text)
+          PY
+
       - name: Generate Xcode project
         working-directory: apps/ios
         run: xcodegen generate

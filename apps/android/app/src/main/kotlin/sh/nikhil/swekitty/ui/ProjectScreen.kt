@@ -129,6 +129,7 @@ fun ProjectScreen(
         ) {
             ControlsRow(
                 model = headerModel,
+                chatOnly = chatOnly,
                 agentAccent = agentAccent,
                 menuExpanded = menuExpanded,
                 onAgentTap = { menuExpanded = true },
@@ -290,6 +291,7 @@ fun ProjectScreen(
 @Composable
 private fun ControlsRow(
     model: ProjectHeaderModel,
+    chatOnly: Boolean = false,
     agentAccent: androidx.compose.ui.graphics.Color,
     menuExpanded: Boolean,
     onAgentTap: () -> Unit,
@@ -312,7 +314,12 @@ private fun ControlsRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        HeaderCircleButton(icon = Icons.Default.Menu, contentDescription = "Sessions", onClick = onOpenDrawer)
+        // Tablet 3-pane centre (chatOnly): the sessions rail is already
+        // pinned on the left, so the drawer toggle is a dead button here —
+        // hide it. Phone keeps it (the drawer is the only way to the rail).
+        if (!chatOnly) {
+            HeaderCircleButton(icon = Icons.Default.Menu, contentDescription = "Sessions", onClick = onOpenDrawer)
+        }
 
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             AgentPill(
@@ -345,13 +352,22 @@ private fun ControlsRow(
         // nothing when count is null / 0 / 1 — see ViewerCountBadge.
         ViewerCountBadge(count = viewerCount)
 
-        MemoryButton(
-            currentMode = browserMode,
-            onToggle = onBrowserModeChange,
-            onJumpToBrowser = onJumpToBrowser,
-        )
+        // In the tablet 3-pane the Browser and Info surfaces live in the
+        // right pane (NeonTabletRightPane), so the memory/browser toggle and
+        // the info button here are redundant — and the "jump to Browser"
+        // pager scroll does nothing in chat-only mode (there's no pager).
+        // Drop them; keep only Reconnect, which still applies.
+        if (!chatOnly) {
+            MemoryButton(
+                currentMode = browserMode,
+                onToggle = onBrowserModeChange,
+                onJumpToBrowser = onJumpToBrowser,
+            )
+        }
         HeaderCircleButton(icon = Icons.Default.Refresh, contentDescription = "Reconnect", onClick = onReconnect)
-        HeaderCircleButton(icon = Icons.Outlined.Info, contentDescription = "Session info", onClick = onShowInfo)
+        if (!chatOnly) {
+            HeaderCircleButton(icon = Icons.Outlined.Info, contentDescription = "Session info", onClick = onShowInfo)
+        }
     }
 }
 
