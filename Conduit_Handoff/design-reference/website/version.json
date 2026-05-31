@@ -1,0 +1,15 @@
+{
+  "version": "0.9.4",
+  "channel": "beta",
+  "updated": "2026-05-30",
+  "ios": {
+    "manifestUrl": "itms-services://?action=download-manifest&url=https://REPLACE-WITH-YOUR-DOMAIN/ios/manifest.plist",
+    "minOS": "iOS 16+",
+    "size": "24.8 MB"
+  },
+  "android": {
+    "apkUrl": "downloads/swe-kitty-latest.apk",
+    "minOS": "Android 10+",
+    "size": "31.2 MB"
+  }
+}

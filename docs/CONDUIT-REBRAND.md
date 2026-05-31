@@ -16,24 +16,57 @@ Android) plus repo/infra. Decided **2026-05-31**.
 | Execution | **Phase-by-phase, looped until done.** Each phase is its own commit/PR with its CI gate green before the next. |
 | Visual design / assets | **Pending handoff** — see "New Conduit design" below. |
 
-## New Conduit design
+## New Conduit design — handoff integrated (SOURCE OF TRUTH)
 
-The user is providing a **Conduit design handoff** bundle (location TBD — prior
-handoffs landed under `handoff-drop/`). It ships **its own instructions** that
-this plan must follow; the **UI copy/text** (taglines, About, website hero) lives
-inside it. Until the bundle + instructions are in hand, design-dependent phases
-(7 = visual, plus copy strings in iOS/Android/website) are blocked.
+The **`Conduit_Handoff/`** bundle is committed at repo root and is the source of
+truth: `BRAND.md` (tokens/type/mark/voice), `RENAME_MAP.md` (find/replace + the
+verification grep = **definition of done**), `MIGRATION_PLAN.md`, `APP_PLATFORMS.md`,
+`COPY_DECK.md`, `CLAUDE_CODE_PROMPT.md`, `assets/` (final icons), `design-reference/`
+(HTML/React prototypes + a near-ship-ready `website/`).
 
-Direction from the user:
-- The new design is **still neon-focused** and **does not replace** the current
-  Neon work ([[project_neon_ui_rework]] / [[project_neon_v2_design_handoff]]) —
-  instead, **compare the new design against what we already have** and reconcile
-  the deltas rather than rip-and-replace.
-- Copy for all surfaces comes from the handoff, not invented here.
+**Key reconciliation (what we have vs the design):**
+- ✅ **Palette already matches.** Shipped `NeonTheme.swift`/`NeonTheme.kt` use the
+  exact BRAND hex (`#22D3EE`/`#3EF0A0`/`#04050A`/`#0A1120`/`#EAF3FF`/`#FF9D4D`/`#FF7847`)
+  and already target JetBrains Mono + Space Grotesk (system fallback today). The
+  Neon work ([[project_neon_ui_rework]]) **is** the Conduit color system — not replaced.
+- 🔴 **Bigger rename than first scoped.** Handoff requires erasing the *whole*
+  cat-mascot codename, not just `swe-kitty`: `kitty`/`Kitty`/`litter`/`Litter`/
+  `KittyLitter`/`kitten`/`paw`/`CatMark` (whole-word; never blind-replace `cat`).
+  This repo is built on a **`LitterUI`** iOS module (~523 refs, ~50 `Litter*` types,
+  its own dir) + Android `Litter*` (~108 refs) → must become `ConduitUI`/`Conduit*`.
+- 🔴 **New mark + icons.** Replace `AnimatedBrandMark`/app icon with the **terminal
+  daemon**: in-UI vector `ConduitMark` (rounded square, `>` `<` squint eyes, smile,
+  cyan→green stroke, connector pills — ref `design-reference/kit.jsx`) + wire the
+  provided `assets/AppIcon-*.png`/`favicon-*` into iOS asset catalog + Android
+  adaptive icon (fg on `#04050A`) + web.
+- 🔴 **Copy** (`COPY_DECK.md`): tagline → **"Your agents, in your pocket."**,
+  wordmark `>conduit`, theme "Paper Kitty" → "Paper", strip cat/litter metaphors.
+- 🟡 **Website + distribution differ.** Handoff ships a new HTML site
+  (`design-reference/website/`) using **OTA `itms-services` manifest + direct APK**
+  (no App Store/Play, no `brew`), reading `version.json`. Current `website/` is a
+  GitHub-release static generator. → decision (see "Open decisions").
 
-> **TODO:** paste the handoff instructions here and link the asset bundle path
-> once dropped. The empty "instructions as follows:" in the kickoff message did
-> not come through.
+## Revised remaining phases (after mechanical Phases 1–5)
+- **Phase 6 — finish the `swe-kitty` cleanup + repo/infra/docs:** repo URLs
+  `nikhilsh/swe-kitty`→`nikhilsh/conduit` (coordinate w/ GitHub repo rename),
+  `ci.yml`/`release.yml` repo-name refs, `memory.go` HANDOFF git URL, `.gitignore`
+  paths, CLAUDE.md/README/docs sweep, `window.swekitty` terminal JS↔native bridge
+  (rename both sides), core test fixtures (`swekitty-saved`, `SWEKITTY_TEST_*`),
+  bare `swekitty://`/`SWE_KITTY_TOKEN` comments in core, the `.swe-kitty/` harness dir.
+- **Phase 6b — kitty/litter/cat rename:** `LitterUI`→`ConduitUI` (iOS module + dir +
+  ~50 types), Android `Litter*`, standalone `kitty`/`Kitty`, "Paper Kitty"→"Paper".
+- **Phase 7 — visual re-skin:** `ConduitMark` daemon vector (reskin `AnimatedBrandMark`);
+  app icons (iOS catalog, Android adaptive on `#04050A`, web favicons); splash; `>conduit`
+  wordmark; bundle JetBrains Mono + Space Grotesk (optional fidelity); `COPY_DECK.md` copy.
+- **Phase 8 — website + distribution:** per the website decision below.
+- **Phase 9 — release + device verify:** provisioning under `sh.nikhil.conduit`,
+  one re-pair, broker redeploy + `~/.swe-kitty`→`~/.conduit` migration, run the
+  `RENAME_MAP.md` verification grep → **zero matches**, on-device QA.
+
+## Open decisions (asked 2026-05-31)
+1. **Website/distribution:** adopt the new OTA/APK handoff site wholesale vs. keep
+   the current GitHub-release site + just rebrand it.
+2. **`LitterUI`/`litter` rename timing:** now (own phase) vs. after the visual reskin.
 
 ## The one-time cost we're accepting
 
