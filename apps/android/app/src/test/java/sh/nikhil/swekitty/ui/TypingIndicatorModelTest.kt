@@ -75,34 +75,48 @@ class TypingIndicatorModelTest {
     // `LitterUI.ChatViewModel.isAgentWorking`.
 
     @Test fun agentWorkingFalseWhenNoEvents() {
-        assertFalse(TypingIndicatorModel.agentWorking(lastRole = null, lastStatus = null))
+        assertFalse(TypingIndicatorModel.agentWorking(lastRole = null, lastStatus = null, lastContentEmpty = true))
     }
 
     @Test fun agentWorkingTrueWhenUserMessageIsLast() {
         // User just sent — no assistant turn started yet.
-        assertTrue(TypingIndicatorModel.agentWorking(lastRole = "user", lastStatus = ""))
+        assertTrue(TypingIndicatorModel.agentWorking(lastRole = "user", lastStatus = "", lastContentEmpty = false))
         // Case-insensitive on the role.
-        assertTrue(TypingIndicatorModel.agentWorking(lastRole = "USER", lastStatus = "done"))
+        assertTrue(TypingIndicatorModel.agentWorking(lastRole = "USER", lastStatus = "done", lastContentEmpty = false))
     }
 
-    @Test fun agentWorkingTrueForBusyAssistantStatuses() {
+    @Test fun agentWorkingTrueForBusyAssistantBeforeFirstToken() {
+        // Pre-first-token "thinking": busy status + NO content yet → busy.
         for (status in listOf("thinking", "working", "pending", "streaming", "running")) {
             assertTrue(
-                "status $status should read as busy",
-                TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = status),
+                "status $status with empty content should read as busy",
+                TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = status, lastContentEmpty = true),
             )
             // Status check is case-insensitive.
             assertTrue(
                 TypingIndicatorModel.agentWorking(
                     lastRole = "assistant",
                     lastStatus = status.uppercase(),
+                    lastContentEmpty = true,
                 ),
             )
         }
     }
 
+    @Test fun agentWorkingFalseWhenAssistantHasContent() {
+        // Device feedback v0.0.68: the broker leaves a finished turn's status
+        // stuck at "running"/"working". Once the assistant has produced content
+        // the turn is done — the stale status must not keep the indicator on.
+        for (status in listOf("thinking", "working", "pending", "streaming", "running")) {
+            assertFalse(
+                "status $status with content present should read as settled",
+                TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = status, lastContentEmpty = false),
+            )
+        }
+    }
+
     @Test fun agentWorkingFalseForSettledAssistant() {
-        assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = "done"))
-        assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = ""))
+        assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = "done", lastContentEmpty = false))
+        assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = "", lastContentEmpty = true))
     }
 }

@@ -443,7 +443,11 @@ fun ChatPage(
     // working/thinking/pending assistant status both count as busy.
     val agentWorking = run {
         val l = events.lastOrNull()
-        TypingIndicatorModel.agentWorking(lastRole = l?.role, lastStatus = l?.status)
+        TypingIndicatorModel.agentWorking(
+            lastRole = l?.role,
+            lastStatus = l?.status,
+            lastContentEmpty = l?.content.orEmpty().isBlank(),
+        )
     }
     val showTyping = !readOnly && (typing.isStreaming(typingTick) || agentWorking)
 
@@ -1393,7 +1397,11 @@ private fun ConversationBubble(
                     .fillMaxWidth(0.82f)
                     .wrapContentWidth(Alignment.End)
                     .clip(RoundedCornerShape(18.dp))
-                    .background(neon.accent2),
+                    // Device feedback v0.0.68: fill with `accent`, NOT `accent2`.
+                    // `accentText` is the guaranteed-contrast partner of `accent`
+                    // (in light mode `accent2` is a bright tint, e.g. Matrix lime,
+                    // and `accentText` is white → white-on-lime was unreadable).
+                    .background(neon.accent),
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),

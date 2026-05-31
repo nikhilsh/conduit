@@ -150,9 +150,12 @@ extension LitterUI {
         /// assistant status as busy.
         private var isAgentWorking: Bool {
             let last = events.last
+            let contentEmpty = (last?.content ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return LitterUI.ChatViewModel.isAgentWorking(
                 lastRole: last?.role,
                 lastStatus: last?.status,
+                lastContentEmpty: contentEmpty,
                 isStreaming: isStreaming
             )
         }
@@ -733,10 +736,19 @@ private struct LitterChatMessageRow: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
+                    // Device feedback v0.0.68: fill the user pill with the
+                    // primary `accent`, NOT `accent2`. `accentText` (the pill's
+                    // text colour) is the guaranteed-contrast partner of
+                    // `accent` everywhere else (send button, primary buttons),
+                    // but in LIGHT mode `accent2` is a bright tint (e.g. Matrix
+                    // lime #b6f23d) and `accentText` is white — white-on-lime
+                    // was unreadable. `accent` is the mode-aware brand colour
+                    // (bright in dark, darker in light) so the white/dark
+                    // accentText reads cleanly in both modes.
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(neon.accent2)
+                        .fill(neon.accent)
                 )
-                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent2) : nil)
+                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
             } else {
                 LitterBlockStack(
                     blocks: ConversationRenderer.blocks(for: event.content),

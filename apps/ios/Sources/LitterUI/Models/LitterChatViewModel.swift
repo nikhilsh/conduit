@@ -135,11 +135,23 @@ extension LitterUI {
         static func isAgentWorking(
             lastRole: String?,
             lastStatus: String?,
+            lastContentEmpty: Bool,
             isStreaming: Bool
         ) -> Bool {
             if isStreaming { return true }
             guard let lastRole else { return false }
             if lastRole.lowercased() == "user" { return true }
+            // The assistant turn is the trailing event. Only treat it as
+            // "working" when it hasn't produced any content yet — i.e. the
+            // pre-first-token "thinking" window (empty assistant item with a
+            // working status). Device feedback v0.0.68: the broker never
+            // transitions a turn's status to a terminal value on completion
+            // (the phase sticks at "running"/"working"), so once tokens stop
+            // `isStreaming` correctly goes false but the stale status string
+            // kept the typing indicator on a finished turn that was waiting on
+            // the user. Gating on empty content ignores that stale status the
+            // moment the agent has actually said something.
+            guard lastContentEmpty else { return false }
             return workingStatuses.contains((lastStatus ?? "").lowercased())
         }
 

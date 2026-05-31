@@ -101,48 +101,62 @@ struct LitterChatViewModelTests {
     // MARK: isAgentWorking (typing-indicator predicate)
 
     @Test func isAgentWorkingTrueWhileStreaming() {
-        // Streaming wins regardless of the trailing role/status.
+        // Streaming wins regardless of the trailing role/status/content.
         #expect(LitterUI.ChatViewModel.isAgentWorking(
-            lastRole: "assistant", lastStatus: "done", isStreaming: true
+            lastRole: "assistant", lastStatus: "done", lastContentEmpty: false, isStreaming: true
         ))
     }
 
     @Test func isAgentWorkingTrueWhenUserMessageIsLast() {
         // The user just sent — no assistant turn has started yet.
         #expect(LitterUI.ChatViewModel.isAgentWorking(
-            lastRole: "user", lastStatus: "", isStreaming: false
+            lastRole: "user", lastStatus: "", lastContentEmpty: false, isStreaming: false
         ))
         // Case-insensitive on the role.
         #expect(LitterUI.ChatViewModel.isAgentWorking(
-            lastRole: "USER", lastStatus: "", isStreaming: false
+            lastRole: "USER", lastStatus: "", lastContentEmpty: false, isStreaming: false
         ))
     }
 
-    @Test func isAgentWorkingTrueForBusyAssistantStatuses() {
+    @Test func isAgentWorkingTrueForBusyAssistantBeforeFirstToken() {
+        // Pre-first-token "thinking": assistant item exists, busy status, but
+        // NO content yet → show the indicator.
         for status in ["thinking", "working", "pending", "streaming", "running"] {
             #expect(LitterUI.ChatViewModel.isAgentWorking(
-                lastRole: "assistant", lastStatus: status, isStreaming: false
-            ), "status \(status) should read as busy")
+                lastRole: "assistant", lastStatus: status, lastContentEmpty: true, isStreaming: false
+            ), "status \(status) with empty content should read as busy")
             // Status check is case-insensitive.
             #expect(LitterUI.ChatViewModel.isAgentWorking(
-                lastRole: "assistant", lastStatus: status.uppercased(), isStreaming: false
+                lastRole: "assistant", lastStatus: status.uppercased(), lastContentEmpty: true, isStreaming: false
             ))
+        }
+    }
+
+    @Test func isAgentWorkingFalseWhenAssistantHasContent() {
+        // Device feedback v0.0.68: the broker leaves a finished turn's status
+        // stuck at a "busy" value ("running"/"working"). Once the assistant
+        // has actually produced content and streaming has stopped, the turn
+        // is DONE — the stale status must not keep the typing indicator on.
+        for status in ["thinking", "working", "pending", "streaming", "running"] {
+            #expect(!LitterUI.ChatViewModel.isAgentWorking(
+                lastRole: "assistant", lastStatus: status, lastContentEmpty: false, isStreaming: false
+            ), "status \(status) with content present should read as settled")
         }
     }
 
     @Test func isAgentWorkingFalseForSettledAssistant() {
         #expect(!LitterUI.ChatViewModel.isAgentWorking(
-            lastRole: "assistant", lastStatus: "done", isStreaming: false
+            lastRole: "assistant", lastStatus: "done", lastContentEmpty: false, isStreaming: false
         ))
         #expect(!LitterUI.ChatViewModel.isAgentWorking(
-            lastRole: "assistant", lastStatus: "", isStreaming: false
+            lastRole: "assistant", lastStatus: "", lastContentEmpty: true, isStreaming: false
         ))
     }
 
     @Test func isAgentWorkingFalseWhenNoEvents() {
         // Empty log → nil role/status → not busy.
         #expect(!LitterUI.ChatViewModel.isAgentWorking(
-            lastRole: nil, lastStatus: nil, isStreaming: false
+            lastRole: nil, lastStatus: nil, lastContentEmpty: true, isStreaming: false
         ))
     }
 }

@@ -79,14 +79,21 @@ data class TypingIndicatorModel(
          * a null trailing event (empty log) is not busy; the user's
          * message being the trailing event (no assistant turn started
          * yet) is busy; and a working/thinking/pending/streaming/running
-         * trailing status is busy. `lastRole`/`lastStatus` are null only
-         * when there is no trailing event.
+         * trailing status is busy ONLY while the assistant turn has no
+         * content yet (the pre-first-token window). `lastRole`/`lastStatus`
+         * are null only when there is no trailing event.
+         *
+         * Device feedback v0.0.68: the broker never transitions a finished
+         * turn's status to a terminal value — the phase sticks at "running"
+         * (which is in [WORKING_STATUSES]) for any live session. Gating the
+         * status clause on empty content stops a settled turn (the agent
+         * replied and is waiting on the user) from keeping the indicator on.
          */
-        fun agentWorking(lastRole: String?, lastStatus: String?): Boolean {
+        fun agentWorking(lastRole: String?, lastStatus: String?, lastContentEmpty: Boolean): Boolean {
             if (lastRole == null) return false
             return when {
                 lastRole.equals("user", ignoreCase = true) -> true
-                lastStatus.orEmpty().lowercase() in WORKING_STATUSES -> true
+                lastContentEmpty && lastStatus.orEmpty().lowercase() in WORKING_STATUSES -> true
                 else -> false
             }
         }
