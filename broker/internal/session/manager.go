@@ -91,6 +91,20 @@ type Session struct {
 	contextUsedTokens   uint64
 	contextWindowTokens uint64
 	hasUsage            bool
+	// Per-session "outcome" stats (OutcomeChips) computed from the workspace
+	// git repo + `gh`. Guarded by mu; surfaced via Outcome() into the status
+	// frame, refreshed by the watchdog loop. See outcome.go. `startCommit` is
+	// the git HEAD captured at session create so diffs measure only this
+	// session's work.
+	startCommit         string
+	outcomeHasGit       bool
+	outcomeLinesAdded   int
+	outcomeLinesRemoved int
+	outcomeCommits      int
+	outcomePRNumber     int
+	outcomePRState      string
+	outcomeGitAt        time.Time
+	outcomePRAt         time.Time
 	handoffHTML         string
 	checkpointMu        sync.Mutex
 	lastMemoryModTime   time.Time
@@ -264,6 +278,10 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	}
 	s.workspaceDir = s.commandDir(adapter)
 	cmd.Dir = s.workspaceDir
+	// Capture the workspace git HEAD now so OutcomeChips diffs measure only
+	// what this session changes (see outcome.go). Cheap; no-op when the cwd
+	// isn't a git repo.
+	s.recordStartCommit()
 	// ALWAYS isolate $HOME per session. Multiple concurrent claude/codex
 	// agents sharing the broker's real $HOME race on the OAuth refresh
 	// token rotation in `.claude/.credentials.json` (or `.codex/auth.json`)

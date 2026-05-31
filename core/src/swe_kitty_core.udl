@@ -34,6 +34,11 @@ dictionary SessionStatus {
     f64? total_cost_usd = null;
     u64? context_used_tokens = null;
     u64? context_window_tokens = null;
+    u32? lines_added = null;
+    u32? lines_removed = null;
+    u32? commits = null;
+    u32? pr_number = null;
+    string? pr_state = null;
 };
 
 dictionary ProjectSession {
@@ -53,6 +58,11 @@ dictionary ProjectSession {
     f64? total_cost_usd = null;
     u64? context_used_tokens = null;
     u64? context_window_tokens = null;
+    u32? lines_added = null;
+    u32? lines_removed = null;
+    u32? commits = null;
+    u32? pr_number = null;
+    string? pr_state = null;
 };
 
 dictionary ChatEvent {

@@ -8,7 +8,7 @@ use crate::conversation::item_from_chat_event;
 /// The transport emits transient `status` / `view_event` frames; mobile shells
 /// can fold them into this session summary and the richer view state below.
 // Not `Eq`: total_cost_usd is an f64 (cost has no exact integer form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ProjectSession {
     pub id: String,
     pub name: String,
@@ -52,6 +52,21 @@ pub struct ProjectSession {
     pub context_used_tokens: Option<u64>,
     #[serde(default)]
     pub context_window_tokens: Option<u64>,
+    /// Per-session "outcome" stats from the workspace git repo (+ `gh`):
+    /// cumulative lines added/removed and commit count since session
+    /// start, plus the associated PR (number + state). Feed the design's
+    /// OutcomeChips on the session cards. All `None` when the workspace
+    /// isn't a git repo / has no PR.
+    #[serde(default)]
+    pub lines_added: Option<u32>,
+    #[serde(default)]
+    pub lines_removed: Option<u32>,
+    #[serde(default)]
+    pub commits: Option<u32>,
+    #[serde(default)]
+    pub pr_number: Option<u32>,
+    #[serde(default)]
+    pub pr_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -161,6 +176,24 @@ impl ProjectSessionState {
         if status.context_window_tokens.is_some() {
             self.session.context_window_tokens = status.context_window_tokens;
         }
+        // Outcome stats — last frame wins (the broker recomputes them each
+        // emit, so the latest is authoritative; a PR's state can flip
+        // open→merged over the session's life).
+        if status.lines_added.is_some() {
+            self.session.lines_added = status.lines_added;
+        }
+        if status.lines_removed.is_some() {
+            self.session.lines_removed = status.lines_removed;
+        }
+        if status.commits.is_some() {
+            self.session.commits = status.commits;
+        }
+        if status.pr_number.is_some() {
+            self.session.pr_number = status.pr_number;
+        }
+        if status.pr_state.is_some() {
+            self.session.pr_state = status.pr_state.clone();
+        }
         self.terminal.rows = status.rows;
         self.terminal.cols = status.cols;
         self.status = Some(status);
@@ -220,6 +253,7 @@ mod tests {
             total_cost_usd: None,
             context_used_tokens: None,
             context_window_tokens: None,
+            ..Default::default()
         };
         let mut state = ProjectSessionState::new(session);
         state.push_chat_event(ChatEvent {

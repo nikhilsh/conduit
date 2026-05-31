@@ -143,6 +143,19 @@ extension LitterUI {
                             .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    // OutcomeChips: read the live session's broker-computed
+                    // git/PR stats by id (the row view-model doesn't carry
+                    // them). Renders nothing when there's no outcome data.
+                    if case .session(let id) = row.kind,
+                       let session = store.sessions.first(where: { $0.id == id }) {
+                        LitterUI.OutcomeChips(
+                            linesAdded: session.linesAdded.map(Int.init),
+                            linesRemoved: session.linesRemoved.map(Int.init),
+                            commits: session.commits.map(Int.init),
+                            prNumber: session.prNumber.map(Int.init),
+                            prState: session.prState
+                        )
+                    }
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)

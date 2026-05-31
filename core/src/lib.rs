@@ -502,6 +502,8 @@ impl Inner {
                 total_cost_usd: None,
                 context_used_tokens: None,
                 context_window_tokens: None,
+                // Outcome stats arrive via the broker's status frame.
+                ..Default::default()
             }),
         );
 

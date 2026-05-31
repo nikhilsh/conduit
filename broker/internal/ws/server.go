@@ -447,6 +447,18 @@ func (c *client) sendStatus(assistant string, created bool) error {
 			payload["context_window_tokens"] = u.ContextWindowTokens
 		}
 	}
+	// Outcome stats (OutcomeChips). Diff + commit count only when the cwd is
+	// a git repo; PR fields only when an associated PR was found. Absent
+	// fields render as no chip on the client. See session/outcome.go.
+	if o := c.sess.Outcome(); o.HasGit {
+		payload["lines_added"] = o.LinesAdded
+		payload["lines_removed"] = o.LinesRemoved
+		payload["commits"] = o.Commits
+		if o.HasPR {
+			payload["pr_number"] = o.PRNumber
+			payload["pr_state"] = o.PRState
+		}
+	}
 	return c.writeJSON(payload)
 }
 

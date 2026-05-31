@@ -326,6 +326,10 @@ func seedClaudeConfig(ephemeralHome string) error {
 func (s *Session) startBackgroundLoops() {
 	go s.checkpointLoop()
 	go s.watchdogLoop()
+	// Seed the OutcomeChips stats once up front (async) so the first status
+	// frame on connect carries them, rather than waiting for the first
+	// watchdog tick. See outcome.go.
+	go s.refreshOutcomeStats()
 }
 
 func (s *Session) checkpointLoop() {
@@ -348,6 +352,10 @@ func (s *Session) watchdogLoop() {
 		select {
 		case <-ticker.C:
 			s.runWatchdogChecks()
+			// Recompute OutcomeChips stats on the same cadence (TTL-gated
+			// inside, so the gh PR lookup runs at a slower interval). See
+			// outcome.go.
+			s.refreshOutcomeStats()
 		case <-s.closed:
 			return
 		}

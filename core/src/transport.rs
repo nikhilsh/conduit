@@ -749,6 +749,16 @@ async fn handle_text(
         #[serde(default)]
         context_window_tokens: Option<u64>,
         #[serde(default)]
+        lines_added: Option<u32>,
+        #[serde(default)]
+        lines_removed: Option<u32>,
+        #[serde(default)]
+        commits: Option<u32>,
+        #[serde(default)]
+        pr_number: Option<u32>,
+        #[serde(default)]
+        pr_state: Option<String>,
+        #[serde(default)]
         code: Option<i32>,
         #[serde(default)]
         view: Option<String>,
@@ -792,6 +802,11 @@ async fn handle_text(
                 total_cost_usd: env.total_cost_usd,
                 context_used_tokens: env.context_used_tokens,
                 context_window_tokens: env.context_window_tokens,
+                lines_added: env.lines_added,
+                lines_removed: env.lines_removed,
+                commits: env.commits,
+                pr_number: env.pr_number,
+                pr_state: env.pr_state,
             };
             delegate.on_status(status);
             if let Some(p) = env.preview {

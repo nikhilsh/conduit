@@ -37,7 +37,7 @@ pub struct PreviewInfo {
 }
 
 // Not `Eq`: total_cost_usd is an f64 (cost has no exact integer form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SessionStatus {
     pub session: String,
     pub assistant: String,
@@ -90,6 +90,22 @@ pub struct SessionStatus {
     /// The model's max context window (e.g. 1_000_000), for the % gauge.
     #[serde(default)]
     pub context_window_tokens: Option<u64>,
+    /// Per-session "outcome" stats the broker computes from the workspace
+    /// git repo (and `gh`): cumulative lines added/removed and commit count
+    /// since session start, plus the associated PR. Feed the design's
+    /// OutcomeChips on the session cards. All `None` when the workspace
+    /// isn't a git repo (or has no PR / `gh` is unavailable).
+    #[serde(default)]
+    pub lines_added: Option<u32>,
+    #[serde(default)]
+    pub lines_removed: Option<u32>,
+    #[serde(default)]
+    pub commits: Option<u32>,
+    #[serde(default)]
+    pub pr_number: Option<u32>,
+    /// PR lifecycle state — "open" | "draft" | "merged" | "closed".
+    #[serde(default)]
+    pub pr_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -102,7 +102,7 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
                     firstUserMessage = firstUserMessageOf(conversationLog[id]),
                 )
                 val preview = latestActivityPreviewOf(conversationLog[id])
-                SessionCard(neon, title, session.assistant, isRunning, preview) { onOpenSession(id) }
+                SessionCard(neon, title, session.assistant, isRunning, preview, session) { onOpenSession(id) }
             }
             Spacer(Modifier.size(24.dp))
         }
@@ -160,6 +160,7 @@ private fun SessionCard(
     assistant: String,
     isRunning: Boolean,
     preview: String?,
+    session: uniffi.swe_kitty_core.ProjectSession,
     onClick: () -> Unit,
 ) {
     val tint = neonAgentColor(assistant, neon)
@@ -181,6 +182,14 @@ private fun SessionCard(
         if (!preview.isNullOrBlank()) {
             Text(preview, fontFamily = neon.sans, fontSize = 12.5.sp, color = neon.textDim, maxLines = 2)
         }
+        NeonOutcomeChips(
+            neon = neon,
+            linesAdded = session.linesAdded?.toInt(),
+            linesRemoved = session.linesRemoved?.toInt(),
+            commits = session.commits?.toInt(),
+            prNumber = session.prNumber?.toInt(),
+            prState = session.prState,
+        )
     }
 }
 

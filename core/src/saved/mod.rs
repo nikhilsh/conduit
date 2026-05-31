@@ -285,6 +285,7 @@ mod tests {
             total_cost_usd: None,
             context_used_tokens: None,
             context_window_tokens: None,
+            ..Default::default()
         };
         ProjectSessionState::new(session)
     }

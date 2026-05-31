@@ -165,6 +165,9 @@ impl SessionStoreCore {
                 total_cost_usd: status.total_cost_usd,
                 context_used_tokens: status.context_used_tokens,
                 context_window_tokens: status.context_window_tokens,
+                // Outcome stats are folded in by apply_status() immediately
+                // below (same frame); seed them as None here.
+                ..Default::default()
             })
         });
         state.apply_status(status);
@@ -344,6 +347,7 @@ mod tests {
             total_cost_usd: None,
             context_used_tokens: None,
             context_window_tokens: None,
+            ..Default::default()
         }
     }
 
@@ -379,6 +383,7 @@ mod tests {
             total_cost_usd: None,
             context_used_tokens: None,
             context_window_tokens: None,
+            ..Default::default()
         }
     }
 
