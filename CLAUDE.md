@@ -15,7 +15,7 @@ Operating principles for Claude agents working in this repo.
 Android SDK on the machine agents run on. Only the Go **broker** (`broker/`) and
 Rust **core** (`core/`) are locally buildable/testable. iOS (`apps/ios/`) and
 Android (`apps/android/`) changes are verified **only by CI**
-(`.github/workflows/ci.yml`): iOS `xcodebuild test` of `SweKittyTests`, Android
+(`.github/workflows/ci.yml`): iOS `xcodebuild test` of `ConduitTests`, Android
 `./gradlew :app:testDebugUnitTest`, plus both apps build. **CI green means it
 COMPILES and unit-tests pass — NOT that the UI/runtime behaves.** Flag any
 UI / layout / keyboard / render fix as **"needs on-device verification"** and
@@ -32,12 +32,12 @@ device-test session.
 
 **Broker ops footguns:**
 
-- **Never `pkill -f 'swe-kitty-broker'`** — the pattern matches the shell
+- **Never `pkill -f 'conduit-broker'`** — the pattern matches the shell
   running it, so you kill your own process. Kill by **PID**.
 - Redeploy via atomic `mv`, **never `cp`** (`cp` over the running binary →
   `ETXTBSY`). Relaunch **from `/root`** (cwd matters — a worktree cwd picks up a
   stale `./agents` dir).
-- Pin `SWE_KITTY_TOKEN` to the **current** token or every reup mints a fresh one
+- Pin `CONDUIT_TOKEN` to the **current** token or every reup mints a fresh one
   and forces both devices to re-pair. Full procedure: `docs/BROKER-REDEPLOY.md`.
 
 **Releases** are tag-triggered (`.github/workflows/release.yml`). **Always cut

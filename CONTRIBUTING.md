@@ -1,29 +1,29 @@
-# Contributing to swe-kitty
+# Contributing to conduit
 
-This repo is **built under its own broker**. Whether you are a human or an AI agent (Claude Code, Codex, Gemini, …), the workflow is the same: pick a task brief from `.swe-kitty/tasks/`, get a fresh git worktree, work in isolation, open a PR. Multiple agents can be in flight at once; the frozen contracts in `docs/` keep them from colliding.
+This repo is **built under its own broker**. Whether you are a human or an AI agent (Claude Code, Codex, Gemini, …), the workflow is the same: pick a task brief from `.conduit/tasks/`, get a fresh git worktree, work in isolation, open a PR. Multiple agents can be in flight at once; the frozen contracts in `docs/` keep them from colliding.
 
 ## TL;DR
 
 ```bash
 # one-time
-git clone git@github.com:nikhilsh/swe-kitty.git
-cd swe-kitty
-cp .swe-kitty/env.example .swe-kitty/env   # add your API keys
+git clone git@github.com:nikhilsh/conduit.git
+cd conduit
+cp .conduit/env.example .conduit/env   # add your API keys
 
 # every task
-make broker && ./broker/bin/swe-kitty-broker up --local   # opens http://localhost:1977
+make broker && ./broker/bin/conduit-broker up --local   # opens http://localhost:1977
 #  → spawn a session with your preferred agent
-#  → the broker creates a worktree at .swe-kitty/sessions/<uuid>/work
-#  → the agent reads .swe-kitty/HANDOFF.html (if any) first
+#  → the broker creates a worktree at .conduit/sessions/<uuid>/work
+#  → the agent reads .conduit/HANDOFF.html (if any) first
 #  → work in that worktree, commit, push the branch
 #  → open a PR on GitHub
 ```
 
-> **Historical note:** earlier versions of this guide pointed at `npm i -g swe-swe` for the dev workflow. swe-kitty has since absorbed everything it needed from that prior art and now ships its own broker binary (`swe-kitty-broker`). Don't install or run upstream swe-swe alongside — its `/swe-swe-auth/login` redirect breaks our bearer-only client. See `docs/SELF-HOST.md`.
+> **Historical note:** earlier versions of this guide pointed at `npm i -g swe-swe` for the dev workflow. conduit has since absorbed everything it needed from that prior art and now ships its own broker binary (`conduit-broker`). Don't install or run upstream swe-swe alongside — its `/swe-swe-auth/login` redirect breaks our bearer-only client. See `docs/SELF-HOST.md`.
 
 ## Picking a task
 
-`.swe-kitty/tasks/` contains numbered task briefs. Each is self-contained:
+`.conduit/tasks/` contains numbered task briefs. Each is self-contained:
 - **Scope** — what to build, what NOT to build
 - **Contract refs** — which `docs/*.md` files to treat as ground truth
 - **Files** — paths to touch (whitelist)
@@ -48,11 +48,11 @@ When a session is created, the broker writes `HANDOFF.html` into the worktree. *
 - Open questions
 - Last-known-good state
 
-When you stop work (manual exit, agent swap, or broker shutdown), the broker invokes hooks that update `.swe-kitty/memory/sessions/<uuid>.html`. You can edit it directly in your worktree if you need to leave a specific note for the next agent — the broker merges your edits on the next checkpoint.
+When you stop work (manual exit, agent swap, or broker shutdown), the broker invokes hooks that update `.conduit/memory/sessions/<uuid>.html`. You can edit it directly in your worktree if you need to leave a specific note for the next agent — the broker merges your edits on the next checkpoint.
 
-Project-wide knowledge (architecture decisions, "do not do X") lives in `.swe-kitty/memory/index.html` and is committed to git. Promote useful per-session findings up to it via:
+Project-wide knowledge (architecture decisions, "do not do X") lives in `.conduit/memory/index.html` and is committed to git. Promote useful per-session findings up to it via:
 ```bash
-swe-kitty memory promote --session <uuid> --decision <id>
+conduit memory promote --session <uuid> --decision <id>
 ```
 
 ## Branch + commit conventions
@@ -80,4 +80,4 @@ Tags `v*` (and `workflow_dispatch -f release_tag=…` from `release.yml`) trigge
 
 - **No comments** unless something is non-obvious. Identifiers and types should explain themselves.
 - **No future-proofing.** Build for the current contract; the next contract change comes with its own PR.
-- **Standalone product.** swe-kitty has its own wire shape, its own auth, its own apps, and its own release pipeline. Don't reach for upstream `swe-swe` semantics (cookie auth, browser UI, etc.) — they were prior art, not a contract. Don't reinvent terminals though: `SwiftTerm` on iOS, `termux-terminal-view` on Android.
+- **Standalone product.** conduit has its own wire shape, its own auth, its own apps, and its own release pipeline. Don't reach for upstream `swe-swe` semantics (cookie auth, browser UI, etc.) — they were prior art, not a contract. Don't reinvent terminals though: `SwiftTerm` on iOS, `termux-terminal-view` on Android.

@@ -1,6 +1,6 @@
-# apps/ios — SweKitty iOS app
+# apps/ios — Conduit iOS app
 
-Native SwiftUI shell for the swe-kitty harness. Implements the v0.1 surface
+Native SwiftUI shell for the conduit harness. Implements the v0.1 surface
 from `docs/PLAN.md` Part B4 / Part D step 6: project switcher + per-project
 multi-view (Terminal wired; Chat / Browser stubbed for task 007).
 
@@ -8,11 +8,11 @@ multi-view (Terminal wired; Chat / Browser stubbed for task 007).
 
 ```
 apps/ios/
-├── project.yml                 xcodegen spec — generates SweKitty.xcodeproj
-├── build-rust.sh               builds SweKittyCore.xcframework from ../../core/
+├── project.yml                 xcodegen spec — generates Conduit.xcodeproj
+├── build-rust.sh               builds ConduitCore.xcframework from ../../core/
 ├── Sources/
-│   ├── SweKittyApp.swift       @main
-│   ├── SessionStore.swift      @Observable wrapper around SweKittyClient
+│   ├── ConduitApp.swift       @main
+│   ├── SessionStore.swift      @Observable wrapper around ConduitClient
 │   ├── Info.plist
 │   └── Views/
 │       ├── RootView.swift
@@ -22,9 +22,9 @@ apps/ios/
 │       ├── TerminalTab.swift       SwiftTerm-backed
 │       ├── ChatTab.swift           stub
 │       └── BrowserTab.swift        stub
-└── SweKittyCore/               populated by build-rust.sh (gitignored)
-    ├── SweKittyCore.xcframework
-    └── Sources/SweKittyCore.swift
+└── ConduitCore/               populated by build-rust.sh (gitignored)
+    ├── ConduitCore.xcframework
+    └── Sources/ConduitCore.swift
 ```
 
 ## Build & run
@@ -34,7 +34,7 @@ Requires Xcode 16+, Rust with iOS targets, `xcodegen`.
 ```bash
 # from repo root
 make ios               # ./build-rust.sh + xcodegen generate
-open apps/ios/SweKitty.xcodeproj
+open apps/ios/Conduit.xcodeproj
 # Run on iPhone 16 simulator → Settings sheet → enter ws://<host>:1977 + bearer
 ```
 

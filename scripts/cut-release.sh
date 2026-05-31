@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# cut-release.sh — tag-provenance guard for swe-kitty releases.
+# cut-release.sh — tag-provenance guard for conduit releases.
 #
 # Why this exists:
 #   Releases are tag-triggered (.github/workflows/release.yml). The build runs

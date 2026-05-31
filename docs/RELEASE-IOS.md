@@ -44,12 +44,12 @@ From a Claude Code session with the MCP loaded:
 > 1. List existing certificates of type `DISTRIBUTION` — if a current one exists and we have the private key, reuse it. Otherwise:
 > 2. Generate a new private key + CSR locally, submit to ASC to create a new `DISTRIBUTION` cert.
 > 3. Bundle the private key + cert into a `.p12` file with a strong password.
-> 4. Save the `.p12` to `/root/.appstoreconnect/SweKittyDist.p12`.
+> 4. Save the `.p12` to `/root/.appstoreconnect/ConduitDist.p12`.
 > 5. Write the `.p12` password to `IOS_CERTIFICATE_PASSWORD` in `/root/.appstoreconnect/secrets.env`.
 
 Manual sanity check:
 ```bash
-openssl pkcs12 -in /root/.appstoreconnect/SweKittyDist.p12 -nokeys -passin pass:"$IOS_CERTIFICATE_PASSWORD" | openssl x509 -noout -subject -dates
+openssl pkcs12 -in /root/.appstoreconnect/ConduitDist.p12 -nokeys -passin pass:"$IOS_CERTIFICATE_PASSWORD" | openssl x509 -noout -subject -dates
 ```
 
 ---
@@ -76,9 +76,9 @@ Apple caps registered devices at **100/year per device class**. Track usage.
 ## Step 4 — Create or regenerate the ad-hoc provisioning profile (MCP)
 
 > Use `app-store-connect` MCP to:
-> 1. Look up the bundle ID `sh.nikhil.swekitty` (create if missing).
-> 2. List `IOS_APP_ADHOC` profiles named `SweKitty AdHoc` — if one exists, regenerate it so it includes every currently-registered device; otherwise create it with all current devices and the Distribution cert from Step 1.
-> 3. Download the profile (`.mobileprovision`) to `/root/.appstoreconnect/SweKitty_AdHoc.mobileprovision`.
+> 1. Look up the bundle ID `sh.nikhil.conduit` (create if missing).
+> 2. List `IOS_APP_ADHOC` profiles named `Conduit AdHoc` — if one exists, regenerate it so it includes every currently-registered device; otherwise create it with all current devices and the Distribution cert from Step 1.
+> 3. Download the profile (`.mobileprovision`) to `/root/.appstoreconnect/Conduit_AdHoc.mobileprovision`.
 
 Profile regeneration is the operation you'll repeat most often — every time
 Step 3 adds a new tester.
@@ -89,12 +89,12 @@ Step 3 adds a new tester.
 
 ```bash
 source /root/.appstoreconnect/secrets.env
-REPO=nikhilsh/swe-kitty
+REPO=nikhilsh/conduit
 
 gh secret set IOS_CERTIFICATE_P12_BASE64 -R $REPO \
-  < <(base64 -w0 /root/.appstoreconnect/SweKittyDist.p12)
+  < <(base64 -w0 /root/.appstoreconnect/ConduitDist.p12)
 gh secret set IOS_PROVISIONING_PROFILE_BASE64 -R $REPO \
-  < <(base64 -w0 /root/.appstoreconnect/SweKitty_AdHoc.mobileprovision)
+  < <(base64 -w0 /root/.appstoreconnect/Conduit_AdHoc.mobileprovision)
 gh secret set IOS_CERTIFICATE_PASSWORD       -R $REPO --body "$IOS_CERTIFICATE_PASSWORD"
 gh secret set IOS_KEYCHAIN_PASSWORD          -R $REPO --body "$IOS_KEYCHAIN_PASSWORD"
 gh secret set IOS_TEAM_ID                    -R $REPO --body "$IOS_TEAM_ID"
@@ -117,11 +117,11 @@ gh run watch -R $REPO   # follow the release-ios workflow
 
 Outputs:
 - A GitHub Release named `v0.0.1`
-- `SweKitty.ipa` attached as a release asset (ad-hoc signed, valid for the
+- `Conduit.ipa` attached as a release asset (ad-hoc signed, valid for the
   UDIDs in the profile until the profile expires — typically one year)
 
 > **Blocker:** the workflow expects `apps/ios/` to exist (`project.yml`,
-> `build-rust.sh`, `ExportOptions.plist`, `SweKitty` scheme). If absent, the
+> `build-rust.sh`, `ExportOptions.plist`, `Conduit` scheme). If absent, the
 > `xcodegen generate` step fails. Scaffold that before the first tag — see
 > `docs/archive/PLAN.md` §B for the iOS app skeleton.
 

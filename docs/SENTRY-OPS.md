@@ -1,6 +1,6 @@
 # Sentry Ops
 
-Operational playbook for pulling SweKitty Sentry issues/events from this server.
+Operational playbook for pulling Conduit Sentry issues/events from this server.
 
 ## Script
 
@@ -16,7 +16,7 @@ This script:
 
 Default scope:
 
-- org: `swe-kitty`
+- org: `conduit`
 - projects: `apple-ios,android`
 - query: `is:unresolved`
 
@@ -32,7 +32,7 @@ chmod +x scripts/sentry-check.sh
 Only auth token is required. Everything else has defaults.
 
 ```bash
-SENTRY_ORG=swe-kitty \
+SENTRY_ORG=conduit \
 SENTRY_PROJECTS=apple-ios,android \
 SENTRY_QUERY='is:unresolved level:error' \
 SENTRY_LIMIT=50 \

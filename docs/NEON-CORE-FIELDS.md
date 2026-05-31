@@ -17,15 +17,15 @@ rather than re-parsing in the shell."* This doc is that list.
     `meta: Option<String>` JSON field on `ChatEvent`) plus a broker producer, so
     it is the heaviest tier.
   - `ConversationItem` is defined in TWO places that must stay in sync:
-    `core/src/swe_kitty_core.udl` (`dictionary ConversationItem` — the UniFFI
+    `core/src/conduit_core.udl` (`dictionary ConversationItem` — the UniFFI
     source of truth) and the matching Rust struct in `conversation.rs`.
   - `item_from_chat_event(...)` builds each `ConversationItem`; helpers
     `classify_kind` / `classify_status` / `looks_like_handoff` /
     `looks_like_subagent` / `extract_command` / `summarize_diff` /
     `extract_pending_options` already parse from `content`.
   - Tests: `mod tests` in the same file.
-- Generated bindings (committed): `core/generated/swe_kitty_core.swift`,
-  `core/generated/sweKittyCore.kt`. Regenerate with the Makefile target
+- Generated bindings (committed): `core/generated/conduit_core.swift`,
+  `core/generated/conduitCore.kt`. Regenerate with the Makefile target
   (`make` / the uniffi-bindgen invocation at the top of the Makefile) after any
   struct change.
 - CI gate: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.

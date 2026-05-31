@@ -1,6 +1,6 @@
-# Installing SweKitty on iOS (sideload)
+# Installing Conduit on iOS (sideload)
 
-SweKitty is distributed as an **ad-hoc signed IPA** on each GitHub Release.
+Conduit is distributed as an **ad-hoc signed IPA** on each GitHub Release.
 No TestFlight, no App Store. You install it like any other sideloaded
 build.
 
@@ -19,10 +19,10 @@ project owner with your UDID. Get it from
 ## Get the IPA
 
 From the latest release at
-<https://github.com/nikhilsh/swe-kitty/releases>:
+<https://github.com/nikhilsh/conduit/releases>:
 
 ```
-SweKitty-vX.Y.Z.ipa
+Conduit-vX.Y.Z.ipa
 ```
 
 ## Install — AltStore (recommended)
@@ -53,16 +53,16 @@ handles refresh automatically while it's connected to AltServer.
 - Open *Settings → General → VPN & Device Management* and trust the
   signing identity. (Ad-hoc profiles are pre-trusted on devices whose
   UDID is in the profile; this step is for Apple-ID-signed re-signs.)
-- Launch SweKitty → the **Settings sheet** opens.
+- Launch Conduit → the **Settings sheet** opens.
 - Either type the broker endpoint + bearer token manually, or tap
   **Scan pairing QR** and point the camera at the QR printed when you
-  ran `swe-kitty-broker up`.
+  ran `conduit-broker up`.
 
 ## Updating
 
 Pull the new IPA from a fresh release and repeat the install step. State
 (endpoint + token in Keychain, scrollback in memory) is preserved across
-upgrades because the bundle ID `sh.nikhil.swekitty` is stable.
+upgrades because the bundle ID `sh.nikhil.conduit` is stable.
 
 ## Troubleshooting
 
@@ -71,6 +71,6 @@ upgrades because the bundle ID `sh.nikhil.swekitty` is stable.
 - **App opens then immediately closes** — usually a Keychain entitlement
   mismatch when you've switched between AltStore-signed and ad-hoc-signed
   builds. Delete the app and reinstall.
-- **Camera permission denied for QR** — *Settings → SweKitty → Camera*.
+- **Camera permission denied for QR** — *Settings → Conduit → Camera*.
 
 See also: `docs/RELEASE-IOS.md` for the maintainer-side release flow.

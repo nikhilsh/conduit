@@ -515,7 +515,7 @@ func buildProjectMetaSection(ts time.Time) string {
 	return fmt.Sprintf(`  <header data-section="meta">
     <dl>
       <dt>scope</dt><dd>project</dd>
-      <dt>repo</dt><dd><code>git@github.com:nikhilsh/swe-kitty.git</code></dd>
+      <dt>repo</dt><dd><code>git@github.com:nikhilsh/conduit.git</code></dd>
       <dt>memory-format</dt><dd>v1 (see <code>docs/MEMORY-FORMAT.md</code>)</dd>
       <dt>last-promoted</dt><dd><time datetime="%s">%s</time></dd>
     </dl>
@@ -871,7 +871,7 @@ const defaultProjectHTML = `<!doctype html>
   <header data-section="meta">
     <dl>
       <dt>scope</dt><dd>project</dd>
-      <dt>repo</dt><dd><code>git@github.com:nikhilsh/swe-kitty.git</code></dd>
+      <dt>repo</dt><dd><code>git@github.com:nikhilsh/conduit.git</code></dd>
       <dt>memory-format</dt><dd>v1 (see <code>docs/MEMORY-FORMAT.md</code>)</dd>
       <dt>last-promoted</dt><dd><time datetime="">never</time></dd>
     </dl>

@@ -1,6 +1,6 @@
-# apps/android — SweKitty Android app
+# apps/android — Conduit Android app
 
-Native Compose shell for the swe-kitty harness. Mirrors `apps/ios/`: drawer
+Native Compose shell for the conduit harness. Mirrors `apps/ios/`: drawer
 of projects + per-project multi-view (Terminal wired, Chat / Browser
 stubbed for task 007).
 
@@ -15,12 +15,12 @@ apps/android/
 ├── gradlew, gradlew.bat
 ├── build-rust.sh                   compiles core/ for the 4 Android ABIs
 └── app/
-    ├── build.gradle.kts            applicationId sh.nikhil.swekitty
+    ├── build.gradle.kts            applicationId sh.nikhil.conduit
     └── src/main/
         ├── AndroidManifest.xml
-        ├── kotlin/sh/nikhil/swekitty/
+        ├── kotlin/sh/nikhil/conduit/
         │   ├── MainActivity.kt
-        │   ├── SessionStore.kt     ViewModel + SweKittyDelegate
+        │   ├── SessionStore.kt     ViewModel + ConduitDelegate
         │   └── ui/{AppRoot,EmptyDetail,SettingsScreen,
         │            ProjectListScreen,ProjectScreen,
         │            TerminalPage,ChatPage,BrowserPage}.kt

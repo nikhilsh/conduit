@@ -20,7 +20,7 @@ found, plus a product question about whether the broker box needs Docker.
 | 4 | Ghostty renders blank | iOS | **by design** — Stage 4 is a skeleton: `snapshot()` returns empty cells, surface created at 0×0 (the promised re-`attach()` in `layoutSubviews` was never written), no Metal renderer (Stage 5), no display link | gate the toggle off until Stage 5; plan Stage 5 properly | CI compile only |
 
 ### #1 — claude crash-loop (FIX LANDED IN THIS PR)
-`broker/cmd/swe-kitty-broker/embedded-agents/claude.toml:4` ships
+`broker/cmd/conduit-broker/embedded-agents/claude.toml:4` ships
 `args = ["--dangerously-skip-permissions"]`. Claude Code hard-refuses that
 flag under root/sudo. The Docker image runs as non-root `app` uid 1000
 (`AGENT-ADAPTERS.md:37`) — *which is exactly what lets claude accept the
@@ -35,7 +35,7 @@ Live-verified on this box as root: with the env var, `claude
 
 ### #3a — chat→agent input (HIGH, next)
 Path exists: `LitterChatView` send → `SessionStore.sendChat` →
-`SweKittyClient.sendChat` → broker `handleText` "chat" → `c.sess.Write()`
+`ConduitClient.sendChat` → broker `handleText` "chat" → `c.sess.Write()`
 (`server.go:583`) → PTY. The write errors are swallowed (`_, _ =`). Two
 suspects: (a) for claude the agent was dead (=#1), so re-test first; (b) the
 bytes reach the codex TUI but aren't *submitted* (no trailing CR) or collide
@@ -67,7 +67,7 @@ its actual pixel size (re-`attach()` on `layoutSubviews`) + a render tick.
 
 ## Architecture question: does the broker box need Docker?
 
-**Short answer: no, not for swe-kitty's self-hosted single-operator model.**
+**Short answer: no, not for conduit's self-hosted single-operator model.**
 Docker was assumed for two reasons: (1) blast-radius containment for an
 agent running with `--dangerously-skip-permissions` (full autonomy), and
 (2) the non-root `app` uid that lets claude accept that flag. Bug #1 is the
@@ -83,7 +83,7 @@ broker support, not new isolation machinery.
 **Trade-off to decide (not blocking the bug fixes):**
 - *Bare-box (proposed):* minimal first-launch friction; the agent runs with
   the broker's privileges in the chosen dir. Acceptable for the "my box, my
-  agent, I trust it" posture swe-kitty targets — but it should **not run as
+  agent, I trust it" posture conduit targets — but it should **not run as
   root**. Recommend: broker drops to / runs as a non-root user, and the YOLO
   flag + `IS_SANDBOX=1` confine intent rather than enforce a sandbox.
 - *Docker (current docs):* stronger containment, but requires Docker
@@ -142,7 +142,7 @@ Observed:
 3. **codex interactive prompt not in Chat** — the "trust this directory?"
    prompt appeared only in Terminal.
 4. **codex reply garbled** — Chat bubble showed
-   `Higpt-5.5 default · /root/.swe-kitty/sessions/5d0…`: the scraper merged
+   `Higpt-5.5 default · /root/.conduit/sessions/5d0…`: the scraper merged
    the echoed input with codex's status/header line (TUI chrome leaking in).
 
 **Fix direction:** wire a real structured channel (MCP `chat_event` bridge

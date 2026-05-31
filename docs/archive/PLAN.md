@@ -1,4 +1,4 @@
-# Plan: `swe-kitty` — phone-first AI coding broker with per-project multi-view, built under its own dev harness
+# Plan: `conduit` — phone-first AI coding broker with per-project multi-view, built under its own dev harness
 
 > **Archived 2026-05-27 — shipped; see [`docs/ROADMAP.md`](../ROADMAP.md).** This
 > was the original master plan. v0.1–v0.4 all shipped and the forward-looking
@@ -10,7 +10,7 @@
 ## How To Read This Document
 
 - **Status Snapshot** below is the current reality and should drive execution.
-- **Part A onward** preserves the detailed target architecture and the original (2026-04) bootstrap plan, including framing that referenced upstream `swe-swe` as the harness for dev work. That dependency is gone — swe-kitty ships its own `swe-kitty-broker` binary now — but the historical text is preserved verbatim below so the design rationale isn't lost. The newer execution layer is [`PLAN-2026-05-19.md`](PLAN-2026-05-19.md).
+- **Part A onward** preserves the detailed target architecture and the original (2026-04) bootstrap plan, including framing that referenced upstream `swe-swe` as the harness for dev work. That dependency is gone — conduit ships its own `conduit-broker` binary now — but the historical text is preserved verbatim below so the design rationale isn't lost. The newer execution layer is [`PLAN-2026-05-19.md`](PLAN-2026-05-19.md).
 - If there is any mismatch, treat the Status Snapshot + newer focused docs (`RELEASE.md`, `PLAN-2026-05-19.md`, `PLAN-LITTER-VISUAL-PARITY.md`, `PLAN-AGENT-OAUTH.md`, `PLAN-TERMINAL-REWRITE.md`) as the source of truth for immediate work. (`NEXT-RELEASE.md` + `MOBILE-FEATURE-BACKLOG.md` archived 2026-05-23 — see `docs/archive/`.)
 
 ## Status Snapshot (May 23, 2026 — late)
@@ -19,7 +19,7 @@
 - Repository, CI, and tagged release automation are active. Latest tag `v0.0.25` (2026-05-23) builds IPA + APK + cross-compiled broker binaries via `release.yml`.
 - Broker one-line bootstrap is active:
   - `install.sh` download/install
-  - `swe-kitty-broker up --local` prints bearer token + pairing QR + `swekitty://` deep link
+  - `conduit-broker up --local` prints bearer token + pairing QR + `conduit://` deep link
   - `harness/` → `broker/` rename complete (PR #19, #34)
   - `/healthz` endpoint + sidecar liveness probe (PR #26)
 - Broker per-session HOME isolation (PR #126): each spawn copies the broker host's `.claude/` / `.codex/` into an ephemeral `$HOME` so concurrent OAuth refreshes can't race. The empty-AUTH-env trap in `commandEnv` is stripped (PR #135) so a placeholder `ANTHROPIC_API_KEY=` line in `EnvironmentFile=` no longer clobbers OAuth fallback.
@@ -46,7 +46,7 @@
   - polish (#145) flat inline rows for PendingInput/Handoff, 20/12 discovery padding, inline agent-picker header
 - **iOS Ghostty terminal Stage 4 (PR #129, #131, #133, #134, #137)**: real libghostty App/Surface integration via Lakr233's `libghostty-spm` xcframework, CoreText/Metal renderer with full link path (CoreGraphics + CoreText + Metal + IOSurface + QuartzCore + c++). `Terminal.isAvailable` now returns true at runtime; experimental terminal flag exercises libghostty's parser.
 - **Agent OAuth v2 broker + skeletons (PRs #114, #126, #144)**: broker `internal/oauth/login_session.go` spawns the agent CLI's own `login` subcommand, parses the stdout authorize URL + loopback port, and ferries the redirect over WS. WS handlers for `start_agent_login` / `agent_login_callback` / `cancel_agent_login` are live. iOS `AgentLoginCoordinator` + `AgentLoginLoopbackServer` + `LitterAgentLoginSheet` consume the inbound view-events. Android pure-data state machine + loopback parser landed in #144 (no UI wire-up yet).
-- Test discipline (2026-05-23): iOS `SweKittyTests` target with 20+ tests (PR #20); Android JUnit harness + TerminalBridge tests (PR #21); core E2E WS tests (PR #25); snapshot testing wired on both platforms (PR #30) with CI artifacts on failure (PR #31); `SessionStoreForgetServerTest` pins Android persistence contract (PR #136); `TurnActivityModel` mirrors iOS pure-data state machine on Android (PR #146).
+- Test discipline (2026-05-23): iOS `ConduitTests` target with 20+ tests (PR #20); Android JUnit harness + TerminalBridge tests (PR #21); core E2E WS tests (PR #25); snapshot testing wired on both platforms (PR #30) with CI artifacts on failure (PR #31); `SessionStoreForgetServerTest` pins Android persistence contract (PR #136); `TurnActivityModel` mirrors iOS pure-data state machine on Android (PR #146).
 
 ### In Progress
 - **Agent OAuth v2 end-to-end** (`docs/PLAN-AGENT-OAUTH.md`):
@@ -64,12 +64,12 @@
 
 ## Original Planning Context (Preserved)
 
-Originally this plan started from an empty working tree (`/root/developer/projects/kitty-swe`) and described full bootstrap to `git@github.com:nikhilsh/swe-kitty.git`. That historical context is intentionally preserved below so future planned sections are not lost.
+Originally this plan started from an empty working tree (`/root/developer/projects/kitty-swe`) and described full bootstrap to `git@github.com:nikhilsh/conduit.git`. That historical context is intentionally preserved below so future planned sections are not lost.
 
 Two threads run through this plan, and they must not be conflated:
 
 1. **What we are building** — a native iOS + Android app that drives AI coding agents on a broker server. Per-project the app shows multiple **views** (terminal / agent-chat / browser-preview), and the user switches between views inside one project. A separate top-level nav switches between projects.
-2. **How we are building it** — local development itself runs under a swe-swe-style harness. Multiple agents (Claude Code, Codex) work on this repo in parallel via per-agent git worktrees, each in its own PTY/container, all pushing to the same GitHub remote. The repo ships a `.swe-kitty/` config so any team member (or AI agent) can `swe-swe up` and instantly get the same harnessed dev environment.
+2. **How we are building it** — local development itself runs under a swe-swe-style harness. Multiple agents (Claude Code, Codex) work on this repo in parallel via per-agent git worktrees, each in its own PTY/container, all pushing to the same GitHub remote. The repo ships a `.conduit/` config so any team member (or AI agent) can `swe-swe up` and instantly get the same harnessed dev environment.
 
 Reference projects:
 - **[swe-swe](https://github.com/choonkeat/swe-swe)** — Go harness with PTY+worktree sessions, WebSocket on `:1977`, per-project tabbed multi-view (terminal / agent / browser), agent-interchangeability via CLI adapters
@@ -83,7 +83,7 @@ v1 scope decisions (from clarifying Q&A):
 
 ---
 
-## Part A — Development harness (build *swe-kitty* under harness)
+## Part A — Development harness (build *conduit* under harness)
 
 This is set up **before any product code is written**. The goal: `git clone … && swe-swe up` produces an environment where Claude Code and Codex can both be spawned on per-agent git worktrees, working on this repo in parallel.
 
@@ -97,12 +97,12 @@ cd ~/developer/projects/kitty-swe
 swe-swe up                # opens http://localhost:1977
 ```
 
-### A2. Repo-shipped harness config: `.swe-kitty/`
+### A2. Repo-shipped harness config: `.conduit/`
 
 ```
-.swe-kitty/
+.conduit/
 ├── config.toml           # which agents, default ports, default branch base
-├── env.example           # ANTHROPIC_API_KEY=, OPENAI_API_KEY= (env to .swe-kitty/env, gitignored)
+├── env.example           # ANTHROPIC_API_KEY=, OPENAI_API_KEY= (env to .conduit/env, gitignored)
 ├── agents/
 │   ├── claude.toml       # agent adapter (see Part B section 1)
 │   └── codex.toml
@@ -127,20 +127,20 @@ naming = "agent/{assistant}-{task}"
 
 [[task]]
 id = "001-harness-server"
-brief = ".swe-kitty/tasks/001-harness-server.md"
+brief = ".conduit/tasks/001-harness-server.md"
 suggested_agent = "codex"   # not enforcing; user can override
 
 [[task]]
 id = "002-rust-core"
-brief = ".swe-kitty/tasks/002-rust-core.md"
+brief = ".conduit/tasks/002-rust-core.md"
 suggested_agent = "claude"
 ```
 
 ### A3. Parallel-agent workflow on this repo
 
-- Each task brief in `.swe-kitty/tasks/` is self-contained: scope, files to touch, interface contract (e.g., WebSocket protocol is fixed across tasks 001 and 002 so they can land independently), how to test.
+- Each task brief in `.conduit/tasks/` is self-contained: scope, files to touch, interface contract (e.g., WebSocket protocol is fixed across tasks 001 and 002 so they can land independently), how to test.
 - An agent is spawned with `swe-swe up`, picks a task, gets a fresh worktree on branch `agent/<assistant>-<task-id>`.
-- Agents commit + push their branch to `nikhilsh/swe-kitty`; integration happens via PRs into `main`.
+- Agents commit + push their branch to `nikhilsh/conduit`; integration happens via PRs into `main`.
 - `.github/CODEOWNERS` is empty so any agent can merge after CI passes. Required CI checks (Part E) gate the merge.
 - **Coordination**: the WebSocket protocol spec (`docs/WEBSOCKET-PROTOCOL.md`) is written in task 000 *first* and held stable so 001 (server) and 002 (core) parallelize cleanly. Same for the agent-adapter TOML schema across 001 and the Dockerfiles.
 
@@ -150,31 +150,31 @@ Documents the harness workflow so a human contributor or a third agent can drop 
 
 ---
 
-## Part B — The product: `swe-kitty` mobile app + broker server
+## Part B — The product: `conduit` mobile app + broker server
 
 ### Repo layout
 
 ```
-swe-kitty/                         # local: kitty-swe, remote: nikhilsh/swe-kitty
-├── .swe-kitty/                    # dev harness config (Part A)
+conduit/                         # local: kitty-swe, remote: nikhilsh/conduit
+├── .conduit/                    # dev harness config (Part A)
 ├── broker/                       # Go server (swe-swe-derived, slimmed)
-│   ├── cmd/swe-kitty-broker/
+│   ├── cmd/conduit-broker/
 │   ├── internal/session/          # PTY + worktree manager
 │   ├── internal/ws/               # WebSocket protocol
 │   ├── internal/agents/           # adapter registry
 │   ├── internal/auth/             # bearer + mDNS
 │   └── docker/                    # per-agent Dockerfiles
-├── core/                          # Rust shared core (swe-kitty-core)
+├── core/                          # Rust shared core (conduit-core)
 │   ├── src/lib.rs
 │   ├── src/transport.rs
 │   ├── src/session.rs             # per-project session model with multiple views
 │   ├── src/views.rs               # terminal/chat/browser view abstractions
 │   ├── src/discovery.rs           # mDNS + remote endpoint config
-│   └── swe-kitty-core.udl         # UniFFI interface
+│   └── conduit-core.udl         # UniFFI interface
 ├── apps/
 │   ├── ios/                       # SwiftUI
 │   └── android/                   # Kotlin Compose
-├── agents/                        # production agent adapters (separate from .swe-kitty/agents/)
+├── agents/                        # production agent adapters (separate from .conduit/agents/)
 │   ├── claude.toml
 │   └── codex.toml
 ├── .github/workflows/
@@ -209,7 +209,7 @@ swe-kitty/                         # local: kitty-swe, remote: nikhilsh/swe-kitt
                                │  UniFFI bindings
                                ▼
               ┌────────────────────────────────────┐
-              │  swe-kitty-core (Rust)             │
+              │  conduit-core (Rust)             │
               │  - WebSocket transport             │
               │  - ProjectSession { id, agent,     │
               │      views: { terminal: PtyState,  │
@@ -222,7 +222,7 @@ swe-kitty/                         # local: kitty-swe, remote: nikhilsh/swe-kitt
                                │  WebSocket (binary + JSON)
                                ▼
               ┌────────────────────────────────────┐
-              │  swe-kitty-broker (Go)            │
+              │  conduit-broker (Go)            │
               │  - HTTP+WS on :1977                │
               │  - SessionManager (PTY+worktree)   │
               │  - Docker-spawned agent containers │
@@ -250,12 +250,12 @@ Slimmed fork of swe-swe's server. Keep:
 Add:
 - `switch_agent` JSON control message → server kills container, re-spawns with new adapter, **keeps worktree + scrollback** (Claude can hand off to Codex on the same branch)
 - `view_event` JSON messages for the **chat view**: separate stream so the mobile chat tab doesn't have to scrape PTY output (see B5)
-- mDNS advertise (`_swe-kitty._tcp.local`) when `--local` flag set; bearer token printed as QR on `swe-kitty-broker up`
+- mDNS advertise (`_conduit._tcp.local`) when `--local` flag set; bearer token printed as QR on `conduit-broker up`
 - `--public-url https://…` flag for remote mode; runs TLS-terminated behind Caddy
 
 **Session manager** (`internal/session/`):
-- Each session = UUID + worktree (`git worktree add .swe-kitty/sessions/<uuid>/work <branch>`) + PTY (`creack/pty`) + Docker container
-- Bind mount worktree to `/workspace`, inject env vars (`SESSION_UUID`, `PORT`, `AGENT_CHAT_PORT`, plus `.swe-kitty/env` contents)
+- Each session = UUID + worktree (`git worktree add .conduit/sessions/<uuid>/work <branch>`) + PTY (`creack/pty`) + Docker container
+- Bind mount worktree to `/workspace`, inject env vars (`SESSION_UUID`, `PORT`, `AGENT_CHAT_PORT`, plus `.conduit/env` contents)
 - Per-session preview port allocated from `[3000, 3019]`, reverse-proxied at `/preview/<uuid>/*`
 
 ### B2. Agent adapter contract (`agents/`)
@@ -263,7 +263,7 @@ Add:
 ```toml
 # agents/claude.toml
 name = "claude"
-image = "swekitty/claude:latest"
+image = "conduit/claude:latest"
 command = ["claude"]
 args = ["--dangerously-skip-permissions"]
 env_passthrough = ["ANTHROPIC_API_KEY"]
@@ -275,7 +275,7 @@ chat_event_port_env = "AGENT_CHAT_PORT"
 ```toml
 # agents/codex.toml
 name = "codex"
-image = "swekitty/codex:latest"
+image = "conduit/codex:latest"
 command = ["codex"]
 args = ["--full-auto"]
 env_passthrough = ["OPENAI_API_KEY"]
@@ -285,9 +285,9 @@ chat_event_port_env = "AGENT_CHAT_PORT"
 
 Adding Gemini/Aider/Goose later = one TOML + one Dockerfile, no code changes.
 
-### B3. Rust core (`core/`, `swe-kitty-core`)
+### B3. Rust core (`core/`, `conduit-core`)
 
-UniFFI surface (`swe-kitty-core.udl`):
+UniFFI surface (`conduit-core.udl`):
 ```
 dictionary ProjectSession {
   string id;
@@ -297,7 +297,7 @@ dictionary ProjectSession {
   PreviewInfo? preview;      // {url, port}
 };
 
-interface SweKittyClient {
+interface ConduitClient {
   constructor(string endpoint, string bearer_token);
   void connect();
   void disconnect();
@@ -309,7 +309,7 @@ interface SweKittyClient {
   [Throws=Error] sequence<ProjectSession> list_sessions();
 };
 
-callback interface SweKittyDelegate {
+callback interface ConduitDelegate {
   void on_pty_data(string session_id, bytes data);          // terminal view
   void on_chat_event(string session_id, ChatEvent ev);      // chat view
   void on_preview_ready(string session_id, PreviewInfo p);  // browser view
@@ -346,8 +346,8 @@ Key choices:
 - **SwiftTerm** (`migueldeicaza/SwiftTerm`) for terminal rendering — do not write an emulator
 - View picker uses `.segmented` Picker style on iPhone, can become a sidebar segment on iPad
 - Agent switch is a `Menu` on the agent badge → `switch_agent` RPC
-- Auth: QR scan → parses `swekitty://<endpoint>?token=<bearer>` → Keychain
-- State: `@Observable` `SessionStore` wraps `SweKittyClient`
+- Auth: QR scan → parses `conduit://<endpoint>?token=<bearer>` → Keychain
+- State: `@Observable` `SessionStore` wraps `ConduitClient`
 
 ### B5. Android app (`apps/android/`, Compose)
 
@@ -371,7 +371,7 @@ MainActivity
 ### B6. Build & bindings
 
 - `core/` produces:
-  - `apps/ios/build-rust.sh` → `SweKittyCore.xcframework` (targets `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`)
+  - `apps/ios/build-rust.sh` → `ConduitCore.xcframework` (targets `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`)
   - `apps/android/build-rust.sh` → JNI libs (`aarch64`, `armv7`, `x86_64`, `i686`)
 - `make bindings` regenerates Swift + Kotlin glue from the `.udl` (litter pattern)
 
@@ -385,14 +385,14 @@ MainActivity
 cd /root/developer/projects/kitty-swe
 git init -b main
 # (after Part A scaffolding is committed)
-git remote add origin git@github.com:nikhilsh/swe-kitty.git
+git remote add origin git@github.com:nikhilsh/conduit.git
 git push -u origin main
 ```
 
 ### C2. `.github/workflows/ci.yml` — every PR
 - `broker`: `go vet`, `go test ./...`, `golangci-lint`
 - `core`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`
-- `ios-build`: macOS runner, `make bindings`, build-rust, `xcodebuild -scheme SweKitty -destination 'platform=iOS Simulator,name=iPhone 16' build` (no signing)
+- `ios-build`: macOS runner, `make bindings`, build-rust, `xcodebuild -scheme Conduit -destination 'platform=iOS Simulator,name=iPhone 16' build` (no signing)
 - `android-build`: `./gradlew assembleDebug`
 
 ### C3. `.github/workflows/release-ios.yml` — on tag `v*`
@@ -407,9 +407,9 @@ Steps:
 1. `macos-14` runner, Xcode 16, Rust toolchain w/ iOS targets
 2. Decode P12 + profile, create temp keychain, import cert, install profile
 3. `apps/ios/build-rust.sh` → xcframework
-4. `xcodebuild archive -scheme SweKitty -archivePath build/SweKitty.xcarchive CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=$IOS_TEAM_ID`
+4. `xcodebuild archive -scheme Conduit -archivePath build/Conduit.xcarchive CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=$IOS_TEAM_ID`
 5. `xcodebuild -exportArchive -exportPath build/ipa -exportOptionsPlist ExportOptions.plist` (method=ad-hoc)
-6. `gh release upload $TAG build/ipa/SweKitty.ipa`
+6. `gh release upload $TAG build/ipa/Conduit.ipa`
 
 Install path documented in `docs/INSTALL-IOS.md`: AltStore / Sideloadly / Apple Configurator. UDIDs must be in the provisioning profile (≤100/year).
 
@@ -440,8 +440,8 @@ Cross-compile the Go server for `linux/{amd64,arm64}` and `darwin/{amd64,arm64}`
 
 | Scope | Path | Lifetime | Who writes |
 |---|---|---|---|
-| **Project** | `.swe-kitty/memory/index.html` | Committed to git; permanent | Any agent, any session |
-| **Session** | `.swe-kitty/memory/sessions/<uuid>.html` | Tied to a session UUID; gitignored | The agent currently driving the session |
+| **Project** | `.conduit/memory/index.html` | Committed to git; permanent | Any agent, any session |
+| **Session** | `.conduit/memory/sessions/<uuid>.html` | Tied to a session UUID; gitignored | The agent currently driving the session |
 
 Project memory captures cross-session truth (architecture decisions, conventions, "do not do X"). Session memory captures live state (current task, what I just tried, what's next, open questions, last-known-good state).
 
@@ -449,17 +449,17 @@ Project memory captures cross-session truth (architecture decisions, conventions
 
 ```html
 <!doctype html>
-<html lang="en" data-swe-kitty-memory="v1">
+<html lang="en" data-conduit-memory="v1">
 <head>
   <meta charset="utf-8">
-  <title>swe-kitty memory · session <uuid></title>
+  <title>conduit memory · session <uuid></title>
   <link rel="stylesheet" href="../memory.css">
 </head>
 <body>
   <header data-section="meta">
     <dl>
       <dt>session</dt><dd><code>...</code></dd>
-      <dt>worktree</dt><dd><code>.swe-kitty/sessions/.../work</code></dd>
+      <dt>worktree</dt><dd><code>.conduit/sessions/.../work</code></dd>
       <dt>branch</dt><dd><code>agent/claude-002-rust-core</code></dd>
       <dt>current-agent</dt><dd>claude</dd>
       <dt>last-checkpoint</dt><dd><time datetime="...">...</time></dd>
@@ -517,26 +517,26 @@ Each agent adapter TOML gets two hook commands:
 
 ```toml
 [hooks]
-on_start = "swe-kitty memory render --session $SESSION_UUID > /workspace/.swe-kitty/HANDOFF.html"
-on_exit  = "swe-kitty memory checkpoint --session $SESSION_UUID --reason 'exit'"
-on_swap  = "swe-kitty memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"
+on_start = "conduit memory render --session $SESSION_UUID > /workspace/.conduit/HANDOFF.html"
+on_exit  = "conduit memory checkpoint --session $SESSION_UUID --reason 'exit'"
+on_swap  = "conduit memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"
 ```
 
 - `on_start`: broker writes the current session memory into the worktree as `HANDOFF.html`; the agent's startup prompt (handled inside the Docker image's entrypoint) instructs the agent to read it before doing anything else
-- `on_exit` / `on_swap`: broker invokes a small CLI (part of `swe-kitty-broker`) that parses the agent's outgoing chat log + last-known scrollback and updates the session HTML
+- `on_exit` / `on_swap`: broker invokes a small CLI (part of `conduit-broker`) that parses the agent's outgoing chat log + last-known scrollback and updates the session HTML
 
 For Claude Code: image entrypoint sets `--system-prompt-file /workspace/HANDOFF.html` (or prepends its contents). For Codex: same pattern via Codex's system-prompt mechanism. Documented in `docs/AGENT-ADAPTERS.md`.
 
-### CLI: `swe-kitty memory`
+### CLI: `conduit memory`
 
 A subcommand of the broker binary so it works locally without the server:
 
-- `swe-kitty memory init` — scaffolds `.swe-kitty/memory/` with empty templates
-- `swe-kitty memory render --session <uuid>` — emits the current HTML
-- `swe-kitty memory checkpoint --session <uuid> --reason <str>` — append timestamped checkpoint
-- `swe-kitty memory handoff --session <uuid> --from <a> --to <b>` — flush handoff section, mark agent swap
-- `swe-kitty memory promote --session <uuid> --decision <id>` — copy a decision from session HTML into the project-level `index.html`
-- `swe-kitty memory show` — render to terminal (uses `w3m` or built-in plaintext fallback)
+- `conduit memory init` — scaffolds `.conduit/memory/` with empty templates
+- `conduit memory render --session <uuid>` — emits the current HTML
+- `conduit memory checkpoint --session <uuid> --reason <str>` — append timestamped checkpoint
+- `conduit memory handoff --session <uuid> --from <a> --to <b>` — flush handoff section, mark agent swap
+- `conduit memory promote --session <uuid> --decision <id>` — copy a decision from session HTML into the project-level `index.html`
+- `conduit memory show` — render to terminal (uses `w3m` or built-in plaintext fallback)
 
 ### Mobile surface
 
@@ -552,8 +552,8 @@ Sessions must survive: agent crashes, container OOM, broker restart, network bli
 
 | Rail | What's captured | Where | Cadence |
 |---|---|---|---|
-| **Scrollback ring buffer** | Last N MB of raw PTY bytes | `.swe-kitty/sessions/<uuid>/scrollback.bin` (mmap) | Continuous |
-| **Memory HTML** | Structured agent state (Part D') | `.swe-kitty/memory/sessions/<uuid>.html` | Every 60s + on event |
+| **Scrollback ring buffer** | Last N MB of raw PTY bytes | `.conduit/sessions/<uuid>/scrollback.bin` (mmap) | Continuous |
+| **Memory HTML** | Structured agent state (Part D') | `.conduit/memory/sessions/<uuid>.html` | Every 60s + on event |
 | **Worktree** | Code changes themselves | git worktree | Every commit (agent-driven) + auto-WIP every 5 min |
 
 A session is **recoverable** iff all three rails are intact on disk. The broker verifies this on every checkpoint.
@@ -574,14 +574,14 @@ internal/session/
 - Atomically:
   1. Pauses PTY drain into a buffer
   2. Writes scrollback ring to disk (rename + fsync)
-  3. Triggers `swe-kitty memory checkpoint` for the session
+  3. Triggers `conduit memory checkpoint` for the session
   4. Runs `git add -A && git stash push -m "checkpoint:<ts>"` in the worktree (auto-WIP)
   5. Resumes PTY drain
 
 **Watchdog** (`watchdog.go`):
 - Every 30s, sends a no-op probe to the agent container (`docker exec ... echo`) — confirms the container is alive
 - Every 30s, parses tail of PTY output for a "stuck" pattern (no bytes in 5 min) — opens an alert via `view_event` so the mobile app surfaces it
-- On container death: marks session `stalled`, **does not auto-restart by default**, requires user to tap "Resume" (avoids agents looping forever burning credits). User-configurable in `.swe-kitty/config.toml`:
+- On container death: marks session `stalled`, **does not auto-restart by default**, requires user to tap "Resume" (avoids agents looping forever burning credits). User-configurable in `.conduit/config.toml`:
   ```toml
   [watchdog]
   liveness_probe_interval_sec = 30
@@ -590,15 +590,15 @@ internal/session/
   ```
 
 **Handoff** (`handoff.go`) — agent swap is atomic:
-1. Send agent a `SIGUSR1` (or write to a control file inside the container) — adapter's image is built to interpret this as "begin handoff" and write a final chat message to `/workspace/.swe-kitty/HANDOFF-OUT.html`
+1. Send agent a `SIGUSR1` (or write to a control file inside the container) — adapter's image is built to interpret this as "begin handoff" and write a final chat message to `/workspace/.conduit/HANDOFF-OUT.html`
 2. Wait up to 30s for that file to land; if it doesn't, fall back to last memory checkpoint
 3. Stop container
-4. Run `swe-kitty memory handoff --from claude --to codex` → reads `HANDOFF-OUT.html`, merges into session HTML, flushes
+4. Run `conduit memory handoff --from claude --to codex` → reads `HANDOFF-OUT.html`, merges into session HTML, flushes
 5. Start new container, mount worktree, `on_start` hook copies `HANDOFF.html` into the workspace, new agent reads it first
 6. Notify mobile clients via `status` message: `{phase: "swapped", from: "claude", to: "codex"}`
 
 **Recovery** (`recovery.go`):
-- On `swe-kitty-broker up`, scans `.swe-kitty/sessions/*/` for sessions
+- On `conduit-broker up`, scans `.conduit/sessions/*/` for sessions
 - For each: re-creates the PTY, replays scrollback from disk, re-attaches the (still-running, since Docker survives broker restart by default) container OR re-spawns it if `--restart unless-stopped` policy lost it
 - Clients reconnecting receive the gzip snapshot as usual; from their POV nothing happened
 
@@ -625,13 +625,13 @@ A "Health" badge in the mobile project header reflects three states:
 
 ## Part D — Implementation order
 
-(Each step ends with a commit pushed to `nikhilsh/swe-kitty`. Steps that can fan out to parallel agent worktrees are tagged ⟂.)
+(Each step ends with a commit pushed to `nikhilsh/conduit`. Steps that can fan out to parallel agent worktrees are tagged ⟂.)
 
-1. **Bootstrap** — `git init`, push to `nikhilsh/swe-kitty`, scaffold `.swe-kitty/` (Part A), write `docs/WEBSOCKET-PROTOCOL.md`, `docs/AGENT-ADAPTERS.md`, **`docs/MEMORY-FORMAT.md`** (HTML schema from Part D'), `docs/SESSION-LIFECYCLE.md` (checkpoints + recovery from Part D''). These four contracts are frozen here so the next four steps can parallelize. Includes `CONTRIBUTING.md`, CI workflow skeleton, `.gitignore`, project-level `.swe-kitty/memory/index.html` seed
-2. ⟂ **Harness server core** — `broker/cmd/swe-kitty-broker/main.go` + `internal/session/manager.go` + `internal/ws/server.go`. One hardcoded agent working end-to-end with `wscat`
-3. ⟂ **Rust core** — `core/swe-kitty-core.udl`, `transport.rs`, `session.rs`, `views.rs`; `cargo test` with mock WS server
+1. **Bootstrap** — `git init`, push to `nikhilsh/conduit`, scaffold `.conduit/` (Part A), write `docs/WEBSOCKET-PROTOCOL.md`, `docs/AGENT-ADAPTERS.md`, **`docs/MEMORY-FORMAT.md`** (HTML schema from Part D'), `docs/SESSION-LIFECYCLE.md` (checkpoints + recovery from Part D''). These four contracts are frozen here so the next four steps can parallelize. Includes `CONTRIBUTING.md`, CI workflow skeleton, `.gitignore`, project-level `.conduit/memory/index.html` seed
+2. ⟂ **Harness server core** — `broker/cmd/conduit-broker/main.go` + `internal/session/manager.go` + `internal/ws/server.go`. One hardcoded agent working end-to-end with `wscat`
+3. ⟂ **Rust core** — `core/conduit-core.udl`, `transport.rs`, `session.rs`, `views.rs`; `cargo test` with mock WS server
 4. **Agent adapters** — `internal/agents/registry.go`, `agents/{claude,codex}.toml`, `broker/docker/{claude,codex}.Dockerfile`, `switch_agent` wired but without handoff yet
-5. **Memory + checkpoint subsystem** — `swe-kitty memory` subcommand, `internal/session/{checkpoint,handoff,recovery,watchdog}.go`, HTML schema validator, agent-swap end-to-end with handoff section round-trip. **Cannot defer to v2** per user requirement
+5. **Memory + checkpoint subsystem** — `conduit memory` subcommand, `internal/session/{checkpoint,handoff,recovery,watchdog}.go`, HTML schema validator, agent-swap end-to-end with handoff section round-trip. **Cannot defer to v2** per user requirement
 6. ⟂ **iOS shell** — xcodegen + project.yml + build-rust.sh + xcframework; `ProjectListView`, `ProjectView` with view picker, terminal tab only
 7. ⟂ **Android shell** — Gradle + build-rust.sh + JNI; drawer + project screen with view tabs, terminal page only
 8. **Chat view + browser view** on both platforms; `view_event` plumbing; "Memory" affordance in chat header that opens session HTML in the in-app browser
@@ -643,15 +643,15 @@ A "Health" badge in the mobile project header reflects three states:
 
 ## Part E — End-to-end verification
 
-1. **Dev harness sanity**: fresh clone → `npm i -g swe-swe && swe-swe up` reads `.swe-kitty/config.toml`, lets you spawn parallel Claude + Codex sessions on this repo, each on its own worktree
-2. **Harness server**: `go run ./cmd/swe-kitty-broker up` → QR + `:1977`. `wscat` to `/ws/$(uuidgen)?assistant=claude` echoes PTY
+1. **Dev harness sanity**: fresh clone → `npm i -g swe-swe && swe-swe up` reads `.conduit/config.toml`, lets you spawn parallel Claude + Codex sessions on this repo, each on its own worktree
+2. **Harness server**: `go run ./cmd/conduit-broker up` → QR + `:1977`. `wscat` to `/ws/$(uuidgen)?assistant=claude` echoes PTY
 3. **Agent swap**: `{"type":"switch_agent","assistant":"codex"}` in same session → container replaced, worktree preserved
 4. **Core**: `cargo test` against mock WS; `cargo run --example cli-driver` against real broker
 5. **iOS sim**: Xcode → iPhone 16, scan QR (dev: paste), spawn Claude session, swipe View picker: Terminal types and echoes → Chat shows agent messages → Browser shows `npm run dev` preview
 6. **Android emu**: same flow on Pixel 8
 7. **CI**: open a no-op PR → 4 jobs green
-8. **Release**: `git tag v0.0.1 && git push --tags` → 3 workflows run → Release has `swe-kitty-broker-{linux,darwin}-{amd64,arm64}`, `SweKitty.ipa`, `SweKitty.apk`
-9. **Sideload + remote**: install IPA via AltStore (UDID registered), install APK on Pixel; spin up VPS with Caddy + `swe-kitty-broker up --public-url …`; connect from LTE; verify all three views work over the public internet
+8. **Release**: `git tag v0.0.1 && git push --tags` → 3 workflows run → Release has `conduit-broker-{linux,darwin}-{amd64,arm64}`, `Conduit.ipa`, `Conduit.apk`
+9. **Sideload + remote**: install IPA via AltStore (UDID registered), install APK on Pixel; spin up VPS with Caddy + `conduit-broker up --public-url …`; connect from LTE; verify all three views work over the public internet
 
 ---
 
@@ -696,7 +696,7 @@ Versions are deliberate, not aspirational. Each one ends in a tagged GitHub Rele
 ### v1.0 — "ship it" (polish window)
 - Crash-free for 48 hours of continuous use
 - Docs for `INSTALL-IOS.md`, `INSTALL-ANDROID.md`, `SELF-HOST.md`
-- `swe-kitty memory promote` workflow documented (curating session insights into project-level memory)
+- `conduit memory promote` workflow documented (curating session insights into project-level memory)
 - Public README + screencast
 
 ### v1.x roadmap (post-v1, prioritized)
@@ -725,17 +725,17 @@ Versions are deliberate, not aspirational. Each one ends in a tagged GitHub Rele
 
 ## Reused from upstream (do not rewrite)
 
-- **swe-swe**: WebSocket framing (byte-identical), `loadEnvFile` (`$VAR` expansion of `.swe-kitty/env`), per-project tabbed multi-view UX model, `--agents` flag semantics
+- **swe-swe**: WebSocket framing (byte-identical), `loadEnvFile` (`$VAR` expansion of `.conduit/env`), per-project tabbed multi-view UX model, `--agents` flag semantics
 - **litter**: `build-rust.sh` shape, `make bindings` target, xcframework packaging, UniFFI `.udl` → Swift/Kotlin codegen flow, app-store/ad-hoc export-options plist patterns
 - **SwiftTerm** (iOS) and **termux/terminal-view** (Android) — terminal rendering; do not write an emulator
 
 ## Critical files to create (paths only, in order)
 
-1. `.swe-kitty/config.toml`, `.swe-kitty/env.example`, `.swe-kitty/agents/{claude,codex}.toml`, `.swe-kitty/tasks/*.md`, `.swe-kitty/README.md`, `.swe-kitty/memory/index.html` (project), `.swe-kitty/memory/memory.css`, `.swe-kitty/memory/session-template.html`, `CONTRIBUTING.md`
+1. `.conduit/config.toml`, `.conduit/env.example`, `.conduit/agents/{claude,codex}.toml`, `.conduit/tasks/*.md`, `.conduit/README.md`, `.conduit/memory/index.html` (project), `.conduit/memory/memory.css`, `.conduit/memory/session-template.html`, `CONTRIBUTING.md`
 2. `docs/WEBSOCKET-PROTOCOL.md`, `docs/AGENT-ADAPTERS.md`, `docs/MEMORY-FORMAT.md`, `docs/SESSION-LIFECYCLE.md`, `docs/ARCHITECTURE.md`
-3. `broker/cmd/swe-kitty-broker/main.go`, `broker/internal/session/{manager,checkpoint,handoff,recovery,watchdog}.go`, `broker/internal/{ws,agents,auth,memory}/*.go`, `broker/docker/{claude,codex}.Dockerfile`, `agents/{claude,codex}.toml`
-4. `core/swe-kitty-core.udl`, `core/src/{lib,transport,session,views,discovery}.rs`, `core/Cargo.toml`
+3. `broker/cmd/conduit-broker/main.go`, `broker/internal/session/{manager,checkpoint,handoff,recovery,watchdog}.go`, `broker/internal/{ws,agents,auth,memory}/*.go`, `broker/docker/{claude,codex}.Dockerfile`, `agents/{claude,codex}.toml`
+4. `core/conduit-core.udl`, `core/src/{lib,transport,session,views,discovery}.rs`, `core/Cargo.toml`
 5. `apps/ios/project.yml`, `apps/ios/build-rust.sh`, `apps/ios/Sources/{SessionStore,Views/ProjectListView,Views/ProjectView,Views/TerminalTab,Views/ChatTab,Views/BrowserTab,Views/MemoryButton}.swift`, `apps/ios/ExportOptions.plist`
-6. `apps/android/build-rust.sh`, `apps/android/app/build.gradle.kts`, `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/{MainActivity,ProjectListScreen,ProjectScreen,TerminalPage,ChatPage,BrowserPage,MemoryButton}.kt`
+6. `apps/android/build-rust.sh`, `apps/android/app/build.gradle.kts`, `apps/android/app/src/main/kotlin/sh/nikhil/conduit/{MainActivity,ProjectListScreen,ProjectScreen,TerminalPage,ChatPage,BrowserPage,MemoryButton}.kt`
 7. `.github/workflows/{ci,release-ios,release-android,release-broker}.yml`
 8. `docs/INSTALL-{IOS,ANDROID}.md`, `docs/SELF-HOST.md`, `Makefile`, `.gitignore`

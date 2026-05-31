@@ -1,7 +1,7 @@
 .PHONY: build test vet run lint
 
 build:
-	go build -o bin/swe-kitty-broker ./cmd/swe-kitty-broker
+	go build -o bin/conduit-broker ./cmd/conduit-broker
 
 test:
 	go test ./...
@@ -10,7 +10,7 @@ vet:
 	go vet ./...
 
 run:
-	go run ./cmd/swe-kitty-broker up --local
+	go run ./cmd/conduit-broker up --local
 
 lint:
 	golangci-lint run

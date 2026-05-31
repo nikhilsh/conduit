@@ -109,7 +109,7 @@ Picking Ghostty.
   `tabContent`.
 - `scripts/fetch-ghostty-vt-xcframework.sh` — fetch helper for the
   Ghostty `ghostty-vt.xcframework.zip` release asset.
-- `apps/ios/Tests/SweKittyTests/AppearanceStoreTests.swift` — flag
+- `apps/ios/Tests/ConduitTests/AppearanceStoreTests.swift` — flag
   persistence + default.
 
 The xterm.js path (`WKTerminalView`, `TerminalTabXterm`) is **untouched**
@@ -200,7 +200,7 @@ within a SwiftUI re-render.
   so the bundle stays green if the framework didn't link.
 - `apps/ios/project.yml` — `GhosttyVT` registered under `packages:`
   via `path: GhosttyVT` and consumed as a `package:` dep by the
-  `SweKitty` target. Existing packages (Sentry, HighlightSwift,
+  `Conduit` target. Existing packages (Sentry, HighlightSwift,
   SnapshotTesting) untouched.
 - `apps/ios/Sources/Views/GhosttyTerminalView.swift` — when
   `#if canImport(GhosttyVT)` is true, the placeholder view
@@ -262,16 +262,16 @@ so flipping the flag at runtime stays a one-toggle revert.
 
 ## Stage 2 status — 2026-05-22
 
-**Update (swekittycore-framework-rewrap):** PR #88 had to comment out
-the GhosttyVT `.binaryTarget` because the SweKittyCore xcframework was
+**Update (conduitcore-framework-rewrap):** PR #88 had to comment out
+the GhosttyVT `.binaryTarget` because the ConduitCore xcframework was
 built as `-library + -headers` (legacy shape), and Xcode's
 `ProcessXCFramework` writes every such xcframework's module map to the
 shared `$BUILT_PRODUCTS_DIR/include/module.modulemap` path. With both
-SweKittyCore and ghostty-vt fighting for that file, xcodebuild emitted
+ConduitCore and ghostty-vt fighting for that file, xcodebuild emitted
 "Multiple commands produce include/module.modulemap" and refused to
 link. `apps/ios/build-rust.sh` now produces a `.framework`-flavored
 xcframework instead: each arch slice contains a per-arch
-`swe_kitty_coreFFI.framework/` with its module map under
+`conduit_coreFFI.framework/` with its module map under
 `Modules/module.modulemap` (scoped to the framework, no shared path).
 The Ghostty `binaryTarget` is therefore re-enabled and libghostty
 actually loads at runtime — Stage 2 now meets its core acceptance
@@ -480,7 +480,7 @@ one-toggle for both platforms.
   Android-side PTY launching isn't trivial — feed it canned bytes
   instead).
 - **Acceptance:** screenshot of a Termux `TerminalView` rendered
-  inside swe-kitty's Compose scaffold, behind the flag.
+  inside conduit's Compose scaffold, behind the flag.
 
 #### Stage 1 — broker byte stream → `TerminalSession`
 
@@ -589,11 +589,11 @@ renderer to write — whereas libghostty on iOS still owes us a
 ### Files touched by Android Stage 0
 
 - `apps/android/app/build.gradle.kts` — add Maven dep.
-- `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/AppearanceStore.kt`
+- `apps/android/app/src/main/kotlin/sh/nikhil/conduit/AppearanceStore.kt`
   (or equivalent) — `experimentalNativeTerminal` flag mirror.
-- `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/ui/NativeTerminalView.kt`
+- `apps/android/app/src/main/kotlin/sh/nikhil/conduit/ui/NativeTerminalView.kt`
   — Compose wrapper hosting `TerminalView` via `AndroidView`.
-- `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/ui/SettingsScreen.kt`
+- `apps/android/app/src/main/kotlin/sh/nikhil/conduit/ui/SettingsScreen.kt`
   (or wherever Experimental Features lives) — toggle row.
 - `apps/android/app/src/main/assets/NOTICE` — Apache-2.0 attribution
   for `com.termux:terminal-view` + `com.termux:terminal-emulator`.
@@ -608,10 +608,10 @@ shape to iOS.
 **What worked**
 
 - `experimentalNativeTerminal: StateFlow<Boolean>` added to
-  `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/AppearanceStore.kt`,
-  persisted to the existing `swekitty.appearance` SharedPreferences
+  `apps/android/app/src/main/kotlin/sh/nikhil/conduit/AppearanceStore.kt`,
+  persisted to the existing `conduit.appearance` SharedPreferences
   file under key `experimentalNativeTerminal` (mirrors the
-  `swekitty.experimental.nativeTerminal` UserDefaults key on iOS).
+  `conduit.experimental.nativeTerminal` UserDefaults key on iOS).
   Defaults to `false` so the xterm.js path stays in production.
 - Toggle row landed in the existing `Experimental` section of
   `SettingsScreen.kt`, replacing the placeholder text — flask icon,
@@ -694,7 +694,7 @@ shape to iOS.
   `adb logcat` to see which path is live.
 - `TermuxSessionConfig.from(session)` lifted as a pure-data plumbing
   helper. One JUnit test
-  (`apps/android/app/src/test/java/sh/nikhil/swekitty/ui/TermuxSessionConfigTest.kt`)
+  (`apps/android/app/src/test/java/sh/nikhil/conduit/ui/TermuxSessionConfigTest.kt`)
   locks the Stage 1 defaults (shell path, env, argv shape, purity
   w.r.t. `session.id`). No Robolectric — Termux's emulator hits JNI
   on first `updateSize`, so any test that actually mounts the view
@@ -857,7 +857,7 @@ bridge it yet"). Ships both platforms in one PR
   computed from `cellWidth` / `cellHeight`; pan after long-press
   extends `end`; double-tap selects the ASCII-word at the tap cell;
   triple-tap selects the full row.
-- `draw(_:)` paints a translucent `SweKittyTheme.warning` (yellow at
+- `draw(_:)` paints a translucent `ConduitTheme.warning` (yellow at
   0.25 opacity) rectangle under the selected cells **before** the
   glyphs so the text remains readable. The highlight walks the same
   normalized rectangle the text extractor reads — what you see is
@@ -885,7 +885,7 @@ bridge it yet"). Ships both platforms in one PR
   We leave that on; Stage 3 only wires Termux's
   `TerminalSessionClient` clipboard hooks into the OS:
   - `onCopyTextToClipboard(session, text)` → `ClipboardManager.setPrimaryClip`
-    with a `ClipData.newPlainText("swe-kitty terminal", text)`
+    with a `ClipData.newPlainText("conduit terminal", text)`
     payload. Fires when the user taps Copy in Termux's action mode.
   - `onPasteTextFromClipboard(session)` → read
     `ClipboardManager.primaryClip` → forward bytes through `onInput`
@@ -906,9 +906,9 @@ substring matches the on-screen width.
 
 Tests pin both implementations against the same scenario set:
 
-- `apps/ios/Tests/SweKittyTests/TerminalSelectionRangeTests.swift`
+- `apps/ios/Tests/ConduitTests/TerminalSelectionRangeTests.swift`
   — Swift Testing, 11 cases.
-- `apps/android/app/src/test/java/sh/nikhil/swekitty/ui/TerminalSelectionRangeTest.kt`
+- `apps/android/app/src/test/java/sh/nikhil/conduit/ui/TerminalSelectionRangeTest.kt`
   — JUnit 4, 11 cases mirroring the Swift suite.
 
 **What's deferred**
@@ -938,7 +938,7 @@ simulator target produces `building for 'iOS-simulator', but linking
 in object file built for 'iOS'` and CI is red.
 
 This section captures what the other Ghostty-on-iOS consumers do
-about it, picks the right path for swe-kitty, and writes down the
+about it, picks the right path for conduit, and writes down the
 exact command surface so the next agent has zero archaeology to do.
 
 ### Survey
@@ -1028,7 +1028,7 @@ exact command surface so the next agent has zero archaeology to do.
 
 This is the find. Lakr233 publishes a community-maintained
 `GhosttyKit.xcframework.zip` as a GitHub release **with every slice
-swe-kitty needs**, and ships an SPM package that exposes it as a
+conduit needs**, and ships an SPM package that exposes it as a
 binary target.
 
 - **Package.swift** at
@@ -1131,7 +1131,7 @@ Two reasons stacked:
 So even if upstream fixed (1), we'd still be missing Metal/surface
 on iOS — exactly the things Stage 1 of our plan needs.
 
-### Options considered for swe-kitty
+### Options considered for conduit
 
 #### Option A — cross-compile from source in our CI
 
@@ -1141,7 +1141,7 @@ loops `zig build -Dtarget=<...> -Demit-lib-vt=false
 -Demit-xcframework=true` for each slice (or runs the same
 `-Demit-xcframework -Dxcframework-target=universal` once), then
 uploads `GhosttyKit.xcframework.zip` as a release asset on the
-**swe-kitty** repo. The xcframework asset URL feeds our existing
+**conduit** repo. The xcframework asset URL feeds our existing
 `scripts/fetch-ghostty-vt-xcframework.sh` (renamed).
 
 - **Pros:** no third-party dependency; we control the patch surface
@@ -1164,7 +1164,7 @@ uploads `GhosttyKit.xcframework.zip` as a release asset on the
 
 A `nikhilsh/ghostty` fork with the missing simulator slice wired
 into the upstream `release-tip.yml` job; publish to fork releases;
-pin swe-kitty against the fork.
+pin conduit against the fork.
 
 - **Pros:** maximum control; upstream-shaped recipe.
 - **Cons:** we now own a Ghostty fork. Rebasing against upstream is
@@ -1185,7 +1185,7 @@ ideally `x86_64-ios-simulator`) to the `release-tip.yml`
 
 #### Option D — vendor Ghostty as a git subtree
 
-Add Ghostty source to swe-kitty as a subtree under
+Add Ghostty source to conduit as a subtree under
 `vendor/ghostty/`, call `zig build -Demit-xcframework
 -Dxcframework-target=universal` from `scripts/build-rust.sh` (or
 a new `scripts/build-ghostty.sh`) as part of the iOS build.
@@ -1260,7 +1260,7 @@ Concretely, Stage 0.5 (a new substage before Stage 1):
    checksum.
 3. Smoke-run the iOS simulator build locally; CI on the next
    push should be green.
-4. Roll the swe-kitty release notes to mention we now pin
+4. Roll the conduit release notes to mention we now pin
    `libghostty-spm storage.1.1.5` (downstream of Ghostty 1.1.5).
 5. If anything in Lakr233's xcframework is missing for Stage 1
    (e.g. a header we need but they patched out), drop to

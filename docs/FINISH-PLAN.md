@@ -1,4 +1,4 @@
-# swe-kitty finish plan
+# conduit finish plan
 
 Prioritised work remaining after the 2026-05-29 session (PRs #261–#264 in
 review). Phases are sequenced by verifiability: CI-only work first, then
@@ -31,7 +31,7 @@ These can be written, tested, and merged from the dev box alone.
   items (`broker/internal/session/codexstream.go`); map them to a typed tool
   `ChatEvent` so codex tool calls appear in chat. Size M.
 - [ ] **Delete OAuth v1 (dead path).** Both providers reject the
-  `swekitty://` custom-scheme redirect. Remove `OAuthClient.swift`
+  `conduit://` custom-scheme redirect. Remove `OAuthClient.swift`
   (`apps/ios`), `set_agent_credentials` + UDL bindings in core. Size S.
 - [ ] **Push-notification client-side token registration.** Broker WS handler
   already accepts `register_push_token`; wire iOS

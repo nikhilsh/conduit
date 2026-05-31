@@ -61,14 +61,14 @@ func TestCommandEnv_PreservesNonEmptyAuthKeys(t *testing.T) {
 // PS2=) must still pass through, since it does not interact with
 // agent auth.
 func TestCommandEnv_LeavesUnrelatedEmptyVarsAlone(t *testing.T) {
-	t.Setenv("SWEKITTY_TEST_EMPTY", "")
+	t.Setenv("CONDUIT_TEST_EMPTY", "")
 
 	s := &Session{ID: "sess-unrelated", Assistant: "claude"}
 	got := s.commandEnv(nil)
 
 	found := false
 	for _, kv := range got {
-		if strings.HasPrefix(kv, "SWEKITTY_TEST_EMPTY=") {
+		if strings.HasPrefix(kv, "CONDUIT_TEST_EMPTY=") {
 			found = true
 			break
 		}

@@ -1,10 +1,10 @@
-# swe-kitty
+# conduit
 
 A phone-first AI coding agent. Drive Claude Code, Codex, and other CLI agents
 on your own remote box from iOS and Android — with per-project tabs for an agent
 chat, a terminal, and a live browser preview.
 
-swe-kitty is its own product. Three layers ship from this one repo: a Rust core,
+conduit is its own product. Three layers ship from this one repo: a Rust core,
 a Go server (the broker), and native iOS / Android shells. The IPA, APK, and
 broker binaries all come from `release.yml` in this repo and only this repo.
 
@@ -16,11 +16,11 @@ broker binaries all come from `release.yml` in this repo and only this repo.
 └─────────────────┬─────────────────┘
                   │ UniFFI
 ┌─────────────────┴─────────────────┐
-│  swe-kitty-core (Rust)            │  protocol, session model, reconnect, discovery, SSH bootstrap
+│  conduit-core (Rust)            │  protocol, session model, reconnect, discovery, SSH bootstrap
 └─────────────────┬─────────────────┘
                   │ WebSocket
 ┌─────────────────┴─────────────────┐
-│  swe-kitty-broker (Go, :1977)     │  tmux-backed PTYs, worktrees, agent processes, OAuth
+│  conduit-broker (Go, :1977)     │  tmux-backed PTYs, worktrees, agent processes, OAuth
 └─────────────────┬─────────────────┘
                   │ spawn + PTY
 ┌─────────────────┴─────────────────┐
@@ -56,7 +56,7 @@ and the direction decisions.
 ## Install
 
 - **iOS:** sideload the signed IPA from the latest
-  [Release](https://github.com/nikhilsh/swe-kitty/releases) via AltStore /
+  [Release](https://github.com/nikhilsh/conduit/releases) via AltStore /
   Sideloadly — [`docs/INSTALL-IOS.md`](docs/INSTALL-IOS.md).
 - **Android:** install the signed APK from the latest Release —
   [`docs/INSTALL-ANDROID.md`](docs/INSTALL-ANDROID.md).
@@ -84,7 +84,7 @@ Install and run the broker on your box, then pair from the app —
 The WebSocket framing took inspiration from
 [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), and the layered
 Rust-core + native-shells split is the shape [dnakov/litter](https://github.com/dnakov/litter)
-chose for Codex on mobile. swe-kitty has diverged on auth (bearer-only, no
+chose for Codex on mobile. conduit has diverged on auth (bearer-only, no
 cookie login), on the broker protocol (`switch_agent`, typed `view_event`,
 structured chat), and on the entire mobile surface — neither upstream is a
 runtime dependency or an interoperability target.

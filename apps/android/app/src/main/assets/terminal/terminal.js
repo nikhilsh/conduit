@@ -1,7 +1,7 @@
-// terminal.js — xterm.js bootstrap for SweKitty WKWebView / Android WebView host.
+// terminal.js — xterm.js bootstrap for Conduit WKWebView / Android WebView host.
 // Communicates with the native side via a platform-detected bridge:
 //   iOS:     window.webkit.messageHandlers.term.postMessage(obj)
-//   Android: window.swekitty.postMessage(JSON.stringify(obj))
+//   Android: window.conduit.postMessage(JSON.stringify(obj))
 // Messages:
 //   { type: "ready" }                    emitted once after term.open()
 //   { type: "input", data: "<utf8>" }    keystroke from xterm.onData
@@ -22,9 +22,9 @@
         window.webkit.messageHandlers.term.postMessage(msg);
       };
     }
-    if (window.swekitty && typeof window.swekitty.postMessage === "function") {
+    if (window.conduit && typeof window.conduit.postMessage === "function") {
       return function (msg) {
-        window.swekitty.postMessage(JSON.stringify(msg));
+        window.conduit.postMessage(JSON.stringify(msg));
       };
     }
     return function () {};
@@ -39,9 +39,9 @@
   }
 
   // Native code may seed an initial font size + theme before boot by
-  // assigning window.SWEKITTY_TERM_CONFIG = { fontSize, theme }. Falls
+  // assigning window.CONDUIT_TERM_CONFIG = { fontSize, theme }. Falls
   // back to a dense 10pt Ghostty-Dark default (matches iOS) if absent.
-  var seed = window.SWEKITTY_TERM_CONFIG || {};
+  var seed = window.CONDUIT_TERM_CONFIG || {};
   var initialFontSize = typeof seed.fontSize === "number" ? seed.fontSize : 10;
   var initialTheme = seed.theme || { background: "#1d1f21", foreground: "#c5c8c6", cursor: "#c5c8c6" };
 

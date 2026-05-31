@@ -1,6 +1,6 @@
-# swe-kitty roadmap
+# conduit roadmap
 
-Single source of truth for what swe-kitty does today, what's next, and the
+Single source of truth for what conduit does today, what's next, and the
 direction decisions that supersede the older `PLAN-*` docs. The forward-looking
 content that used to be scattered across those plans now lives here; the plans
 themselves are archived once their work ships (see `docs/archive/`).
@@ -93,7 +93,7 @@ backed by a tagged GitHub Release built from `.github/workflows/release.yml`.
 - **AI quick replies** and **AI session titles** — the broker mints both via a
   fast-gen path (`broker/internal/session/aigen.go`) that makes a direct
   Anthropic haiku Messages API call against the session's OAuth token. Both are
-  config-gated and default ON (`SWE_KITTY_AI_QUICKREPLIES`, `SWE_KITTY_AI_TITLES`).
+  config-gated and default ON (`CONDUIT_AI_QUICKREPLIES`, `CONDUIT_AI_TITLES`).
 
 ### Terminal
 
@@ -150,7 +150,7 @@ backed by a tagged GitHub Release built from `.github/workflows/release.yml`.
   registration are the remaining gap.
 - **OAuth v1 teardown.** v2 is the live path; the v1 `OAuthClient` /
   `set_agent_credentials` code (now dead — both providers reject the
-  `swekitty://` custom-scheme redirect) is slated for deletion once v2 is
+  `conduit://` custom-scheme redirect) is slated for deletion once v2 is
   device-verified end-to-end on both platforms.
 - **Rust-first refactor (final slice).** Both platforms shadow-write into the
   shared reducer (`core/src/store/`); the remaining step is to make both
@@ -174,7 +174,7 @@ section wins.
   setup friction with no benefit for the "my box, my agent, I trust it" posture.
   (Supersedes the container language in the original `PLAN.md`.)
 - **"harness" removed from the product.** The user-facing component is a
-  **server** / **broker**, never a "harness". The Go server is `swe-kitty-broker`.
+  **server** / **broker**, never a "harness". The Go server is `conduit-broker`.
   ("harness" still describes the *internal* multi-agent dev workflow on this
   repo, but nothing user-facing.) (Supersedes `RENAMING-broker.md`, now archived.)
 - **Ghostty is the long-term native terminal**, but **xterm.js is the current

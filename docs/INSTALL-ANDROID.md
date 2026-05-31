@@ -1,6 +1,6 @@
-# Installing SweKitty on Android (sideload)
+# Installing Conduit on Android (sideload)
 
-SweKitty Android is distributed as a **signed release APK** on each
+Conduit Android is distributed as a **signed release APK** on each
 GitHub Release. No Play Store; no Internal Testing track.
 
 ## Prerequisites
@@ -12,10 +12,10 @@ GitHub Release. No Play Store; no Internal Testing track.
 
 ## Get the APK
 
-From <https://github.com/nikhilsh/swe-kitty/releases>:
+From <https://github.com/nikhilsh/conduit/releases>:
 
 ```
-SweKitty-vX.Y.Z.apk
+Conduit-vX.Y.Z.apk
 ```
 
 ## Install — direct sideload (recommended)
@@ -29,28 +29,28 @@ SweKitty-vX.Y.Z.apk
 ## Install — adb
 
 ```bash
-adb install -r SweKitty-vX.Y.Z.apk
+adb install -r Conduit-vX.Y.Z.apk
 ```
 
 `-r` reinstalls over an existing version without losing state.
 
 ## First launch
 
-- Launch SweKitty → drawer opens → tap *Settings*.
+- Launch Conduit → drawer opens → tap *Settings*.
 - Either type the broker endpoint + bearer manually, or tap **Scan QR**.
   Android prompts for camera permission on the first scan; grant it.
-- The QR is the one printed when you ran `swe-kitty-broker up`.
+- The QR is the one printed when you ran `conduit-broker up`.
 
 State (endpoint + bearer in EncryptedSharedPreferences, scrollback in
 ViewModel state) is preserved across upgrades because the application id
-`sh.nikhil.swekitty` is stable.
+`sh.nikhil.conduit` is stable.
 
 ## Troubleshooting
 
 - **"App not installed"** when sideloading — usually a signature
   mismatch with a previously installed copy. Uninstall first, then
   install fresh.
-- **Camera permission denied for QR** — *Settings → Apps → SweKitty →
+- **Camera permission denied for QR** — *Settings → Apps → Conduit →
   Permissions → Camera → Allow*.
 - **Cleartext traffic blocked** for a `ws://…` endpoint — the app's
   `AndroidManifest.xml` sets `android:usesCleartextTraffic="true"`

@@ -16,7 +16,7 @@ Date: 2026-05-18
 
 ## Purpose
 
-This document turns the KittyLitter reference into a concrete product backlog for `swe-kitty`.
+This document turns the KittyLitter reference into a concrete product backlog for `conduit`.
 
 It is not a vague "make the app nicer" note. It is the next implementation plan for making the current shell behave like a real mobile client for our broker.
 
@@ -28,7 +28,7 @@ Current mobile chat surfaces are extremely thin:
   - flat `ScrollView`
   - one text bubble per event
   - no typed rendering beyond role + text + file list
-- [apps/android/app/src/main/kotlin/sh/nikhil/swekitty/ui/ChatPage.kt](/root/developer/projects/kitty-swe/apps/android/app/src/main/kotlin/sh/nikhil/swekitty/ui/ChatPage.kt:1)
+- [apps/android/app/src/main/kotlin/sh/nikhil/conduit/ui/ChatPage.kt](/root/developer/projects/kitty-swe/apps/android/app/src/main/kotlin/sh/nikhil/conduit/ui/ChatPage.kt:1)
   - same basic shape in Compose
 
 This is enough for smoke testing transport, but not enough for serious dogfooding.
@@ -187,7 +187,7 @@ What we need:
 
 Why:
 
-- this is where `swe-kitty` should exceed a generic Codex mobile client
+- this is where `conduit` should exceed a generic Codex mobile client
 - our broker semantics need dedicated UI, not hidden protocol behavior
 
 ## 8. Streaming behavior needs to feel native
@@ -263,7 +263,7 @@ Goal:
 
 - make the app viable for real repeated use, not one pairing at a time
 
-### Package 5: `swe-kitty` differentiators
+### Package 5: `conduit` differentiators
 
 - inline handoff view
 - subagent cards
@@ -296,10 +296,10 @@ Add likely new groups:
 
 Priority files to replace or refactor heavily:
 
-- [apps/android/app/src/main/kotlin/sh/nikhil/swekitty/ui/ChatPage.kt](/root/developer/projects/kitty-swe/apps/android/app/src/main/kotlin/sh/nikhil/swekitty/ui/ChatPage.kt:1)
+- [apps/android/app/src/main/kotlin/sh/nikhil/conduit/ui/ChatPage.kt](/root/developer/projects/kitty-swe/apps/android/app/src/main/kotlin/sh/nikhil/conduit/ui/ChatPage.kt:1)
 - `ProjectScreen.kt`
 - `ProjectListScreen.kt`
-- [apps/android/app/src/main/kotlin/sh/nikhil/swekitty/SessionStore.kt](/root/developer/projects/kitty-swe/apps/android/app/src/main/kotlin/sh/nikhil/swekitty/SessionStore.kt:1)
+- [apps/android/app/src/main/kotlin/sh/nikhil/conduit/SessionStore.kt](/root/developer/projects/kitty-swe/apps/android/app/src/main/kotlin/sh/nikhil/conduit/SessionStore.kt:1)
 
 Likely add:
 
@@ -353,7 +353,7 @@ Surfaces we don't have yet, drawn from `apps/ios/Sources/Litter/Views/`:
 
 3. **`QuickReplySheet`** — modal sheet of contextual chips parsed from the visible agent output. Existing memory `project-quick-replies-client-side` already pins the design: client-side detector, no MCP bridge, per-agent regex strategies. Lives in `core/` so iOS + Android share.
 
-4. **`DiscoveryView` + saved servers** — multi-broker pairing. Today we pair one endpoint and forget. Add `SavedServerStore` (Keychain / EncryptedSharedPreferences), an mDNS browser screen listing every `_swe-kitty._tcp.local` advertiser, and a server-switcher in the sidebar / drawer. Litter's `DiscoveredServer.swift` + `SavedServer.swift` are the template.
+4. **`DiscoveryView` + saved servers** — multi-broker pairing. Today we pair one endpoint and forget. Add `SavedServerStore` (Keychain / EncryptedSharedPreferences), an mDNS browser screen listing every `_conduit._tcp.local` advertiser, and a server-switcher in the sidebar / drawer. Litter's `DiscoveredServer.swift` + `SavedServer.swift` are the template.
 
 5. **`HomeBottomBar` + `HomeComposerView`** — the in-session bottom dock from litter's `HomeDashboardView`. Glass-capsule action row that's persistent across the terminal/chat/browser tabs (new session, voice, attach, pin a context). Currently we have no global persistent affordance inside a session. Closes B.5 in `project-ios-visual-rewrite`.
 
@@ -375,7 +375,7 @@ Surfaces we don't have yet, drawn from `apps/ios/Sources/Litter/Views/`:
 
 ### B. Parity with **swe-swe** (`github.com/choonkeat/swe-swe`)
 
-`swe-swe` ships a real **web frontend** in `www/`: Elm app (`elm.js`) + vanilla JS (`index.js`) + theme-aware CSS, with FOUC-prevention boot script and `_redirects` for Netlify-style hosting. It speaks the same WebSocket protocol that swe-kitty's broker already serves.
+`swe-swe` ships a real **web frontend** in `www/`: Elm app (`elm.js`) + vanilla JS (`index.js`) + theme-aware CSS, with FOUC-prevention boot script and `_redirects` for Netlify-style hosting. It speaks the same WebSocket protocol that conduit's broker already serves.
 
 14. **Web frontend** — at minimum, a static `www/` served by the broker at `GET /` so a user with a laptop on the same network can drive a session without installing the mobile app. v1: just a terminal view (xterm.js) wired to the existing `/ws/<uuid>` endpoint. v1.1: chat + browser tabs to match the mobile multi-view. Trade-off: PLAN.md explicitly says "no web client (swe-swe's UI already works)" — but having something on `/` keeps a non-mobile fallback alive when swe-swe isn't installed alongside, and we can ship it as ~200 KB of static assets embedded in the Go binary (`//go:embed www/*`).
 
@@ -383,17 +383,17 @@ Surfaces we don't have yet, drawn from `apps/ios/Sources/Litter/Views/`:
 
 ### C. Parity-independent — operational wins
 
-These don't come from upstream but show up the moment swe-kitty has more than one user:
+These don't come from upstream but show up the moment conduit has more than one user:
 
 16. **Push notifications** — APNs/FCM wired to the broker's `view_event { kind: "stall_alert" }`, `status { phase: "exited" }`, and `pending_input` events. Today the phone is a viewer; this turns it into a real remote control. The broker needs a new endpoint `POST /push/register` that stores APNs/FCM tokens, plus a background "needs your attention" classifier in `internal/session/watchdog.go`.
 
 17. **Background fetch / wakeup** — iOS Background App Refresh + Android `WorkManager` periodic check so a backgrounded app reconnects ahead of the user opening it. Pairs with #16: by the time the notification taps in, the session is already paired.
 
-18. **Memory diff UI** — `swe-kitty memory show --diff <a> <b>` rendered in-app. Currently `MemoryButton` opens the rendered HTML in the in-app browser; add a "compare to last checkpoint" affordance that shows what the agent changed in its plan.
+18. **Memory diff UI** — `conduit memory show --diff <a> <b>` rendered in-app. Currently `MemoryButton` opens the rendered HTML in the in-app browser; add a "compare to last checkpoint" affordance that shows what the agent changed in its plan.
 
 19. **Subagent / parallel sessions in one project** — when claude spawns a child task, surface it as a nested session you can drill into. Maps onto our existing per-session model — needs a `parent_session_id` field on `ProjectSession` and a tree-view in the sidebar.
 
-20. **Pairing via shortlink** — instead of QR + bearer, the broker can mint `swekitty://pair/<short-code>` URLs and post them through the OS share sheet, so pairing from a desktop to a phone doesn't need a physical screen-to-camera step.
+20. **Pairing via shortlink** — instead of QR + bearer, the broker can mint `conduit://pair/<short-code>` URLs and post them through the OS share sheet, so pairing from a desktop to a phone doesn't need a physical screen-to-camera step.
 
 ### Sequencing recommendation
 

@@ -1,4 +1,4 @@
-# swe-kitty architecture
+# conduit architecture
 
 Entry point for new contributors. For the current feature set, what's next, and
 the direction decisions, see [`ROADMAP.md`](ROADMAP.md).
@@ -6,7 +6,7 @@ the direction decisions, see [`ROADMAP.md`](ROADMAP.md).
 ## One-paragraph summary
 
 A native iOS + Android client drives AI coding agents (Claude Code, Codex, …)
-running on **`swe-kitty-broker`** — our own Go server that owns tmux-backed
+running on **`conduit-broker`** — our own Go server that owns tmux-backed
 PTYs, git worktrees, and the agent CLI processes it spawns directly on the host.
 There is no Docker: per-session isolation is a git worktree + an ephemeral
 `$HOME` + the PTY process tree. Each *project* is a session in the app; *within*
@@ -24,12 +24,12 @@ crashes, and broker restarts.
 └────────────────────┬────────────────────────────┘
                      │ UniFFI bindings
 ┌────────────────────┴────────────────────────────┐
-│  swe-kitty-core (Rust)                           │  ← protocol, session model, reconnect,
+│  conduit-core (Rust)                           │  ← protocol, session model, reconnect,
 │                                                  │     conversation classifier, discovery, SSH
 └────────────────────┬────────────────────────────┘
                      │ WebSocket (:1977)
 ┌────────────────────┴────────────────────────────┐
-│  swe-kitty-broker (Go)                          │  ← tmux PTYs, worktrees, agents, OAuth,
+│  conduit-broker (Go)                          │  ← tmux PTYs, worktrees, agents, OAuth,
 │                                                  │     AI quick-replies / titles, checkpoints
 └────────────────────┬────────────────────────────┘
                      │ pty.Start (no Docker)
@@ -56,20 +56,20 @@ cross-link rather than repeat.
 ## Repo layout
 
 ```
-swe-kitty/
-├── .swe-kitty/                  dev harness state (read by swe-kitty-broker on this repo)
+conduit/
+├── .conduit/                  dev harness state (read by conduit-broker on this repo)
 │   ├── config.toml
 │   ├── agents/                  dev-time adapter TOMLs
 │   ├── tasks/                   task briefs for parallel agents
 │   └── memory/                  project + session HTML memory
 ├── broker/                      Go server
-│   ├── cmd/swe-kitty-broker/
+│   ├── cmd/conduit-broker/
 │   └── internal/{session,ws,agents,auth,oauth,push,memory,termgrid}/
 ├── core/                        Rust shared core
 │   ├── src/{lib,transport,session,views,conversation,discovery}.rs
 │   ├── src/store/               shared reducer (SessionStoreCore)
 │   ├── src/ssh/                 SSH-bootstrap pairing (russh)
-│   └── swe-kitty-core.udl
+│   └── conduit-core.udl
 ├── apps/
 │   ├── ios/                     SwiftUI — Sources/LitterUI/ is the default tree
 │   └── android/                 Jetpack Compose (Material 3)
@@ -82,7 +82,7 @@ swe-kitty/
 
 ## Why two adapter directories
 
-- `.swe-kitty/agents/*.toml` — what `swe-kitty-broker` reads when working **on
+- `.conduit/agents/*.toml` — what `conduit-broker` reads when working **on
   this repo** (dev-time).
 - `agents/*.toml` — what the broker uses when running the shipped product.
 

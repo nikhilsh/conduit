@@ -67,7 +67,7 @@ fi
 # stdout OK/ERR contract stays clean; the app streams stderr as status.
 if [ ! -x "$BIN" ]; then
   mkdir -p "$BIN_DIR" "$STATE_DIR"
-  if ! curl -fsSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh \
+  if ! curl -fsSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh \
        | sh -s -- --bin-dir "$BIN_DIR" 1>&2; then
     echo "ERR 16 could not install conduit-broker binary"
     exit 16

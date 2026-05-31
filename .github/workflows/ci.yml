@@ -165,7 +165,7 @@ jobs:
         if: steps.detect.outputs.skip != 'true' && !cancelled()
         working-directory: apps/ios
         # Swift warnings are emitted as `path:line:col: warning: ...`.
-        # We strip the runner's `/Users/runner/.../swe-kitty/` prefix
+        # We strip the runner's `/Users/runner/.../conduit/` prefix
         # so file paths read as `apps/ios/Sources/…` — the same shape
         # Android's extract uses. Excludes anything inside the SPM
         # checkout (DerivedData/SourcePackages/checkouts) since those
@@ -176,7 +176,7 @@ jobs:
           cat build/ci-logs/xcodebuild-build.log build/ci-logs/xcodebuild-test.log 2>/dev/null \
             | grep -E '^[^[:space:]].*\.swift:[0-9]+:[0-9]+: warning:' \
             | grep -v 'SourcePackages/checkouts/' \
-            | sed -E 's|^.*/swe-kitty/||' \
+            | sed -E 's|^.*/conduit/||' \
             | sort -u \
             > build/ci-logs/swift-warnings.txt || true
           count=$(wc -l < build/ci-logs/swift-warnings.txt | tr -d ' ')
@@ -278,7 +278,7 @@ jobs:
         run: |
           mkdir -p build/ci-logs
           grep -E ' w: file://' build/ci-logs/gradle.log \
-            | sed -E 's|^[^w]*w: file://[^/]*/swe-kitty/||' \
+            | sed -E 's|^[^w]*w: file://[^/]*/conduit/||' \
             > build/ci-logs/kotlin-warnings.txt || true
           count=$(wc -l < build/ci-logs/kotlin-warnings.txt | tr -d ' ')
           {

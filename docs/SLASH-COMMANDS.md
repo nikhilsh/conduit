@@ -1,6 +1,6 @@
 # Slash-command recognition & routing
 
-How swe-kitty should recognise `/`-prefixed commands typed in the chat
+How conduit should recognise `/`-prefixed commands typed in the chat
 composer (e.g. `/compact`, `/clear`, `/model`, `/loop`) and route each to
 the right place: the underlying agent CLI, an in-app handler, or a polite
 "not supported here" message.
@@ -41,10 +41,10 @@ Three classes, recognised only when the trimmed draft starts with `/`:
 - **pass-through** — send the text to the agent unchanged. Works for
   Claude stream-json (`/compact`, `/clear`, `/context`, `/usage`, custom
   commands). Not available on Codex/TUI → show an in-chat note.
-- **app-handled** — swe-kitty intercepts; never reaches the agent:
+- **app-handled** — conduit intercepts; never reaches the agent:
   - `/model [name]`, `/effort [level]` → open the existing fork-with-model
     / fork-with-effort flow (model can't change mid-session in stream-json).
-  - `/loop [interval] [prompt]` → a swe-kitty client loop (repeated
+  - `/loop [interval] [prompt]` → a conduit client loop (repeated
     `sendChat`); unrelated to Claude Code's own interactive `/loop`.
   - `/help` → a client-rendered help card listing recognised commands.
 - **terminal-only** — everything else; informational only.

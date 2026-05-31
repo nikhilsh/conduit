@@ -131,7 +131,7 @@ struct AnimatedSplashModelTests {
 
     @Test func wordmarkIsLowercaseKebab() {
         // The product is consistently rendered "conduit" in copy.
-        // A regression to "Conduit" or "SWE Kitty" on the splash
+        // A regression to "Conduit" or "Conduit" on the splash
         // would be jarring on first launch.
         #expect(AnimatedSplashModel.wordmark == "conduit")
     }

@@ -1,6 +1,6 @@
 # WebSocket protocol (frozen contract v1)
 
-Wire format between `swe-kitty-broker` (Go) and `swe-kitty-core` (Rust). The binary framing was originally adopted from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), but swe-kitty has since added `switch_agent`, typed `view_event`, structured `health` / `phase` fields, and a **bearer-only auth path** (no cookie redirect to `/swe-swe-auth/login`). Treat the upstream as historical prior art, not as a compatibility target — pointing the SweKitty client at an unmodified `swe-swe` server fails the WS upgrade because the auth redirect lands on an HTML login page.
+Wire format between `conduit-broker` (Go) and `conduit-core` (Rust). The binary framing was originally adopted from [choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), but conduit has since added `switch_agent`, typed `view_event`, structured `health` / `phase` fields, and a **bearer-only auth path** (no cookie redirect to `/swe-swe-auth/login`). Treat the upstream as historical prior art, not as a compatibility target — pointing the Conduit client at an unmodified `swe-swe` server fails the WS upgrade because the auth redirect lands on an HTML login page.
 
 Changes to this document REQUIRE a deliberate PR that rebases all in-flight feature branches.
 
@@ -18,7 +18,7 @@ Upgrade: websocket
 
 - `{session-uuid}` is a v4 UUID. Unknown UUID → server creates a new session.
 - `assistant` query param is **only honored on session creation**. For existing sessions it is ignored (use `switch_agent` JSON message to swap mid-session).
-- Bearer token is validated against the broker's token table (printed as QR on `swe-kitty-broker up`).
+- Bearer token is validated against the broker's token table (printed as QR on `conduit-broker up`).
 
 ## 2. Frame types
 
@@ -147,7 +147,7 @@ The `view: "quick_replies"` shape carries **AI-generated** contextual quick repl
 Generation details and guarantees:
 - **Never blocks the real turn**: runs in a goroutine with an 8s timeout; any error/timeout/malformed model output emits **nothing**.
 - **Credential-race safe**: the interactive session and the one-shot share one ephemeral `$HOME`, so a concurrent OAuth refresh-token rotation on `.claude/.credentials.json` could race. The one-shot sidesteps this by running against a **throwaway temp-`$HOME` copy** of the session's `.claude` creds (removed after the call) — any refresh it does lands in the discardable copy, never the live session's token.
-- **Config-gated**: on by default; `SWE_KITTY_AI_QUICKREPLIES=0` (or `false`/`off`/`no`) disables it entirely.
+- **Config-gated**: on by default; `CONDUIT_AI_QUICKREPLIES=0` (or `false`/`off`/`no`) disables it entirely.
 - **Claude-only**: codex / TUI-scrape sessions cleanly no-op (no chips from the broker; the apps fall back to the local heuristic).
 - Core passes this through `on_view_event(session_id, "quick_replies", { replies: "<json-array-string>", for_message_id })` — the typed `record<string,string>` delegate, so `replies` is JSON-encoded as a string the apps decode. No UDL change.
 
@@ -197,7 +197,7 @@ Generation details and guarantees:
 - On success, the broker emits a typed `view_event { view: "status", event: { agent_credentials_refreshed: { provider } } }` so the phone learns the credential landed without needing a separate ack channel. This piggybacks on the existing `view: "status"` mirror so multi-viewer surfaces stay consistent.
 - The encrypted credential is keyed by **a hash of the broker's bearer token**, not per-session — subsequent sessions started by the same phone reuse the stored credential. The broker materializes it into a per-session ephemeral `$HOME` (with `CODEX_HOME` set for codex) at session spawn time; missing-credential sessions fall back to the legacy host-mirror behaviour exactly as before.
 
-`set_agent_credentials` is **deprecated** in favour of the v2 server-side login flow below. v1 PRs (#100, #104, #110, #112) shipped the wire but both providers reject the phone-generated `swekitty://` custom-scheme redirect URI at the authorize endpoint, so the existing path is dead code. Stage 4 of [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md) removes it.
+`set_agent_credentials` is **deprecated** in favour of the v2 server-side login flow below. v1 PRs (#100, #104, #110, #112) shipped the wire but both providers reject the phone-generated `conduit://` custom-scheme redirect URI at the authorize endpoint, so the existing path is dead code. Stage 4 of [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md) removes it.
 
 #### v2 agent-login control messages
 

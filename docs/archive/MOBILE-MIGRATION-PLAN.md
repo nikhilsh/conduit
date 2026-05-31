@@ -8,12 +8,12 @@ Date: 2026-05-18
 
 ## Executive Summary
 
-The current `swe-kitty` mobile apps are not missing polish by accident. They are the direct result of shipping the scoped shell tasks instead of the full reference app.
+The current `conduit` mobile apps are not missing polish by accident. They are the direct result of shipping the scoped shell tasks instead of the full reference app.
 
 Why we got the skeleton:
 
-- [Task 003](/root/developer/projects/kitty-swe/.swe-kitty/tasks/003-ios-shell.md:1) explicitly scoped iOS to a "terminal view only" shell.
-- [Task 004](/root/developer/projects/kitty-swe/.swe-kitty/tasks/004-android-shell.md:1) did the same for Android.
+- [Task 003](/root/developer/projects/kitty-swe/.conduit/tasks/003-ios-shell.md:1) explicitly scoped iOS to a "terminal view only" shell.
+- [Task 004](/root/developer/projects/kitty-swe/.conduit/tasks/004-android-shell.md:1) did the same for Android.
 - The richer product surface in [docs/PLAN.md](/root/developer/projects/kitty-swe/docs/PLAN.md:263) was planned, but not actually implemented as the first shipped mobile milestone.
 
 Why we did not simply copy the original app:
@@ -25,8 +25,8 @@ Why we did not simply copy the original app:
 
 So the first decision is not "how do we port the UI?" It is:
 
-1. Do we accept upstream `litter` licensing and treat `swe-kitty` as a derivative/fork?
-2. Or do we keep `swe-kitty` under its current permissive posture and reimplement the product shell using `litter` as a reference only?
+1. Do we accept upstream `litter` licensing and treat `conduit` as a derivative/fork?
+2. Or do we keep `conduit` under its current permissive posture and reimplement the product shell using `litter` as a reference only?
 
 ## What Upstream `litter` Gives Us
 
@@ -44,7 +44,7 @@ That means the reference app is not just "nice visuals." It is a complete produc
 - real session/server management flows
 - a much more opinionated iOS/Android presentation layer
 
-So if the goal is "make `swe-kitty` feel like KittyLitter instead of a scaffold," the right move is not incremental beautification of the current shell. The right move is structural convergence toward the upstream app shape.
+So if the goal is "make `conduit` feel like KittyLitter instead of a scaffold," the right move is not incremental beautification of the current shell. The right move is structural convergence toward the upstream app shape.
 
 ## Decision Gate
 
@@ -67,7 +67,7 @@ Effect:
 
 Use when:
 
-- you want to preserve a permissive `swe-kitty` core/repo posture
+- you want to preserve a permissive `conduit` core/repo posture
 - you are willing to spend more engineering time to avoid direct code carryover
 
 Effect:
@@ -105,7 +105,7 @@ Deliverable:
 - file-level mapping:
   - upstream iOS files we should adopt or mirror
   - upstream Android files we should adopt or mirror
-  - upstream shared Rust flows we should adapt into `swe-kitty-core`
+  - upstream shared Rust flows we should adapt into `conduit-core`
 
 ### Phase 1: Release Automation
 
@@ -216,7 +216,7 @@ Tasks:
 
 - replace current `RootView`, `ProjectListView`, `ProjectView`, and settings structure with the target shell
 - move to a coherent design system instead of isolated visual tweaks
-- preserve existing `SweKittyClient` integration while swapping the presentation layer
+- preserve existing `ConduitClient` integration while swapping the presentation layer
 
 ### Workstream C: Pairing + Server Management
 

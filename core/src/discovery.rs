@@ -32,7 +32,7 @@ use parking_lot::Mutex;
 pub enum DiscoverySource {
     /// Observed via mDNS browse (`_conduit._tcp.local`).
     Mdns,
-    /// Reached via QR pairing or `swekitty://` deeplink.
+    /// Reached via QR pairing or `conduit://` deeplink.
     Pairing,
     /// Typed in by the user in the Settings → URL/Token form.
     Manual,

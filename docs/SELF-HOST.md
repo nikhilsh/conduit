@@ -1,10 +1,10 @@
-# Self-hosting `swe-kitty-broker`
+# Self-hosting `conduit-broker`
 
 The broker runs **directly on the box** as a single static Go binary —
 there is no Docker / container requirement. You install the binary, make
 sure the agent CLIs (`claude`, `codex`) are on `PATH`, point it at a
-working directory, and run `swe-kitty-broker up`. The pairing log line is
-your `swekitty://…?token=…` URL — tap it on the phone (the SweKitty app
+working directory, and run `conduit-broker up`. The pairing log line is
+your `conduit://…?token=…` URL — tap it on the phone (the Conduit app
 registers the scheme) and you're connected.
 
 Running as **root is fine**: the broker sets `IS_SANDBOX=1` for the
@@ -22,9 +22,9 @@ on credentials.
 
 ```bash
 # Install the broker binary (from the GitHub Release):
-curl -sLo /usr/local/bin/swe-kitty-broker \
-  https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-broker-linux-amd64
-chmod +x /usr/local/bin/swe-kitty-broker
+curl -sLo /usr/local/bin/conduit-broker \
+  https://github.com/nikhilsh/conduit/releases/latest/download/conduit-broker-linux-amd64
+chmod +x /usr/local/bin/conduit-broker
 
 # Install agent CLIs *natively* (NOT via npm for claude — re-running
 # `npm install -g` on top of a previous install fails with ENOTEMPTY and
@@ -52,30 +52,30 @@ npm install -g @openai/codex
 # Bring the broker up. --local enables mDNS so the app auto-discovers it
 # on your LAN. Pick the working directory the agents run in with --cwd
 # (defaults to a per-session worktree).
-swe-kitty-broker up --local --addr :1977
+conduit-broker up --local --addr :1977
 ```
 
 stdout prints:
 
 ```
-swe-kitty-broker up
+conduit-broker up
   addr:    :1977
   url:     http://localhost:1977
   token:   <bearer>
-  pairing: swekitty://hostname.local:1977?token=<bearer>
+  pairing: conduit://hostname.local:1977?token=<bearer>
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 █ ▄▄▄▄▄ █▀▀█ ▄▄▄▄▄ █  …    ← the QR
 …
 ```
 
-Scan the QR with the SweKitty app (or tap the `swekitty://` link). Done.
+Scan the QR with the Conduit app (or tap the `conduit://` link). Done.
 
 Two supported topologies:
 
-1. **LAN / homelab** — run `swe-kitty-broker up --local` on a laptop / dev
+1. **LAN / homelab** — run `conduit-broker up --local` on a laptop / dev
    box. Mobile clients connect over `ws://<host>:1977` and discover it via
-   mDNS (`_swe-kitty._tcp`).
+   mDNS (`_conduit._tcp`).
 2. **Public VPS** — same binary, plus Caddy in front for TLS; mobile
    clients connect over `wss://<your-domain>` from anywhere (below).
 
@@ -90,27 +90,27 @@ You need:
 
 ```bash
 ssh root@vps
-mkdir -p /opt/swe-kitty && cd /opt/swe-kitty
-curl -fsSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh \
-  | sh -s -- --bin-dir /opt/swe-kitty
-mkdir -p .swe-kitty
-# Drop .swe-kitty/env if you want to pass through ANTHROPIC_API_KEY /
+mkdir -p /opt/conduit && cd /opt/conduit
+curl -fsSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh \
+  | sh -s -- --bin-dir /opt/conduit
+mkdir -p .conduit
+# Drop .conduit/env if you want to pass through ANTHROPIC_API_KEY /
 # OPENAI_API_KEY. The default agent TOMLs are embedded in the binary;
-# override by placing TOMLs in ~/.swe-kitty/agents/ or pass --agents-dir.
+# override by placing TOMLs in ~/.conduit/agents/ or pass --agents-dir.
 # Install claude/codex on PATH on the VPS too (see "Install the broker").
 ```
 
-### systemd unit (`/etc/systemd/system/swe-kitty.service`)
+### systemd unit (`/etc/systemd/system/conduit.service`)
 
 ```ini
 [Unit]
-Description=swe-kitty broker
+Description=conduit broker
 After=network-online.target
 
 [Service]
-WorkingDirectory=/opt/swe-kitty
-EnvironmentFile=/opt/swe-kitty/.swe-kitty/env
-ExecStart=/opt/swe-kitty/swe-kitty-broker up \
+WorkingDirectory=/opt/conduit
+EnvironmentFile=/opt/conduit/.conduit/env
+ExecStart=/opt/conduit/conduit-broker up \
             --addr 127.0.0.1:1977 \
             --public-url https://broker.example.com
 Restart=always
@@ -121,8 +121,8 @@ WantedBy=multi-user.target
 
 ```bash
 systemctl daemon-reload
-systemctl enable --now swe-kitty
-journalctl -u swe-kitty -f
+systemctl enable --now conduit
+journalctl -u conduit -f
 # copy the printed bearer + QR
 ```
 
@@ -141,7 +141,7 @@ WebSocket endpoint at `/ws/...` is reverse-proxied through TLS.
 ### Pairing
 
 ```bash
-journalctl -u swe-kitty | grep -A 30 'pairing:'
+journalctl -u conduit | grep -A 30 'pairing:'
 ```
 
 Scan the QR. The app stores the bearer in Keychain
@@ -151,14 +151,14 @@ Scan the QR. The app stores the bearer in Keychain
 ## Updating
 
 ```bash
-systemctl stop swe-kitty
-curl -sLo /opt/swe-kitty/swe-kitty-broker \
-  https://github.com/nikhilsh/swe-kitty/releases/latest/download/swe-kitty-broker-linux-amd64
-chmod +x /opt/swe-kitty/swe-kitty-broker
-systemctl start swe-kitty
+systemctl stop conduit
+curl -sLo /opt/conduit/conduit-broker \
+  https://github.com/nikhilsh/conduit/releases/latest/download/conduit-broker-linux-amd64
+chmod +x /opt/conduit/conduit-broker
+systemctl start conduit
 ```
 
-Sessions are recovered from `.swe-kitty/sessions/` on disk — clients
+Sessions are recovered from `.conduit/sessions/` on disk — clients
 reconnect transparently. See `docs/SESSION-LIFECYCLE.md` for the
 recovery model.
 
@@ -166,8 +166,8 @@ recovery model.
 
 ```bash
 # from a laptop on the same LAN as a --local broker
-dns-sd -B _swe-kitty._tcp local        # macOS
-avahi-browse -t _swe-kitty._tcp        # Linux
+dns-sd -B _conduit._tcp local        # macOS
+avahi-browse -t _conduit._tcp        # Linux
 
 # from anywhere, against a public deploy
 curl -i https://broker.example.com/ws/$(uuidgen) \

@@ -1,7 +1,7 @@
-// terminal.js — xterm.js bootstrap for SweKitty WKWebView / Android WebView host.
+// terminal.js — xterm.js bootstrap for Conduit WKWebView / Android WebView host.
 // Communicates with the native side via a platform-detected bridge:
 //   iOS:     window.webkit.messageHandlers.term.postMessage(obj)
-//   Android: window.swekitty.postMessage(JSON.stringify(obj))
+//   Android: window.conduit.postMessage(JSON.stringify(obj))
 // Messages:
 //   { type: "ready" }                    emitted once after term.open()
 //   { type: "input", data: "<utf8>" }    keystroke from xterm.onData
@@ -22,9 +22,9 @@
         window.webkit.messageHandlers.term.postMessage(msg);
       };
     }
-    if (window.swekitty && typeof window.swekitty.postMessage === "function") {
+    if (window.conduit && typeof window.conduit.postMessage === "function") {
       return function (msg) {
-        window.swekitty.postMessage(JSON.stringify(msg));
+        window.conduit.postMessage(JSON.stringify(msg));
       };
     }
     return function () {};

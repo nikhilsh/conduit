@@ -2,9 +2,9 @@
 # install.sh — one-command installer for conduit-broker (server).
 #
 # Usage:
-#   curl -sSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sh
-#   curl -sSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sh -s -- --up [--local]
-#   curl -sSL https://github.com/nikhilsh/swe-kitty/releases/latest/download/install.sh | sudo sh -s -- --service [--addr :1977] [--local]
+#   curl -sSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh | sh
+#   curl -sSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh | sh -s -- --up [--local]
+#   curl -sSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh | sudo sh -s -- --service [--addr :1977] [--local]
 #
 # Flags:
 #   --version <vN.N.N>   pin a specific tag instead of `latest`
@@ -20,7 +20,7 @@
 
 set -eu
 
-REPO="nikhilsh/swe-kitty"
+REPO="nikhilsh/conduit"
 VERSION=""
 BIN_DIR=""
 RUN_UP=0

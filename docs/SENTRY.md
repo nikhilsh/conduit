@@ -1,6 +1,6 @@
 # Sentry
 
-SweKitty now has mobile telemetry hooks for handled connection and session failures.
+Conduit now has mobile telemetry hooks for handled connection and session failures.
 
 ## Secrets
 
@@ -37,8 +37,8 @@ The current UI now treats that state as `Paired`, not verified, and maps auth fa
 
 ## Secret values
 
-- `SENTRY_DSN_IOS`: DSN for the `swe-kitty-ios` Sentry project
-- `SENTRY_DSN_ANDROID`: DSN for the `swe-kitty-android` Sentry project
+- `SENTRY_DSN_IOS`: DSN for the `conduit-ios` Sentry project
+- `SENTRY_DSN_ANDROID`: DSN for the `conduit-android` Sentry project
 - `SENTRY_AUTH_TOKEN`: org token with release and project write access
 - `SENTRY_ORG`: Sentry org slug
 - `SENTRY_PROJECT_IOS`: iOS project slug

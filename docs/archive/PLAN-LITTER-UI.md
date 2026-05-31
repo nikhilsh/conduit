@@ -30,7 +30,7 @@ LitterUI tree. The remainder is verbatim from the original plan.
 
 ## Goal
 
-Bring SweKitty's visual + structural design into alignment with
+Bring Conduit's visual + structural design into alignment with
 litter's iOS reference, while keeping our own product affordances —
 specifically the per-session **Terminal / Chat / Browser** multi-view,
 which is the main idea per chat window for us.
@@ -72,8 +72,8 @@ which is the main idea per chat window for us.
 
 Keep the existing tokens, plus add:
 
-- `SweKittyTheme.statBig: Font` — big-number font for stat grids (mono, large size).
-- `SweKittyTheme.bodyMono: Font` — bound to `AppearanceStore.fontFamily`.
+- `ConduitTheme.statBig: Font` — big-number font for stat grids (mono, large size).
+- `ConduitTheme.bodyMono: Font` — bound to `AppearanceStore.fontFamily`.
 - `SettingsRow` shape — rounded-rect with leading orange icon, trailing chevron, optional toggle. Uses `glassRoundedRect`.
 - `SectionLabel` shape — small uppercased mono label above section.
 

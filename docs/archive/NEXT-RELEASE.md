@@ -30,7 +30,7 @@ Symptom seen in the app:
 Evidence:
 
 - [apps/ios/Sources/SessionStore.swift](/root/developer/projects/kitty-swe/apps/ios/Sources/SessionStore.swift:85) calls `client.createSession(...)` inside a Swift `Task`.
-- [core/generated/swe_kitty_core.swift](/root/developer/projects/kitty-swe/core/generated/swe_kitty_core.swift:629) exposes `createSession(...)` as an async UniFFI call, so the Swift side is not the source of the panic.
+- [core/generated/conduit_core.swift](/root/developer/projects/kitty-swe/core/generated/conduit_core.swift:629) exposes `createSession(...)` as an async UniFFI call, so the Swift side is not the source of the panic.
 - [core/src/lib.rs](/root/developer/projects/kitty-swe/core/src/lib.rs:166) routes `create_session` into `open_session(...)`.
 - [core/src/lib.rs](/root/developer/projects/kitty-swe/core/src/lib.rs:188) then calls `transport::connect(...)`.
 - [core/src/transport.rs](/root/developer/projects/kitty-swe/core/src/transport.rs:89) uses Tokio networking/spawn/timers.
@@ -40,11 +40,11 @@ Interpretation:
 - `connect()` on the Swift side currently only stores a delegate and returns; it does not touch the network, which is why initial connection looks healthy.
 - The first real network work happens in `create_session`.
 - At that point the Rust library is entering Tokio-dependent code without a guaranteed Tokio runtime owned by the library itself.
-- Result: first session creation panics instead of returning a normal `SweKittyError`.
+- Result: first session creation panics instead of returning a normal `ConduitError`.
 
 Required fix:
 
-- Make `swe-kitty-core` own its async runtime boundary instead of assuming callers are already inside Tokio.
+- Make `conduit-core` own its async runtime boundary instead of assuming callers are already inside Tokio.
 - The clean version is: create and hold a runtime/handle in the Rust client layer, then run transport work on that runtime.
 - Also convert this panic path into a normal surfaced error if runtime setup fails.
 
@@ -84,7 +84,7 @@ Evidence:
   - project detail
   - header with agent badge
   - segmented terminal/chat/browser
-- But [`.swe-kitty/tasks/003-ios-shell.md`](/root/developer/projects/kitty-swe/.swe-kitty/tasks/003-ios-shell.md:1) explicitly narrowed the first iOS delivery to:
+- But [`.conduit/tasks/003-ios-shell.md`](/root/developer/projects/kitty-swe/.conduit/tasks/003-ios-shell.md:1) explicitly narrowed the first iOS delivery to:
   - "minimal SwiftUI app"
   - terminal view only
   - chat/browser stubbed
@@ -137,7 +137,7 @@ Recommendation:
 
 - `core/src/lib.rs`
 - `core/src/transport.rs`
-- `core/src/swe_kitty_core.udl`
+- `core/src/conduit_core.udl`
 - `apps/ios/Sources/SessionStore.swift`
 - `apps/ios/Sources/Views/RootView.swift`
 - `apps/ios/Sources/Views/ProjectListView.swift`

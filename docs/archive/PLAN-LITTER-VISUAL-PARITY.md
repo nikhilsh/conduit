@@ -241,7 +241,7 @@ For each screen: list the litter primitives we should match, then concrete drift
 - A.9.2 **Missing badge stack.** Up to 4 agent badges per pill — significant feature, deferred.
 - A.9.3 **Vertical padding +2pt** — minor but adds up across the row.
 
-### A.10 — Terminal + Browser tabs (swe-kitty divergence)
+### A.10 — Terminal + Browser tabs (conduit divergence)
 
 Litter has no per-session multi-view; conversation IS the surface. We have Terminal / Chat / Browser tabs under a segmented picker. **Keep them** (user-decided).
 
@@ -274,7 +274,7 @@ Litter has no per-session multi-view; conversation IS the surface. We have Termi
 | `textOnAccent` | `#FFFFFF` / `#0D0D0D` | match | match |
 | `codeBackground` | `#F0F0F5` / `#111111` | **missing** | **GAP** — used by all `code` blocks; we instead use `surface.opacity(0.72)` ad-hoc |
 | `background` | not in `LitterPalette` (computed via `LitterTheme.backgroundGradient` from `surface`) | `#FAFAFA` / `#0C0E12` (separate token) | **drift** — we have an extra brightness-shift gradient (`Theme.swift:75-83`); litter uses surface directly |
-| Per-agent accents (`claudeAccent`, `codexAccent`, `hermesAccent`, `piAccent`, `opencodeAccent`) | not in litter | ours ship them | **deliberate addition** — keep, this is a swe-kitty feature |
+| Per-agent accents (`claudeAccent`, `codexAccent`, `hermesAccent`, `piAccent`, `opencodeAccent`) | not in litter | ours ship them | **deliberate addition** — keep, this is a conduit feature |
 
 **B.1 verdict:** add `textSystem` and `codeBackground` tokens. Drop the brightness-shifted gradient and use flat surface for the background.
 
@@ -287,7 +287,7 @@ Litter has no per-session multi-view; conversation IS the surface. We have Termi
 
 **Ours** uses raw `Font.system(.style, design: .monospaced|.default)` calls. No central font ramp. `AppearanceStore.bodyFont()` exists but only returns the body font — no heading scale, no caption scale.
 
-**B.2 verdict:** **GAP — add `SweKittyTypography` with:**
+**B.2 verdict:** **GAP — add `ConduitTypography` with:**
 - `body(design:)` — respects `appearance.fontFamily`
 - `heading(level:)` — h1 1.43×, h2 1.30×, h3 1.15×, h4 1.07× of body
 - `caption()`, `footnote()`, `subheadline()` wrappers (all design-aware)
@@ -397,7 +397,7 @@ Litter has no per-session multi-view; conversation IS the surface. We have Termi
 Files:
 - `apps/ios/Sources/Theme/Palette.swift` — add `textSystem`, `codeBackground` Pair tokens.
 - `apps/ios/Sources/Theme/Theme.swift` — drop the brightness-shift gradient; use `surface.color(for: scheme)` directly. Add `tagCornerRadius = 4`, `codeBlockCornerRadius = 10`, reduce `cardCornerRadius` to `14`, keep `smallCornerRadius` at `10`.
-- `apps/ios/Sources/Theme/Typography.swift` (NEW) — `SweKittyTypography` enum:
+- `apps/ios/Sources/Theme/Typography.swift` (NEW) — `ConduitTypography` enum:
   - `body()`, `heading1()..heading4()` with multiplier (1.43, 1.30, 1.15, 1.07 × bodyPointSize).
   - `caption()`, `footnote()`, `subheadline()`, `monoCaption()`, `monoFootnote()`.
   - All design-aware via `AppearanceStore.fontFamily`.
@@ -430,7 +430,7 @@ LOC: ~400. Acceptance: open Settings on iPhone with litter screenshots side-by-s
 Files:
 - `apps/ios/Sources/Views/HomeView.swift` — full rewrite:
   - Top row: brand mark left (consider migrating to an `AnimatedLogo`), search/list right. **Drop the top-row settings gear**; relocate settings into a long-press on the brand mark (matches litter's settings access pattern via sidebar/menu).
-  - Session list: typography from `SweKittyTypography.footnote()` (title) + `.monoCaption()` (subtitle). Padding `.leading 1 / .trailing 8 / .vertical 5`. Active row fills `RoundedRectangle(cornerRadius: 6).fill(surfaceLight.opacity(0.55))`.
+  - Session list: typography from `ConduitTypography.footnote()` (title) + `.monoCaption()` (subtitle). Padding `.leading 1 / .trailing 8 / .vertical 5`. Active row fills `RoundedRectangle(cornerRadius: 6).fill(surfaceLight.opacity(0.55))`.
   - Indicator: replace SF Symbol circle.fill with a 7pt `Circle()` filled `accentStrong` (or `success` for live status) with optional pulse animation.
 - `apps/ios/Sources/Views/BottomActionBar.swift` — full rewrite:
   - Two `GlassMorphContainer`s. Buttons at 44pt. Spacing 14. Spring `response 0.42 / dampingFraction 0.82`.
@@ -457,7 +457,7 @@ Files:
   - "Connecting" pill: drop to flat `surface.opacity(0.4)` with no border stroke.
 - `apps/ios/Sources/Views/ConversationView.swift` — major edit:
   - **Decide on `UserMessageStyle`** (Section E2 — user decision required). If switching to `.bubble`, update the assertion test.
-  - Apply typography ramp from `SweKittyTypography` — headings scale 1.07–1.43× of body in `ConversationMarkdownBlock`. (Implementation: post-parse the `AttributedString` to walk `.markdown.heading.level` runs and set point size.)
+  - Apply typography ramp from `ConduitTypography` — headings scale 1.07–1.43× of body in `ConversationMarkdownBlock`. (Implementation: post-parse the `AttributedString` to walk `.markdown.heading.level` runs and set point size.)
   - `ConversationToolCard`: drop the outer `glassRect`; use flat `surface.opacity(0.6)` with 14pt corner. Drop nested `surface.opacity(0.72)` blocks — pick one surface depth.
   - `ConversationHandoffCard` / `ConversationPendingInputCard`: convert from heavy glass cards to flat inline rows with a small leading tint dot.
   - Drop `border.opacity(0.55)` strokes on code/diff blocks.
@@ -492,7 +492,7 @@ Litter's `accentStrong` is `#00FF9C` neon green — their brand. Ours is `#CC785
 
 ### F.2 — Terminal + Browser tabs under the chat area
 
-Litter has only chat. We have Terminal / Chat / Browser. User has explicitly said keep tabs (per `docs/PLAN-LITTER-UI.md` decisions §1). The hairline-segmented-control treatment in Section D minimizes the visual cost, but the tabs themselves are non-negotiable — they are the main idea per session for swe-kitty.
+Litter has only chat. We have Terminal / Chat / Browser. User has explicitly said keep tabs (per `docs/PLAN-LITTER-UI.md` decisions §1). The hairline-segmented-control treatment in Section D minimizes the visual cost, but the tabs themselves are non-negotiable — they are the main idea per session for conduit.
 
 ### F.3 — Multi-agent picker + per-agent accents
 

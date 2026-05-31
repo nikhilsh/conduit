@@ -75,7 +75,7 @@ extension LitterUI {
                         Text(
                             "If you maintain a library listed here and notice " +
                             "an incorrect attribution, please open an issue at " +
-                            "github.com/nikhilsh/swe-kitty."
+                            "github.com/nikhilsh/conduit."
                         )
                         .font(.caption)
                         .foregroundStyle(LitterUI.Palette.textMuted.color)

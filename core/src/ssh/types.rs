@@ -43,7 +43,7 @@ pub struct SshBootstrapResult {
     /// endpoint the mobile WebSocket transport connects to).
     pub local_port: u16,
     /// Bearer token the harness accepts. Either the value the caller
-    /// passed in (via the `SWE_KITTY_TOKEN` env on the remote container)
+    /// passed in (via the `CONDUIT_TOKEN` env on the remote container)
     /// or — if we found an existing reusable container — the bearer
     /// that container was started with.
     pub token: String,

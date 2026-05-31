@@ -113,14 +113,14 @@ gh run watch <run-id> --exit-status
 
 4. Verify the GitHub Release has the expected assets:
 
-- `SweKitty.ipa`
+- `Conduit.ipa`
 - Android `*.apk`
 - broker binaries
 
 Example:
 
 ```sh
-gh release view v0.0.X -R nikhilsh/swe-kitty --json assets,tagName,url,name
+gh release view v0.0.X -R nikhilsh/conduit --json assets,tagName,url,name
 ```
 
 5. The website deploy is automatic after successful tagged releases.
@@ -133,13 +133,13 @@ npm install
 npm run build
 cd out
 rm -f .deploy.yaml
-fyra link swekitty
+fyra link conduit
 fyra push
 ```
 
 Live site:
 
-- `https://swekitty.kaopeh.com`
+- `https://conduit.kaopeh.com`
 
 The website generates:
 
@@ -153,7 +153,7 @@ The website generates:
 ### iOS
 
 - `release-ios` succeeded
-- `SweKitty.ipa` exists on the release
+- `Conduit.ipa` exists on the release
 - OTA install works from Safari on an enrolled device
 - direct IPA link downloads correctly
 
@@ -187,7 +187,7 @@ If you are using repo-provided Android secrets, confirm the four secret names ex
 Check with:
 
 ```sh
-gh secret list -R nikhilsh/swe-kitty
+gh secret list -R nikhilsh/conduit
 ```
 
 ### Website shows no APK button
@@ -201,9 +201,9 @@ Check:
 - `FYRA_TOKEN` exists in repo secrets
 - The `ios`, `android`, and `broker` jobs in the same `release` run all succeeded
 - The GitHub Release has:
-  - `SweKitty.ipa`
+  - `Conduit.ipa`
   - `app-release.apk`
-  - the four broker binaries (`swe-kitty-broker-{linux,darwin}-{amd64,arm64}`)
+  - the four broker binaries (`conduit-broker-{linux,darwin}-{amd64,arm64}`)
 
 To re-run just the website deploy without rebuilding the apps, use "Re-run failed jobs" on the `release` workflow run — `prepare`, `ios`, `android`, `broker` are skipped if green and only `deploy-website` re-runs.
 
@@ -214,6 +214,6 @@ Relink the export directory:
 ```sh
 cd website/out
 rm -f .deploy.yaml
-fyra link swekitty
+fyra link conduit
 fyra push
 ```

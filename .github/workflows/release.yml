@@ -69,7 +69,7 @@ jobs:
           if ! gh release view "${RELEASE_TAG}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "${RELEASE_TAG}" -R "$GITHUB_REPOSITORY" \
               --target "${GITHUB_SHA}" \
-              --title "swe-kitty ${RELEASE_TAG}" \
+              --title "conduit ${RELEASE_TAG}" \
               --notes "Auto-generated release. See workflow logs for build provenance." \
               || gh release view "${RELEASE_TAG}" -R "$GITHUB_REPOSITORY" >/dev/null
           else
@@ -120,7 +120,7 @@ jobs:
           echo "${release_json}" | jq '.assets | map(.name)'
           missing=()
           for required in \
-            SweKitty.ipa \
+            Conduit.ipa \
             app-release.apk \
             conduit-broker-linux-amd64 \
             conduit-broker-linux-arm64 \

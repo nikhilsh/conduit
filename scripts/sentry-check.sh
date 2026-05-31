@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# SweKitty Sentry triage helper.
+# Conduit Sentry triage helper.
 # Defaults:
-# - org: swe-kitty
+# - org: conduit
 # - projects: apple-ios, android
 # - unresolved issues query
 # - optional recent-event samples
@@ -12,7 +12,7 @@ set -euo pipefail
 # 1) SENTRY_AUTH_TOKEN env var
 # 2) /root/.config/sentry/auth-token
 
-ORG="${SENTRY_ORG:-swe-kitty}"
+ORG="${SENTRY_ORG:-conduit}"
 PROJECTS="${SENTRY_PROJECTS:-apple-ios,android}"
 QUERY="${SENTRY_QUERY:-is:unresolved}"
 LIMIT="${SENTRY_LIMIT:-20}"

@@ -1,6 +1,6 @@
 # Session lifecycle (frozen contract v1)
 
-How a swe-kitty session is created, kept alive, checkpointed, watchdogged, swapped between agents, and recovered after a crash. The guarantees here are what makes "long-running sessions with constant checks and ability to switch out agents without losing where we are" real.
+How a conduit session is created, kept alive, checkpointed, watchdogged, swapped between agents, and recovered after a crash. The guarantees here are what makes "long-running sessions with constant checks and ability to switch out agents without losing where we are" real.
 
 ## 1. Three persistence rails
 
@@ -8,17 +8,17 @@ Every session has three independent rails on disk. Recovery is possible iff all 
 
 | Rail | What | Where | Cadence |
 |---|---|---|---|
-| **Scrollback ring** | Last N MiB raw PTY bytes (`N = 16` default) | `.swe-kitty/sessions/<uuid>/scrollback.bin` (mmap) | Continuous |
-| **Memory HTML** | Structured agent state per `docs/MEMORY-FORMAT.md` | `.swe-kitty/memory/sessions/<uuid>.html` | Every 60s + on event |
-| **Worktree** | Code changes | `.swe-kitty/sessions/<uuid>/work/` git worktree | Every agent commit + auto-WIP every 5 min |
+| **Scrollback ring** | Last N MiB raw PTY bytes (`N = 16` default) | `.conduit/sessions/<uuid>/scrollback.bin` (mmap) | Continuous |
+| **Memory HTML** | Structured agent state per `docs/MEMORY-FORMAT.md` | `.conduit/memory/sessions/<uuid>.html` | Every 60s + on event |
+| **Worktree** | Code changes | `.conduit/sessions/<uuid>/work/` git worktree | Every agent commit + auto-WIP every 5 min |
 
 ## 2. Session creation
 
 1. Client `GET /ws/<new-uuid>?assistant=<a>` with bearer auth.
 2. Broker:
    1. Allocates a preview port from `[3000, 3019]`.
-   2. Creates worktree: `git worktree add .swe-kitty/sessions/<uuid>/work -b agent/<a>-<task-or-uuidshort> origin/main`
-   3. Renders session memory HTML from `.swe-kitty/memory/session-template.html` (substitutes placeholders).
+   2. Creates worktree: `git worktree add .conduit/sessions/<uuid>/work -b agent/<a>-<task-or-uuidshort> origin/main`
+   3. Renders session memory HTML from `.conduit/memory/session-template.html` (substitutes placeholders).
    4. Creates `scrollback.bin` (16 MiB mmap).
    5. Looks up adapter for `<a>`, runs `on_start` hook.
    6. Spawns the agent as a host child process: `pty.Start` in the worktree with
@@ -35,7 +35,7 @@ A checkpoint is a coordinated flush of all three rails. Triggers:
 - Every `switch_agent`
 - Every clean `exit`
 - `SIGTERM` to the broker
-- Manual `swe-kitty memory checkpoint --session <uuid>` from the broker host
+- Manual `conduit memory checkpoint --session <uuid>` from the broker host
 
 Checkpoint sequence (atomic):
 1. Pause PTY drain into an in-memory tail buffer
@@ -54,7 +54,7 @@ A goroutine per session, independent of the PTY drain. Runs three checks every 3
 |---|---|---|
 | Agent process alive | the PTY child's exit is observed | Mark session `dead`; broadcast `phase: "stalled"`; emit `view_event` to chat tab; **do not** auto-restart |
 | PTY producing output | bytes-since-last-output > `[watchdog] stall_alert_after_sec` (default 300s) | Mark `warning`; broadcast `phase: "stalled"`; emit alert `view_event` |
-| Memory writable | open + fsync probe file under `.swe-kitty/memory/` | Log error; broadcast `phase: "stalled"`; do not crash broker |
+| Memory writable | open + fsync probe file under `.conduit/memory/` | Log error; broadcast `phase: "stalled"`; do not crash broker |
 
 `auto_restart_on_crash` is `false` by default (avoids agents looping forever burning credits). Users tap "Resume" in the mobile app to restart.
 
@@ -84,9 +84,9 @@ The worktree, branch, git state, scrollback, and memory are preserved across the
 
 ## 6. Broker restart recovery
 
-`swe-kitty-broker up` after a kill / reboot:
+`conduit-broker up` after a kill / reboot:
 
-1. Scan `.swe-kitty/sessions/*/` for sessions.
+1. Scan `.conduit/sessions/*/` for sessions.
 2. For each:
    1. Validate all three rails (§1). If any rail missing, mark `corrupted` and skip with a warning.
    2. Check whether the session's tmux server still holds the PTY (tmux survives
@@ -102,13 +102,13 @@ Sessions can survive an arbitrary number of broker restarts as long as tmux and 
 
 Triggered by:
 - `{"type":"exit"}` from any client (graceful, prompts confirm in app)
-- Explicit `swe-kitty-broker session rm <uuid>` from CLI
+- Explicit `conduit-broker session rm <uuid>` from CLI
 
 Shutdown sequence:
 1. Final checkpoint (§3).
 2. `SIGTERM` the agent process (10s grace, then `SIGKILL`); tear down its tmux PTY.
 3. Run `on_exit` hook.
-4. Optionally archive: move `.swe-kitty/sessions/<uuid>/` to `.swe-kitty/archive/<uuid>/` (configurable; default off — keeps disk usage in check).
+4. Optionally archive: move `.conduit/sessions/<uuid>/` to `.conduit/archive/<uuid>/` (configurable; default off — keeps disk usage in check).
 5. Remove the git worktree: `git worktree remove --force <path>`.
 6. Mobile clients drop the session from their list.
 

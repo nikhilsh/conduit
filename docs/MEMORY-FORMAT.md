@@ -1,6 +1,6 @@
 # Memory format (frozen contract v1)
 
-Inter-agent handoff and long-running-session continuity in swe-kitty rely on a structured HTML document. This file specifies the schema. Anything outside this schema is undefined behavior; the broker validator will reject non-conforming HTML.
+Inter-agent handoff and long-running-session continuity in conduit rely on a structured HTML document. This file specifies the schema. Anything outside this schema is undefined behavior; the broker validator will reject non-conforming HTML.
 
 HTML was chosen over Markdown because:
 - It renders directly in the mobile in-app browser (no Markdown engine to ship)
@@ -12,8 +12,8 @@ HTML was chosen over Markdown because:
 
 | Scope | Path | Lifetime |
 |---|---|---|
-| **project** | `.swe-kitty/memory/index.html` | Committed to git; permanent |
-| **session** | `.swe-kitty/memory/sessions/<uuid>.html` | Per session; gitignored |
+| **project** | `.conduit/memory/index.html` | Committed to git; permanent |
+| **session** | `.conduit/memory/sessions/<uuid>.html` | Per session; gitignored |
 
 A document declares its scope via `<html data-scope="project|session">`.
 
@@ -21,7 +21,7 @@ A document declares its scope via `<html data-scope="project|session">`.
 
 ```html
 <!doctype html>
-<html lang="en" data-swe-kitty-memory="v1" data-scope="project|session">
+<html lang="en" data-conduit-memory="v1" data-scope="project|session">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -37,7 +37,7 @@ A document declares its scope via `<html data-scope="project|session">`.
 </html>
 ```
 
-The `data-swe-kitty-memory` version attribute is mandatory. Schema breaking changes bump it to `v2`; the broker must reject mismatched versions with a clear error.
+The `data-conduit-memory` version attribute is mandatory. Schema breaking changes bump it to `v2`; the broker must reject mismatched versions with a clear error.
 
 ## 3. Required sections
 
@@ -49,7 +49,7 @@ A `<dl>` of key/value metadata. Keys vary by scope; see §3.2 and §3.3.
 | `data-section` | Content |
 |---|---|
 | `meta` | `repo`, `memory-format`, `last-promoted` |
-| `north-star` | One paragraph: what swe-kitty is, why |
+| `north-star` | One paragraph: what conduit is, why |
 | `frozen-contracts` | `<ol>` linking to the four contract docs |
 | `decisions` | `<ol>` of `<li data-id="d-NNN">` project-wide decisions |
 | `conventions` | `<ul>` of one-line conventions |
@@ -61,7 +61,7 @@ A `<dl>` of key/value metadata. Keys vary by scope; see §3.2 and §3.3.
 | `data-section` | Content |
 |---|---|
 | `meta` | `session`, `worktree`, `branch`, `task`, `current-agent`, `created`, `last-checkpoint` |
-| `task` | Brief summary + pointer to the canonical brief in `.swe-kitty/tasks/` |
+| `task` | Brief summary + pointer to the canonical brief in `.conduit/tasks/` |
 | `state` | "Last completed", "Currently working on", "Next step" |
 | `decisions` | `<ol data-id="d-NNN">` decisions made this session |
 | `attempts` | `<ul>` of things tried that didn't work — keeps next agent from repeating |
@@ -71,9 +71,9 @@ A `<dl>` of key/value metadata. Keys vary by scope; see §3.2 and §3.3.
 
 ## 4. The `handoff` section
 
-When `switch_agent` fires (or an agent exits cleanly), the agent writes its outgoing brief to `/workspace/.swe-kitty/HANDOFF-OUT.html`. The broker parses the `<section data-section="handoff">` from that file and merges it into the session memory's own `handoff` section (removing the `hidden` attribute).
+When `switch_agent` fires (or an agent exits cleanly), the agent writes its outgoing brief to `/workspace/.conduit/HANDOFF-OUT.html`. The broker parses the `<section data-section="handoff">` from that file and merges it into the session memory's own `handoff` section (removing the `hidden` attribute).
 
-The incoming agent's startup hook (`on_start`) renders the full session memory into `/workspace/.swe-kitty/HANDOFF.html`; the entrypoint script feeds it as system-prompt prefix.
+The incoming agent's startup hook (`on_start`) renders the full session memory into `/workspace/.conduit/HANDOFF.html`; the entrypoint script feeds it as system-prompt prefix.
 
 ### Handoff section shape
 ```html
@@ -90,9 +90,9 @@ The incoming agent's startup hook (`on_start`) renders the full session memory i
 
 ## 5. Validator rules
 
-The `swe-kitty memory` CLI validates on every write. Reject if:
+The `conduit memory` CLI validates on every write. Reject if:
 - Missing `<!doctype html>`
-- `data-swe-kitty-memory` absent or != `v1`
+- `data-conduit-memory` absent or != `v1`
 - `data-scope` not in {`project`, `session`}
 - Any required section (§3) missing
 - A `data-id` on a decision is not unique within its file
@@ -110,13 +110,13 @@ The `swe-kitty memory` CLI validates on every write. Reject if:
 
 | Command | Effect |
 |---|---|
-| `swe-kitty memory init` | Scaffolds `.swe-kitty/memory/` if missing |
-| `swe-kitty memory render --session <uuid>` | Emits the current session HTML to stdout |
-| `swe-kitty memory checkpoint --session <uuid> --reason <str>` | Append a checkpoint entry; flush scrollback tail into `env-snapshot` |
-| `swe-kitty memory handoff --session <uuid> --from <a> --to <b>` | Merge `HANDOFF-OUT.html`, mark agent swap |
-| `swe-kitty memory promote --session <uuid> --decision <id>` | Copy a `data-id="d-NNN"` decision from session into project `decisions` |
-| `swe-kitty memory show [--session <uuid>]` | Render plaintext to terminal |
+| `conduit memory init` | Scaffolds `.conduit/memory/` if missing |
+| `conduit memory render --session <uuid>` | Emits the current session HTML to stdout |
+| `conduit memory checkpoint --session <uuid> --reason <str>` | Append a checkpoint entry; flush scrollback tail into `env-snapshot` |
+| `conduit memory handoff --session <uuid> --from <a> --to <b>` | Merge `HANDOFF-OUT.html`, mark agent swap |
+| `conduit memory promote --session <uuid> --decision <id>` | Copy a `data-id="d-NNN"` decision from session into project `decisions` |
+| `conduit memory show [--session <uuid>]` | Render plaintext to terminal |
 
 ## 8. Mobile rendering
 
-The Chat tab has a "Memory" affordance (icon) that opens `/memory/sessions/<uuid>.html` in the in-app browser (WKWebView / WebView). Because the schema is plain HTML5 with a single stylesheet (`.swe-kitty/memory/memory.css`), no in-app renderer is needed. Dark mode honors `prefers-color-scheme`.
+The Chat tab has a "Memory" affordance (icon) that opens `/memory/sessions/<uuid>.html` in the in-app browser (WKWebView / WebView). Because the schema is plain HTML5 with a single stylesheet (`.conduit/memory/memory.css`), no in-app renderer is needed. Dark mode honors `prefers-color-scheme`.

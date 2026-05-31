@@ -1,11 +1,11 @@
 # Agent adapters (frozen contract v1)
 
-How an arbitrary CLI coding agent (Claude Code, Codex, Gemini, Aider, Goose, OpenCode, …) is integrated into swe-kitty so that all such agents are **interchangeable** end-to-end — including mid-session swap with state preservation.
+How an arbitrary CLI coding agent (Claude Code, Codex, Gemini, Aider, Goose, OpenCode, …) is integrated into conduit so that all such agents are **interchangeable** end-to-end — including mid-session swap with state preservation.
 
 Two physical locations on disk:
 
-- `.swe-kitty/agents/*.toml` — dev-time, read by `swe-kitty-broker` when working on this repo
-- `agents/*.toml` — production, read by `swe-kitty-broker` when running the shipped product
+- `.conduit/agents/*.toml` — dev-time, read by `conduit-broker` when working on this repo
+- `agents/*.toml` — production, read by `conduit-broker` when running the shipped product
 
 The TOML schema is the same; only the consumers differ.
 
@@ -20,9 +20,9 @@ workdir          = "/workspace"                          # required; fallback cw
 chat_event_port_env = "AGENT_CHAT_PORT"                  # optional MCP bridge port var
 
 [hooks]
-on_start = "swe-kitty memory render --session $SESSION_UUID > .swe-kitty/HANDOFF.html"
-on_exit  = "swe-kitty memory checkpoint --session $SESSION_UUID --reason 'exit'"
-on_swap  = "swe-kitty memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"
+on_start = "conduit memory render --session $SESSION_UUID > .conduit/HANDOFF.html"
+on_exit  = "conduit memory checkpoint --session $SESSION_UUID --reason 'exit'"
+on_swap  = "conduit memory handoff --session $SESSION_UUID --from $FROM_AGENT --to $TO_AGENT"
 ```
 
 Required fields: `name`, `command`, `workdir`. Everything else has a documented default. (A legacy `image` field is still accepted but ignored — see §2.)
@@ -45,7 +45,7 @@ approach (detail preserved in `docs/archive/PLAN-DEVICE-BUGS-2026-05-24.md`).
 > **ignored** (the broker `pty.Start`s `command`, it never `docker run`s).
 
 ### 2.1 What the host needs
-- `swe-kitty-broker` binary (the Go server), installed via `install.sh`.
+- `conduit-broker` binary (the Go server), installed via `install.sh`.
 - Every agent CLI you ship a TOML adapter for (e.g. `claude`, `codex`) on
   `PATH`. See `docs/SELF-HOST.md` for host install (Anthropic apt repo /
   native installer for claude; `npm i -g @openai/codex` for codex).
@@ -56,7 +56,7 @@ approach (detail preserved in `docs/archive/PLAN-DEVICE-BUGS-2026-05-24.md`).
   `workdir` / a requested `cwd`). One of the three persistence rails in
   `docs/SESSION-LIFECYCLE.md §1`.
 - **Ephemeral `$HOME`** — each spawn gets a private `$HOME`
-  (`<workspace>/.swe-kitty/agent-home/<session-id>`) seeded with the host's
+  (`<workspace>/.conduit/agent-home/<session-id>`) seeded with the host's
   agent credentials, so concurrent agents don't race on OAuth refresh
   (`broker/internal/session/lifecycle.go`).
 
@@ -73,11 +73,11 @@ The broker spawns each agent as a child process via
 | `HOME` | the per-session ephemeral agent home |
 | `PORT` | preview port (3000–3019) |
 | `AGENT_CHAT_PORT` | `PORT + 1000` — for MCP `view_event` bridge |
-| `KITTY_HANDOFF_PATH` | `<worktree>/.swe-kitty/HANDOFF.html` |
-| `KITTY_HANDOFF_OUT_PATH` | `<worktree>/.swe-kitty/HANDOFF-OUT.html` |
+| `KITTY_HANDOFF_PATH` | `<worktree>/.conduit/HANDOFF.html` |
+| `KITTY_HANDOFF_OUT_PATH` | `<worktree>/.conduit/HANDOFF-OUT.html` |
 | `FROM_AGENT` / `TO_AGENT` | only set inside `on_swap` |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | from the broker's env / `.swe-kitty/env` (empty values are stripped so they don't clobber OAuth fallback) |
-| ... | plus any KEY=VALUE from `.swe-kitty/env` with `$VAR` expansion |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | from the broker's env / `.conduit/env` (empty values are stripped so they don't clobber OAuth fallback) |
+| ... | plus any KEY=VALUE from `.conduit/env` with `$VAR` expansion |
 
 ### 2.4 Agent process expectations
 
@@ -117,7 +117,7 @@ The worktree, branch, and git state are **identical** across the swap.
 
 ## 5. Distribution
 
-The broker ships as a single static Go binary (`swe-kitty-broker`), built
+The broker ships as a single static Go binary (`conduit-broker`), built
 per release and attached to the GitHub Release (linux/darwin × amd64/arm64).
 Install it with `install.sh` and run it on the host — there is no container
 image. See `docs/SELF-HOST.md`.
