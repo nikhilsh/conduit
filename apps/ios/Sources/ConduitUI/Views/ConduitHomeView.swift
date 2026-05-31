@@ -153,12 +153,22 @@ extension ConduitUI {
                     }
                 },
                 center: {
-                    ConduitUI.AnimatedBrandMark(size: 32)
-                        .accessibilityLabel("Conduit")
-                        .accessibilityHint("Press and hold for settings")
-                        .onLongPressGesture(minimumDuration: 0.4) {
-                            showSettings = true
-                        }
+                    // Brand lockup: daemon mark + `>conduit` wordmark
+                    // (mono 700, `>` tinted with the accent), per BRAND.md §1
+                    // and the design-reference home header.
+                    HStack(spacing: 8) {
+                        ConduitUI.AnimatedBrandMark(size: 26)
+                        (Text(">").foregroundStyle(neon.glow ? neon.accent : neon.textDim)
+                            + Text("conduit").foregroundStyle(neon.text))
+                            .font(neon.mono(15).weight(.bold))
+                            .tracking(1)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Conduit")
+                    .accessibilityHint("Press and hold for settings")
+                    .onLongPressGesture(minimumDuration: 0.4) {
+                        showSettings = true
+                    }
                 },
                 trailing: {
                     ConduitUI.HeaderIconButton(systemImage: "clock.arrow.circlepath",
@@ -437,6 +447,8 @@ enum HomeRowMetrics {
     static let titlePointSize: CGFloat = 13
     static let subtitlePointSize: CGFloat = 11
     static let indicatorSize: CGFloat = 7
+    /// Leading daemon-avatar (ConduitMark tinted per agent) box size.
+    static let avatarSize: CGFloat = 38
     /// The selected row gets a brand-tinted card; an unselected row keeps
     /// the neutral glass surface. Both share `cardCornerRadius`.
     static let cardCornerRadius: CGFloat = 12
@@ -460,12 +472,11 @@ private struct HomeRowView: View {
     private var agentTint: Color { neon.agentTint(forAgent: row.agent) }
 
     var body: some View {
-        HStack(spacing: HomeRowMetrics.dotTextSpacing) {
-            // Status dot lives INSIDE the card now (it used to float in
-            // the screen gutter to the left). Vertically centred against
-            // the title for a clean leading rail.
-            indicator
-                .frame(width: HomeRowMetrics.indicatorSize, height: HomeRowMetrics.indicatorSize)
+        HStack(alignment: .top, spacing: HomeRowMetrics.dotTextSpacing) {
+            // Per-design (screens.jsx SessionRow): the leading element is a
+            // daemon avatar — the ConduitMark tinted with the agent color —
+            // in a soft tinted rounded-square, with a small run-state dot.
+            avatar
             VStack(alignment: .leading, spacing: 3) {
                 // Prominent friendly name. 13pt semibold per audit §A.1.1
                 // (upstream-faithful density); single line, truncating.
@@ -552,7 +563,7 @@ private struct HomeRowView: View {
             Text(row.lastActivityPreview)
                 .font(neon.sans(HomeRowMetrics.subtitlePointSize))
                 .foregroundStyle(neon.textDim)
-                .lineLimit(1)
+                .lineLimit(2)
                 .truncationMode(.tail)
         }
     }
@@ -570,6 +581,37 @@ private struct HomeRowView: View {
 
     private var statusDot: some View {
         Circle().fill(statusColor)
+    }
+
+    /// Daemon avatar: the ConduitMark tinted with the agent color in a soft
+    /// tinted rounded-square, with a small bottom-trailing run-state dot.
+    /// Matches the design-reference SessionRow leading element.
+    @ViewBuilder
+    private var avatar: some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(agentTint.opacity(neon.dark ? 0.14 : 0.10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(agentTint.opacity(0.35), lineWidth: 1)
+            )
+            .frame(width: HomeRowMetrics.avatarSize, height: HomeRowMetrics.avatarSize)
+            .overlay {
+                switch row.kind {
+                case .creatingPlaceholder:
+                    ProgressView().controlSize(.small).tint(agentTint)
+                case .session:
+                    ConduitUI.ConduitMark(size: HomeRowMetrics.avatarSize - 14, color: agentTint, glow: neon.glow)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if case .session = row.kind {
+                    Circle()
+                        .fill(row.isRunning ? neon.green : neon.textFaint.opacity(0.5))
+                        .frame(width: 8, height: 8)
+                        .overlay(Circle().stroke(neon.surface, lineWidth: 1.5))
+                        .offset(x: 3, y: 3)
+                }
+            }
     }
 
     @ViewBuilder
