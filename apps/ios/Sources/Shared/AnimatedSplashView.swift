@@ -39,11 +39,11 @@ struct AnimatedSplashModel: Equatable {
     /// Name of the brand image in `Assets.xcassets`. The view falls
     /// back to a copper SF Symbol if the asset is missing so the
     /// splash is never blank.
-    static let logoAssetName = "KittyMark"
+    static let logoAssetName = "ConduitMark"
 
     /// SF Symbol used as a fallback when the asset isn't installed
     /// (e.g. in a stripped test bundle).
-    static let fallbackSymbol = "pawprint.fill"
+    static let fallbackSymbol = "terminal.fill"
 
     /// Whether the supplied `HarnessState` represents a "we've heard
     /// from the broker" signal that should dismiss the splash. Any
@@ -159,7 +159,7 @@ struct AnimatedSplashView: View {
         .allowsHitTesting(false)
     }
 
-    /// Use the `KittyMark` asset when present, fall back to a copper
+    /// Use the `ConduitMark` asset when present, fall back to a
     /// SF Symbol otherwise. Keeps the splash from going blank in
     /// stripped-asset builds (e.g. some unit-test hosts).
     @ViewBuilder

@@ -13,11 +13,7 @@ extension ConduitUI {
             ZStack {
                 ConduitUI.Palette.surface.color.ignoresSafeArea()
                 VStack(spacing: 14) {
-                    Image("KittyMark")
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 72, height: 72)
-                        .cornerRadius(16)
+                    ConduitUI.ConduitMark(size: 72)
                         .opacity(0.85)
                         .accessibilityHidden(true)
                     Text("Pick a session from the left.")

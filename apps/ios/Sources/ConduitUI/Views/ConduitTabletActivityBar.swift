@@ -49,10 +49,7 @@ extension ConduitUI {
 
         var body: some View {
             VStack(spacing: 7) {
-                Image("KittyMark")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 30, height: 30)
+                ConduitUI.ConduitMark(size: 30)
                     .padding(.bottom, 10)
 
                 ForEach(TabletSection.allCases) { item in

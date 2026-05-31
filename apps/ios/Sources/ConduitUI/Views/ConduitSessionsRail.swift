@@ -55,11 +55,7 @@ extension ConduitUI {
                     }
                 },
                 center: {
-                    Image("KittyMark")
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 28, height: 28)
-                        .cornerRadius(6)
+                    ConduitUI.ConduitMark(size: 28)
                         .accessibilityLabel("Conduit")
                 },
                 trailing: {

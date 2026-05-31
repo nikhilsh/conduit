@@ -145,17 +145,17 @@ struct AnimatedSplashModelTests {
     }
 
     @Test func logoAssetNameMatchesXcassetEntry() {
-        // The asset catalog ships `KittyMark.imageset`. If somebody
+        // The asset catalog ships `ConduitMark.imageset`. If somebody
         // renames the asset without updating the model, the splash
         // silently falls through to the SF Symbol — this test
         // catches that drift.
-        #expect(AnimatedSplashModel.logoAssetName == "KittyMark")
+        #expect(AnimatedSplashModel.logoAssetName == "ConduitMark")
     }
 
     @Test func fallbackSymbolIsAPawprint() {
         // Defensive fallback when the asset isn't bundled (stripped
-        // test hosts, etc.). pawprint.fill is on every supported
+        // test hosts, etc.). terminal.fill is on every supported
         // iOS version and matches the brand metaphor.
-        #expect(AnimatedSplashModel.fallbackSymbol == "pawprint.fill")
+        #expect(AnimatedSplashModel.fallbackSymbol == "terminal.fill")
     }
 }

@@ -8,7 +8,7 @@ import SwiftUI
 //
 // Visual decisions:
 //   - Top row: 36pt glass-circle icon buttons left/right, centered
-//     KittyMark logo.
+//     ConduitMark daemon logo.
 //   - Server pill row: horizontal scroll of capsule pills, ending in
 //     a "+" pill. Selected pill carries the brand tint.
 //   - Sessions list: flat rows (no card chrome), separator-less.
