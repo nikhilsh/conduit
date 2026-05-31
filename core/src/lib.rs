@@ -272,6 +272,23 @@ impl SweKittyClient {
         .await
     }
 
+    /// On-demand /usage: ask the broker to re-fetch the account-level Claude
+    /// subscription usage (5-hour + weekly windows) and re-broadcast it on the
+    /// status frame. Backs the "refresh" button in the Session Info usage card.
+    /// Fire-and-forget on the wire — the fresh numbers arrive via `on_status`.
+    pub async fn refresh_account_usage(&self, session_id: String) -> Result<(), SweKittyError> {
+        let handle = self.inner.lookup_handle(&session_id)?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "account_usage",
+                    "session": session_id,
+                }))
+                .await
+        })
+        .await
+    }
+
     pub async fn resize(
         &self,
         session_id: String,

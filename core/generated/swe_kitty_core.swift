@@ -463,6 +463,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
+    typealias FfiType = Double
+    typealias SwiftType = Double
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Double {
+        return try lift(readDouble(&buf))
+    }
+
+    public static func write(_ value: Double, into buf: inout [UInt8]) {
+        writeDouble(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -830,6 +846,8 @@ public protocol SweKittyClientProtocol : AnyObject {
     
     func notifyNetworkChange() 
     
+    func refreshAccountUsage(sessionId: String) async throws 
+    
     func resize(sessionId: String, rows: UInt16, cols: UInt16) async throws 
     
     func sendChat(sessionId: String, msg: String) async throws 
@@ -1040,6 +1058,23 @@ open func notifyNetworkChange() {try! rustCall() {
     uniffi_swe_kitty_core_fn_method_swekittyclient_notify_network_change(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func refreshAccountUsage(sessionId: String)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_swe_kitty_core_fn_method_swekittyclient_refresh_account_usage(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(sessionId)
+                )
+            },
+            pollFunc: ffi_swe_kitty_core_rust_future_poll_void,
+            completeFunc: ffi_swe_kitty_core_rust_future_complete_void,
+            freeFunc: ffi_swe_kitty_core_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeSweKittyError.lift
+        )
 }
     
 open func resize(sessionId: String, rows: UInt16, cols: UInt16)async throws  {
@@ -1759,10 +1794,25 @@ public struct ProjectSession {
     public var startedAt: String?
     public var lastActivityAt: String?
     public var displayName: String?
+    public var totalInputTokens: UInt64?
+    public var totalOutputTokens: UInt64?
+    public var totalCachedTokens: UInt64?
+    public var totalCostUsd: Double?
+    public var contextUsedTokens: UInt64?
+    public var contextWindowTokens: UInt64?
+    public var linesAdded: UInt32?
+    public var linesRemoved: UInt32?
+    public var commits: UInt32?
+    public var prNumber: UInt32?
+    public var prState: String?
+    public var account5hPct: Double?
+    public var account5hResetsAt: String?
+    public var account7dPct: Double?
+    public var account7dResetsAt: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?) {
+    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil) {
         self.id = id
         self.name = name
         self.assistant = assistant
@@ -1773,6 +1823,21 @@ public struct ProjectSession {
         self.startedAt = startedAt
         self.lastActivityAt = lastActivityAt
         self.displayName = displayName
+        self.totalInputTokens = totalInputTokens
+        self.totalOutputTokens = totalOutputTokens
+        self.totalCachedTokens = totalCachedTokens
+        self.totalCostUsd = totalCostUsd
+        self.contextUsedTokens = contextUsedTokens
+        self.contextWindowTokens = contextWindowTokens
+        self.linesAdded = linesAdded
+        self.linesRemoved = linesRemoved
+        self.commits = commits
+        self.prNumber = prNumber
+        self.prState = prState
+        self.account5hPct = account5hPct
+        self.account5hResetsAt = account5hResetsAt
+        self.account7dPct = account7dPct
+        self.account7dResetsAt = account7dResetsAt
     }
 }
 
@@ -1810,6 +1875,51 @@ extension ProjectSession: Equatable, Hashable {
         if lhs.displayName != rhs.displayName {
             return false
         }
+        if lhs.totalInputTokens != rhs.totalInputTokens {
+            return false
+        }
+        if lhs.totalOutputTokens != rhs.totalOutputTokens {
+            return false
+        }
+        if lhs.totalCachedTokens != rhs.totalCachedTokens {
+            return false
+        }
+        if lhs.totalCostUsd != rhs.totalCostUsd {
+            return false
+        }
+        if lhs.contextUsedTokens != rhs.contextUsedTokens {
+            return false
+        }
+        if lhs.contextWindowTokens != rhs.contextWindowTokens {
+            return false
+        }
+        if lhs.linesAdded != rhs.linesAdded {
+            return false
+        }
+        if lhs.linesRemoved != rhs.linesRemoved {
+            return false
+        }
+        if lhs.commits != rhs.commits {
+            return false
+        }
+        if lhs.prNumber != rhs.prNumber {
+            return false
+        }
+        if lhs.prState != rhs.prState {
+            return false
+        }
+        if lhs.account5hPct != rhs.account5hPct {
+            return false
+        }
+        if lhs.account5hResetsAt != rhs.account5hResetsAt {
+            return false
+        }
+        if lhs.account7dPct != rhs.account7dPct {
+            return false
+        }
+        if lhs.account7dResetsAt != rhs.account7dResetsAt {
+            return false
+        }
         return true
     }
 
@@ -1824,6 +1934,21 @@ extension ProjectSession: Equatable, Hashable {
         hasher.combine(startedAt)
         hasher.combine(lastActivityAt)
         hasher.combine(displayName)
+        hasher.combine(totalInputTokens)
+        hasher.combine(totalOutputTokens)
+        hasher.combine(totalCachedTokens)
+        hasher.combine(totalCostUsd)
+        hasher.combine(contextUsedTokens)
+        hasher.combine(contextWindowTokens)
+        hasher.combine(linesAdded)
+        hasher.combine(linesRemoved)
+        hasher.combine(commits)
+        hasher.combine(prNumber)
+        hasher.combine(prState)
+        hasher.combine(account5hPct)
+        hasher.combine(account5hResetsAt)
+        hasher.combine(account7dPct)
+        hasher.combine(account7dResetsAt)
     }
 }
 
@@ -1844,7 +1969,22 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
                 cwd: FfiConverterOptionString.read(from: &buf), 
                 startedAt: FfiConverterOptionString.read(from: &buf), 
                 lastActivityAt: FfiConverterOptionString.read(from: &buf), 
-                displayName: FfiConverterOptionString.read(from: &buf)
+                displayName: FfiConverterOptionString.read(from: &buf), 
+                totalInputTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                totalOutputTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                totalCachedTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                totalCostUsd: FfiConverterOptionDouble.read(from: &buf), 
+                contextUsedTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                contextWindowTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                linesAdded: FfiConverterOptionUInt32.read(from: &buf), 
+                linesRemoved: FfiConverterOptionUInt32.read(from: &buf), 
+                commits: FfiConverterOptionUInt32.read(from: &buf), 
+                prNumber: FfiConverterOptionUInt32.read(from: &buf), 
+                prState: FfiConverterOptionString.read(from: &buf), 
+                account5hPct: FfiConverterOptionDouble.read(from: &buf), 
+                account5hResetsAt: FfiConverterOptionString.read(from: &buf), 
+                account7dPct: FfiConverterOptionDouble.read(from: &buf), 
+                account7dResetsAt: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1859,6 +1999,21 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.startedAt, into: &buf)
         FfiConverterOptionString.write(value.lastActivityAt, into: &buf)
         FfiConverterOptionString.write(value.displayName, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalInputTokens, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalOutputTokens, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalCachedTokens, into: &buf)
+        FfiConverterOptionDouble.write(value.totalCostUsd, into: &buf)
+        FfiConverterOptionUInt64.write(value.contextUsedTokens, into: &buf)
+        FfiConverterOptionUInt64.write(value.contextWindowTokens, into: &buf)
+        FfiConverterOptionUInt32.write(value.linesAdded, into: &buf)
+        FfiConverterOptionUInt32.write(value.linesRemoved, into: &buf)
+        FfiConverterOptionUInt32.write(value.commits, into: &buf)
+        FfiConverterOptionUInt32.write(value.prNumber, into: &buf)
+        FfiConverterOptionString.write(value.prState, into: &buf)
+        FfiConverterOptionDouble.write(value.account5hPct, into: &buf)
+        FfiConverterOptionString.write(value.account5hResetsAt, into: &buf)
+        FfiConverterOptionDouble.write(value.account7dPct, into: &buf)
+        FfiConverterOptionString.write(value.account7dResetsAt, into: &buf)
     }
 }
 
@@ -2000,10 +2155,25 @@ public struct SessionStatus {
     public var startedAt: String?
     public var lastActivityAt: String?
     public var displayName: String?
+    public var totalInputTokens: UInt64?
+    public var totalOutputTokens: UInt64?
+    public var totalCachedTokens: UInt64?
+    public var totalCostUsd: Double?
+    public var contextUsedTokens: UInt64?
+    public var contextWindowTokens: UInt64?
+    public var linesAdded: UInt32?
+    public var linesRemoved: UInt32?
+    public var commits: UInt32?
+    public var prNumber: UInt32?
+    public var prState: String?
+    public var account5hPct: Double?
+    public var account5hResetsAt: String?
+    public var account7dPct: Double?
+    public var account7dResetsAt: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?) {
+    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil) {
         self.session = session
         self.assistant = assistant
         self.phase = phase
@@ -2019,6 +2189,21 @@ public struct SessionStatus {
         self.startedAt = startedAt
         self.lastActivityAt = lastActivityAt
         self.displayName = displayName
+        self.totalInputTokens = totalInputTokens
+        self.totalOutputTokens = totalOutputTokens
+        self.totalCachedTokens = totalCachedTokens
+        self.totalCostUsd = totalCostUsd
+        self.contextUsedTokens = contextUsedTokens
+        self.contextWindowTokens = contextWindowTokens
+        self.linesAdded = linesAdded
+        self.linesRemoved = linesRemoved
+        self.commits = commits
+        self.prNumber = prNumber
+        self.prState = prState
+        self.account5hPct = account5hPct
+        self.account5hResetsAt = account5hResetsAt
+        self.account7dPct = account7dPct
+        self.account7dResetsAt = account7dResetsAt
     }
 }
 
@@ -2071,6 +2256,51 @@ extension SessionStatus: Equatable, Hashable {
         if lhs.displayName != rhs.displayName {
             return false
         }
+        if lhs.totalInputTokens != rhs.totalInputTokens {
+            return false
+        }
+        if lhs.totalOutputTokens != rhs.totalOutputTokens {
+            return false
+        }
+        if lhs.totalCachedTokens != rhs.totalCachedTokens {
+            return false
+        }
+        if lhs.totalCostUsd != rhs.totalCostUsd {
+            return false
+        }
+        if lhs.contextUsedTokens != rhs.contextUsedTokens {
+            return false
+        }
+        if lhs.contextWindowTokens != rhs.contextWindowTokens {
+            return false
+        }
+        if lhs.linesAdded != rhs.linesAdded {
+            return false
+        }
+        if lhs.linesRemoved != rhs.linesRemoved {
+            return false
+        }
+        if lhs.commits != rhs.commits {
+            return false
+        }
+        if lhs.prNumber != rhs.prNumber {
+            return false
+        }
+        if lhs.prState != rhs.prState {
+            return false
+        }
+        if lhs.account5hPct != rhs.account5hPct {
+            return false
+        }
+        if lhs.account5hResetsAt != rhs.account5hResetsAt {
+            return false
+        }
+        if lhs.account7dPct != rhs.account7dPct {
+            return false
+        }
+        if lhs.account7dResetsAt != rhs.account7dResetsAt {
+            return false
+        }
         return true
     }
 
@@ -2090,6 +2320,21 @@ extension SessionStatus: Equatable, Hashable {
         hasher.combine(startedAt)
         hasher.combine(lastActivityAt)
         hasher.combine(displayName)
+        hasher.combine(totalInputTokens)
+        hasher.combine(totalOutputTokens)
+        hasher.combine(totalCachedTokens)
+        hasher.combine(totalCostUsd)
+        hasher.combine(contextUsedTokens)
+        hasher.combine(contextWindowTokens)
+        hasher.combine(linesAdded)
+        hasher.combine(linesRemoved)
+        hasher.combine(commits)
+        hasher.combine(prNumber)
+        hasher.combine(prState)
+        hasher.combine(account5hPct)
+        hasher.combine(account5hResetsAt)
+        hasher.combine(account7dPct)
+        hasher.combine(account7dResetsAt)
     }
 }
 
@@ -2115,7 +2360,22 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
                 cwd: FfiConverterOptionString.read(from: &buf), 
                 startedAt: FfiConverterOptionString.read(from: &buf), 
                 lastActivityAt: FfiConverterOptionString.read(from: &buf), 
-                displayName: FfiConverterOptionString.read(from: &buf)
+                displayName: FfiConverterOptionString.read(from: &buf), 
+                totalInputTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                totalOutputTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                totalCachedTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                totalCostUsd: FfiConverterOptionDouble.read(from: &buf), 
+                contextUsedTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                contextWindowTokens: FfiConverterOptionUInt64.read(from: &buf), 
+                linesAdded: FfiConverterOptionUInt32.read(from: &buf), 
+                linesRemoved: FfiConverterOptionUInt32.read(from: &buf), 
+                commits: FfiConverterOptionUInt32.read(from: &buf), 
+                prNumber: FfiConverterOptionUInt32.read(from: &buf), 
+                prState: FfiConverterOptionString.read(from: &buf), 
+                account5hPct: FfiConverterOptionDouble.read(from: &buf), 
+                account5hResetsAt: FfiConverterOptionString.read(from: &buf), 
+                account7dPct: FfiConverterOptionDouble.read(from: &buf), 
+                account7dResetsAt: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2135,6 +2395,21 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.startedAt, into: &buf)
         FfiConverterOptionString.write(value.lastActivityAt, into: &buf)
         FfiConverterOptionString.write(value.displayName, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalInputTokens, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalOutputTokens, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalCachedTokens, into: &buf)
+        FfiConverterOptionDouble.write(value.totalCostUsd, into: &buf)
+        FfiConverterOptionUInt64.write(value.contextUsedTokens, into: &buf)
+        FfiConverterOptionUInt64.write(value.contextWindowTokens, into: &buf)
+        FfiConverterOptionUInt32.write(value.linesAdded, into: &buf)
+        FfiConverterOptionUInt32.write(value.linesRemoved, into: &buf)
+        FfiConverterOptionUInt32.write(value.commits, into: &buf)
+        FfiConverterOptionUInt32.write(value.prNumber, into: &buf)
+        FfiConverterOptionString.write(value.prState, into: &buf)
+        FfiConverterOptionDouble.write(value.account5hPct, into: &buf)
+        FfiConverterOptionString.write(value.account5hResetsAt, into: &buf)
+        FfiConverterOptionDouble.write(value.account7dPct, into: &buf)
+        FfiConverterOptionString.write(value.account7dResetsAt, into: &buf)
     }
 }
 
@@ -3448,6 +3723,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
+    typealias SwiftType = Double?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterDouble.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterDouble.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -3892,6 +4191,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_notify_network_change() != 11625) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_swe_kitty_core_checksum_method_swekittyclient_refresh_account_usage() != 16851) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_swe_kitty_core_checksum_method_swekittyclient_resize() != 62907) {

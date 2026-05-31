@@ -67,6 +67,17 @@ pub struct ProjectSession {
     pub pr_number: Option<u32>,
     #[serde(default)]
     pub pr_state: Option<String>,
+    /// Account-level Claude subscription usage (on-demand /usage): 5-hour +
+    /// weekly window utilization (percentage 0–100) and each window's ISO-8601
+    /// reset instant. Rolled from the status frame; `None` until fetched.
+    #[serde(default)]
+    pub account_5h_pct: Option<f64>,
+    #[serde(default)]
+    pub account_5h_resets_at: Option<String>,
+    #[serde(default)]
+    pub account_7d_pct: Option<f64>,
+    #[serde(default)]
+    pub account_7d_resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -193,6 +204,20 @@ impl ProjectSessionState {
         }
         if status.pr_state.is_some() {
             self.session.pr_state = status.pr_state.clone();
+        }
+        // Account-level subscription usage — last frame wins (the broker
+        // refetches on connect + on explicit refresh; the latest is current).
+        if status.account_5h_pct.is_some() {
+            self.session.account_5h_pct = status.account_5h_pct;
+        }
+        if status.account_5h_resets_at.is_some() {
+            self.session.account_5h_resets_at = status.account_5h_resets_at.clone();
+        }
+        if status.account_7d_pct.is_some() {
+            self.session.account_7d_pct = status.account_7d_pct;
+        }
+        if status.account_7d_resets_at.is_some() {
+            self.session.account_7d_resets_at = status.account_7d_resets_at.clone();
         }
         self.terminal.rows = status.rows;
         self.terminal.cols = status.cols;

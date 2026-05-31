@@ -1481,6 +1481,15 @@ class SessionStore : ViewModel(), SweKittyDelegate {
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.sendInput(sessionId, data) } } }
     }
 
+    // On-demand /usage: ask the broker to re-fetch the account-level Claude
+    // subscription usage (5-hour + weekly). Fresh numbers arrive on the next
+    // status callback and land on the session via apply_status. Backs the
+    // refresh button in the Session Info account-usage card.
+    fun refreshAccountUsage(sessionId: String) {
+        val c = client ?: return
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.refreshAccountUsage(sessionId) } } }
+    }
+
     fun sendChat(sessionId: String, msg: String) {
         // The user has answered — clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233). Done before the

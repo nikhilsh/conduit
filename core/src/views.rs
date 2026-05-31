@@ -106,6 +106,19 @@ pub struct SessionStatus {
     /// PR lifecycle state — "open" | "draft" | "merged" | "closed".
     #[serde(default)]
     pub pr_state: Option<String>,
+    /// Account-level Claude SUBSCRIPTION usage (the on-demand /usage feature):
+    /// the 5-hour rolling window and the weekly (7-day) window utilization, as
+    /// a percentage 0–100, plus each window's ISO-8601 reset instant. Distinct
+    /// from the per-session token/cost fields above — this is the same data the
+    /// Claude Code CLI's `/usage` shows. All `None` until the broker fetches it.
+    #[serde(default)]
+    pub account_5h_pct: Option<f64>,
+    #[serde(default)]
+    pub account_5h_resets_at: Option<String>,
+    #[serde(default)]
+    pub account_7d_pct: Option<f64>,
+    #[serde(default)]
+    pub account_7d_resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -283,3 +283,35 @@ fn lifecycle_failed_to_start_persists_until_overwrite() {
         })
     );
 }
+
+#[test]
+fn account_usage_rolls_onto_session() {
+    let store = SessionStoreCore::new();
+    store.register_session(project("s1", "claude"));
+    let mut st = status("s1", "live", "green", None, None);
+    st.account_5h_pct = Some(30.0);
+    st.account_5h_resets_at = Some("2026-05-31T09:10:00+00:00".to_string());
+    st.account_7d_pct = Some(66.5);
+    st.account_7d_resets_at = Some("2026-06-04T10:00:00+00:00".to_string());
+    store.apply_status(st);
+
+    let snap = store.get("s1".to_string()).unwrap();
+    assert_eq!(snap.session.account_5h_pct, Some(30.0));
+    assert_eq!(
+        snap.session.account_5h_resets_at.as_deref(),
+        Some("2026-05-31T09:10:00+00:00")
+    );
+    assert_eq!(snap.session.account_7d_pct, Some(66.5));
+    assert_eq!(
+        snap.session.account_7d_resets_at.as_deref(),
+        Some("2026-06-04T10:00:00+00:00")
+    );
+
+    // A later status frame without the account fields must NOT clear them
+    // (is_some guards = last-non-null wins), so a routine status broadcast
+    // doesn't blank the usage card between refreshes.
+    store.apply_status(status("s1", "live", "green", None, None));
+    let snap = store.get("s1".to_string()).unwrap();
+    assert_eq!(snap.session.account_5h_pct, Some(30.0));
+    assert_eq!(snap.session.account_7d_pct, Some(66.5));
+}

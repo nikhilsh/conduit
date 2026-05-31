@@ -232,6 +232,12 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	sub := sess.Subscribe()
 	textSub := sess.SubscribeText()
+	// Populate the Session Info usage card without requiring a manual refresh:
+	// fetch the account-level 5h/weekly subscription usage now that we're
+	// subscribed (so the status re-broadcast it triggers reaches us). Async +
+	// best-effort — a slow/absent OAuth endpoint never blocks the connect. The
+	// explicit refresh button re-fires the same fetch (ws "account_usage").
+	go sess.RefreshAccountUsage()
 	// Defer cleanup ordering matters: unsubscribe FIRST so the
 	// SubscriberCount reflects the post-leave total when we
 	// broadcast. tied to function return; gorilla's read/write loops
@@ -611,6 +617,12 @@ func (c *client) handleText(payload []byte) {
 				_, _ = c.sess.Write([]byte(env.Msg + "\r"))
 			}
 		}
+	case "account_usage":
+		// On-demand /usage: the client tapped "refresh" in the Session Info
+		// usage card. Fetch the subscription 5-hour + weekly usage off the
+		// OAuth endpoint and re-broadcast the status frame with it. Async so
+		// the socket read loop never blocks on the network round-trip.
+		go c.sess.RefreshAccountUsage()
 	case "rename_session":
 		// Protocol §3.3: validate against `^[A-Za-z0-9 _-]{1,32}$`,
 		// last-writer-wins, no ack. Invalid renames are silently

@@ -105,10 +105,17 @@ type Session struct {
 	outcomePRState      string
 	outcomeGitAt        time.Time
 	outcomePRAt         time.Time
-	handoffHTML         string
-	checkpointMu        sync.Mutex
-	lastMemoryModTime   time.Time
-	swapping            bool
+	// Account-level subscription usage (5-hour + weekly windows) — the data
+	// behind the on-demand /usage feature. Guarded by mu; surfaced via
+	// AccountUsage() into the status frame, fetched from the OAuth endpoint on
+	// connect + on an explicit client refresh. See accountusage.go.
+	// accountUsageDo is an injectable HTTP doer (nil → http.DefaultClient).
+	accountUsage      AccountUsage
+	accountUsageDo    httpDoFunc
+	handoffHTML       string
+	checkpointMu      sync.Mutex
+	lastMemoryModTime time.Time
+	swapping          bool
 	// displayName is the human-readable session label set by a
 	// successful `rename_session` JSON control. Mirrors the docs in
 	// `WEBSOCKET-PROTOCOL.md` §3.3: last-writer-wins, no ack, broadcast
