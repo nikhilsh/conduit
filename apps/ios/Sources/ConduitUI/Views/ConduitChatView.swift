@@ -365,7 +365,47 @@ extension ConduitUI {
                         dismissStrayKeyboard()
                     }
                 }
+                // Sentry diagnostics for the recurring composer-behind-keyboard
+                // bug (device bug #19 / reference_ios_keyboard_inset): log the
+                // keyboard geometry + composer focus/active state on show/hide/
+                // focus so on-device occurrences are debuggable remotely under
+                // `diag=keyboard`. Bounded to ~2-3 events per interaction.
+                .onChange(of: composerFocused) { _, focused in
+                    logKeyboardDiag(focused ? "composer focused" : "composer blurred")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+                    let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+                    logKeyboardDiag("keyboard will show", keyboardFrame: frame)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                    logKeyboardDiag("keyboard will hide")
+                }
             }
+        }
+
+        /// Emit a `diag=keyboard` Sentry breadcrumb capturing the keyboard
+        /// intrusion height, screen height, window safe-area bottom inset, and
+        /// the composer focus/active state — the inputs that determine whether
+        /// the `.safeAreaInset(.bottom)` composer is lifted clear of the soft
+        /// keyboard or hidden behind it.
+        private func logKeyboardDiag(_ reason: String, keyboardFrame: CGRect? = nil) {
+            var safeBottom: CGFloat = 0
+            var kbHeight: CGFloat = 0
+            if let scene = UIApplication.shared.connectedScenes
+                .first(where: { $0 is UIWindowScene }) as? UIWindowScene,
+               let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
+                safeBottom = window.safeAreaInsets.bottom
+                if let frame = keyboardFrame {
+                    kbHeight = max(0, window.bounds.maxY - frame.minY)
+                }
+            }
+            Telemetry.debug("keyboard", reason, data: [
+                "composerFocused": "\(composerFocused)",
+                "isActive": "\(isActive)",
+                "kbHeight": String(format: "%.0f", kbHeight),
+                "screenH": String(format: "%.0f", UIScreen.main.bounds.height),
+                "safeBottom": String(format: "%.0f", safeBottom),
+            ])
         }
 
         /// Resign any first responder lingering from another tab so the
