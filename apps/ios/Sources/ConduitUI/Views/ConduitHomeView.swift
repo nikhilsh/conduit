@@ -48,9 +48,7 @@ extension ConduitUI {
                     GlassAppBackground()
                     VStack(spacing: 12) {
                         topRow
-                        serverPillStrip
-                        sessionsList
-                        Spacer(minLength: 0)
+                        homeList
                         bottomBar
                     }
                     .padding(.top, 8)
@@ -179,72 +177,113 @@ extension ConduitUI {
             )
         }
 
-        @ViewBuilder
-        private var serverPillStrip: some View {
-            // Conduit renders saved servers as a horizontal capsule
-            // row. We render the same shape from `store.savedServers`
-            // plus a trailing "+" pill that opens the add-server
-            // sheet.
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(store.savedServers) { server in
-                        let isActive = store.endpoint == server.endpoint
-                        // device bug #23: the dot used to mean "selected",
-                        // so it stayed green even with the broker down. Drive
-                        // it from the live connection state for the active
-                        // server (green=connected, amber=connecting/retrying,
-                        // muted=down/idle).
-                        let dotColor: Color = {
-                            guard isActive else { return neon.textFaint }
-                            switch store.harness {
-                            case .live, .linked: return neon.green
-                            case .connecting, .reconnecting: return neon.yellow
-                            case .disconnected, .failed: return neon.textFaint
-                            }
-                        }()
-                        Button {
-                            store.selectSavedServer(server.id, autoConnect: true)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(dotColor)
-                                    .frame(width: 6, height: 6)
-                                    .neonGlowBox(isActive && neon.glow ? neon.glowBox?.tinted(dotColor) : nil)
-                                Text(server.name)
-                                    .font(neon.sans(12).weight(.semibold))
-                                    .foregroundStyle(isActive ? neon.accent : neon.text)
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Capsule().fill(neon.surface))
-                            .overlay(Capsule().stroke(isActive ? neon.borderStrong : neon.border, lineWidth: 1))
-                            .neonGlowBox(isActive && neon.glow ? neon.glowBox : nil)
-                        }
-                        .buttonStyle(.plain)
-                    }
+        // MARK: Connection card + Boxes (design-reference home)
 
-                    Button {
-                        showAddServer = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .bold))
-                            Text("server")
-                                .font(neon.sans(12).weight(.semibold))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(neon.textDim)
-                        .background(Capsule().fill(neon.surface))
-                        .overlay(Capsule().stroke(neon.border, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
+        /// Connection-status card for the active broker — server icon, name,
+        /// `broker :PORT` sub, and a live status dot (`connected`/`connecting…`/
+        /// `offline`). Green-tinted when connected. Mirrors screens.jsx.
+        private var connectionCard: some View {
+            let activeName = store.savedServers.first(where: { $0.endpoint == store.endpoint })?.name
+                ?? store.endpoint.displayHost
+            let (dot, statusText, connected): (Color, String, Bool) = {
+                switch store.harness {
+                case .live, .linked:        return (neon.green, "connected", true)
+                case .connecting:           return (neon.yellow, "connecting…", false)
+                case .reconnecting:         return (neon.yellow, "reconnecting…", false)
+                case .disconnected:         return (neon.textFaint, "offline", false)
+                case .failed:               return (neon.textFaint, "offline", false)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 4)
+            }()
+            return HStack(spacing: 9) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 16))
+                    .foregroundStyle(connected ? neon.green : neon.textDim)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(activeName)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text("broker · \(store.endpoint.displayHost)")
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textFaint)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                HStack(spacing: 5) {
+                    Circle().fill(dot).frame(width: 6, height: 6)
+                        .neonGlowBox(connected && neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
+                    Text(statusText)
+                        .font(neon.mono(11))
+                        .foregroundStyle(connected ? neon.green : neon.textFaint)
+                }
             }
-            .frame(height: 36)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 10)
+            .neonCardSurface(
+                neon,
+                fill: connected ? neon.green.opacity(neon.dark ? 0.07 : 0.05) : neon.surface,
+                cornerRadius: 12,
+                border: connected ? neon.green.opacity(0.27) : neon.border,
+                glowTint: connected && neon.glow ? neon.green : nil
+            )
+        }
+
+        /// Mono uppercase section label (cyan) with an optional trailing action,
+        /// matching the design's `ACTIVE SESSIONS` / `BOXES` headers.
+        private func sectionHeader(_ title: String, actionIcon: String, actionLabel: String, actionTint: Color, action: @escaping () -> Void) -> some View {
+            HStack {
+                Text(title.uppercased())
+                    .font(neon.mono(12).weight(.semibold))
+                    .tracking(2)
+                    .foregroundStyle(neon.accent)
+                    .neonTextGlow(neon.glow ? neon.textGlow : nil)
+                Spacer()
+                Button(action: action) {
+                    HStack(spacing: 5) {
+                        Image(systemName: actionIcon).font(.system(size: 12, weight: .semibold))
+                        Text(actionLabel).font(neon.sans(12.5).weight(.semibold))
+                    }
+                    .foregroundStyle(actionTint)
+                }
+                .buttonStyle(.plain)
+            }
+            .textCase(nil)
+            .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 6, trailing: 14))
+            .listRowBackground(Color.clear)
+        }
+
+        /// A paired-machine ("box") row: tinted server/ssh glyph, name, endpoint
+        /// sub, and a status word. Mirrors the design's Boxes list.
+        private func boxRow(_ server: SavedServer) -> some View {
+            let isActive = store.endpoint == server.endpoint
+            let online = isActive && store.harness.canIssueCommands
+            return HStack(spacing: 11) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill((online ? neon.green : neon.textFaint).opacity(0.12))
+                    .frame(width: 30, height: 30)
+                    .overlay(
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 14))
+                            .foregroundStyle(online ? neon.green : neon.textFaint)
+                    )
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(server.name)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text(server.endpoint.displayHost)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textFaint)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text(online ? "online" : "tap to connect")
+                    .font(neon.mono(11))
+                    .foregroundStyle(online ? neon.green : neon.textFaint)
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12, border: neon.border, glowTint: nil)
         }
 
         private var snapshot: ConduitUI.HomeSnapshot {
@@ -308,82 +347,112 @@ extension ConduitUI {
             )
         }
 
+        /// The design-reference home body as one sectioned, scrollable List:
+        /// connection card → "Active sessions" → "Boxes". Session rows keep
+        /// swipe-to-archive / tap-to-open; box rows tap to connect.
         @ViewBuilder
-        private var sessionsList: some View {
+        private var homeList: some View {
             let snap = snapshot
             let rows = ConduitUI.HomeViewModel.rows(snap)
-            if rows.isEmpty {
-                VStack(spacing: 10) {
-                    Spacer(minLength: 24)
-                    Image(systemName: ConduitUI.HomeViewModel.emptySymbol(snap))
-                        .font(.system(size: 40, weight: .light))
-                        .foregroundStyle(neon.accent)
-                        .neonTextGlow(neon.textGlow)
-                    Text(ConduitUI.HomeViewModel.emptyTitle(snap))
-                        .font(neon.sans(17).weight(.semibold))
-                        .foregroundStyle(neon.text)
-                    Text(ConduitUI.HomeViewModel.emptyBody(snap))
-                        .font(neon.sans(13))
-                        .foregroundStyle(neon.textDim)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 36)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // Promoted from ScrollView+VStack to a `List` so each row
-                // can carry `.swipeActions` for the delete affordance —
-                // SwiftUI only honours swipe gestures on List/Form rows.
-                // `listStyle(.plain)` + clear backgrounds preserve the
-                // upstream-faithful flat look from the prior layout.
-                List {
-                    ForEach(rows) { row in
-                        HomeRowView(row: row)
+            List {
+                if store.endpoint.isComplete {
+                    Section {
+                        connectionCard
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(
-                                top: HomeRowMetrics.interRowSpacing / 2,
-                                leading: 14,
-                                bottom: HomeRowMetrics.interRowSpacing / 2,
-                                trailing: 14
-                            ))
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if case .session(let id) = row.kind {
-                                    store.selectedSessionID = id
-                                    selectedSessionID = id
-                                }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if case .session(let id) = row.kind {
-                                    // Swipe = ARCHIVE (two-tier delete model):
-                                    // ends the live session on the broker but
-                                    // keeps it in History as a read-only
-                                    // transcript. Permanent delete lives in
-                                    // History. Non-destructive tint so it reads
-                                    // as a light, recoverable action.
-                                    Button {
-                                        pendingDelete = PendingSessionDelete(id: id, title: row.title)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    .tint(neon.textDim)
-                                }
-                            }
-                            .contextMenu {
-                                if case .session(let id) = row.kind {
-                                    Button {
-                                        pendingDelete = PendingSessionDelete(id: id, title: row.title)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                }
-                            }
+                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                     }
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
+
+                Section {
+                    if rows.isEmpty {
+                        emptySessionsView(snap)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
+                    } else {
+                        ForEach(rows) { row in
+                            HomeRowView(row: row)
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(
+                                    top: HomeRowMetrics.interRowSpacing / 2,
+                                    leading: 14,
+                                    bottom: HomeRowMetrics.interRowSpacing / 2,
+                                    trailing: 14
+                                ))
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if case .session(let id) = row.kind {
+                                        store.selectedSessionID = id
+                                        selectedSessionID = id
+                                    }
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    if case .session(let id) = row.kind {
+                                        Button {
+                                            pendingDelete = PendingSessionDelete(id: id, title: row.title)
+                                        } label: {
+                                            Label("Archive", systemImage: "archivebox")
+                                        }
+                                        .tint(neon.textDim)
+                                    }
+                                }
+                                .contextMenu {
+                                    if case .session(let id) = row.kind {
+                                        Button {
+                                            pendingDelete = PendingSessionDelete(id: id, title: row.title)
+                                        } label: {
+                                            Label("Archive", systemImage: "archivebox")
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                } header: {
+                    sectionHeader("Active sessions", actionIcon: "plus", actionLabel: "New session", actionTint: neon.accent) {
+                        if store.harness.canIssueCommands { showAgentPicker = true } else { showAddServer = true }
+                    }
+                }
+
+                if !store.savedServers.isEmpty {
+                    Section {
+                        ForEach(store.savedServers) { server in
+                            boxRow(server)
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                                .contentShape(Rectangle())
+                                .onTapGesture { store.selectSavedServer(server.id, autoConnect: true) }
+                        }
+                    } header: {
+                        sectionHeader("Boxes", actionIcon: "wifi", actionLabel: "Pair box", actionTint: neon.textDim) {
+                            showAddServer = true
+                        }
+                    }
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+
+        @ViewBuilder
+        private func emptySessionsView(_ snap: ConduitUI.HomeSnapshot) -> some View {
+            VStack(spacing: 10) {
+                Image(systemName: ConduitUI.HomeViewModel.emptySymbol(snap))
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundStyle(neon.accent)
+                    .neonTextGlow(neon.textGlow)
+                Text(ConduitUI.HomeViewModel.emptyTitle(snap))
+                    .font(neon.sans(16).weight(.semibold))
+                    .foregroundStyle(neon.text)
+                Text(ConduitUI.HomeViewModel.emptyBody(snap))
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.textDim)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
         }
 
         private var bottomBar: some View {
