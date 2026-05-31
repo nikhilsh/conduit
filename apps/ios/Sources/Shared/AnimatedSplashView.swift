@@ -34,7 +34,7 @@ struct AnimatedSplashModel: Equatable {
 
     /// The brand wordmark rendered under the logo. Lower-case kebab
     /// matches the GitHub repo name + the in-product copy elsewhere.
-    static let wordmark = "conduit"
+    static let wordmark = ">conduit"
 
     /// Name of the brand image in `Assets.xcassets`. The view falls
     /// back to a copper SF Symbol if the asset is missing so the

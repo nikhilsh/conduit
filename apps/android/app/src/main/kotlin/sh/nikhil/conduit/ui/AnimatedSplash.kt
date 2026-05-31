@@ -67,7 +67,7 @@ object AnimatedSplashModel {
     const val loadingCaption: String = "Loading…"
 
     /** Brand wordmark — matches the iOS copy + the GitHub repo name. */
-    const val wordmark: String = "conduit"
+    const val wordmark: String = ">conduit"
 
     /**
      * Mirror of `AnimatedSplashModel.shouldDismiss(on:)` on iOS — any

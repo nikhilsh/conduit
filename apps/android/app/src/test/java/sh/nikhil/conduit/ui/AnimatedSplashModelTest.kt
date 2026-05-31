@@ -60,7 +60,7 @@ class AnimatedSplashModelTest {
         // Two clients, same brand surface — the wordmark is the lower-
         // case kebab repo name, the caption is the single soft string
         // (no spinner) chosen in the audit.
-        assertEquals("conduit", AnimatedSplashModel.wordmark)
+        assertEquals(">conduit", AnimatedSplashModel.wordmark)
         assertEquals("Loading…", AnimatedSplashModel.loadingCaption)
     }
 
