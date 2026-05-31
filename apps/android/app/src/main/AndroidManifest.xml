@@ -17,7 +17,7 @@
 
     <application
         android:label="@string/app_name"
-        android:theme="@style/Theme.SweKitty"
+        android:theme="@style/Theme.Conduit"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
@@ -41,24 +41,24 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="swekitty" />
+                <data android:scheme="conduit" />
             </intent-filter>
             <!--
               Agent OAuth callback (`apps/.../auth/OAuthClient.kt`).
               Chrome Custom Tabs hands control back via this filter
               when the provider redirects to
-              `swekitty://oauth/<provider>/callback?code=...`. The
+              `conduit://oauth/<provider>/callback?code=...`. The
               `host="oauth"` constraint makes the disambiguation in
               `SessionStore.handleOAuthCallback` explicit at the
               manifest level — a paired URL like
-              `swekitty://my-host?token=...` doesn't match and falls
+              `conduit://my-host?token=...` doesn't match and falls
               through to the existing filter above.
             -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="swekitty" android:host="oauth" />
+                <data android:scheme="conduit" android:host="oauth" />
             </intent-filter>
         </activity>
     </application>

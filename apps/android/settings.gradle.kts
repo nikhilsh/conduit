@@ -31,5 +31,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SweKitty"
+rootProject.name = "Conduit"
 include(":app")

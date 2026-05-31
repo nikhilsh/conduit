@@ -9,12 +9,12 @@ plugins {
 }
 
 android {
-    namespace = "sh.nikhil.swekitty"
+    namespace = "sh.nikhil.conduit"
     compileSdk = 35
     ndkVersion = "26.3.11579264"
 
     defaultConfig {
-        applicationId = "sh.nikhil.swekitty"
+        applicationId = "sh.nikhil.conduit"
         minSdk = 26
         targetSdk = 35
         versionCode = 12
@@ -128,7 +128,7 @@ dependencies {
     // Chrome Custom Tabs — system-blessed OAuth browser surface used by
     // `auth/OAuthClient.kt`. Same role as iOS's
     // `ASWebAuthenticationSession`: hands the authorize URL to a Chrome
-    // tab, gets called back via the `swekitty://oauth/...` intent
+    // tab, gets called back via the `conduit://oauth/...` intent
     // filter. See `docs/PLAN-AGENT-OAUTH.md` §F.1.
     implementation("androidx.browser:browser:1.8.0")
 
