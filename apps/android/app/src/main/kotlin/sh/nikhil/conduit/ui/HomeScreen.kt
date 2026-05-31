@@ -50,6 +50,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
@@ -146,72 +148,102 @@ fun HomeScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        // ServerTabsStrip
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Spacer(Modifier.width(8.dp))
-            savedServers.forEach { server ->
-                val isActive = endpoint == server.endpoint
-                // device bug #23: the dot meant "selected", so it stayed
-                // green with the broker down. Drive it from the live
-                // connection state for the active server.
-                val dotColor = when {
-                    !isActive -> neon.textFaint
-                    harness is HarnessState.Live || harness is HarnessState.Linked -> neon.green
-                    harness is HarnessState.Connecting || harness is HarnessState.Reconnecting -> neon.yellow
-                    else -> neon.textFaint
-                }
-                // Neon capsule; the active server carries an accent tint
-                // wash + glow so it reads as the selected pill.
-                Box(
-                    modifier = Modifier
-                        .glassCapsule(interactive = true, tint = if (isActive) neon.accent else null)
-                        .clip(RoundedCornerShape(50))
-                        .clickable { store.selectSavedServer(server.id, autoConnect = true) },
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .background(dotColor, CircleShape),
-                        )
-                        Text(
-                            server.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontFamily = neon.sans,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isActive) neon.accent else neon.text,
-                            maxLines = 1,
-                        )
-                    }
-                }
+        // Connection-status card for the active broker — server glyph, name,
+        // `broker · host`, and a live status dot (green when connected).
+        // Mirrors iOS + the design-reference home (replaces the pill strip).
+        run {
+            val connected = harness is HarnessState.Live || harness is HarnessState.Linked
+            val connecting = harness is HarnessState.Connecting || harness is HarnessState.Reconnecting
+            val dotColor = when {
+                connected -> neon.green
+                connecting -> neon.yellow
+                else -> neon.textFaint
             }
-            // Add server pill
-            Box(
+            val statusText = when {
+                connected -> "connected"
+                connecting -> "connecting…"
+                else -> "offline"
+            }
+            val activeName = savedServers.firstOrNull { it.endpoint == endpoint }?.name
+                ?: if (endpoint.isComplete) endpoint.displayHost else "no server"
+            Row(
                 modifier = Modifier
-                    .glassCapsule(interactive = true)
-                    .clip(RoundedCornerShape(50))
-                    .clickable { onAddServer() },
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp)
+                    .neonCardSurface(
+                        neon = neon,
+                        shape = RoundedCornerShape(12.dp),
+                        fill = if (connected) neon.green.copy(alpha = 0.07f) else neon.surface,
+                        borderColor = if (connected) neon.green.copy(alpha = 0.27f) else neon.border,
+                        glowTint = if (connected) neon.green else null,
+                    )
+                    .padding(horizontal = 13.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp), tint = neon.accent)
-                    Text("server", style = MaterialTheme.typography.titleSmall, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = neon.text)
+                Icon(Icons.Filled.Storage, null, modifier = Modifier.size(18.dp), tint = if (connected) neon.green else neon.textDim)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        activeName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        color = neon.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "broker · " + (if (endpoint.isComplete) endpoint.displayHost else "—"),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
+                Box(modifier = Modifier.size(6.dp).background(dotColor, CircleShape))
+                Text(
+                    statusText,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = if (connected) neon.green else neon.textFaint,
+                )
             }
-            Spacer(Modifier.width(8.dp))
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
+
+        // ACTIVE SESSIONS section label (mono uppercase, cyan) + New session,
+        // matching the design-reference home.
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "ACTIVE SESSIONS",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                letterSpacing = 2.sp,
+                color = neon.accent,
+            )
+            Spacer(Modifier.weight(1f))
+            Row(
+                modifier = Modifier.clickable { if (canIssueCommands(harness)) onNewSession() else onAddServer() },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp), tint = neon.accent)
+                Text(
+                    "New session",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.accent,
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
 
         // Sessions list
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
