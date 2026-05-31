@@ -759,7 +759,20 @@ public final class GhosttySurface {
         // `.ios.uiview` slot is where the renderer attaches its layer.
         let uiviewPtr: UnsafeMutableRawPointer?
         if let host = hostView {
-            uiviewPtr = Unmanaged.passUnretained(host).toOpaque()
+            // RETAIN the host view for the surface's lifetime — balanced by a
+            // release in `teardown()` right after `ghostty_surface_free`.
+            // libghostty stores this as an UNRETAINED raw pointer in
+            // `platform.ios.uiview` + `userdata` and queries it (e.g.
+            // `[uiview bounds]`) from its renderer DURING a CoreAnimation
+            // commit. With only an unretained pointer, a host view freed
+            // before its surface (font-size rebuild / session-close ARC
+            // ordering) left libghostty messaging freed memory — the
+            // `-[__NSTaggedDate bounds]` / `object.Object.getProperty` UAF
+            // under `CA::Context::commit_transaction` (APPLE-IOS-Q/-P, which
+            // the deferred-teardown change alone did NOT close). Pinning the
+            // view alive for as long as the surface can reference it removes
+            // the window regardless of ARC release ordering.
+            uiviewPtr = Unmanaged.passRetained(host).toOpaque()
         } else {
             uiviewPtr = nil
         }
@@ -796,6 +809,9 @@ public final class GhosttySurface {
 
         guard let surface: UnsafeMutableRawPointer = ghostty_surface_new(appHandle, &config) else {
             GhosttyDiagnostics.shared.setSurface(created: false)
+            // No surface was created, so `teardown()` will never run to
+            // balance the `passRetained(host)` above — release it here.
+            if let p = uiviewPtr { Unmanaged<AnyObject>.fromOpaque(p).release() }
             return
         }
         self._surface = surface
@@ -889,6 +905,14 @@ public final class GhosttySurface {
         _surface = nil
         GhosttyApp.unregisterSurface(key: _clipboardKey)
         ghostty_surface_free(surface)
+        // Balance init's `passRetained(host)`: the surface is freed, so
+        // libghostty can no longer query the host view from a CA commit, so
+        // it's safe to drop our retain. `_clipboardKey` IS that retained
+        // pointer; the `guard` above makes this run exactly once.
+        if let key = _clipboardKey {
+            Unmanaged<AnyObject>.fromOpaque(key).release()
+        }
+        _clipboardKey = nil
     }
 
     deinit {
