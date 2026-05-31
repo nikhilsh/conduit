@@ -101,9 +101,9 @@ function htmlPage({ tagName, publishedAt, releaseUrl, ipa, apk, manifestUrl, ota
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Conduit</title>
-<meta name="description" content="Mobile client for Claude Code and Codex sessions.">
-<meta name="theme-color" content="#0c0e12" media="(prefers-color-scheme: dark)">
+<title>Conduit — your coding agents, in your pocket</title>
+<meta name="description" content="Conduit is a mobile + tablet client for driving your coding agents — Claude and Codex — on your own dev box.">
+<meta name="theme-color" content="#04050a" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
 <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
@@ -342,7 +342,7 @@ function htmlPage({ tagName, publishedAt, releaseUrl, ipa, apk, manifestUrl, ota
     <h1>Conduit</h1>
   </header>
 
-  <p class="tagline">Mobile client for Claude Code and Codex.</p>
+  <p class="tagline">Your agents, in your pocket.</p>
 
   <div class="release" id="release" data-published="${publishedAt}">
     <span class="dot" aria-hidden="true"></span>
