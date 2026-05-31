@@ -35,6 +35,7 @@ extension LitterUI {
                             actionRow
                             statsGrid
                             LitterUI.UsageCard(session: session)
+                            LitterUI.AccountUsageCard(session: session)
                             detailsCard
                             serverCard
                         }

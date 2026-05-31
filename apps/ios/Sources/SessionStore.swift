@@ -1058,6 +1058,15 @@ final class SessionStore {
         Task { try? await client.sendInput(sessionId: sessionID, data: bytes) }
     }
 
+    /// On-demand /usage: ask the broker to re-fetch the account-level Claude
+    /// subscription usage (5-hour + weekly). The fresh numbers arrive on the
+    /// next `on_status` callback and land on the session via `apply_status`.
+    /// Backs the refresh button in the Session Info account-usage card.
+    func refreshAccountUsage(sessionID: String) {
+        guard let client else { return }
+        Task { try? await client.refreshAccountUsage(sessionId: sessionID) }
+    }
+
     /// Upload a composer attachment to the session's
     /// `<workspace>/uploads/<sessionID>/<filename>` via the core 0x01
     /// binary frame (`SweKittyClient.sendFile`). Awaited by the chat

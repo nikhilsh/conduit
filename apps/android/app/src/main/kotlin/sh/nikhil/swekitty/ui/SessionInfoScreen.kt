@@ -245,6 +245,19 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 execLabel = stats.execTimeLabel,
             )
 
+            // Account-level subscription usage (on-demand /usage): the 5-hour
+            // + weekly Claude limits, fetched from the OAuth endpoint on
+            // connect + the refresh button. Always shown (account-global),
+            // unlike the per-session card above. Status delta wins over the
+            // session snapshot. See NeonAccountUsageCard.
+            NeonAccountUsageCard(
+                fivePct = status?.account5hPct ?: session.account5hPct,
+                fiveResetsAt = status?.account5hResetsAt ?: session.account5hResetsAt,
+                weekPct = status?.account7dPct ?: session.account7dPct,
+                weekResetsAt = status?.account7dResetsAt ?: session.account7dResetsAt,
+                onRefresh = { store.refreshAccountUsage(session.id) },
+            )
+
             session.preview?.let { preview ->
                 Column {
                     Text(

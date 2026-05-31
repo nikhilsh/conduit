@@ -891,6 +891,8 @@ internal open class UniffiVTableCallbackInterfaceSweKittyDelegate(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -974,6 +976,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_notify_network_change(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_swe_kitty_core_fn_method_swekittyclient_refresh_account_usage(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,
+    ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_resize(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`rows`: Short,`cols`: Short,
     ): Long
     fun uniffi_swe_kitty_core_fn_method_swekittyclient_send_chat(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`msg`: RustBuffer.ByValue,
@@ -1158,6 +1162,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_notify_network_change(
     ): Short
+    fun uniffi_swe_kitty_core_checksum_method_swekittyclient_refresh_account_usage(
+    ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_resize(
     ): Short
     fun uniffi_swe_kitty_core_checksum_method_swekittyclient_send_chat(
@@ -1289,6 +1295,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_notify_network_change() != 11625.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_refresh_account_usage() != 16851.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_swe_kitty_core_checksum_method_swekittyclient_resize() != 62907.toShort()) {
@@ -1524,6 +1533,29 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterDouble: FfiConverter<Double, Double> {
+    override fun lift(value: Double): Double {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Double {
+        return buf.getDouble()
+    }
+
+    override fun lower(value: Double): Double {
+        return value
+    }
+
+    override fun allocationSize(value: Double) = 8UL
+
+    override fun write(value: Double, buf: ByteBuffer) {
+        buf.putDouble(value)
     }
 }
 
@@ -2233,6 +2265,8 @@ public interface SweKittyClientInterface {
     
     fun `notifyNetworkChange`()
     
+    suspend fun `refreshAccountUsage`(`sessionId`: kotlin.String)
+    
     suspend fun `resize`(`sessionId`: kotlin.String, `rows`: kotlin.UShort, `cols`: kotlin.UShort)
     
     suspend fun `sendChat`(`sessionId`: kotlin.String, `msg`: kotlin.String)
@@ -2528,6 +2562,28 @@ open class SweKittyClient: Disposable, AutoCloseable, SweKittyClientInterface {
     }
     
     
+
+    
+    @Throws(SweKittyException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `refreshAccountUsage`(`sessionId`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_swe_kitty_core_fn_method_swekittyclient_refresh_account_usage(
+                thisPtr,
+                FfiConverterString.lower(`sessionId`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_swe_kitty_core_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        SweKittyException.ErrorHandler,
+    )
+    }
 
     
     @Throws(SweKittyException::class)
@@ -2991,7 +3047,22 @@ data class ProjectSession (
     var `cwd`: kotlin.String?, 
     var `startedAt`: kotlin.String?, 
     var `lastActivityAt`: kotlin.String?, 
-    var `displayName`: kotlin.String?
+    var `displayName`: kotlin.String?, 
+    var `totalInputTokens`: kotlin.ULong? = null, 
+    var `totalOutputTokens`: kotlin.ULong? = null, 
+    var `totalCachedTokens`: kotlin.ULong? = null, 
+    var `totalCostUsd`: kotlin.Double? = null, 
+    var `contextUsedTokens`: kotlin.ULong? = null, 
+    var `contextWindowTokens`: kotlin.ULong? = null, 
+    var `linesAdded`: kotlin.UInt? = null, 
+    var `linesRemoved`: kotlin.UInt? = null, 
+    var `commits`: kotlin.UInt? = null, 
+    var `prNumber`: kotlin.UInt? = null, 
+    var `prState`: kotlin.String? = null, 
+    var `account5hPct`: kotlin.Double? = null, 
+    var `account5hResetsAt`: kotlin.String? = null, 
+    var `account7dPct`: kotlin.Double? = null, 
+    var `account7dResetsAt`: kotlin.String? = null
 ) {
     
     companion object
@@ -3013,6 +3084,21 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -3026,7 +3112,22 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalString.allocationSize(value.`cwd`) +
             FfiConverterOptionalString.allocationSize(value.`startedAt`) +
             FfiConverterOptionalString.allocationSize(value.`lastActivityAt`) +
-            FfiConverterOptionalString.allocationSize(value.`displayName`)
+            FfiConverterOptionalString.allocationSize(value.`displayName`) +
+            FfiConverterOptionalULong.allocationSize(value.`totalInputTokens`) +
+            FfiConverterOptionalULong.allocationSize(value.`totalOutputTokens`) +
+            FfiConverterOptionalULong.allocationSize(value.`totalCachedTokens`) +
+            FfiConverterOptionalDouble.allocationSize(value.`totalCostUsd`) +
+            FfiConverterOptionalULong.allocationSize(value.`contextUsedTokens`) +
+            FfiConverterOptionalULong.allocationSize(value.`contextWindowTokens`) +
+            FfiConverterOptionalUInt.allocationSize(value.`linesAdded`) +
+            FfiConverterOptionalUInt.allocationSize(value.`linesRemoved`) +
+            FfiConverterOptionalUInt.allocationSize(value.`commits`) +
+            FfiConverterOptionalUInt.allocationSize(value.`prNumber`) +
+            FfiConverterOptionalString.allocationSize(value.`prState`) +
+            FfiConverterOptionalDouble.allocationSize(value.`account5hPct`) +
+            FfiConverterOptionalString.allocationSize(value.`account5hResetsAt`) +
+            FfiConverterOptionalDouble.allocationSize(value.`account7dPct`) +
+            FfiConverterOptionalString.allocationSize(value.`account7dResetsAt`)
     )
 
     override fun write(value: ProjectSession, buf: ByteBuffer) {
@@ -3040,6 +3141,21 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalString.write(value.`startedAt`, buf)
             FfiConverterOptionalString.write(value.`lastActivityAt`, buf)
             FfiConverterOptionalString.write(value.`displayName`, buf)
+            FfiConverterOptionalULong.write(value.`totalInputTokens`, buf)
+            FfiConverterOptionalULong.write(value.`totalOutputTokens`, buf)
+            FfiConverterOptionalULong.write(value.`totalCachedTokens`, buf)
+            FfiConverterOptionalDouble.write(value.`totalCostUsd`, buf)
+            FfiConverterOptionalULong.write(value.`contextUsedTokens`, buf)
+            FfiConverterOptionalULong.write(value.`contextWindowTokens`, buf)
+            FfiConverterOptionalUInt.write(value.`linesAdded`, buf)
+            FfiConverterOptionalUInt.write(value.`linesRemoved`, buf)
+            FfiConverterOptionalUInt.write(value.`commits`, buf)
+            FfiConverterOptionalUInt.write(value.`prNumber`, buf)
+            FfiConverterOptionalString.write(value.`prState`, buf)
+            FfiConverterOptionalDouble.write(value.`account5hPct`, buf)
+            FfiConverterOptionalString.write(value.`account5hResetsAt`, buf)
+            FfiConverterOptionalDouble.write(value.`account7dPct`, buf)
+            FfiConverterOptionalString.write(value.`account7dResetsAt`, buf)
     }
 }
 
@@ -3112,7 +3228,22 @@ data class SessionStatus (
     var `cwd`: kotlin.String?, 
     var `startedAt`: kotlin.String?, 
     var `lastActivityAt`: kotlin.String?, 
-    var `displayName`: kotlin.String?
+    var `displayName`: kotlin.String?, 
+    var `totalInputTokens`: kotlin.ULong? = null, 
+    var `totalOutputTokens`: kotlin.ULong? = null, 
+    var `totalCachedTokens`: kotlin.ULong? = null, 
+    var `totalCostUsd`: kotlin.Double? = null, 
+    var `contextUsedTokens`: kotlin.ULong? = null, 
+    var `contextWindowTokens`: kotlin.ULong? = null, 
+    var `linesAdded`: kotlin.UInt? = null, 
+    var `linesRemoved`: kotlin.UInt? = null, 
+    var `commits`: kotlin.UInt? = null, 
+    var `prNumber`: kotlin.UInt? = null, 
+    var `prState`: kotlin.String? = null, 
+    var `account5hPct`: kotlin.Double? = null, 
+    var `account5hResetsAt`: kotlin.String? = null, 
+    var `account7dPct`: kotlin.Double? = null, 
+    var `account7dResetsAt`: kotlin.String? = null
 ) {
     
     companion object
@@ -3139,6 +3270,21 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -3157,7 +3303,22 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.allocationSize(value.`cwd`) +
             FfiConverterOptionalString.allocationSize(value.`startedAt`) +
             FfiConverterOptionalString.allocationSize(value.`lastActivityAt`) +
-            FfiConverterOptionalString.allocationSize(value.`displayName`)
+            FfiConverterOptionalString.allocationSize(value.`displayName`) +
+            FfiConverterOptionalULong.allocationSize(value.`totalInputTokens`) +
+            FfiConverterOptionalULong.allocationSize(value.`totalOutputTokens`) +
+            FfiConverterOptionalULong.allocationSize(value.`totalCachedTokens`) +
+            FfiConverterOptionalDouble.allocationSize(value.`totalCostUsd`) +
+            FfiConverterOptionalULong.allocationSize(value.`contextUsedTokens`) +
+            FfiConverterOptionalULong.allocationSize(value.`contextWindowTokens`) +
+            FfiConverterOptionalUInt.allocationSize(value.`linesAdded`) +
+            FfiConverterOptionalUInt.allocationSize(value.`linesRemoved`) +
+            FfiConverterOptionalUInt.allocationSize(value.`commits`) +
+            FfiConverterOptionalUInt.allocationSize(value.`prNumber`) +
+            FfiConverterOptionalString.allocationSize(value.`prState`) +
+            FfiConverterOptionalDouble.allocationSize(value.`account5hPct`) +
+            FfiConverterOptionalString.allocationSize(value.`account5hResetsAt`) +
+            FfiConverterOptionalDouble.allocationSize(value.`account7dPct`) +
+            FfiConverterOptionalString.allocationSize(value.`account7dResetsAt`)
     )
 
     override fun write(value: SessionStatus, buf: ByteBuffer) {
@@ -3176,6 +3337,21 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalString.write(value.`startedAt`, buf)
             FfiConverterOptionalString.write(value.`lastActivityAt`, buf)
             FfiConverterOptionalString.write(value.`displayName`, buf)
+            FfiConverterOptionalULong.write(value.`totalInputTokens`, buf)
+            FfiConverterOptionalULong.write(value.`totalOutputTokens`, buf)
+            FfiConverterOptionalULong.write(value.`totalCachedTokens`, buf)
+            FfiConverterOptionalDouble.write(value.`totalCostUsd`, buf)
+            FfiConverterOptionalULong.write(value.`contextUsedTokens`, buf)
+            FfiConverterOptionalULong.write(value.`contextWindowTokens`, buf)
+            FfiConverterOptionalUInt.write(value.`linesAdded`, buf)
+            FfiConverterOptionalUInt.write(value.`linesRemoved`, buf)
+            FfiConverterOptionalUInt.write(value.`commits`, buf)
+            FfiConverterOptionalUInt.write(value.`prNumber`, buf)
+            FfiConverterOptionalString.write(value.`prState`, buf)
+            FfiConverterOptionalDouble.write(value.`account5hPct`, buf)
+            FfiConverterOptionalString.write(value.`account5hResetsAt`, buf)
+            FfiConverterOptionalDouble.write(value.`account7dPct`, buf)
+            FfiConverterOptionalString.write(value.`account7dResetsAt`, buf)
     }
 }
 
@@ -4152,6 +4328,38 @@ public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
         } else {
             buf.put(1)
             FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalDouble: FfiConverterRustBuffer<kotlin.Double?> {
+    override fun read(buf: ByteBuffer): kotlin.Double? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterDouble.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Double?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterDouble.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Double?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterDouble.write(value, buf)
         }
     }
 }

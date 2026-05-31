@@ -83,6 +83,12 @@ func (s *Session) StatusPayload() map[string]any {
 			payload["pr_state"] = o.PRState
 		}
 	}
+	if a := s.AccountUsage(); a.HasUsage {
+		payload["account_5h_pct"] = a.FiveHourPct
+		payload["account_5h_resets_at"] = a.FiveHourResetsAt
+		payload["account_7d_pct"] = a.SevenDayPct
+		payload["account_7d_resets_at"] = a.SevenDayResetsAt
+	}
 	return payload
 }
 
