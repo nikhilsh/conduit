@@ -46,6 +46,28 @@ object Telemetry {
         }
     }
 
+    /**
+     * Structured diagnostic telemetry meant to be READ BACK from Sentry
+     * (org `swe-kitty`, project `android`): an INFO-level event tagged
+     * `diag=<category>` with `data` as searchable extras. Use it for runtime
+     * state that can't be reproduced on the dev box — layout / render /
+     * timing — so the on-device numbers can be read remotely instead of asked
+     * for and transcribed.
+     *
+     * Standing practice: instrument new features with `Telemetry.debug` so
+     * they're always debuggable from Sentry. Keep it LOW VOLUME — dedupe to
+     * once per distinct state — because every call is a Sentry event.
+     */
+    fun debug(category: String, message: String, data: Map<String, String> = emptyMap()) {
+        if (BuildConfig.SENTRY_DSN.trim().isEmpty()) return
+        Sentry.withScope { scope ->
+            scope.level = SentryLevel.INFO
+            scope.setTag("diag", category)
+            data.forEach { (key, value) -> scope.setExtra(key, value) }
+            Sentry.captureMessage("[$category] $message", SentryLevel.INFO)
+        }
+    }
+
     /** Leave a breadcrumb so it shows up in the trail of the next event. */
     fun breadcrumb(message: String, data: Map<String, String> = emptyMap()) {
         if (BuildConfig.SENTRY_DSN.trim().isEmpty()) return

@@ -331,6 +331,9 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         l.isUserInteractionEnabled = false
         return l
     }()
+    /// Last geometry string mirrored to Sentry, so `Telemetry.debug` fires
+    /// once per distinct grid rather than on every layout pass.
+    private var lastGeometryDiagKey: String?
 
     /// Frame pacing. A `CADisplayLink` drives `Terminal.draw()` (→
     /// `ghostty_surface_draw`) once per frame while the view is on a
@@ -1244,14 +1247,33 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// pushed pixel size, the backing scale, and libghostty's authoritative
     /// grid + cell px (the values that determine on-screen cell size).
     private func updateGeometryOverlay(scale: CGFloat) {
-        guard Self.showGeometryOverlay else { return }
         let g = terminal?.gridSize()
         let pxW = Int(bounds.width * scale)
         let pxH = Int(bounds.height * scale)
         let gridStr = g.map { "grid \($0.cols)x\($0.rows)  cellpx \($0.cellWidthPx)x\($0.cellHeightPx)" } ?? "grid —"
-        diagLabel.text = " bounds \(Int(bounds.width))x\(Int(bounds.height))pt  scale \(scale)\n px \(pxW)x\(pxH)\n \(gridStr)  font \(Int(ghosttyFontSize)) "
-        diagLabel.sizeToFit()
-        diagLabel.frame.origin = CGPoint(x: 4, y: 4)
+        if Self.showGeometryOverlay {
+            diagLabel.text = " bounds \(Int(bounds.width))x\(Int(bounds.height))pt  scale \(scale)\n px \(pxW)x\(pxH)\n \(gridStr)  font \(Int(ghosttyFontSize)) "
+            diagLabel.sizeToFit()
+            diagLabel.frame.origin = CGPoint(x: 4, y: 4)
+        }
+        // Mirror the geometry to Sentry (tag `diag=terminal_geometry`) so the
+        // tiny-render scale/cell mismatch can be read off-device. Deduped to
+        // one event per distinct grid — every call is a Sentry event.
+        let key = "\(pxW)x\(pxH)@\(scale)|\(gridStr)"
+        if key != lastGeometryDiagKey {
+            lastGeometryDiagKey = key
+            Telemetry.debug("terminal_geometry", "native terminal sized", data: [
+                "bounds_pt": "\(Int(bounds.width))x\(Int(bounds.height))",
+                "scale": "\(scale)",
+                "pixel_size": "\(pxW)x\(pxH)",
+                "grid_cols": g.map { "\($0.cols)" } ?? "nil",
+                "grid_rows": g.map { "\($0.rows)" } ?? "nil",
+                "cell_px": g.map { "\($0.cellWidthPx)x\($0.cellHeightPx)" } ?? "nil",
+                "font_pt": "\(Int(ghosttyFontSize))",
+                "content_scale_factor": "\(contentScaleFactor)",
+                "display_scale": "\(traitCollection.displayScale)",
+            ])
+        }
     }
     #endif
 
