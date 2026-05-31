@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Conduit — your coding agents, in your pocket</title>
+<meta name="description" content="Conduit is a mobile + tablet client for coding agents. Drive Claude and Codex on your dev box from anywhere — terminal, browser, voice, and generative UI in your pocket." />
+<link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+<link rel="apple-touch-icon" href="assets/conduit-256.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#04050a;
+    --panel:rgba(16,24,42,0.55);
+    --panel-solid:#0a1120;
+    --line:rgba(34,211,238,0.14);
+    --line-soft:rgba(160,184,224,0.10);
+    --text:#eaf3ff;
+    --dim:rgba(196,214,244,0.64);
+    --faint:rgba(160,184,224,0.40);
+    --green:#3ef0a0;
+    --cyan:#22d3ee;
+    --blue:#4f8cff;
+    --amber:#ffb627;
+    --orange:#ff7847;
+    --claude:#ff9d4d;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'Space Grotesk',system-ui,-apple-system,Segoe UI,sans-serif;
+    --maxw:1180px;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+    line-height:1.55;overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none;}
+  ::selection{background:rgba(62,240,160,0.28);color:#fff;}
+
+  /* ambient glow + grid backdrop */
+  .backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;}
+  .backdrop::before{
+    content:"";position:absolute;left:50%;top:-340px;transform:translateX(-50%);
+    width:1100px;height:760px;border-radius:50%;
+    background:radial-gradient(closest-side,rgba(62,240,160,0.16),rgba(34,211,238,0.07) 45%,transparent 72%);
+    filter:blur(8px);
+  }
+  .backdrop::after{
+    content:"";position:absolute;inset:0;opacity:0.5;
+    background-image:linear-gradient(rgba(120,160,220,0.045) 1px,transparent 1px),linear-gradient(90deg,rgba(120,160,220,0.045) 1px,transparent 1px);
+    background-size:64px 64px;
+    mask-image:radial-gradient(circle at 50% 12%,#000 0%,transparent 60%);
+    -webkit-mask-image:radial-gradient(circle at 50% 12%,#000 0%,transparent 60%);
+  }
+  .wrap{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 24px;}
+
+  /* ===== nav ===== */
+  header.nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);
+    background:linear-gradient(180deg,rgba(4,5,10,0.86),rgba(4,5,10,0.55));
+    border-bottom:1px solid var(--line-soft);}
+  .nav-in{display:flex;align-items:center;justify-content:space-between;height:68px;}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:600;letter-spacing:-0.01em;font-size:17px;}
+  .brand img{width:34px;height:34px;border-radius:9px;box-shadow:0 0 0 1px rgba(34,211,238,0.18),0 6px 22px rgba(34,211,238,0.18);}
+  .nav-links{display:flex;align-items:center;gap:30px;font-family:var(--mono);font-size:12.5px;color:var(--dim);}
+  .nav-links a{transition:color .18s;}
+  .nav-links a:hover{color:var(--green);}
+  .nav-cta{font-family:var(--mono);font-size:12.5px;font-weight:600;color:#04140d;
+    background:var(--green);padding:9px 16px;border-radius:9px;
+    box-shadow:0 0 14px rgba(62,240,160,0.34);transition:transform .16s,box-shadow .16s;}
+  .nav-cta:hover{transform:translateY(-1px);box-shadow:0 0 22px rgba(62,240,160,0.5);}
+  @media(max-width:760px){.nav-links{display:none;}}
+
+  /* ===== shared bits ===== */
+  .eyebrow{font-family:var(--mono);font-weight:600;font-size:12px;letter-spacing:0.24em;
+    text-transform:uppercase;color:var(--green);display:inline-flex;align-items:center;gap:9px;}
+  .eyebrow .pip{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);}
+  .display{font-family:var(--mono);font-weight:800;letter-spacing:-0.02em;line-height:1.02;margin:0;}
+  .lead{color:var(--dim);font-size:17px;max-width:46ch;}
+
+  /* ===== hero ===== */
+  .hero{padding:64px 0 40px;}
+  .hero-grid{display:grid;grid-template-columns:1.05fr 0.95fr;gap:36px;align-items:center;}
+  .hero h1{font-size:clamp(40px,6.4vw,78px);margin:20px 0 0;}
+  .hero h1 .cursor{color:var(--green);font-weight:400;animation:blink 1.1s steps(1) infinite;}
+  @keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+  .hero .lead{margin:22px 0 0;font-size:18.5px;}
+  .stores{display:flex;flex-wrap:wrap;gap:14px;margin-top:32px;}
+  .store{display:flex;align-items:center;gap:12px;padding:12px 20px 12px 16px;border-radius:14px;
+    border:1px solid var(--line);background:var(--panel);transition:transform .16s,border-color .16s,box-shadow .16s;}
+  .store:hover{transform:translateY(-2px);border-color:rgba(62,240,160,0.5);box-shadow:0 10px 30px rgba(0,0,0,0.4),0 0 18px rgba(62,240,160,0.14);}
+  .store svg{width:26px;height:26px;flex:none;}
+  .store .st-sub{font-family:var(--mono);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--faint);line-height:1;}
+  .store .st-main{font-size:17px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;}
+  .hero-note{margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:8px;align-items:center;}
+  .hero-note b{color:var(--green);font-weight:600;}
+
+  .phone-stage{position:relative;}
+  .phone-stage::before{content:"";position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);
+    width:118%;height:88%;border-radius:50%;
+    background:radial-gradient(closest-side,rgba(34,211,238,0.20),rgba(62,240,160,0.08) 50%,transparent 75%);
+    filter:blur(10px);z-index:0;}
+  .phone-img{position:relative;z-index:1;width:100%;display:block;
+    -webkit-mask-image:linear-gradient(180deg,#000 86%,transparent 100%);
+    mask-image:linear-gradient(180deg,#000 86%,transparent 100%);}
+  @media(max-width:880px){
+    .hero-grid{grid-template-columns:1fr;gap:8px;}
+    .phone-stage{max-width:380px;margin:8px auto 0;}
+  }
+
+  /* ===== agent strip ===== */
+  .strip{border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);
+    margin-top:24px;padding:26px 0;}
+  .strip-in{display:flex;align-items:center;justify-content:center;gap:14px 34px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:13px;color:var(--dim);}
+  .strip-label{color:var(--faint);font-size:11px;letter-spacing:0.18em;text-transform:uppercase;}
+  .agent{display:inline-flex;align-items:center;gap:9px;}
+  .agent .dot{width:9px;height:9px;border-radius:50%;}
+  .agent b{color:var(--text);font-weight:600;}
+
+  /* ===== feature rows ===== */
+  section.feat{padding:88px 0;}
+  .feat-grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;}
+  .feat.rev .feat-copy{order:2;}
+  .feat h2{font-size:clamp(30px,4vw,46px);margin:18px 0 0;}
+  .feat .lead{margin-top:18px;}
+  .feat-list{list-style:none;margin:26px 0 0;padding:0;display:flex;flex-direction:column;gap:13px;}
+  .feat-list li{display:flex;gap:12px;align-items:flex-start;font-size:14.5px;color:var(--dim);}
+  .feat-list .tick{font-family:var(--mono);font-weight:700;color:var(--accent,var(--green));flex:none;margin-top:1px;}
+  .feat-phone{position:relative;}
+  .feat-phone::before{content:"";position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);
+    width:108%;height:80%;border-radius:50%;
+    background:radial-gradient(closest-side,var(--glow,rgba(34,211,238,0.18)),transparent 72%);filter:blur(8px);z-index:0;}
+  .feat-phone img{position:relative;z-index:1;width:100%;max-width:420px;display:block;margin:0 auto;
+    -webkit-mask-image:linear-gradient(180deg,#000 88%,transparent 100%);
+    mask-image:linear-gradient(180deg,#000 88%,transparent 100%);}
+  @media(max-width:880px){
+    section.feat{padding:60px 0;}
+    .feat-grid{grid-template-columns:1fr;gap:16px;}
+    .feat.rev .feat-copy{order:0;}
+    .feat-phone{max-width:360px;margin:0 auto;}
+  }
+
+  /* ===== capabilities grid ===== */
+  .caps{padding:30px 0 96px;}
+  .caps-head{text-align:center;max-width:640px;margin:0 auto 48px;}
+  .caps-head h2{font-size:clamp(28px,3.6vw,42px);margin:16px 0 0;}
+  .caps-head .lead{margin:16px auto 0;}
+  .cap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+  .cap{border:1px solid var(--line);background:var(--panel);border-radius:16px;padding:24px;
+    transition:transform .18s,border-color .18s,background .18s;}
+  .cap:hover{transform:translateY(-3px);border-color:rgba(62,240,160,0.42);background:rgba(18,28,48,0.7);}
+  .cap .ic{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;
+    border:1px solid var(--line);background:rgba(0,4,12,0.5);margin-bottom:16px;}
+  .cap .ic svg{width:21px;height:21px;}
+  .cap h3{font-size:17px;margin:0 0 7px;letter-spacing:-0.01em;}
+  .cap p{margin:0;font-size:13.5px;color:var(--dim);line-height:1.5;}
+  @media(max-width:880px){.cap-grid{grid-template-columns:1fr;}}
+
+  /* ===== download cta ===== */
+  .cta{padding:18px 0 110px;}
+  .cta-card{position:relative;border:1px solid var(--line);border-radius:26px;overflow:hidden;
+    background:linear-gradient(180deg,rgba(16,26,46,0.8),rgba(6,10,20,0.85));
+    padding:64px 32px;text-align:center;}
+  .cta-card::before{content:"";position:absolute;left:50%;top:-40%;transform:translateX(-50%);
+    width:760px;height:520px;border-radius:50%;
+    background:radial-gradient(closest-side,rgba(62,240,160,0.20),rgba(34,211,238,0.08) 50%,transparent 75%);filter:blur(6px);}
+  .cta-card>*{position:relative;}
+  .cta-icon{width:88px;height:88px;border-radius:22px;margin:0 auto 24px;display:block;
+    box-shadow:0 0 0 1px rgba(34,211,238,0.25),0 16px 50px rgba(34,211,238,0.28);}
+  .cta-card h2{font-family:var(--mono);font-weight:800;letter-spacing:-0.02em;
+    font-size:clamp(30px,4.6vw,52px);margin:0;line-height:1.05;}
+  .cta-card .lead{margin:18px auto 0;}
+  .cta-card .stores{justify-content:center;}
+  .cta-meta{margin-top:22px;font-family:var(--mono);font-size:12.5px;color:var(--dim);
+    display:flex;justify-content:center;gap:8px 16px;flex-wrap:wrap;}
+  .cta-help{margin:18px auto 0;max-width:52ch;font-size:12.5px;color:var(--faint);line-height:1.6;}
+  .cta-help b{color:var(--dim);font-weight:600;}
+  [data-dl-meta] b{color:var(--green);font-weight:600;}
+  [data-dl-meta] .sep{color:var(--faint);opacity:.7;}
+  .store.is-off{opacity:.55;}
+
+  /* ===== footer ===== */
+  footer{border-top:1px solid var(--line-soft);padding:40px 0 56px;}
+  .foot-in{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;}
+  .foot-brand{display:flex;align-items:center;gap:11px;font-weight:600;}
+  .foot-brand img{width:30px;height:30px;border-radius:8px;}
+  .foot-links{display:flex;gap:26px;font-family:var(--mono);font-size:12.5px;color:var(--dim);}
+  .foot-links a:hover{color:var(--green);}
+  .foot-copy{width:100%;margin-top:26px;font-family:var(--mono);font-size:11.5px;color:var(--faint);
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;}
+
+  /* reveal */
+  .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);}
+  .reveal.in{opacity:1;transform:none;}
+  @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none;}.hero h1 .cursor{animation:none;}}
+</style>
+</head>
+<body>
+<div class="backdrop"></div>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top"><img src="assets/conduit-512.png" alt="Conduit" />Conduit</a>
+    <nav class="nav-links">
+      <a href="#remote">Remote</a>
+      <a href="#terminal">Terminal</a>
+      <a href="#browser">Browser</a>
+      <a href="#everything">Everything</a>
+    </nav>
+    <a class="nav-cta" href="#download">Get the app</a>
+  </div>
+</header>
+
+<main id="top">
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <span class="eyebrow"><span class="pip"></span>Open beta · v0.9</span>
+        <h1 class="display">Your agents,<br />in your pocket.<span class="cursor">_</span></h1>
+        <p class="lead">Conduit drives <b style="color:var(--text)">Claude</b> and <b style="color:var(--text)">Codex</b> on your dev box — from your phone or tablet. Start a session, watch it plan, run commands, edit files, and approve actions. Anywhere.</p>
+        <div class="stores">
+          <a class="store" data-dl="ios" href="#" aria-label="Install on iPhone over the air">
+            <svg viewBox="0 0 24 24" fill="#eaf3ff"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
+            <span><span class="st-sub">Over-the-air install</span><span class="st-main">Install on iPhone</span></span>
+          </a>
+          <a class="store" data-dl="android" href="#" aria-label="Download the Android APK">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="#3ef0a0"><path d="M6.8 9.4h10.4v6.6a1.2 1.2 0 0 1-1.2 1.2H8a1.2 1.2 0 0 1-1.2-1.2V9.4z"/><rect x="4.2" y="9.6" width="2" height="5.6" rx="1"/><rect x="17.8" y="9.6" width="2" height="5.6" rx="1"/><rect x="8.7" y="16.6" width="1.9" height="4.4" rx=".95"/><rect x="13.4" y="16.6" width="1.9" height="4.4" rx=".95"/><path d="M7 8.7a5 5 0 0 1 10 0z"/></g><line x1="8.3" y1="4.1" x2="9.4" y2="5.8" stroke="#3ef0a0" stroke-width="1.1" stroke-linecap="round"/><line x1="15.7" y1="4.1" x2="14.6" y2="5.8" stroke="#3ef0a0" stroke-width="1.1" stroke-linecap="round"/><circle cx="9.7" cy="7" r=".5" fill="#04050a"/><circle cx="14.3" cy="7" r=".5" fill="#04050a"/></svg>
+            <span><span class="st-sub">Direct APK · sideload</span><span class="st-main">Download for Android</span></span>
+          </a>
+        </div>
+        <div class="hero-note" data-dl-meta>Loading the latest build…</div>
+      </div>
+      <div class="phone-stage">
+        <img class="phone-img" src="assets/phone-home.png" alt="Conduit home screen with recent sessions and connected servers" />
+      </div>
+    </div>
+  </section>
+
+  <!-- AGENT STRIP -->
+  <div class="strip">
+    <div class="wrap strip-in">
+      <span class="strip-label">Works with</span>
+      <span class="agent"><span class="dot" style="background:var(--claude);box-shadow:0 0 9px var(--claude)"></span><b>Claude</b> — Anthropic</span>
+      <span class="agent"><span class="dot" style="background:var(--cyan);box-shadow:0 0 9px var(--cyan)"></span><b>Codex</b> — OpenAI</span>
+      <span class="agent"><span class="dot" style="background:var(--green);box-shadow:0 0 9px var(--green)"></span>Your <b>Mac&nbsp;Studio</b>, over a broker</span>
+    </div>
+  </div>
+
+  <!-- FEATURE: REMOTE -->
+  <section class="feat reveal" id="remote" style="--accent:var(--green);--glow:rgba(62,240,160,0.18)">
+    <div class="wrap feat-grid">
+      <div class="feat-copy">
+        <span class="eyebrow"><span class="pip"></span>Remote servers</span>
+        <h2 class="display">Your dev machine.<br />Anywhere.</h2>
+        <p class="lead">Pair to a box on your network or across the world. Sessions run on the real thing — your repos, your branches, your toolchain — streamed straight to your hand.</p>
+        <ul class="feat-list">
+          <li><span class="tick">›|</span>Live command output with exit codes &amp; timing, exactly as it runs on the box.</li>
+          <li><span class="tick">›|</span>Per-file diffs you can read and approve before anything lands.</li>
+          <li><span class="tick">›|</span>Reconnect mid-session — the broker keeps the agent working while you're away.</li>
+        </ul>
+      </div>
+      <div class="feat-phone">
+        <img src="assets/phone-chat.png" alt="A live Conduit session: the agent working in a repo with diffs and approvals" />
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURE: TERMINAL -->
+  <section class="feat rev reveal" id="terminal" style="--accent:var(--cyan);--glow:rgba(34,211,238,0.20)">
+    <div class="wrap feat-grid">
+      <div class="feat-copy">
+        <span class="eyebrow" style="color:var(--cyan)"><span class="pip" style="background:var(--cyan);box-shadow:0 0 10px var(--cyan)"></span>Real terminal</span>
+        <h2 class="display" style="color:var(--text)">A real shell,<br />in your thumb.</h2>
+        <p class="lead">Not a toy console — a full terminal on the box, with streamed stdout, real exit codes, and the hard keys one tap away. Drop in whenever you want to drive by hand.</p>
+        <ul class="feat-list">
+          <li><span class="tick">›_</span>Live stdout streamed line by line, with exit codes and timing.</li>
+          <li><span class="tick">›_</span>An esc / tab / ctrl / arrow accessory bar for the keys phones forget.</li>
+          <li><span class="tick">›_</span>Hand off between the agent and yourself without dropping the session.</li>
+        </ul>
+      </div>
+      <div class="feat-phone">
+        <img src="assets/phone-terminal.png" alt="Conduit terminal tab streaming command output on the remote box" />
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURE: BROWSER -->
+  <section class="feat reveal" id="browser" style="--accent:var(--blue);--glow:rgba(79,140,255,0.20)">
+    <div class="wrap feat-grid">
+      <div class="feat-copy">
+        <span class="eyebrow" style="color:var(--blue)"><span class="pip" style="background:var(--blue);box-shadow:0 0 10px var(--blue)"></span>Live preview</span>
+        <h2 class="display">See the build,<br />as it builds.</h2>
+        <p class="lead">Point the in-app browser at the dev server running on your box and watch the thing you're shipping render in your hand — refreshing the instant the agent saves a file.</p>
+        <ul class="feat-list">
+          <li><span class="tick">›_</span>Render localhost from the remote box, right inside the session.</li>
+          <li><span class="tick">›_</span>A hot-reload pill that fires the moment a file changes.</li>
+          <li><span class="tick">›_</span>Flip between Chat, Terminal, and Browser without losing your place.</li>
+        </ul>
+      </div>
+      <div class="feat-phone">
+        <img src="assets/phone-browser.png" alt="Conduit browser tab previewing the running dev server" />
+      </div>
+    </div>
+  </section>
+
+  <!-- CAPABILITIES -->
+  <section class="caps" id="everything">
+    <div class="wrap">
+      <div class="caps-head reveal">
+        <span class="eyebrow"><span class="pip"></span>Everything in the box</span>
+        <h2 class="display">A whole dev surface,<br />pocket-sized.</h2>
+        <p class="lead">The phone and tablet share one feature set. Chat, terminal, browser, and approvals — wherever you pick it up.</p>
+      </div>
+      <div class="cap-grid">
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4-4 4"/><path d="M12 16h7"/></svg></div>
+          <h3>Real terminal</h3>
+          <p>A full-bleed terminal with streamed stdout, exit codes, and an esc/tab/arrow accessory bar for the hard keys.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M7 6.5h.01M10 6.5h.01"/></svg></div>
+          <h3>Live preview browser</h3>
+          <p>Watch the app under development render in-app, with a hot-reload pill that fires the moment the agent saves.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--claude)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-2 2H4v-3l9-9 3 3-5 5z"/><circle cx="17" cy="7" r="3"/></svg></div>
+          <h3>Subagent handoffs</h3>
+          <p>Watch the lead agent delegate to subagents — nested progress and a collapsible result summary, in one card.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 8l-2 4 2 4"/><path d="M19 8l2 4-2 4"/></svg></div>
+          <h3>Approve before it lands</h3>
+          <p>Destructive or irreversible? It pauses and asks. The safe option is the primary button — you stay in control.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></div>
+          <h3>Command palette</h3>
+          <p>⌘K fuzzy-search across every session, repo, branch, and message — history rows surface diffs, PRs, and test results.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 12V7"/><path d="M12 12l4 2"/></svg></div>
+          <h3>Usage &amp; limits</h3>
+          <p>Context window, token spend, session cost, and per-agent plan limits with reset countdowns — at a glance.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOWNLOAD CTA -->
+  <section class="cta" id="download">
+    <div class="wrap">
+      <div class="cta-card reveal">
+        <img class="cta-icon" src="assets/conduit-1024.png" alt="Conduit" />
+        <h2>Your agents, in your pocket.</h2>
+        <p class="lead">Free during the open beta — no App Store, no Play Store. Install straight from here, pair a box, and let it cook while you do something else.</p>
+        <div class="stores">
+          <a class="store" data-dl="ios" href="#" aria-label="Install on iPhone over the air">
+            <svg viewBox="0 0 24 24" fill="#eaf3ff"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
+            <span><span class="st-sub">Over-the-air install</span><span class="st-main">Install on iPhone</span></span>
+          </a>
+          <a class="store" data-dl="android" href="#" aria-label="Download the Android APK">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><g fill="#3ef0a0"><path d="M6.8 9.4h10.4v6.6a1.2 1.2 0 0 1-1.2 1.2H8a1.2 1.2 0 0 1-1.2-1.2V9.4z"/><rect x="4.2" y="9.6" width="2" height="5.6" rx="1"/><rect x="17.8" y="9.6" width="2" height="5.6" rx="1"/><rect x="8.7" y="16.6" width="1.9" height="4.4" rx=".95"/><rect x="13.4" y="16.6" width="1.9" height="4.4" rx=".95"/><path d="M7 8.7a5 5 0 0 1 10 0z"/></g><line x1="8.3" y1="4.1" x2="9.4" y2="5.8" stroke="#3ef0a0" stroke-width="1.1" stroke-linecap="round"/><line x1="15.7" y1="4.1" x2="14.6" y2="5.8" stroke="#3ef0a0" stroke-width="1.1" stroke-linecap="round"/><circle cx="9.7" cy="7" r=".5" fill="#04050a"/><circle cx="14.3" cy="7" r=".5" fill="#04050a"/></svg>
+            <span><span class="st-sub">Direct APK · sideload</span><span class="st-main">Download for Android</span></span>
+          </a>
+        </div>
+        <div class="cta-meta" data-dl-meta>Loading the latest build…</div>
+        <p class="cta-help">iOS installs over the air — tap <b>Install</b>, then trust the profile in <b>Settings › General › VPN &amp; Device Management</b>. Android: open the <b>.apk</b> and allow install from this source.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-in">
+      <a class="foot-brand" href="#top"><img src="assets/conduit-512.png" alt="" />Conduit</a>
+      <nav class="foot-links">
+        <a href="#remote">Remote</a>
+        <a href="#terminal">Terminal</a>
+        <a href="#browser">Browser</a>
+        <a href="#download">Download</a>
+      </nav>
+    </div>
+    <div class="foot-copy">
+      <span>© 2026 Conduit · made for people who ship from the couch.</span>
+      <span>›_ conduit</span>
+    </div>
+  </div>
+</footer>
+
+<script type="application/json" id="release-data">
+{
+  "version": "0.9.4",
+  "channel": "beta",
+  "updated": "2026-05-30",
+  "ios": { "manifestUrl": "itms-services://?action=download-manifest&url=https://REPLACE-WITH-YOUR-DOMAIN/ios/manifest.plist", "minOS": "iOS 16+", "size": "24.8 MB" },
+  "android": { "apkUrl": "downloads/conduit-latest.apk", "minOS": "Android 10+", "size": "31.2 MB" }
+}
+</script>
+<script>
+  (function(){
+    // ---- scroll reveal ----
+    var els = document.querySelectorAll('.reveal');
+    if(!('IntersectionObserver' in window)){els.forEach(function(e){e.classList.add('in');});}
+    else{
+      var io = new IntersectionObserver(function(entries){
+        entries.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add('in'); io.unobserve(en.target);} });
+      },{threshold:0.16,rootMargin:'0px 0px -8% 0px'});
+      els.forEach(function(e){io.observe(e);});
+    }
+
+    // ---- live release data ----
+    function fmtDate(s){
+      try{ var d=new Date(s+'T00:00:00'); return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
+      catch(e){ return s; }
+    }
+    function apply(d){
+      var iosUrl = d.ios && d.ios.manifestUrl, apkUrl = d.android && d.android.apkUrl;
+      document.querySelectorAll('[data-dl="ios"]').forEach(function(a){
+        if(iosUrl){ a.setAttribute('href', iosUrl); } else { a.classList.add('is-off'); }
+      });
+      document.querySelectorAll('[data-dl="android"]').forEach(function(a){
+        if(apkUrl){ a.setAttribute('href', apkUrl); a.setAttribute('download',''); } else { a.classList.add('is-off'); }
+      });
+      var ver = d.version ? ('v'+d.version) : '';
+      var ch = d.channel || '';
+      var meta = '<b>'+ver+'</b> '+ch
+        + ' <span class="sep">·</span> updated '+fmtDate(d.updated)
+        + ' <span class="sep">·</span> iOS '+((d.ios&&d.ios.size)||'')+' '+((d.ios&&d.ios.minOS)||'')
+        + ' <span class="sep">·</span> APK '+((d.android&&d.android.size)||'')+' '+((d.android&&d.android.minOS)||'');
+      document.querySelectorAll('[data-dl-meta]').forEach(function(el){ el.innerHTML = meta; });
+    }
+    // inline defaults first, then try to override with the live file
+    var fallback = {};
+    try{ fallback = JSON.parse(document.getElementById('release-data').textContent); apply(fallback); }catch(e){}
+    fetch('version.json',{cache:'no-store'})
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(d){ apply(d); })
+      .catch(function(){ /* keep inline defaults */ });
+  })();
+</script>
+</body>
+</html>
