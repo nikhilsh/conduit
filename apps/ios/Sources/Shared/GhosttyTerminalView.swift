@@ -44,9 +44,14 @@ struct GhosttyTerminalTab: View {
     @Environment(SessionStore.self) private var store
     @Environment(AppearanceStore.self) private var appearance
     let session: ProjectSession
+    /// False while the Terminal tab is mounted-but-hidden (kept alive to
+    /// avoid the surface teardown/recreate crash). Pauses the draw pump and
+    /// marks the surface occluded so a backgrounded tab costs nothing.
+    var isActive: Bool = true
 
     var body: some View {
         GhosttyTerminalView(
+            isActive: isActive,
             sessionID: session.id,
             bufferProvider: { store.terminalBuffer[session.id] ?? Data() },
             bufferRevision: store.terminalBuffer[session.id]?.count ?? 0,
@@ -73,6 +78,11 @@ struct GhosttyTerminalTab: View {
 /// drive the byte diff; onInput / onResize close the loop with
 /// SessionStore) so the swap is a one-line branch in ProjectView.
 struct GhosttyTerminalView: UIViewRepresentable {
+    /// Drives the surface's occlusion + draw-pump gating. The view stays
+    /// mounted across tab switches now (so libghostty's surface is never
+    /// torn down + recreated mid-use), so `isActive` is how the host tells
+    /// it "you're hidden — stand the renderer down".
+    var isActive: Bool = true
     let sessionID: String
     let bufferProvider: () -> Data
     let bufferRevision: Int
@@ -115,6 +125,8 @@ struct GhosttyTerminalView: UIViewRepresentable {
     func updateUIView(_ view: GhosttyRenderView, context: Context) {
         view.onInput = onInput
         view.onResize = onResize
+        // Tab visibility → renderer occlusion + draw-pump gating.
+        view.setActive(isActive)
         // Apply appearance every update so changes in
         // `AppearanceStore.themeMode` / `fontFamily` propagate to the
         // live view without a remount. `applyAppearance` is a no-op
@@ -326,6 +338,12 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// surface is hidden, then resume on foreground. Mirrors geistty's
     /// occlusion handling (`set_occlusion(!visible)` + renderer stand-down).
     private var isAppBackgrounded = false
+
+    /// Whether the Terminal tab is currently the visible tab. The view is
+    /// kept mounted while hidden (to avoid the surface teardown/recreate
+    /// crash), so this gates occlusion + the draw pump. Pushed via
+    /// `setActive(_:)` from the representable's `updateUIView`.
+    private var isActive = true
 
     /// Weak-target indirection for `frameDisplayLink`. Mirrors geistty's
     /// `FrameDisplayLinkProxy`: the link retains this proxy, the proxy
@@ -1250,7 +1268,10 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // parented), we explicitly drive `ghostty_surface_draw` from a
         // CADisplayLink — geistty pumps `ghostty_surface_draw_now` the
         // same way, and that working app is what we're matching.
-        let visible = window != nil
+        // Factor in `isActive`: the view can attach to a window while its tab
+        // is hidden (it's kept mounted), and in that case it must stay
+        // occluded.
+        let visible = window != nil && isActive
         #if canImport(GhosttyVT)
         terminal?.setVisible(visible)
         if visible {
@@ -1277,12 +1298,38 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// and we resume cleanly on un-occlusion without disturbing the
     /// wakeup→tick render loop.
     private func updateFrameDisplayLinkRunning() {
-        let shouldRun = (window != nil) && !isAppBackgrounded
+        let shouldRun = (window != nil) && !isAppBackgrounded && isActive
         if shouldRun {
             startFrameDisplayLink()
         } else {
             stopFrameDisplayLink()
         }
+    }
+
+    /// Tab visibility, pushed from the representable. The view is kept
+    /// MOUNTED across tab switches (so libghostty's surface is never torn
+    /// down + recreated mid-use — the reopen-crash fix), so this is how the
+    /// host tells it "you're hidden": stand the renderer down (occlusion +
+    /// stop the draw pump), and wake it back up when shown. Drives the same
+    /// occlusion recipe as background/foreground + window attach.
+    func setActive(_ active: Bool) {
+        guard active != isActive else { return }
+        isActive = active
+        #if canImport(GhosttyVT)
+        let visible = active && window != nil && !isAppBackgrounded
+        terminal?.setVisible(visible)
+        if visible {
+            // Wake recipe (matches didMoveToWindow): toggle focus + refresh
+            // so the re-shown surface repaints rather than showing stale or
+            // blank pixels.
+            terminal?.setFocus(false)
+            terminal?.setFocus(true)
+            terminal?.refresh()
+        } else {
+            terminal?.setFocus(false)
+        }
+        #endif
+        updateFrameDisplayLinkRunning()
     }
 
     /// Start the per-frame draw pump. The link drives `Terminal.draw()`

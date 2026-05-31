@@ -30,7 +30,6 @@ type SessionUsage struct {
 // tokens add up; the context gauge tracks the latest turn only.
 func (s *Session) accumulateUsage(d usageDelta) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.totalInputTokens += d.input
 	s.totalOutputTokens += d.output
 	s.totalCachedTokens += d.cached
@@ -40,6 +39,14 @@ func (s *Session) accumulateUsage(d usageDelta) {
 		s.contextWindowTokens = d.contextWindow
 	}
 	s.hasUsage = true
+	s.mu.Unlock()
+	// Push the updated totals to connected clients NOW. Usage accumulates on
+	// turn completion, but the broker otherwise only sends a status frame on
+	// connect — so without this re-broadcast the usage card never updates
+	// live (it stayed hidden on a session whose first turn finished while you
+	// were watching, and only appeared after a reconnect). Broadcast OUTSIDE
+	// the lock: StatusPayload re-acquires s.mu via its accessors.
+	s.broadcastStatus()
 }
 
 // Usage returns the cumulative usage snapshot for the status frame.

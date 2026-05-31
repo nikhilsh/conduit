@@ -282,34 +282,43 @@ extension LitterUI {
                     .accessibilityHidden(tab != .chat)
                     .zIndex(tab == .chat ? 1 : 0)
 
-                liveSecondaryContent
+                // Device feedback v0.0.68: keep Terminal + Browser MOUNTED
+                // too, rather than rebuilding them on every tab switch.
+                // Rebuilding the native GhosttyTerminalView tore down and
+                // recreated the libghostty surface each Terminal↔other switch;
+                // a CoreAnimation commit landing mid-teardown drove a
+                // stale-object access — the terminal-reopen crash (Sentry
+                // APPLE-IOS-S `apprt.surface.Mailbox.push`, then APPLE-IOS-P/Q
+                // `object.Object.getProperty` → `bounds` after the teardown
+                // hardening) — and the recreated surface re-sized small + re-
+                // initialized laggily. Mounting once keeps the surface warm;
+                // `isActive` pauses its draw pump + marks it occluded while
+                // hidden (no battery cost off-tab).
+                terminalContent
+                    .opacity(tab == .terminal ? 1 : 0)
+                    .allowsHitTesting(tab == .terminal)
+                    .accessibilityHidden(tab != .terminal)
+                    .zIndex(tab == .terminal ? 1 : 0)
+
+                BrowserTab(session: session, mode: .preview)
+                    .opacity(tab == .browser ? 1 : 0)
+                    .allowsHitTesting(tab == .browser)
+                    .accessibilityHidden(tab != .browser)
+                    .zIndex(tab == .browser ? 1 : 0)
             }
         }
 
         @ViewBuilder
-        private var liveSecondaryContent: some View {
-            switch tab {
-            case .chat:
-                EmptyView()
-            case .terminal:
-                // Default engine is the xterm.js terminal (shipping,
-                // proven). Stage 5 wires the native `GhosttyTerminalTab`
-                // to libghostty's *own* Metal renderer — we pass our
-                // UIView via `ghostty_platform_ios_s.uiview`, push the
-                // real pixel size, and drive `ghostty_surface_draw` from
-                // a CADisplayLink (the Stage-4 skeleton fed bytes but
-                // never sized the surface or asked it to paint, hence the
-                // blank screen). It's gated behind the
-                // `experimentalNativeTerminal` flag for on-device
-                // verification; default users stay on xterm.js until the
-                // native path is confirmed painting on real hardware.
-                if appearance.experimentalNativeTerminal {
-                    GhosttyTerminalTab(session: session)
-                } else {
-                    TerminalTabXterm(session: session)
-                }
-            case .browser:
-                BrowserTab(session: session, mode: .preview)
+        private var terminalContent: some View {
+            // Default engine is the xterm.js terminal (shipping, proven).
+            // The native `GhosttyTerminalTab` drives libghostty's own Metal
+            // renderer and is gated behind `experimentalNativeTerminal`.
+            // `isActive` lets the native view pause its CADisplayLink draw
+            // pump + go occluded while the Terminal tab isn't visible.
+            if appearance.experimentalNativeTerminal {
+                GhosttyTerminalTab(session: session, isActive: tab == .terminal)
+            } else {
+                TerminalTabXterm(session: session)
             }
         }
     }
