@@ -115,7 +115,7 @@ final class AppearanceStore {
         /// instead of the current `RootView`. Off by default for this
         /// PR — follow-up PRs flip the default and delete the old
         /// views. See `docs/PLAN-CONDUIT-UI.md`.
-        static let experimentalConduitUI = "conduit.experimental.litterUI"
+        static let experimentalConduitUI = "conduit.experimental.conduitUI"
         /// Body point size for the typography ramp
         /// (`ConduitTypography`). User-tunable within
         /// [bodyPointSizeRange]; everything in the ramp scales off this.

@@ -1,11 +1,11 @@
-# `.swe-kitty/` — dev harness state for *this* repo
+# `.conduit/` — dev harness state for *this* repo
 
-This directory is read by **`swe-kitty-harness`** so multiple AI agents can
-work on swe-kitty in parallel, each on its own git worktree, each in its
+This directory is read by **`conduit-harness`** so multiple AI agents can
+work on conduit in parallel, each on its own git worktree, each in its
 own PTY-backed container.
 
 > Earlier iterations of this README pointed at upstream `swe-swe` for the
-> dev workflow. swe-kitty now ships its own harness binary and is no
+> dev workflow. conduit now ships its own harness binary and is no
 > longer a swe-swe consumer. Don't install upstream swe-swe alongside.
 
 ## What lives here
@@ -25,10 +25,10 @@ own PTY-backed container.
 
 ## Two adapter directories — why?
 
-- `.swe-kitty/agents/` — what the harness reads when working **on this repo**
-  (dev-time). These TOMLs are tuned for the agents that work on swe-kitty
+- `.conduit/agents/` — what the harness reads when working **on this repo**
+  (dev-time). These TOMLs are tuned for the agents that work on conduit
   itself.
-- `agents/` (repo root) — what `swe-kitty-harness` ships **to users**. End
+- `agents/` (repo root) — what `conduit-harness` ships **to users**. End
   users get this set when they run the harness against their own project.
 
 These are intentionally separate so a change to dev-time tooling never
@@ -38,8 +38,8 @@ breaks the shipped product.
 
 ```sh
 cp env.example env                              # fill in your API keys
-make harness                                    # build ./harness/bin/swe-kitty-harness
-./harness/bin/swe-kitty-harness up --local      # opens http://localhost:1977
+make harness                                    # build ./harness/bin/conduit-harness
+./harness/bin/conduit-harness up --local      # opens http://localhost:1977
 ```
 
 In the local UI (or the mobile app, paired via the printed QR):

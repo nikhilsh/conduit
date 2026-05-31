@@ -4,10 +4,10 @@
 Generate the Xcode project, wire up the Rust core as an xcframework, and ship a minimal SwiftUI app that connects to a harness and renders the terminal view of one project.
 
 **In scope:**
-- `apps/ios/project.yml` — xcodegen spec; bundle id `sh.nikhil.swekitty`
-- `apps/ios/build-rust.sh` — compiles `core/` for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`; packages `SweKittyCore.xcframework`
-- `apps/ios/Sources/SweKittyApp.swift` — `@main`
-- `apps/ios/Sources/SessionStore.swift` — `@Observable` wrapper around `SweKittyClient`
+- `apps/ios/project.yml` — xcodegen spec; bundle id `sh.nikhil.conduit`
+- `apps/ios/build-rust.sh` — compiles `core/` for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`; packages `ConduitCore.xcframework`
+- `apps/ios/Sources/ConduitApp.swift` — `@main`
+- `apps/ios/Sources/SessionStore.swift` — `@Observable` wrapper around `ConduitClient`
 - `apps/ios/Sources/Views/ProjectListView.swift` — top-level session switcher
 - `apps/ios/Sources/Views/ProjectView.swift` — segmented picker for Terminal/Chat/Browser; terminal tab wired, chat+browser stubbed
 - `apps/ios/Sources/Views/TerminalTab.swift` — SwiftTerm binding to `on_pty_data` / `send_input`

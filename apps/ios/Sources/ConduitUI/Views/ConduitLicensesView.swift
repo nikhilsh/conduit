@@ -131,7 +131,7 @@ extension ConduitUI {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .litterGlassRoundedRect(cornerRadius: 14)
+                .conduitGlassRoundedRect(cornerRadius: 14)
             }
             .buttonStyle(.plain)
         }
@@ -161,7 +161,7 @@ extension ConduitUI {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .litterGlassRoundedRect(cornerRadius: 14)
+            .conduitGlassRoundedRect(cornerRadius: 14)
         }
     }
 }

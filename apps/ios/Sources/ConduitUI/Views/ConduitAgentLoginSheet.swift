@@ -115,7 +115,7 @@ extension ConduitUI {
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .litterGlassRoundedRect(cornerRadius: 14)
+            .conduitGlassRoundedRect(cornerRadius: 14)
         }
 
         @ViewBuilder
@@ -165,7 +165,7 @@ extension ConduitUI {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .litterGlassRoundedRect(cornerRadius: 14)
+                .conduitGlassRoundedRect(cornerRadius: 14)
         }
 
         private func sectionLabel(_ text: String) -> some View {

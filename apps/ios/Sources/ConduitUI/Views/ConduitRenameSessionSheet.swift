@@ -41,7 +41,7 @@ extension ConduitUI {
                             .autocorrectionDisabled(true)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
-                            .litterGlassRoundedRect(cornerRadius: 14)
+                            .conduitGlassRoundedRect(cornerRadius: 14)
 
                         Text(RenameSessionValidator.helpText)
                             .font(.caption2)

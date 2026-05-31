@@ -1,10 +1,10 @@
-# Task 002 — Rust shared core (`swe-kitty-core`)
+# Task 002 — Rust shared core (`conduit-core`)
 
 ## Scope
 Build the WebSocket client + session state machine in Rust, exposed via UniFFI for iOS/Android.
 
 **In scope:**
-- `core/swe-kitty-core.udl` — UniFFI interface (see `docs/PLAN.md` Part B3)
+- `core/conduit-core.udl` — UniFFI interface (see `docs/PLAN.md` Part B3)
 - `core/src/lib.rs` — UniFFI exports
 - `core/src/transport.rs` — `tokio-tungstenite` WebSocket client; demux binary vs text; gzip chunked-snapshot reassembly; 30s ping
 - `core/src/session.rs` — `ProjectSession` model; per-session view state (terminal scrollback, chat log, preview info)
@@ -24,7 +24,7 @@ Build the WebSocket client + session state machine in Rust, exposed via UniFFI f
 - `cd core && cargo test` green (uses a mock WS server in-process)
 - `cargo run --example cli-driver -- ws://localhost:1977 <token>` connects to a running harness from task 001, creates a session, sends keystrokes, prints PTY data
 - `cargo clippy -- -D warnings` clean
-- `make bindings` generates `core/generated/swe_kitty_core.swift` and `core/generated/sweKittyCore.kt` without errors
+- `make bindings` generates `core/generated/conduit_core.swift` and `core/generated/conduitCore.kt` without errors
 
 ## Files allowed
 - `core/**`

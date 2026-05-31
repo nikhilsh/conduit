@@ -1,10 +1,10 @@
 # Task 001 — Harness server (Go)
 
 ## Scope
-Build the swe-kitty harness server: an HTTP+WebSocket service that manages per-session PTYs, git worktrees, and Docker-spawned agent containers. Slimmed fork of swe-swe's server.
+Build the conduit harness server: an HTTP+WebSocket service that manages per-session PTYs, git worktrees, and Docker-spawned agent containers. Slimmed fork of swe-swe's server.
 
 **In scope:**
-- `harness/cmd/swe-kitty-harness/main.go` — CLI: `up`, `down`, `memory`, `--public-url`, `--local` flags
+- `harness/cmd/conduit-harness/main.go` — CLI: `up`, `down`, `memory`, `--public-url`, `--local` flags
 - `harness/internal/session/manager.go` — Session struct, create/destroy, PTY drain goroutine
 - `harness/internal/ws/server.go` — WebSocket server matching `docs/WEBSOCKET-PROTOCOL.md` byte-for-byte
 - `harness/internal/auth/auth.go` — Bearer token check
@@ -21,7 +21,7 @@ Build the swe-kitty harness server: an HTTP+WebSocket service that manages per-s
 
 ## Done means
 - `go test ./...` green
-- `go run ./harness/cmd/swe-kitty-harness up --local` opens `:1977`
+- `go run ./harness/cmd/conduit-harness up --local` opens `:1977`
 - `wscat -c "ws://localhost:1977/ws/$(uuidgen)?assistant=claude" -H "Authorization: Bearer <token>"` echoes typed input via PTY (hardcoded `sh` as the "agent" is fine for this task — real adapter integration is task 006)
 - Resize (binary `0x00 RR CC`) and gzip-chunked snapshot (`0x02`) round-trip
 - `ci.yml` `harness` job green

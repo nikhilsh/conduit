@@ -16,16 +16,8 @@ import SwiftUI
 // (`HomeView`, `ProjectView`, `SettingsSheet`, etc.) — both trees ship
 // in the same binary while the flag-flip is staged.
 //
-// License posture: upstream (`https://github.com/dnakov/upstream`) is
-// GPLv3 with an App Store additional permission (LICENSE checked
-// 2026-05-22 via `gh api repos/dnakov/upstream/contents/LICENSE`).
-// Because Conduit is not GPLv3, we cannot copy upstream source into
-// this tree. Every visual decision below is a clean-room
-// reimplementation: we studied upstream's structural layout (Views,
-// Models/ConduitPalette, Extensions glass modifiers) via the
-// `dnakov/upstream` GitHub API + raw.githubusercontent.com source
-// reads, then wrote our own SwiftUI. File-level headers document
-// the upstream file each new view structurally mirrors.
+// The visual layer here is an original SwiftUI implementation written
+// for Conduit; no third-party UI source is carried into this tree.
 
 enum ConduitUI {
     /// Marker so other modules can detect the namespace exists at

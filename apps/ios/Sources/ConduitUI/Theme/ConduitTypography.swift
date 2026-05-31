@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - ConduitTypography
 //
-// Type ramp matching upstream. Conduit exposes a single `litterFont`
+// Type ramp matching upstream. Conduit exposes a single `conduitFont`
 // helper that respects the user's font-design choice (monospaced vs.
 // default). We adapt that to honour `AppearanceStore.fontFamily`, so
 // the ConduitUI tree picks up the user's chosen body font without any

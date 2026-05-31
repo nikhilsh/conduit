@@ -70,7 +70,7 @@ extension ConduitUI {
             .padding(.trailing, 6)
             .padding(.vertical, 6)
             .frame(maxWidth: 220)
-            .litterGlassCapsule(tint: ConduitUI.Palette.surfaceLight.color, config: .pill)
+            .conduitGlassCapsule(tint: ConduitUI.Palette.surfaceLight.color, config: .pill)
         }
     }
 
@@ -105,7 +105,7 @@ extension ConduitUI {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(ConduitUI.Palette.textSecondary.color)
                     .frame(width: 36, height: 36)
-                    .litterGlassCircle(tint: ConduitUI.Palette.surfaceLight.color, config: .floating)
+                    .conduitGlassCircle(tint: ConduitUI.Palette.surfaceLight.color, config: .floating)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Attach")

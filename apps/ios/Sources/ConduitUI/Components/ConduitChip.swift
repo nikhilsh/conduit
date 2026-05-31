@@ -32,7 +32,7 @@ extension ConduitUI {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .foregroundStyle(foreground)
-            .litterGlassCapsule(tint: capsuleTint)
+            .conduitGlassCapsule(tint: capsuleTint)
         }
 
         private var foreground: Color {

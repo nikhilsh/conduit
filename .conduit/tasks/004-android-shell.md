@@ -6,10 +6,10 @@ Mirror of task 003 for Android. Compose UI, Rust core as JNI lib, minimal app co
 **In scope:**
 - `apps/android/build-rust.sh` — compiles `core/` for `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`, `i686-linux-android`; drops `.so` into `app/src/main/jniLibs/<abi>/`
 - `apps/android/settings.gradle.kts`, `build.gradle.kts`
-- `apps/android/app/build.gradle.kts` — applicationId `sh.nikhil.swekitty`, signing config reads env vars
+- `apps/android/app/build.gradle.kts` — applicationId `sh.nikhil.conduit`, signing config reads env vars
 - `apps/android/app/src/main/AndroidManifest.xml`
-- `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/MainActivity.kt`
-- `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/SessionStore.kt`
+- `apps/android/app/src/main/kotlin/sh/nikhil/conduit/MainActivity.kt`
+- `apps/android/app/src/main/kotlin/sh/nikhil/conduit/SessionStore.kt`
 - `.../ProjectListScreen.kt`, `ProjectScreen.kt`, `TerminalPage.kt`, `ChatPage.kt` (stub), `BrowserPage.kt` (stub)
 
 **Out of scope:**

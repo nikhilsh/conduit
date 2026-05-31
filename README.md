@@ -82,9 +82,7 @@ Install and run the broker on your box, then pair from the app —
 ## Prior art
 
 The WebSocket framing took inspiration from
-[choonkeat/swe-swe](https://github.com/choonkeat/swe-swe), and the layered
-Rust-core + native-shells split is the shape [dnakov/litter](https://github.com/dnakov/litter)
-chose for Codex on mobile. conduit has diverged on auth (bearer-only, no
-cookie login), on the broker protocol (`switch_agent`, typed `view_event`,
-structured chat), and on the entire mobile surface — neither upstream is a
-runtime dependency or an interoperability target.
+[choonkeat/swe-swe](https://github.com/choonkeat/swe-swe). conduit has its own
+auth (bearer-only, no cookie login), broker protocol (`switch_agent`, typed
+`view_event`, structured chat), and mobile surface — swe-swe is neither a
+runtime dependency nor an interoperability target.

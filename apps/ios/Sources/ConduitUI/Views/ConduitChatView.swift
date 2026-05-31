@@ -460,7 +460,7 @@ extension ConduitUI {
                 }
                 // Device feedback v0.0.49 (round 2) #1: NO bar background —
                 // the chips float directly over the chat as glass capsules
-                // (each `litterGlassCapsule` is its own translucent blurred
+                // (each `conduitGlassCapsule` is its own translucent blurred
                 // surface), matching the floating scroll-to-bottom arrow. The
                 // earlier `.ultraThinMaterial` strip still read as a flat,
                 // opaque-looking row because the inset cluster painted an
@@ -1197,7 +1197,7 @@ enum ConduitToolCardMetrics {
     /// Leading 6pt status dot replaces the previous wrench glyph.
     static let statusDotSize: CGFloat = 6
     /// Outer corner radius — 14pt matches the new flatter card shape
-    /// landed in PR 2 (`litterGlassRoundedRect` default).
+    /// landed in PR 2 (`conduitGlassRoundedRect` default).
     static let surfaceCornerRadius: CGFloat = 14
     /// Surface fill opacity — 0.6 keeps the card legible without the
     /// "card-inside-card" layering the prior glass treatment produced

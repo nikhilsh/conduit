@@ -18,7 +18,7 @@ const outDir = path.join(__dirname, "out");
 const publicDir = path.join(__dirname, "public");
 
 const repo = process.env.GITHUB_REPO || "nikhilsh/conduit";
-const siteOrigin = process.env.SITE_ORIGIN || "https://swekitty.kaopeh.com";
+const siteOrigin = process.env.SITE_ORIGIN || "https://conduit.kaopeh.com";
 
 const headers = {
     "User-Agent": "conduit-website-build",

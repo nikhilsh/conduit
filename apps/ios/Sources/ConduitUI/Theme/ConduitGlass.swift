@@ -121,7 +121,7 @@ extension View {
     /// Pairs with `ConduitUI.GlassMorphContainer` so Liquid Glass can
     /// morph between surfaces (e.g. `+` button expanding into the
     /// composer). Thin wrapper over `glassEffectID(_:in:)`.
-    func litterGlassMorphID(_ id: String, in namespace: Namespace.ID) -> some View {
+    func conduitGlassMorphID(_ id: String, in namespace: Namespace.ID) -> some View {
         glassEffectID(id, in: namespace)
     }
 }
@@ -131,7 +131,7 @@ extension View {
     /// dropped from 16 → 14 in PLAN-CONDUIT-VISUAL-PARITY PR 2 to match
     /// upstream's flatter card shape (audit §A.3.2 / §B.3); hero surfaces
     /// that want the previous chunkier radius pass an explicit value.
-    func litterGlassRoundedRect(
+    func conduitGlassRoundedRect(
         cornerRadius: CGFloat = 14,
         tint: Color? = nil,
         config: ConduitUI.GlassConfig = .card
@@ -145,7 +145,7 @@ extension View {
 
     /// Conduit-style capsule glass surface (used for server pills,
     /// agent chips, and BottomActionBar buttons).
-    func litterGlassCapsule(
+    func conduitGlassCapsule(
         tint: Color? = nil,
         config: ConduitUI.GlassConfig = .pill
     ) -> some View {
@@ -158,7 +158,7 @@ extension View {
 
     /// Conduit-style circular glass surface (used for floating icon
     /// buttons in the home top row).
-    func litterGlassCircle(
+    func conduitGlassCircle(
         tint: Color? = nil,
         config: ConduitUI.GlassConfig = .floating
     ) -> some View {

@@ -8,7 +8,7 @@ import SwiftUI
 // research notes), then re-typed by hand here so we don't carry over
 // any GPLv3 source. Every named color is a (light, dark) pair, the
 // shape matches upstream's `ConduitColor` indirection so callers in the
-// ConduitUI views can write `.litterAccentStrong` etc. without
+// ConduitUI views can write `.conduitAccentStrong` etc. without
 // reaching into ConduitPalette.
 //
 // Mapping notes:

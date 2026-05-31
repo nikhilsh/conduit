@@ -137,7 +137,7 @@ extension ConduitUI {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .litterGlassRoundedRect(cornerRadius: 14)
+                .conduitGlassRoundedRect(cornerRadius: 14)
             }
             .buttonStyle(.plain)
         }
@@ -180,7 +180,7 @@ struct ConduitManualPairSheet: View {
                             .keyboardType(.URL)
                             .textFieldStyle(.plain)
                             .padding(12)
-                            .litterGlassRoundedRect(cornerRadius: 14)
+                            .conduitGlassRoundedRect(cornerRadius: 14)
 
                         Text("BEARER TOKEN")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -192,7 +192,7 @@ struct ConduitManualPairSheet: View {
                             .autocorrectionDisabled()
                             .textFieldStyle(.plain)
                             .padding(12)
-                            .litterGlassRoundedRect(cornerRadius: 14)
+                            .conduitGlassRoundedRect(cornerRadius: 14)
 
                         if let error {
                             Text(error)

@@ -39,7 +39,7 @@ extension ConduitUI {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(ConduitUI.Palette.textPrimary.color)
                     .frame(width: 36, height: 36)
-                    .litterGlassCircle(
+                    .conduitGlassCircle(
                         tint: ConduitUI.Palette.surface.color.opacity(0.65),
                         config: .floating
                     )

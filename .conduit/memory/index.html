@@ -1,16 +1,16 @@
 <!doctype html>
-<html lang="en" data-swe-kitty-memory="v1" data-scope="project">
+<html lang="en" data-conduit-memory="v1" data-scope="project">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>swe-kitty project memory</title>
+  <title>conduit project memory</title>
   <link rel="stylesheet" href="memory.css">
 </head>
 <body>
   <header data-section="meta">
     <dl>
       <dt>scope</dt><dd>project</dd>
-      <dt>repo</dt><dd><code>git@github.com:nikhilsh/swe-kitty.git</code></dd>
+      <dt>repo</dt><dd><code>git@github.com:nikhilsh/conduit.git</code></dd>
       <dt>memory-format</dt><dd>v1 (see <code>docs/MEMORY-FORMAT.md</code>)</dd>
       <dt>last-promoted</dt><dd><time datetime="">never</time></dd>
     </dl>
@@ -40,7 +40,7 @@
       <li data-id="d-003">iOS distribution: ad-hoc signed IPA → GitHub Release. No TestFlight in v1. Sideload via AltStore / Sideloadly.</li>
       <li data-id="d-004">Android distribution: signed APK → GitHub Release. No Play Console in v1.</li>
       <li data-id="d-005">Memory format is HTML, not Markdown. Reason: renders directly in the mobile browser view, supports structured sections.</li>
-      <li data-id="d-006">Two adapter directories on purpose: <code>.swe-kitty/agents/</code> for dev-time (swe-swe consumed), <code>agents/</code> for production (swe-kitty-harness consumed). Avoids dev-tooling churn breaking the shipped product.</li>
+      <li data-id="d-006">Two adapter directories on purpose: <code>.conduit/agents/</code> for dev-time (swe-swe consumed), <code>agents/</code> for production (conduit-harness consumed). Avoids dev-tooling churn breaking the shipped product.</li>
       <li data-id="d-007">No web client. The swe-swe browser UI already works against our server because we keep the WebSocket framing byte-identical.</li>
       <li data-id="d-008">Watchdog does NOT auto-restart crashed agents by default. User taps Resume. Avoids agents looping forever burning credits.</li>
     </ol>
@@ -52,8 +52,8 @@
       <li>Branch name: <code>agent/&lt;agent-name&gt;-&lt;task-id&gt;</code></li>
       <li>One PR per task brief. Don't bundle.</li>
       <li>No comments unless WHY is non-obvious.</li>
-      <li>Reuse over rewrite: SwiftTerm (iOS), termux-terminal-view (Android), swe-swe's framing, litter's build scripts.</li>
-      <li>Bundle ID: <code>sh.nikhil.swekitty</code>.</li>
+      <li>Reuse over rewrite: SwiftTerm (iOS), termux-terminal-view (Android), swe-swe's framing, conduit's build scripts.</li>
+      <li>Bundle ID: <code>sh.nikhil.conduit</code>.</li>
     </ul>
   </section>
 
@@ -67,7 +67,7 @@
 
   <section data-section="promoted-from-sessions">
     <h2>Insights promoted from sessions</h2>
-    <p>Empty. Use <code>swe-kitty memory promote --session &lt;uuid&gt; --decision &lt;id&gt;</code> to lift a session decision up here.</p>
+    <p>Empty. Use <code>conduit memory promote --session &lt;uuid&gt; --decision &lt;id&gt;</code> to lift a session decision up here.</p>
     <ol></ol>
   </section>
 </body>

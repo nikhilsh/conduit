@@ -1,5 +1,5 @@
-/* swe-kitty memory stylesheet.
- * Loaded by both .swe-kitty/memory/index.html (project) and per-session HTML.
+/* conduit memory stylesheet.
+ * Loaded by both .conduit/memory/index.html (project) and per-session HTML.
  * Also renders inside the mobile app's WebView/WKWebView when the user taps
  * the Memory affordance in the chat tab header. Keep it self-contained and
  * dark-mode-aware — phone displays vary. */

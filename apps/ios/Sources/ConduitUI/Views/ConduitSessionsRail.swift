@@ -84,7 +84,7 @@ extension ConduitUI {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .litterGlassCapsule(
+                            .conduitGlassCapsule(
                                 tint: isActive ? neon.accent.opacity(0.4) : nil,
                                 config: .pill
                             )
@@ -104,7 +104,7 @@ extension ConduitUI {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .foregroundStyle(ConduitUI.Palette.textPrimary.color)
-                        .litterGlassCapsule(config: .pill)
+                        .conduitGlassCapsule(config: .pill)
                     }
                     .buttonStyle(.plain)
                 }

@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Pins the ConduitUI glass surface defaults still meaningful after the
 /// iOS-26 deployment-target migration:
-///   - `litterGlassRoundedRect` default corner radius dropped 16 → 14.
+///   - `conduitGlassRoundedRect` default corner radius dropped 16 → 14.
 ///   - `ConduitUI.Card` default corner radius dropped 16 → 14.
 ///   - Per-shape highlight opacity (card / pill / floating) still
 ///     differs so the three variants don't render identically.
@@ -35,7 +35,7 @@ struct ConduitGlassDefaultsTests {
         #expect(ConduitUI.GlassConfig.floating.highlightOpacity == 0.22)
     }
 
-    @Test func litterCardDefaultCornerRadiusIs14() {
+    @Test func conduitCardDefaultCornerRadiusIs14() {
         let card = ConduitUI.Card { Text("x") }
         #expect(card.cornerRadius == 14)
     }

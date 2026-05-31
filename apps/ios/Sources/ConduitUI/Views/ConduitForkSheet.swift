@@ -83,7 +83,7 @@ extension ConduitUI {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 12)
-                            .litterGlassRoundedRect(cornerRadius: 14)
+                            .conduitGlassRoundedRect(cornerRadius: 14)
                         }
                         .neonAccentTint()
                         Text("Default keeps the current model. Pick an alias to fork onto a different one.")

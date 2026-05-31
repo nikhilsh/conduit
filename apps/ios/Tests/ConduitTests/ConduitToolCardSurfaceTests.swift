@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Pins the upstream-faithful tool-card surface chosen in
 /// `PLAN-CONDUIT-VISUAL-PARITY` PR 4. Before this PR `ConduitToolCard`
-/// stacked `litterGlassRoundedRect(tint: statusTint.opacity(0.20))`
+/// stacked `conduitGlassRoundedRect(tint: statusTint.opacity(0.20))`
 /// over nested `ConduitLabeledOutputBlock` glass — once a code or diff
 /// sub-block landed inside, you got card-inside-card-inside-card
 /// (audit §A.2.3). PR 4 collapses to a single flat surfaceLight fill
@@ -23,7 +23,7 @@ struct ConduitToolCardSurfaceTests {
     }
 
     @Test func surfaceCornerMatchesCardDefault() {
-        // 14pt matches `litterGlassRoundedRect`'s new default landed
+        // 14pt matches `conduitGlassRoundedRect`'s new default landed
         // in PR 2. If the tool card drifts out of sync, cards inside
         // a settings card or inside a discovery section would no
         // longer nest cleanly.

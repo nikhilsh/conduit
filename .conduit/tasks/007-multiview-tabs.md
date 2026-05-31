@@ -29,7 +29,7 @@ Complete the per-project view picker by implementing the Chat tab and Browser ta
 ## Files allowed
 - `core/src/{transport,views,session}.rs`
 - `apps/ios/Sources/Views/{ChatTab,BrowserTab,MemoryButton,ProjectView}.swift`
-- `apps/android/app/src/main/kotlin/sh/nikhil/swekitty/{ChatPage,BrowserPage,MemoryButton,ProjectScreen}.kt`
+- `apps/android/app/src/main/kotlin/sh/nikhil/conduit/{ChatPage,BrowserPage,MemoryButton,ProjectScreen}.kt`
 
 ## Branch
 `agent/<your-name>-007-multiview-tabs`
