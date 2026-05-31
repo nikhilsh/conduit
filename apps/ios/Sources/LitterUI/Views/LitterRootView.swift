@@ -27,7 +27,9 @@ extension LitterUI {
         var body: some View {
             ZStack {
                 LitterUI.Palette.surface.color
-                    .ignoresSafeArea()
+                    // `.container` (not a bare ignore) so the root canvas never
+                    // claims the `.keyboard` region — see GlassAppBackground.
+                    .ignoresSafeArea(.container, edges: .all)
                 if horizontalSizeClass == .regular {
                     TabletShell()
                 } else {

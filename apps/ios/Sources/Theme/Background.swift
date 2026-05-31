@@ -13,6 +13,14 @@ struct GlassAppBackground: View {
             neon.appBg
             NeonGrid()
         }
-        .ignoresSafeArea()
+        // Scope to `.container` (notch / home-indicator), NOT a bare
+        // `.ignoresSafeArea()` which also ignores the `.keyboard` region.
+        // A bare call here leaked into the foreground layout and suppressed
+        // the chat composer's `.safeAreaInset(.bottom)` keyboard avoidance —
+        // the recurring "composer hides behind the keyboard on re-tap" bug
+        // (device #19/#31). The outer ProjectView scopes its own background
+        // the same way; this makes the canvas itself never eat the keyboard
+        // band regardless of where it's mounted.
+        .ignoresSafeArea(.container, edges: .all)
     }
 }
