@@ -173,13 +173,9 @@ fun AnimatedSplash(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Image(
-                    painter = painterResource(R.drawable.kitty_mark),
-                    contentDescription = "Conduit",
-                    modifier = Modifier
-                        .size(84.dp)
-                        .scale(pulseScale)
-                        .clip(RoundedCornerShape(18.dp)),
+                ConduitMark(
+                    size = 84.dp,
+                    modifier = Modifier.scale(pulseScale),
                 )
                 Text(
                     AnimatedSplashModel.wordmark,

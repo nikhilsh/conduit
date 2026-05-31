@@ -6,29 +6,22 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import sh.nikhil.conduit.R
 
 /**
- * The Conduit brand mark (`KittyMark`) with a subtle, continuous
- * "breathe" — a gentle scale loop so the home header feels alive without
- * the attention-grabbing pulse of the cold-start splash. Mirrors the iOS
- * `ConduitUI.AnimatedBrandMark`; both share the same calm timing
- * (1.0 → 1.03 over 2.2s, ease-in-out, autoreversing) so the wordless
- * brand mark reads the same on both platforms.
+ * The Conduit brand mark (the terminal-daemon [ConduitMark]) with a subtle,
+ * continuous "breathe" — a gentle scale loop so the home header feels alive
+ * without the attention-grabbing pulse of the cold-start splash. Mirrors the
+ * iOS `ConduitUI.AnimatedBrandMark`; both share the same calm timing
+ * (1.0 → 1.03 over 2.2s, ease-in-out, autoreversing) so the wordless brand
+ * mark reads the same on both platforms.
  *
- * Distinct on purpose from [AnimatedSplash]'s faster 1.2s "loading"
- * pulse — the splash signals work-in-progress, the header just breathes.
+ * Distinct on purpose from [AnimatedSplash]'s faster 1.2s "loading" pulse —
+ * the splash signals work-in-progress, the header just breathes.
  */
 @Composable
 fun AnimatedBrandMark(size: Dp, modifier: Modifier = Modifier) {
@@ -42,12 +35,5 @@ fun AnimatedBrandMark(size: Dp, modifier: Modifier = Modifier) {
         ),
         label = "brandScale",
     )
-    Image(
-        painter = painterResource(R.drawable.kitty_mark),
-        contentDescription = "Conduit",
-        modifier = modifier
-            .size(size)
-            .scale(scale)
-            .clip(RoundedCornerShape(size * 0.22f)),
-    )
+    ConduitMark(size = size, modifier = modifier.scale(scale))
 }
