@@ -66,18 +66,39 @@ extension LitterUI {
             .background(GlassAppBackground().ignoresSafeArea(.container, edges: .all))
         }
 
+        // Keep Terminal + Browser MOUNTED across the right-pane tab switches
+        // (same reopen-crash fix as the phone ProjectView): rebuilding the
+        // native GhosttyTerminalView on every Terminal↔Info↔Browser switch
+        // tore down + recreated libghostty's surface, and a CA commit mid-
+        // teardown crashed (APPLE-IOS-S / -P / -Q). `isActive` stands the
+        // hidden terminal's renderer down. Info is cheap, so it stays a
+        // plain switch overlaid on top when selected.
         @ViewBuilder private var content: some View {
-            switch tab {
-            case .terminal:
-                if appearance.experimentalNativeTerminal {
-                    GhosttyTerminalTab(session: session)
-                } else {
-                    TerminalTabXterm(session: session)
-                }
-            case .browser:
+            ZStack {
+                terminalContent
+                    .opacity(tab == .terminal ? 1 : 0)
+                    .allowsHitTesting(tab == .terminal)
+                    .accessibilityHidden(tab != .terminal)
+                    .zIndex(tab == .terminal ? 1 : 0)
+
                 BrowserTab(session: session, mode: .preview)
-            case .info:
-                LitterUI.SessionInfoView(session: session, embedded: true)
+                    .opacity(tab == .browser ? 1 : 0)
+                    .allowsHitTesting(tab == .browser)
+                    .accessibilityHidden(tab != .browser)
+                    .zIndex(tab == .browser ? 1 : 0)
+
+                if tab == .info {
+                    LitterUI.SessionInfoView(session: session, embedded: true)
+                        .zIndex(2)
+                }
+            }
+        }
+
+        @ViewBuilder private var terminalContent: some View {
+            if appearance.experimentalNativeTerminal {
+                GhosttyTerminalTab(session: session, isActive: tab == .terminal)
+            } else {
+                TerminalTabXterm(session: session)
             }
         }
     }

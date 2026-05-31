@@ -373,92 +373,15 @@ func (c *client) writeJSON(v any) error {
 }
 
 func (c *client) sendStatus(assistant string, created bool) error {
-	st := c.sess.Status()
-	reason := st.ReasonCode
-	if reason == "" {
-		reason = "ok"
-	}
-	// viewers reflects existing subscribers PLUS this one — we haven't
-	// called Subscribe() yet on the connect path, but the client is
-	// definitely about to count itself as a viewer. Add 1 so the very
-	// first status frame agrees with the view_event mirror's
-	// viewer_count emitted right after Subscribe.
-	viewers := c.sess.SubscriberCount() + 1
-	rows, cols := c.sess.Dimensions()
-	if rows == 0 {
-		rows = 40
-	}
-	if cols == 0 {
-		cols = 120
-	}
-	payload := map[string]any{
-		"type":        "status",
-		"session":     c.sess.ID,
-		"viewers":     viewers,
-		"rows":        rows,
-		"cols":        cols,
-		"assistant":   assistant,
-		"yolo":        false,
-		"health":      st.Health,
-		"phase":       st.Phase,
-		"reason_code": reason,
-		"ts":          time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	// Info-sheet fields. Optional so older clients ignore unknown
-	// keys safely; the iOS/Android decoder reads them via #[serde(default)].
-	if cwd := c.sess.WorkspaceDir(); cwd != "" {
-		payload["cwd"] = cwd
-	}
-	if !st.StartedAt.IsZero() {
-		payload["started_at"] = st.StartedAt.Format(time.RFC3339Nano)
-	}
-	if !st.LastOutput.IsZero() {
-		payload["last_activity_at"] = st.LastOutput.Format(time.RFC3339Nano)
-	}
-	// Per-agent reasoning effort. Only emitted when explicitly set
-	// (a fork/override or an adapter toml that declares one). claude
-	// (Claude Code) has no real effort knob, so omitting the key lets
-	// the UI show just the agent name instead of a fabricated label.
-	if effort := c.sess.ReasoningEffort(); effort != "" {
-		payload["reasoning_effort"] = effort
-	}
-	// Human-readable label set by `rename_session` (protocol §3.3).
-	// Emitted as both `session_name` (top-level mirror) and
-	// `display_name` — older clients ignore unknown keys, newer ones
-	// can switch their title binding without a flag day.
-	if name := c.sess.DisplayName(); name != "" {
-		payload["session_name"] = name
-		payload["display_name"] = name
-	}
-	// Per-session token/cost usage + context gauge (info sheet). Optional;
-	// only once a turn has reported usage. Cost/context-window are claude
-	// only (codex reports neither), so emit them only when present.
-	if u := c.sess.Usage(); u.HasUsage {
-		payload["total_input_tokens"] = u.InputTokens
-		payload["total_output_tokens"] = u.OutputTokens
-		payload["total_cached_tokens"] = u.CachedTokens
-		if u.CostUSD > 0 {
-			payload["total_cost_usd"] = u.CostUSD
-		}
-		if u.ContextUsedTokens > 0 {
-			payload["context_used_tokens"] = u.ContextUsedTokens
-		}
-		if u.ContextWindowTokens > 0 {
-			payload["context_window_tokens"] = u.ContextWindowTokens
-		}
-	}
-	// Outcome stats (OutcomeChips). Diff + commit count only when the cwd is
-	// a git repo; PR fields only when an associated PR was found. Absent
-	// fields render as no chip on the client. See session/outcome.go.
-	if o := c.sess.Outcome(); o.HasGit {
-		payload["lines_added"] = o.LinesAdded
-		payload["lines_removed"] = o.LinesRemoved
-		payload["commits"] = o.Commits
-		if o.HasPR {
-			payload["pr_number"] = o.PRNumber
-			payload["pr_state"] = o.PRState
-		}
-	}
+	// The full status payload (health/phase + cwd/usage/outcome/…) is built
+	// in the session layer so the same frame can be re-broadcast on a state
+	// change — see session.StatusPayload / broadcastStatus. Connect path
+	// overrides: pin the resolved `assistant` from this connection, and count
+	// the about-to-subscribe client (StatusPayload reports current
+	// subscribers only; we haven't Subscribe()'d yet here).
+	payload := c.sess.StatusPayload()
+	payload["assistant"] = assistant
+	payload["viewers"] = c.sess.SubscriberCount() + 1
 	return c.writeJSON(payload)
 }
 
