@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -120,6 +121,14 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 		if s.Assistant == "codex" {
 			pairs["CODEX_HOME"] = filepath.Join(s.agentHomeDir, ".codex")
 		}
+	}
+	// Preview dev-server port (AGENT-ADAPTERS.md §2.3): the agent binds $PORT
+	// and the broker reverse-proxies `/preview/<id>/` to it; $AGENT_CHAT_PORT
+	// (=PORT+1000) is the optional MCP view_event bridge. Only set when a port
+	// was successfully allocated.
+	if s.previewPort > 0 {
+		pairs["PORT"] = strconv.Itoa(s.previewPort)
+		pairs["AGENT_CHAT_PORT"] = strconv.Itoa(s.previewPort + 1000)
 	}
 	for k, v := range extra {
 		pairs[k] = v

@@ -123,6 +123,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/session/start", s.serveSessionStart)
 	mux.HandleFunc("/api/recent-projects", s.serveRecentProjects)
 	mux.HandleFunc("/api/fs/list", s.serveFSList)
+	// /preview/<session-id>/… reverse-proxies the session's dev server
+	// ($PORT) so the in-app Browser tab can load it. See preview.go.
+	mux.HandleFunc("/preview/", s.servePreview)
 	// Trailing slash: path-prefix match so the session id is the tail.
 	mux.HandleFunc("/api/session/conversation/", s.serveSessionConversation)
 	// DELETE /api/session/<id> — terminate + archive a session. The more

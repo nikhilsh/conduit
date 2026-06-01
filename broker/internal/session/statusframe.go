@@ -60,6 +60,14 @@ func (s *Session) StatusPayload() map[string]any {
 		payload["session_name"] = name
 		payload["display_name"] = name
 	}
+	// preview — the per-session dev-server surface (WEBSOCKET-PROTOCOL.md §3.2).
+	// The agent binds $PORT; the app loads the proxied URL in its Browser tab.
+	if s.previewPort > 0 {
+		payload["preview"] = map[string]any{
+			"port": s.previewPort,
+			"url":  "/preview/" + s.ID + "/",
+		}
+	}
 	if u := s.Usage(); u.HasUsage {
 		payload["total_input_tokens"] = u.InputTokens
 		payload["total_output_tokens"] = u.OutputTokens

@@ -83,6 +83,7 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		}
 		return s.Switch(nextAdapter)
 	}
+	s.previewPort = m.allocatePreviewPortLocked()
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)
 	go func() {
