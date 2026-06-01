@@ -366,7 +366,7 @@ extension ConduitUI {
                     ConduitUI.toggleRow(
                         icon: "apple.terminal",
                         title: "Native Terminal (Ghostty)",
-                        subtitle: "libghostty renderer — falls back to the web terminal if off",
+                        subtitle: "On by default (libghostty). Turn off to use the legacy web terminal.",
                         isOn: $appearance.experimentalNativeTerminal
                     )
                     // Font-size + color-theme controls only matter for the

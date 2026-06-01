@@ -89,12 +89,12 @@ struct AppearanceStoreTests {
         #expect(store.collapseTurns == false)
     }
 
-    @Test func freshInstallHasExperimentalNativeTerminalOff() {
-        // The xterm.js path is still the production renderer; flipping
-        // this default to `true` would unconditionally swap it for the
-        // Stage 0 placeholder, which is not what we want.
+    @Test func freshInstallHasExperimentalNativeTerminalOn() {
+        // The native Ghostty path is the default renderer now that it has
+        // reached parity; xterm.js is the retained fallback. A fresh
+        // install (no stored pref) must come up on native.
         let store = AppearanceStore(defaults: freshDefaults())
-        #expect(store.experimentalNativeTerminal == false)
+        #expect(store.experimentalNativeTerminal == true)
     }
 
     // MARK: - bodyPointSize (PLAN-CONDUIT-VISUAL-PARITY PR 1)
