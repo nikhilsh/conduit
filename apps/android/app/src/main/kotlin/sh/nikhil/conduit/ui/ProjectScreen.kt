@@ -24,8 +24,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import android.widget.Toast
-import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionLifecycle
@@ -33,7 +31,9 @@ import sh.nikhil.conduit.SessionStore
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
 
-enum class ProjectTab(val label: String) { Terminal("Terminal"), Chat("Chat"), Browser("Browser") }
+// Order matches the design TabBar and iOS (`[chat, terminal, browser]`):
+// Chat first, so a session lands on the conversation, not the raw terminal.
+enum class ProjectTab(val label: String) { Chat("Chat"), Terminal("Terminal"), Browser("Browser") }
 
 /**
  * Conduit Stage 2 header (Android mirror of `apps/ios/Sources/Views/ProjectView.swift`).
@@ -99,7 +99,6 @@ fun ProjectScreen(
         ProjectHeaderModel.from(session, status, ProjectHeaderModel.lifecycleLabel(lifecycle))
     }
     val agentAccent = neonAgentColor(session.assistant, LocalNeonTheme.current)
-    val ctx = LocalContext.current
     val appearance = LocalAppearanceStore.current
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     // Map the active tab → InSessionContext so the dock knows whether
@@ -226,35 +225,13 @@ fun ProjectScreen(
                 )
             }
 
-            // Persistent in-session dock — mirrors iOS PR #42's
-            // `InSessionBottomBar`. `imePadding()` keeps it above the
-            // soft keyboard the same way the iOS `safeAreaInset(.bottom)`
-            // floats above the keyboard guide.
-            InSessionBottomBar(
-                context = activeContext,
-                onThreads = { showThreadSwitcher = true },
-                onVoice = {
-                    // v1: chat-only voice; other tabs surface a toast via
-                    // the dock's own inline note + a system toast as
-                    // backup so the cue is visible even with reduced
-                    // motion / animations off.
-                    if (activeContext == InSessionContext.Chat) {
-                        showVoice = true
-                    } else {
-                        Toast.makeText(
-                            ctx,
-                            InSessionBottomBarModel.voiceUnsupportedMessage(activeContext),
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                },
-                onNewSession = { showAgentPicker = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .imePadding()
-                    .navigationBarsPadding()
-                    .padding(bottom = 4.dp),
-            )
+            // No floating in-session dock: the design and iOS have none in
+            // session detail (device feedback: "make it match design + iOS").
+            // Its functions live on the same surfaces iOS uses — voice is the
+            // composer's inline mic, and new-session / parallel-session
+            // switching are the session drawer (the list IS the switcher).
+            // Only the Terminal extra-keys row (above) survives, which the
+            // design's AccessoryBar also shows.
         }
     }
 

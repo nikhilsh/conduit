@@ -84,6 +84,7 @@ fun AppRoot(store: SessionStore) {
                         onOpenSettings = { showSettings = true },
                         onOpenBoxes = { showBoxes = true },
                         onOpenTranscript = { row -> transcriptTarget = row },
+                        onHome = { store.select(null) },
                     )
                     VerticalDivider(color = neon.border)
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {

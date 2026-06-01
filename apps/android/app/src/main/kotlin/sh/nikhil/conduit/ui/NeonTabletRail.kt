@@ -20,8 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -64,6 +64,7 @@ fun NeonTabletRail(
     onOpenSettings: () -> Unit,
     onOpenBoxes: () -> Unit,
     onOpenTranscript: (SavedSession) -> Unit,
+    onHome: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     val sessions by store.sessions.collectAsState()
@@ -103,17 +104,31 @@ fun NeonTabletRail(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
-            ConduitMark(size = 24.dp)
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(">", fontFamily = neon.mono, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (neon.glow) neon.accent else neon.textDim)
-                Text("conduit", fontFamily = neon.mono, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = neon.text)
+            // Brand lockup doubles as "home": tapping it deselects the current
+            // session and drops back to the home empty-state. On the 3-pane
+            // tablet the rail has no other back affordance, and a user on a
+            // session couldn't find the way back to the main screen (device
+            // feedback 2026-06-01).
+            Row(
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onHome() }.padding(end = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                ConduitMark(size = 24.dp)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(">", fontFamily = neon.mono, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (neon.glow) neon.accent else neon.textDim)
+                    Text("conduit", fontFamily = neon.mono, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = neon.text)
+                }
             }
             Spacer(Modifier.weight(1f))
             ServerChip(harness = harness, host = endpoint.displayHost, neon = neon)
             Box {
+                // A gear, not a `•••`: the dim ellipsis was undiscoverable as the
+                // route to Settings on tablet (device feedback 2026-06-01).
+                // Settings is the primary item; Boxes stays as the secondary entry.
                 Icon(
-                    Icons.Outlined.MoreVert,
-                    contentDescription = "More",
+                    Icons.Outlined.Settings,
+                    contentDescription = "Settings and more",
                     tint = neon.textDim,
                     modifier = Modifier.size(22.dp).clip(RoundedCornerShape(8.dp)).clickable { menuOpen = true },
                 )

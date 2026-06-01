@@ -296,15 +296,26 @@ extension ConduitUI {
                                 // view ignores the .keyboard safe area, so this
                                 // padding raises the composer to the keyboard top.
                                 .padding(.bottom, keyboardInset)
-                                // Surface applied AFTER the lift padding so it
-                                // fills the lifted band too — the composer's
-                                // chat-surface colour runs continuously down to
-                                // (and behind) the keyboard top, so there's no
-                                // dark app-background strip showing through at the
-                                // keyboard's rounded top edge (device feedback).
-                                // Device feedback v0.0.47 #4: same surface colour
-                                // means no seam at the composer/keyboard inset.
-                                .background(neon.surfaceSolid)
+                                // Fill ONLY the lifted band — the strip sitting
+                                // behind the keyboard's rounded top corners — with
+                                // the composer surface colour, bottom-aligned so it
+                                // covers the corner gap WITHOUT painting a hard
+                                // opaque rectangle over the composer's faded-in top
+                                // edge. The previous full-cluster `.background`
+                                // drew that flat seam across the chat ("the
+                                // rounded-corner fix doesn't look good" — device
+                                // feedback v0.0.81). The +24pt underlaps the
+                                // composer's own opaque bottom so there's no sliver
+                                // where the two meet; zero height when the keyboard
+                                // is down (keyboardInset == 0).
+                                .background(alignment: .bottom) {
+                                    if keyboardInset > 0 {
+                                        neon.surfaceSolid
+                                            .frame(maxWidth: .infinity)
+                                            .frame(height: keyboardInset + 24)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
                         }
                     }
                 }
@@ -408,9 +419,18 @@ extension ConduitUI {
                         dismissStrayKeyboard()
                         DispatchQueue.main.async { dismissStrayKeyboard() }
                     } else {
+                        // Leaving Chat (→ Terminal / Browser): drop the composer
+                        // focus AND force-resign. Clearing @FocusState alone left
+                        // the soft keyboard up over the Browser tab — UIKit had
+                        // already shown it and SwiftUI's focus change didn't pull
+                        // it back down (device feedback v0.0.81: "when I go
+                        // browser the keyboard doesn't dismiss"). Double-fire the
+                        // endEditing walk — now and next runloop — so a late
+                        // re-present from the focus transition is caught too.
                         composerFocused = false
                         keyboardInset = 0
                         dismissStrayKeyboard()
+                        DispatchQueue.main.async { dismissStrayKeyboard() }
                     }
                 }
                 // Sentry diagnostics for the recurring composer-behind-keyboard

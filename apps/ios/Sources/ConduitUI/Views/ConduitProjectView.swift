@@ -170,8 +170,16 @@ extension ConduitUI {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Hug the content (dot · name · agent chip) instead of
+                // stretching edge-to-edge — a full-width card left a large dead
+                // gap between the chips and the refresh/info buttons (device
+                // feedback: "empty space beside Claude at the top"). The trailing
+                // Spacer below absorbs the slack and the name still truncates via
+                // its own lineLimit when the row is tight (no fixedSize, which
+                // would defeat that truncation).
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
+
+                Spacer(minLength: 8)
 
                 headerIcon("arrow.clockwise", tint: neon.textDim, label: "Refresh") {
                     store.reconnect()

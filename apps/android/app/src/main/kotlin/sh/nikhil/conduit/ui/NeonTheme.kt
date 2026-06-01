@@ -231,10 +231,18 @@ data class NeonTheme(
                 accentText = Color(0xFFFFFFFF)
                 codeBg = Color(0xFF0C1322)   // code stays DARK in light mode
                 codeText = Color(0xFFD6E6FF)
-                // radial-gradient(... {A}1f, #eef3fb 40%, #e7edf7 100%)
+                // Light canvas. The design anchors this radial at the TOP
+                // (`at 50% -12%`) so the accent tint sits off the top edge, but
+                // Compose's Brush.radialGradient with center = Offset.Unspecified
+                // paints from the SCREEN CENTRE — so an accent-tinted centre stop
+                // rendered as a dark disc floating in the middle of the light home
+                // (device feedback 2026-06-01: "dark circular thing in the
+                // middle"). Use a soft near-white centre instead: a gentle light
+                // bloom that's invisible-as-a-blob, fading to the slightly cooler
+                // surround. (Dark mode keeps its centred accent glow above.)
                 appBg = Brush.radialGradient(
                     colorStops = arrayOf(
-                        0.0f to withAlpha(palette.accent, 0x1F),
+                        0.0f to Color(0xFFF2F6FF),
                         0.40f to Color(0xFFEEF3FB),
                         1.0f to Color(0xFFE7EDF7),
                     ),

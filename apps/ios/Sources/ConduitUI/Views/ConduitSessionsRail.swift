@@ -125,13 +125,18 @@ extension ConduitUI {
                     Label("Boxes", systemImage: "externaldrive")
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .semibold))
+                // A gear, not a `•••`: the dim ellipsis was undiscoverable as
+                // the route to Settings on tablet — a user on the 3-pane layout
+                // couldn't find Settings at all (device feedback 2026-06-01).
+                // Settings is the primary item, so the trigger reads as a gear;
+                // Boxes stays as the menu's secondary entry.
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(neon.textDim)
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel("More")
+            .accessibilityLabel("Settings and more")
         }
 
         // MARK: Search (covers History)
