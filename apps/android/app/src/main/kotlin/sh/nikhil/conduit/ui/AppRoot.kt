@@ -16,7 +16,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -37,6 +36,7 @@ fun AppRoot(store: SessionStore) {
     var showVoice by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
+    var showBoxes by remember { mutableStateOf(false) }
     // Read-only transcript drilldown from History. The full saved row
     // travels (not just the id) so the transcript can render the title,
     // agent, and timestamps without a second fetch.
@@ -55,7 +55,6 @@ fun AppRoot(store: SessionStore) {
         else if (harness is HarnessState.Disconnected) store.connect()
     }
 
-    var tabletSection by rememberSaveable { mutableStateOf(TabletSection.Sessions) }
     val onNewSession: () -> Unit = {
         if (harness is HarnessState.Live || harness is HarnessState.Linked) {
             showAgentPicker = true
@@ -72,75 +71,42 @@ fun AppRoot(store: SessionStore) {
             // keeps the ModalNavigationDrawer. Mirrors iOS ConduitUI.TabletShell.
             if (maxWidth >= 840.dp) {
                 val neon = LocalNeonTheme.current
+                // Unified rail (design-reference tablet.jsx): no separate icon
+                // activity bar — the rail owns brand + search (→ History) +
+                // overflow (→ Settings/Boxes) + session lists + New session.
+                // Home is the center empty-state when nothing is selected.
                 Row(modifier = Modifier.fillMaxSize()) {
-                    NeonTabletActivityBar(section = tabletSection) { picked ->
-                        when (picked) {
-                            TabletSection.Home, TabletSection.Sessions, TabletSection.Settings, TabletSection.Boxes, TabletSection.History -> tabletSection = picked
-                        }
-                    }
+                    NeonTabletRail(
+                        store = store,
+                        onPick = { store.select(it) },
+                        onNewSession = onNewSession,
+                        onSearch = { showSearch = true },
+                        onOpenSettings = { showSettings = true },
+                        onOpenBoxes = { showBoxes = true },
+                        onOpenTranscript = { row -> transcriptTarget = row },
+                    )
                     VerticalDivider(color = neon.border)
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                        if (tabletSection == TabletSection.Home) {
-                            NeonTabletHome(store = store) { id ->
-                                store.select(id)
-                                tabletSection = TabletSection.Sessions
-                            }
-                        } else if (tabletSection == TabletSection.Settings) {
-                            SettingsScreen(
-                                store = store,
-                                onDismiss = { tabletSection = TabletSection.Sessions },
-                                onOpenLicenses = { showLicenses = true },
-                                embedded = true,
-                            )
-                        } else if (tabletSection == TabletSection.Boxes) {
-                            DiscoveryScreen(
-                                store = store,
-                                onDismiss = { tabletSection = TabletSection.Sessions },
-                                onScanQR = { showAddServer = true },
-                                onManualAdd = { showAddServer = true },
-                                embedded = true,
-                            )
-                        } else if (tabletSection == TabletSection.History) {
-                            HistoryScreen(
-                                store = store,
-                                onDismiss = { tabletSection = TabletSection.Sessions },
-                                onOpenTranscript = { row -> transcriptTarget = row },
-                                embedded = true,
-                            )
+                        val selected = sessions.firstOrNull { it.id == selectedId }
+                        if (selected != null) {
+                            ProjectScreen(store = store, session = selected, onOpenDrawer = {}, chatOnly = true)
                         } else {
-                            Row(modifier = Modifier.fillMaxSize()) {
-                                Box(modifier = Modifier.width(300.dp).fillMaxHeight()) {
-                                    ProjectListScreen(
-                                        store = store,
-                                        onOpenSettings = { showSettings = true },
-                                        onCloseDrawer = {},
-                                    )
-                                }
-                                VerticalDivider(color = neon.border)
-                                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                                    val selected = sessions.firstOrNull { it.id == selectedId }
-                                    if (selected != null) {
-                                        ProjectScreen(store = store, session = selected, onOpenDrawer = {}, chatOnly = true)
-                                    } else {
-                                        HomeScreen(
-                                            store = store,
-                                            onOpenSettings = { showSettings = true },
-                                            onOpenDrawer = {},
-                                            onOpenHistory = { showHistory = true },
-                                            onAddServer = { showAddServer = true },
-                                            onNewSession = onNewSession,
-                                            onSearch = { showSearch = true },
-                                            onVoice = { showVoice = true },
-                                        )
-                                    }
-                                }
-                                sessions.firstOrNull { it.id == selectedId }?.let { sel ->
-                                    VerticalDivider(color = neon.border)
-                                    Box(modifier = Modifier.width(392.dp).fillMaxHeight()) {
-                                        NeonTabletRightPane(store = store, session = sel)
-                                    }
-                                }
-                            }
+                            HomeScreen(
+                                store = store,
+                                onOpenSettings = { showSettings = true },
+                                onOpenDrawer = {},
+                                onOpenHistory = { showHistory = true },
+                                onAddServer = { showAddServer = true },
+                                onNewSession = onNewSession,
+                                onSearch = { showSearch = true },
+                                onVoice = { showVoice = true },
+                            )
+                        }
+                    }
+                    sessions.firstOrNull { it.id == selectedId }?.let { sel ->
+                        VerticalDivider(color = neon.border)
+                        Box(modifier = Modifier.width(392.dp).fillMaxHeight()) {
+                            NeonTabletRightPane(store = store, session = sel)
                         }
                     }
                 }
@@ -193,6 +159,15 @@ fun AppRoot(store: SessionStore) {
 
     if (showAddServer) {
         AddServerSheet(store = store, onDismiss = { showAddServer = false })
+    }
+
+    if (showBoxes) {
+        DiscoveryScreen(
+            store = store,
+            onDismiss = { showBoxes = false },
+            onScanQR = { showBoxes = false; showAddServer = true },
+            onManualAdd = { showBoxes = false; showAddServer = true },
+        )
     }
 
     if (showAgentPicker) {
