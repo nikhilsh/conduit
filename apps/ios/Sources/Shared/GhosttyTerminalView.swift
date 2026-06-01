@@ -1384,7 +1384,16 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             terminal?.setFocus(true)
             terminal?.refresh()
         } else {
-            terminal?.setFocus(false)
+            // Resign the UIKit first responder, not just libghostty focus.
+            // The native terminal is the default renderer now (v0.0.76), so
+            // tapping the Terminal tab makes THIS view (a UIKeyInput) the
+            // window's first responder with the soft keyboard up. If we only
+            // dropped libghostty focus here, the view stayed first responder
+            // and its keyboard lingered over the Chat tab's composer after a
+            // Terminal→Chat switch (the recurring composer-behind-keyboard
+            // bug). resignFirstResponder() dismisses the keyboard AND clears
+            // libghostty focus (see the override above).
+            _ = resignFirstResponder()
         }
         #endif
         updateFrameDisplayLinkRunning()

@@ -359,7 +359,15 @@ extension ConduitUI {
                 // another tab, and clear any stray keyboard when shown again.
                 .onChange(of: isActive) { _, active in
                     if active {
+                        // Double-fire: a single synchronous endEditing loses a
+                        // runloop race when the keyboard was left up by the
+                        // terminal/browser tab (the foreign first responder may
+                        // resign a beat later). Clearing again next runloop
+                        // guarantees the stray keyboard is gone before the
+                        // composer lays out, so its safeAreaInset avoidance
+                        // engages on the user's next tap.
                         dismissStrayKeyboard()
+                        DispatchQueue.main.async { dismissStrayKeyboard() }
                     } else {
                         composerFocused = false
                         dismissStrayKeyboard()

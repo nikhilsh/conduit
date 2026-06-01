@@ -14,6 +14,13 @@ object Telemetry {
             options.dsn = dsn
             options.environment = "android"
             options.isEnableAutoSessionTracking = true
+            // versionName is pinned to "0.0.1" (device bug #7), so Sentry's
+            // default release would mislabel EVERY android event
+            // "sh.nikhil.conduit@0.0.1+12" — we couldn't tell which build a
+            // crash came from. Use the real release tag the CI build injects.
+            if (BuildConfig.RELEASE_TAG != "dev") {
+                options.release = "sh.nikhil.conduit@${BuildConfig.RELEASE_TAG}"
+            }
         }
     }
 
