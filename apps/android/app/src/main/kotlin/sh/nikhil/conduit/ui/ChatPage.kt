@@ -2575,24 +2575,32 @@ private fun ConversationComposer(
                 ) {
                     Icon(Icons.Outlined.Fullscreen, contentDescription = "Expand composer")
                 }
-                if (!hasDraft) {
-                    InlineVoiceButton { transcript ->
-                        val trimmed = transcript.trim()
-                        if (trimmed.isNotEmpty()) {
-                            val next = if (draft.isBlank()) trimmed else "$draft $trimmed"
-                            onDraftChange(next)
+                // Trailing slot: voice (empty) vs send (has draft). Pin it to a
+                // constant 42.dp box so the row height doesn't change when the
+                // mic (42.dp) is swapped for the smaller send button (36.dp) —
+                // otherwise the whole composer visibly shrinks the moment you
+                // start typing (device bug). The text field still grows the row
+                // for multi-line drafts via the Bottom alignment.
+                Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+                    if (!hasDraft) {
+                        InlineVoiceButton { transcript ->
+                            val trimmed = transcript.trim()
+                            if (trimmed.isNotEmpty()) {
+                                val next = if (draft.isBlank()) trimmed else "$draft $trimmed"
+                                onDraftChange(next)
+                            }
                         }
-                    }
-                } else {
-                    FilledIconButton(
-                        onClick = onSend,
-                        colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                            containerColor = neon.accent,
-                            contentColor = neon.accentText,
-                        ),
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Send")
+                    } else {
+                        FilledIconButton(
+                            onClick = onSend,
+                            colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                                containerColor = neon.accent,
+                                contentColor = neon.accentText,
+                            ),
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Send")
+                        }
                     }
                 }
         }

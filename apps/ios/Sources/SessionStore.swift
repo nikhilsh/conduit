@@ -1157,9 +1157,19 @@ final class SessionStore {
             .map { conduitConversationTsEpoch($0) }
             .filter { $0 < .greatestFiniteMagnitude }
             .max()
-        let now = conduitConversationTsString(
-            epoch: lastKnownEpoch.map { $0 + 0.001 } ?? Date().timeIntervalSince1970
-        )
+        // First turn has nothing to anchor to: anchor to the broker-stamped
+        // session start rather than the device clock. The reply is
+        // broker-stamped and necessarily after session start, so start+1ms
+        // keeps the echo ahead of it even when the device runs ahead. This is
+        // the codex case (one-shot reply, tiny gap) where the old device-now
+        // fallback flipped the order. now() is the last resort.
+        let startedEpoch = (statusBySession[sessionID]?.startedAt)
+            .map { conduitConversationTsEpoch($0) }
+            .flatMap { $0 < .greatestFiniteMagnitude ? $0 : nil }
+        let echoEpoch = lastKnownEpoch.map { $0 + 0.001 }
+            ?? startedEpoch.map { $0 + 0.001 }
+            ?? Date().timeIntervalSince1970
+        let now = conduitConversationTsString(epoch: echoEpoch)
         let item = ConversationItem(
             id: "local-\(UUID().uuidString)",
             role: "user",

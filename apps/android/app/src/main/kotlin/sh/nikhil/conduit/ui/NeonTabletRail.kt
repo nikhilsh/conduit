@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -90,7 +91,11 @@ fun NeonTabletRail(
             .width(272.dp)
             .fillMaxHeight()
             .background(if (neon.dark) Color(0xFF060A14).copy(alpha = 0.4f) else Color.White.copy(alpha = 0.5f))
-            .statusBarsPadding(),
+            .statusBarsPadding()
+            // Keep the bottom "New session" button clear of the system gesture
+            // bar — without this the rail's last child collides with the nav
+            // bar on tablets (device bug).
+            .navigationBarsPadding(),
     ) {
         // ── brand + server chip + overflow ──
         Row(

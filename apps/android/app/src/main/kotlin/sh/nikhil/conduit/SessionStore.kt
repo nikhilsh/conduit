@@ -1515,14 +1515,26 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // bug, "brought up many times"). Stamping it one ms past the newest
         // known item keeps it ahead of any reply (whose broker ts is
         // necessarily later) regardless of how far the device clock drifts.
-        // Falls back to device now() only for the very first turn, when
-        // there's nothing to anchor to. See [sortedByConversationTs].
+        // For the very first turn there's no prior item to anchor to. Anchor
+        // to the broker-stamped session start instead of the device clock:
+        // the reply this message triggers is broker-stamped and necessarily
+        // *after* session start, so start+1 keeps the echo ahead of it even
+        // when the device clock runs ahead of the broker. This is the codex
+        // case — a one-shot reply with a tiny user→reply gap, where the old
+        // device-now() fallback flipped the order. Device now() is the last
+        // resort (status not yet received). See [sortedByConversationTs].
         val nowMs = System.currentTimeMillis()
         val lastKnownMs = (
             (_conversationLog.value[sessionId].orEmpty().map { it.ts }) +
                 (_chatLog.value[sessionId].orEmpty().map { it.ts })
             ).map { tsEpochMillis(it) }.filter { it > 0L }.maxOrNull()
-        val echoMs = if (lastKnownMs != null) lastKnownMs + 1 else nowMs
+        val startedMs = _statusBySession.value[sessionId]?.startedAt
+            ?.let { tsEpochMillis(it) }?.takeIf { it > 0L }
+        val echoMs = when {
+            lastKnownMs != null -> lastKnownMs + 1
+            startedMs != null -> startedMs + 1
+            else -> nowMs
+        }
         val ts = java.time.Instant.ofEpochMilli(echoMs)
             .atOffset(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.ISO_INSTANT)

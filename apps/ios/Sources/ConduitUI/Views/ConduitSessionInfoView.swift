@@ -35,7 +35,13 @@ extension ConduitUI {
                             actionRow
                             statsGrid
                             ConduitUI.UsageCard(session: session)
-                            ConduitUI.AccountUsageCard(session: session)
+                            // Account usage (5-hour + weekly) comes from the
+                            // Claude OAuth usage endpoint; codex/other agents
+                            // have no equivalent, so the card would show
+                            // "tap refresh to update" forever. Gate to claude.
+                            if (store.statusBySession[session.id]?.assistant ?? session.assistant) == "claude" {
+                                ConduitUI.AccountUsageCard(session: session)
+                            }
                             detailsCard
                             serverCard
                         }

@@ -893,17 +893,22 @@ func (s *Session) Switch(adapter agents.Adapter) error {
 
 func (s *Session) drain(f *os.File) {
 	buf := make([]byte, 8192)
+	// tf is drain-local: it carries a report sequence that fragmented across
+	// read boundaries into the next chunk. A fresh PTY (adapter swap) starts
+	// with a clean filter, which is exactly what we want.
+	var tf terminalFilter
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 			// Drop spurious terminal capability-query replies (DA1/DA2/OSC
-			// color) before any consumer sees them — nothing on the broker
-			// side answers these, so they'd otherwise echo into the pane and
-			// ship to every client as visible garbage. See
-			// terminal_filter.go.
-			chunk = stripTerminalReports(chunk)
+			// color) and echoed mouse reports before any consumer sees them —
+			// nothing on the broker side answers these, so they'd otherwise
+			// echo into the pane and ship to every client as visible garbage.
+			// Stateful so a report split across two reads is still removed.
+			// See terminal_filter.go.
+			chunk = tf.filter(chunk)
 			if len(chunk) > 0 {
 				s.append(chunk)
 				s.fanout(chunk)
