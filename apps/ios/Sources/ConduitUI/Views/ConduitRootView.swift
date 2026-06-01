@@ -41,61 +41,22 @@ extension ConduitUI {
 
     // MARK: - TabletShell (iPad / regular size class)
     //
-    // The design's tablet IDE chrome: a far-left activity bar +
-    // section content. Home / Sessions render inline; History / Boxes /
-    // Settings present as sheets (reusing the existing sheet views)
-    // until they get dedicated tablet layouts. Section choice persists
-    // under `nk_tab_section` (matches the prototype key).
+    // The design's tablet IDE chrome (tablet.jsx → TabletSessionView):
+    // a unified left rail + the session detail. Navigation that used to
+    // live in a separate icon "activity bar" (Home / History / Boxes /
+    // Settings) now folds into `ConduitUI.SessionsRail` — the shell is
+    // just the sessions split. Mirrors the Android `AppRoot` +
+    // `NeonTabletRail` rework.
 
     fileprivate struct TabletShell: View {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
-        @AppStorage("nk_tab_section") private var sectionRaw =
-            ConduitUI.TabletSection.sessions.rawValue
-
-        private var section: ConduitUI.TabletSection {
-            ConduitUI.TabletSection(rawValue: sectionRaw) ?? .sessions
-        }
 
         var body: some View {
-            HStack(spacing: 0) {
-                ConduitUI.TabletActivityBar(section: section) { picked in
-                    sectionRaw = picked.rawValue
-                }
-                sectionContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-
-        @ViewBuilder private var sectionContent: some View {
-            switch section {
-            case .home:
-                ConduitUI.TabletHome { id in
-                    store.selectedSessionID = id
-                    sectionRaw = ConduitUI.TabletSection.sessions.rawValue
-                }
-            case .settings:
-                ConduitUI.SettingsView(embedded: true)
-            case .boxes:
-                ConduitUI.DiscoveryView(embedded: true)
-            case .history:
-                SessionSearchView(
-                    onSelect: { id in
-                        store.selectedSessionID = id
-                        sectionRaw = ConduitUI.TabletSection.sessions.rawValue
-                    },
-                    embedded: true
-                )
-            default:
-                sessionsSplit
-            }
-        }
-
-        private var sessionsSplit: some View {
             @Bindable var store = store
             return NavigationSplitView {
                 ConduitUI.SessionsRail()
-                    .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 360)
+                    .navigationSplitViewColumnWidth(min: 256, ideal: 272, max: 320)
                     .toolbar(.hidden, for: .navigationBar)
             } detail: {
                 if let id = store.selectedSessionID,

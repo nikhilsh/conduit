@@ -2,11 +2,13 @@ import SwiftUI
 
 // MARK: - ConduitSessionsRail
 //
-// Sidebar variant of `ConduitHomeView` used by the iPad/regular split
-// view. Narrower than the iPhone home, no bottom action bar (those
-// affordances live on the detail toolbar on iPad) — just the
-// server-pill row + the sessions list. Tapping a row drives selection
-// via `SessionStore.switchTo(sessionID:)`.
+// The unified tablet left rail (tablet.jsx → TabletRail), mirroring the
+// Android `NeonTabletRail`. It folds in the navigation that used to live
+// in the separate icon "activity bar": brand + connected-server chip +
+// an overflow menu (Settings / Boxes), a Search button (covers History
+// via the search sheet), the sessions list, and a pinned "New session"
+// button. Tapping a row drives selection via
+// `SessionStore.switchTo(sessionID:)`.
 //
 // The pure-data layout decisions live in `ConduitSessionsRailModel`
 // so the test layer can pin row count + active-session highlight
@@ -21,6 +23,9 @@ extension ConduitUI {
 
         @State private var showSettings = false
         @State private var showAddServer = false
+        @State private var showBoxes = false
+        @State private var showSearch = false
+        @State private var showAgentPicker = false
 
         var body: some View {
             @Bindable var store = store
@@ -29,9 +34,10 @@ extension ConduitUI {
                 ConduitUI.Palette.surface.color.ignoresSafeArea()
                 VStack(spacing: 12) {
                     header
-                    serverPillStrip
+                    searchButton
                     sessionsList
                     Spacer(minLength: 0)
+                    newSessionButton
                 }
                 .padding(.top, 8)
             }
@@ -41,77 +47,150 @@ extension ConduitUI {
             .sheet(isPresented: $showAddServer) {
                 ConduitUI.AddServerSheet()
             }
+            .sheet(isPresented: $showBoxes) {
+                ConduitUI.DiscoveryView()
+            }
+            .sheet(isPresented: $showSearch) {
+                SessionSearchView(
+                    onSelect: { id in store.switchTo(sessionID: id) },
+                    embedded: false
+                )
+            }
+            .sheet(isPresented: $showAgentPicker) {
+                ConduitUI.AgentPickerSheet(initialPrompt: nil)
+            }
             .neonAccentTint()
         }
 
-        // MARK: Subviews
+        // MARK: Header (brand + server chip + overflow)
 
         private var header: some View {
-            ConduitUI.Header(
-                leading: {
-                    ConduitUI.HeaderIconButton(systemImage: "gearshape.fill",
-                                              accessibilityLabel: "Settings") {
-                        showSettings = true
-                    }
-                },
-                center: {
-                    ConduitUI.ConduitMark(size: 28)
-                        .accessibilityLabel("Conduit")
-                },
-                trailing: {
-                    EmptyView()
+            HStack(spacing: 9) {
+                ConduitUI.ConduitMark(size: 24)
+                    .accessibilityLabel("Conduit")
+                wordmark
+                Spacer(minLength: 6)
+                serverChip
+                overflowMenu
+            }
+            .padding(.horizontal, 14)
+        }
+
+        private var wordmark: some View {
+            (Text(">").foregroundStyle(neon.accent)
+                + Text("conduit").foregroundStyle(neon.text))
+                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                .accessibilityHidden(true)
+        }
+
+        /// Single connected-server chip — reuses `TabletHome.connectionChip`
+        /// styling (host + status dot: green live/linked, yellow
+        /// connecting/reconnecting, muted offline).
+        private var serverChip: some View {
+            let (label, color): (String, Color) = {
+                switch store.harness {
+                case .live, .linked:
+                    return (store.endpoint.isComplete ? store.endpoint.displayHost : "online", neon.green)
+                case .connecting, .reconnecting:
+                    return ("connecting", neon.yellow)
+                case .disconnected, .failed:
+                    return ("offline", neon.textFaint)
                 }
+            }()
+            return HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Text(label)
+                    .font(neon.mono(11))
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(neon.surface)
+                    .overlay(Capsule().stroke(neon.border, lineWidth: 1))
             )
         }
 
-        @ViewBuilder
-        private var serverPillStrip: some View {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(store.savedServers) { server in
-                        let isActive = store.endpoint == server.endpoint
-                        Button {
-                            store.selectSavedServer(server.id, autoConnect: true)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(isActive ? ConduitUI.Palette.accentStrong.color : ConduitUI.Palette.textMuted.color)
-                                    .frame(width: 6, height: 6)
-                                Text(server.name)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(ConduitUI.Palette.textPrimary.color)
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .conduitGlassCapsule(
-                                tint: isActive ? neon.accent.opacity(0.4) : nil,
-                                config: .pill
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
+        private var overflowMenu: some View {
+            Menu {
+                Button {
+                    showSettings = true
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                Button {
+                    showBoxes = true
+                } label: {
+                    Label("Boxes", systemImage: "externaldrive")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(neon.textDim)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("More")
+        }
 
-                    Button {
-                        showAddServer = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .bold))
-                            Text("server")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(ConduitUI.Palette.textPrimary.color)
-                        .conduitGlassCapsule(config: .pill)
-                    }
-                    .buttonStyle(.plain)
+        // MARK: Search (covers History)
+
+        private var searchButton: some View {
+            Button {
+                showSearch = true
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(neon.accent)
+                    Text("Search…")
+                        .font(neon.sans(12.5))
+                        .foregroundStyle(neon.textFaint)
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 4)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(neon.surface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .stroke(neon.border, lineWidth: 1)
+                        )
+                )
             }
-            .frame(height: 36)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 14)
+        }
+
+        // MARK: New session (pinned bottom)
+
+        private var newSessionButton: some View {
+            Button {
+                if store.harness.canIssueCommands {
+                    showAgentPicker = true
+                } else {
+                    showAddServer = true
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .bold))
+                    Text("New session")
+                        .font(neon.sans(13.5).weight(.bold))
+                }
+                .foregroundStyle(neon.accentText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(neon.accent)
+                )
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
 
         private var snapshot: ConduitUI.HomeSnapshot {
