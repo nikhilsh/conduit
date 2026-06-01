@@ -89,6 +89,15 @@ enum Telemetry {
     private static var sentryDSN: String {
         let raw = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed == "$(SENTRY_DSN)" ? "" : trimmed
+        // ONLY a real DSN URL enables Sentry. Anything else must disable it
+        // cleanly: the unsubstituted build placeholder `$(SENTRY_DSN)`, an
+        // empty secret, or a stray value like "-" (a bad/empty SENTRY_DSN_IOS
+        // secret literally shipped `SentryDSN = "-"` in v0.0.76–78, which
+        // passed the old `!= "$(SENTRY_DSN)"` check, reached SentrySDK.start as
+        // an invalid DSN, failed SDK init, and silently dropped EVERY event —
+        // iOS telemetry went dark for three releases). Validating the URL shape
+        // here turns a bad secret into "Sentry off" instead of "Sentry broken".
+        guard trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://") else { return "" }
+        return trimmed
     }
 }
