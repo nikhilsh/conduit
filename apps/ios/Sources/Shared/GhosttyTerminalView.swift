@@ -313,14 +313,11 @@ final class GhosttyRenderView: UIView, UIKeyInput {
 
     // The on-screen diagnostic overlay (a green top-left `UILabel`
     // surfacing `GhosttyDiagnostics`) was scaffolding for the now-fixed
-    // blank-screen bug. Re-enabled in a COMPACT form to diagnose the
-    // "renders tiny but proportional" report (device feedback v0.0.68):
-    // it surfaces the live geometry — view bounds (pt), backing scale,
-    // libghostty's authoritative grid (cols×rows) and cell px — so the
-    // exact scale/cell mismatch can be read off-device. Only ever visible
-    // inside the experimental native terminal (which the user opts into),
-    // and `zPosition` keeps it above libghostty's IOSurface sublayer.
-    static var showGeometryOverlay = true
+    // blank-screen + "renders tiny" reports. The geometry it surfaced is
+    // now also in Sentry (diag=terminal_geometry), so the on-screen overlay
+    // is OFF by default — it painted green debug text over the live terminal
+    // (device feedback). Flip to `true` only for a local geometry repro.
+    static var showGeometryOverlay = false
     private lazy var diagLabel: UILabel = {
         let l = UILabel()
         l.numberOfLines = 0

@@ -72,6 +72,15 @@ extension ConduitUI {
         /// (composerMaxY ≤ keyboard top) or behind it — the missing signal that
         /// made the composer-behind-keyboard bug guesswork for many rounds.
         @State private var composerMaxY: CGFloat = 0
+        /// Points the composer cluster is manually lifted by. We drive keyboard
+        /// avoidance EXPLICITLY off the keyboard frame instead of relying on
+        /// SwiftUI's implicit avoidance, which — inside the phone tab ZStack —
+        /// intermittently settled the composer ~48pt short on first focus / when
+        /// the predictive bar resized the keyboard (proven via the keyboard diag:
+        /// overlap flipped between 0 and 48 across taps). With the view ignoring
+        /// the `.keyboard` safe area, this inset is the single source of truth,
+        /// so the composer lands exactly on the keyboard top every time.
+        @State private var keyboardInset: CGFloat = 0
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
@@ -88,6 +97,11 @@ extension ConduitUI {
             // keyboard while the scroll content insets to keep the latest
             // message visible. The body just adds the voice sheet.
             messagesList
+                // Opt out of SwiftUI's implicit keyboard avoidance — we lift
+                // the composer manually via `keyboardInset` (see the state
+                // doc). The implicit path was unreliable inside the phone tab
+                // ZStack (intermittent 48pt undershoot).
+                .ignoresSafeArea(.keyboard, edges: .bottom)
                 // In-chat voice dictation. Mirrors the home-screen mic
                 // (device bug #26) — same VoiceDictationSheet — and brings
                 // the composer mic to parity with Android, which already
@@ -285,6 +299,10 @@ extension ConduitUI {
                                     }
                                 )
                         }
+                        // Manual keyboard lift (see `keyboardInset`): the view
+                        // ignores the .keyboard safe area, so this padding is
+                        // what raises the composer to exactly the keyboard top.
+                        .padding(.bottom, keyboardInset)
                     }
                 }
                 // Measure distance from the bottom edge so the controller
@@ -388,6 +406,7 @@ extension ConduitUI {
                         DispatchQueue.main.async { dismissStrayKeyboard() }
                     } else {
                         composerFocused = false
+                        keyboardInset = 0
                         dismissStrayKeyboard()
                     }
                 }
@@ -401,12 +420,38 @@ extension ConduitUI {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
                     let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+                    applyKeyboardInset(frame)
                     logKeyboardDiag("keyboard will show", keyboardFrame: frame)
                 }
+                // willChangeFrame catches the predictive/QuickType bar resizing
+                // the keyboard AFTER willShow — the source of the intermittent
+                // 48pt undershoot. Re-lift to the new frame each time.
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                    let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+                    applyKeyboardInset(frame)
+                }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                    withAnimation(.easeOut(duration: 0.2)) { keyboardInset = 0 }
                     logKeyboardDiag("keyboard will hide")
                 }
             }
+        }
+
+        /// The key window for geometry math (keyboard frame is in window space).
+        private func keyWindow() -> UIWindow? {
+            guard let scene = UIApplication.shared.connectedScenes
+                .first(where: { $0 is UIWindowScene }) as? UIWindowScene else { return nil }
+            return scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+        }
+
+        /// Lift the composer cluster to sit exactly on the keyboard top. The
+        /// keyboard frame is in window space; the amount above the bottom safe
+        /// area (home indicator) is what the `.safeAreaInset(.bottom)` cluster
+        /// must rise by. Animated so it tracks the IME presentation.
+        private func applyKeyboardInset(_ frame: CGRect?) {
+            guard let frame, let window = keyWindow() else { return }
+            let inset = max(0, window.bounds.maxY - frame.minY - window.safeAreaInsets.bottom)
+            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = inset }
         }
 
         /// Emit a `diag=keyboard` Sentry breadcrumb capturing the keyboard
