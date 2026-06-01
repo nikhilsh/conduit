@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -241,7 +242,9 @@ fun DiscoveryScreen(
     }
 
     if (embedded) {
-        content()
+        // Tablet pane: inset below the status bar (the phone form is a
+        // ModalBottomSheet that never reaches it, so only embedded needs this).
+        Box(modifier = Modifier.statusBarsPadding()) { content() }
     } else {
         ModalBottomSheet(
             onDismissRequest = onDismiss,

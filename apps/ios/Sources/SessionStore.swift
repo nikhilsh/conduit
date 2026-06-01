@@ -2,6 +2,47 @@ import Foundation
 import Observation
 import UIKit
 
+// MARK: - Conversation timestamp ordering
+//
+// Mirror of Android `tsEpochMillis` / `List.sortedByConversationTs`. Chat
+// items are ordered by their RFC3339 `ts`, but a raw String compare mis-sorts
+// when timestamps carry different offsets (`+09:00` vs `Z`) or fractional
+// precision, and an empty `ts` (a live, not-yet-persisted item) has no natural
+// place. Parse to epoch seconds instead; empty/unparseable sorts as the NEWEST
+// so an in-flight reply stays BELOW the user echo that triggered it (device
+// bug: agent reply rendered above the user's prompt).
+private let conduitTsFractional: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+private let conduitTsPlain = ISO8601DateFormatter()
+
+func conduitConversationTsEpoch(_ ts: String) -> Double {
+    if ts.isEmpty { return .greatestFiniteMagnitude }
+    if let d = conduitTsFractional.date(from: ts) { return d.timeIntervalSince1970 }
+    if let d = conduitTsPlain.date(from: ts) { return d.timeIntervalSince1970 }
+    return .greatestFiniteMagnitude
+}
+
+/// A fractional-precision RFC3339 string for the supplied epoch — used to
+/// stamp the optimistic user echo one tick past the newest known item.
+func conduitConversationTsString(epoch: Double) -> String {
+    conduitTsFractional.string(from: Date(timeIntervalSince1970: epoch))
+}
+
+extension Array {
+    /// Stable chronological sort by an epoch-normalized `ts` accessor. Equal
+    /// keys preserve arrival order (mirrors Android's index tie-break).
+    func sortedByConversationTs(_ ts: (Element) -> String) -> [Element] {
+        enumerated().sorted { a, b in
+            let ea = conduitConversationTsEpoch(ts(a.element))
+            let eb = conduitConversationTsEpoch(ts(b.element))
+            return ea != eb ? ea < eb : a.offset < b.offset
+        }.map { $0.element }
+    }
+}
+
 /// Harness reachability state. The Rust `connect()` just stores a delegate
 /// — it doesn't actually prove the server is reachable — so we keep a
 /// separate `.linked` (handshake done, not yet verified) and `.live`
@@ -1104,7 +1145,21 @@ final class SessionStore {
         // without this the chat tab stays empty until the assistant replies.
         // The synthetic item carries a `local-` id; `refreshConversation`
         // preserves it until the server's typed log catches up by content.
-        let now = ISO8601DateFormatter().string(from: Date())
+        //
+        // Anchor the echo into the broker clock domain rather than the device
+        // wall-clock: every item already in the log is broker-stamped, as is
+        // the reply this triggers. Stamping with a device clock that runs
+        // ahead of the broker sorts the echo AFTER its reply (agent-before-user
+        // bug). One ms past the newest known item keeps it ahead of any reply
+        // regardless of device drift; fall back to now() for the first turn.
+        let lastKnownEpoch = ((conversationLog[sessionID] ?? []).map { $0.ts }
+            + (chatLog[sessionID] ?? []).map { $0.ts })
+            .map { conduitConversationTsEpoch($0) }
+            .filter { $0 < .greatestFiniteMagnitude }
+            .max()
+        let now = conduitConversationTsString(
+            epoch: lastKnownEpoch.map { $0 + 0.001 } ?? Date().timeIntervalSince1970
+        )
         let item = ConversationItem(
             id: "local-\(UUID().uuidString)",
             role: "user",
@@ -1581,7 +1636,7 @@ final class SessionStore {
                 $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
             }
             let merged = items + stillPending
-            conversationLog[sessionID] = merged.sorted { $0.ts < $1.ts }
+            conversationLog[sessionID] = merged.sortedByConversationTs { $0.ts }
         }
     }
 

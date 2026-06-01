@@ -201,8 +201,14 @@ fun ProjectScreen(
 
         // Interactive bottom region (terminal extra-keys + in-session
         // dock) is suppressed for read-only/archived sessions — there's
-        // nothing to type into or switch between.
-        if (!isReadOnly) {
+        // nothing to type into or switch between. It is ALSO suppressed in
+        // the tablet `chatOnly` pane: the dock is a phone-only affordance for
+        // switching Terminal/Chat/Browser + new-session/voice, but on tablet
+        // the right pane already hosts Terminal/Browser/Info and the chat
+        // composer carries its own mic/send — so the floating dock would just
+        // hang, phone-styled, below the composer (device bug: "doesn't look
+        // like tablet design below the keyboard").
+        if (!isReadOnly && !chatOnly) {
             // Terminal extra-keys row — Android mirror of iOS
             // `TerminalAccessoryBar` (which iOS hosts via
             // `inputAccessoryView`). Android has no input-accessory hook,

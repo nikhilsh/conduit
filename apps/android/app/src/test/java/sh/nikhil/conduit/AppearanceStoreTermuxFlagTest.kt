@@ -38,15 +38,15 @@ class AppearanceStoreTermuxFlagTest {
     }
 
     @Test
-    fun freshInstall_experimentalNativeTerminal_isOff() {
-        // The xterm.js path remains the production renderer; flipping
-        // this default to `true` would unconditionally swap it for the
-        // Stage 0 placeholder. Same invariant the iOS test
-        // `freshInstallHasExperimentalNativeTerminalOff` defends.
+    fun freshInstall_experimentalNativeTerminal_isOn() {
+        // The native Termux path is the default renderer once it reached
+        // Stage 2/3 parity; xterm.js is the retained fallback. A fresh
+        // install (no stored pref) must come up on native. Same invariant
+        // the iOS test `freshInstallHasExperimentalNativeTerminalOn` defends.
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         val store = AppearanceStore()
         store.hydrate(ctx)
-        assertFalse(store.experimentalNativeTerminal.value)
+        assertTrue(store.experimentalNativeTerminal.value)
     }
 
     @Test

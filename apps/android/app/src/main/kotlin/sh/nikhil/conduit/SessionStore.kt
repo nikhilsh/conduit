@@ -1505,7 +1505,26 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // as onChatEvent, so the chat tab would stay empty until the
         // assistant replies. The `local-` id lets refreshConversation
         // preserve this entry until the server's typed log catches up.
-        val ts = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
+        //
+        // Timestamp must be ANCHORED to the server clock domain, not the
+        // device wall-clock. Every persisted item already in the log is
+        // broker-stamped; the assistant reply this message triggers will be
+        // broker-stamped too. If we stamp the echo with the *device* clock and
+        // it runs even slightly ahead of the broker, the echo sorts AFTER the
+        // reply → the agent's answer renders above the user's prompt (device
+        // bug, "brought up many times"). Stamping it one ms past the newest
+        // known item keeps it ahead of any reply (whose broker ts is
+        // necessarily later) regardless of how far the device clock drifts.
+        // Falls back to device now() only for the very first turn, when
+        // there's nothing to anchor to. See [sortedByConversationTs].
+        val nowMs = System.currentTimeMillis()
+        val lastKnownMs = (
+            (_conversationLog.value[sessionId].orEmpty().map { it.ts }) +
+                (_chatLog.value[sessionId].orEmpty().map { it.ts })
+            ).map { tsEpochMillis(it) }.filter { it > 0L }.maxOrNull()
+        val echoMs = if (lastKnownMs != null) lastKnownMs + 1 else nowMs
+        val ts = java.time.Instant.ofEpochMilli(echoMs)
+            .atOffset(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
         val item = ConversationItem(
             id = "local-${java.util.UUID.randomUUID()}",

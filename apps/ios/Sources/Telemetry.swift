@@ -32,27 +32,59 @@ enum Telemetry {
     }
 
     /// Structured diagnostic telemetry meant to be READ BACK from Sentry
-    /// (org `conduit`, project `apple-ios`): an INFO-level event tagged
+    /// (org `swe-kitty`, project `conduit-ios`): an INFO-level event tagged
     /// `diag=<category>` with `data` as searchable extras. Use it for runtime
     /// state that can't be reproduced on the dev box — layout / render /
     /// timing / keyboard — so the actual on-device numbers can be read
     /// remotely instead of asked for and transcribed.
     ///
     /// Standing practice: instrument new features with `Telemetry.debug` so
-    /// they're always debuggable from Sentry. Keep it LOW VOLUME — dedupe to
-    /// once per distinct state — because every call is a Sentry event.
+    /// they're always debuggable from Sentry. It is meant to be LOW VOLUME —
+    /// every call is a full Sentry event, so a high-frequency caller (keyboard
+    /// show/hide, terminal resize) would otherwise flood the project, burn
+    /// quota, and pile main-thread work behind the SDK. Two guards below keep
+    /// that safe regardless of the caller:
+    ///   1. consecutive-identical events for a category are dropped (only a
+    ///      *distinct state* gets through), and
+    ///   2. the event is built + submitted off the main thread.
     static func debug(_ category: String, _ message: String, data: [String: String] = [:]) {
 #if canImport(Sentry)
         guard !sentryDSN.isEmpty else { return }
-        SentrySDK.capture(message: "[\(category)] \(message)") { scope in
-            scope.setLevel(.info)
-            scope.setTag(value: category, key: "diag")
-            data.forEach { scope.setExtra(value: $0.value, key: $0.key) }
+
+        // Collapse repeats: skip when this category's payload is identical to
+        // the last one we sent for it. `data` is captured by value here, so
+        // the comparison + dispatch are safe to run off the calling thread.
+        let payload = message + "\u{1}" + data.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "\u{1}")
+        debugDedupeLock.lock()
+        let isRepeat = lastDebugPayload[category] == payload
+        if !isRepeat { lastDebugPayload[category] = payload }
+        debugDedupeLock.unlock()
+        guard !isRepeat else { return }
+
+        debugQueue.async {
+            SentrySDK.capture(message: "[\(category)] \(message)") { scope in
+                scope.setLevel(.info)
+                scope.setTag(value: category, key: "diag")
+                data.forEach { scope.setExtra(value: $0.value, key: $0.key) }
+            }
         }
 #else
         _ = (category, message, data)
 #endif
     }
+
+#if canImport(Sentry)
+    /// Serial queue so diagnostic events never cost the main thread time, even
+    /// for the scope-building closure. The Sentry SDK is itself thread-safe.
+    private static let debugQueue = DispatchQueue(label: "sh.nikhil.conduit.telemetry.debug", qos: .utility)
+    /// Last payload emitted per `diag` category, used to drop consecutive
+    /// duplicates. Guarded by `debugDedupeLock` since `debug` is called from
+    /// arbitrary threads (keyboard notifications, layout passes).
+    private static var lastDebugPayload: [String: String] = [:]
+    private static let debugDedupeLock = NSLock()
+#endif
 
     private static var sentryDSN: String {
         let raw = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String ?? ""

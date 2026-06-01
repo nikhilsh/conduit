@@ -397,7 +397,7 @@ fun SettingsScreen(
                 ToggleRow(
                     icon = Icons.Filled.Science,
                     title = "Native Terminal (Termux)",
-                    subtitle = "Stage 0 — see PLAN-TERMINAL-REWRITE",
+                    subtitle = "On by default. Turn off to use the legacy web terminal.",
                     isOn = experimentalNativeTerminal,
                     onChange = { appearance.setExperimentalNativeTerminal(it) },
                 )
@@ -429,7 +429,9 @@ fun SettingsScreen(
     }
 
     if (embedded) {
-        content()
+        // Tablet pane: inset below the status bar (the phone form is a
+        // ModalBottomSheet that never reaches it, so only embedded needs this).
+        Box(modifier = Modifier.statusBarsPadding()) { content() }
     } else {
         ModalBottomSheet(
             onDismissRequest = onDismiss,

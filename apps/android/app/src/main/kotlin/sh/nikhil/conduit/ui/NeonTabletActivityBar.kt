@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,6 +64,10 @@ fun NeonTabletActivityBar(section: TabletSection, onPick: (TabletSection) -> Uni
                 if (neon.dark) Color(0xFF04070E).copy(alpha = 0.7f)
                 else Color.White.copy(alpha = 0.72f),
             )
+            // Keep the rail tint full-bleed behind the status bar but inset
+            // its contents (brand mark + items) so they clear the system clock
+            // (device bug: top cuts into the status bar).
+            .statusBarsPadding()
             .padding(vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(7.dp),

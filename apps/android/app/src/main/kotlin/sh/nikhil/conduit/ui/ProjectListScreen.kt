@@ -62,7 +62,10 @@ fun ProjectListScreen(
     val connected = harness is HarnessState.Live || harness is HarnessState.Linked
 
     ModalDrawerSheet(modifier = Modifier.fillMaxHeight()) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        // statusBarsPadding so the "Conduit" title clears the system clock —
+        // applies both as the phone nav drawer and the tablet left pane
+        // (device bug: top cuts into the status bar).
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             // Title + actions — Material header (title + endpoint subtitle).
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),

@@ -167,11 +167,14 @@ final class AppearanceStore {
         didSet { defaults.set(collapseTurns, forKey: Keys.collapseTurns) }
     }
 
-    /// Stage 0 feature flag — when on, the Terminal tab renders via the
-    /// experimental Ghostty-libghostty path (`GhosttyTerminalView`)
-    /// instead of the production xterm.js path (`TerminalTabXterm`).
-    /// See `docs/PLAN-TERMINAL-REWRITE.md`. The xterm.js path stays
-    /// the default until Stage 2 of that plan ships.
+    /// Terminal renderer selector — when on (the default), the Terminal
+    /// tab renders via the native Ghostty-libghostty path
+    /// (`GhosttyTerminalView`); when off it falls back to the legacy
+    /// xterm.js path (`TerminalTabXterm`). See `docs/PLAN-TERMINAL-REWRITE.md`.
+    /// Flipped to default-on alongside Android; xterm.js is the retained
+    /// one-toggle fallback. NOTE: the native iOS renderer's blank-screen
+    /// fix (#205) is still pending on-device verification — the fallback
+    /// toggle is the safety net.
     var experimentalNativeTerminal: Bool {
         didSet { defaults.set(experimentalNativeTerminal, forKey: Keys.experimentalNativeTerminal) }
     }
@@ -250,7 +253,7 @@ final class AppearanceStore {
             .flatMap(ThemeMode.init(rawValue:))) ?? .system
         self.collapseTurns = defaults.object(forKey: Keys.collapseTurns) as? Bool ?? false
         self.experimentalNativeTerminal =
-            defaults.object(forKey: Keys.experimentalNativeTerminal) as? Bool ?? false
+            defaults.object(forKey: Keys.experimentalNativeTerminal) as? Bool ?? true
         // Default flipped to `true` in the upstream-ui-cutover (this PR):
         // ConduitUI is now the production tree. The flag is kept around
         // (rather than being deleted entirely) so an emergency revert

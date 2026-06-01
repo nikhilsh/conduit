@@ -103,7 +103,11 @@ extension ConduitUI {
             }
             guard !synthetic.isEmpty else { return conversation }
             // Sort by ts (PR #111 contract — typed log is ts-sorted).
-            return (conversation + synthetic).sorted { $0.ts < $1.ts }
+            // Epoch-normalized (not raw String): a `+09:00` offset or a
+            // fractional-second mismatch would otherwise mis-sort, and an
+            // empty live `ts` must stay newest. Mirrors Android
+            // `sortedByConversationTs`.
+            return (conversation + synthetic).sortedByConversationTs { $0.ts }
         }
 
         /// Placeholder text shown in the composer when the draft is

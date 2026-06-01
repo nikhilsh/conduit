@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -47,7 +48,9 @@ fun NeonTabletRightPane(store: SessionStore, session: ProjectSession) {
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     var tab by rememberSaveable { mutableStateOf(RightPaneTab.Terminal) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    // statusBarsPadding so the Terminal/Browser/Info tab row clears the
+    // system status bar (device bug: top cuts into the status bar).
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

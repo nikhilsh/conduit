@@ -3,17 +3,21 @@ set -euo pipefail
 
 # Conduit Sentry triage helper.
 # Defaults:
-# - org: conduit
-# - projects: apple-ios, android
+# - org: swe-kitty   (the Sentry org slug — note: NOT "conduit"; the org kept
+#   its swe-kitty slug, only the apps/projects were renamed to conduit-*)
+# - projects: conduit-ios, conduit-android (the live app projects)
 # - unresolved issues query
 # - optional recent-event samples
+#
+# Pre-rebrand history lives in the same org under projects apple-ios/android;
+# override SENTRY_PROJECTS to reach it.
 #
 # Auth resolution order:
 # 1) SENTRY_AUTH_TOKEN env var
 # 2) /root/.config/sentry/auth-token
 
-ORG="${SENTRY_ORG:-conduit}"
-PROJECTS="${SENTRY_PROJECTS:-apple-ios,android}"
+ORG="${SENTRY_ORG:-swe-kitty}"
+PROJECTS="${SENTRY_PROJECTS:-conduit-ios,conduit-android}"
 QUERY="${SENTRY_QUERY:-is:unresolved}"
 LIMIT="${SENTRY_LIMIT:-20}"
 SHOW_EVENTS="${SENTRY_SHOW_EVENTS:-1}"

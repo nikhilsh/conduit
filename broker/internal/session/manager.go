@@ -898,24 +898,32 @@ func (s *Session) drain(f *os.File) {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			s.append(chunk)
-			s.fanout(chunk)
-			if s.recorder != nil {
-				// Best-effort: nil-safe inside the recorder, errors
-				// only logged. Drain must never block on disk I/O.
-				s.recorder.RecordBytes(chunk, time.Now())
-			}
-			if s.scraper != nil {
-				s.scraper.feed(chunk)
-			}
-			s.mu.Lock()
-			tg := s.termgrid
-			s.mu.Unlock()
-			if tg != nil {
-				if werr := tg.Write(s.ID, chunk); werr != nil {
-					// Best-effort — log and continue. Ring is still
-					// authoritative for live streaming.
-					fmt.Fprintf(os.Stderr, "session %s: termgrid.Write: %v\n", s.ID, werr)
+			// Drop spurious terminal capability-query replies (DA1/DA2/OSC
+			// color) before any consumer sees them — nothing on the broker
+			// side answers these, so they'd otherwise echo into the pane and
+			// ship to every client as visible garbage. See
+			// terminal_filter.go.
+			chunk = stripTerminalReports(chunk)
+			if len(chunk) > 0 {
+				s.append(chunk)
+				s.fanout(chunk)
+				if s.recorder != nil {
+					// Best-effort: nil-safe inside the recorder, errors
+					// only logged. Drain must never block on disk I/O.
+					s.recorder.RecordBytes(chunk, time.Now())
+				}
+				if s.scraper != nil {
+					s.scraper.feed(chunk)
+				}
+				s.mu.Lock()
+				tg := s.termgrid
+				s.mu.Unlock()
+				if tg != nil {
+					if werr := tg.Write(s.ID, chunk); werr != nil {
+						// Best-effort — log and continue. Ring is still
+						// authoritative for live streaming.
+						fmt.Fprintf(os.Stderr, "session %s: termgrid.Write: %v\n", s.ID, werr)
+					}
 				}
 			}
 		}

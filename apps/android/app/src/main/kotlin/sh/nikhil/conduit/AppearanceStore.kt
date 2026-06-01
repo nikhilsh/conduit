@@ -77,13 +77,14 @@ class AppearanceStore : ViewModel() {
     val collapseTurns: StateFlow<Boolean> = _collapseTurns.asStateFlow()
 
     /**
-     * Stage 0 feature flag for the Termux `terminal-view` native
-     * terminal path. Mirrors iOS `experimentalNativeTerminal`. Off by
-     * default — the xterm.js path ([WebTerminal]) remains the
-     * production renderer until Stage 2 of the rewrite ships. See
-     * `docs/PLAN-TERMINAL-REWRITE.md` (Android section).
+     * Terminal renderer selector. `true` (the default) uses the native
+     * Termux `terminal-view` path ([TermuxTerminalView]); `false` falls
+     * back to the legacy xterm.js WebView ([WebTerminal]). Mirrors iOS
+     * `experimentalNativeTerminal`. Flipped to default-on once the Termux
+     * path reached Stage 2/3 parity; the xterm.js path is retained as a
+     * one-toggle fallback. See `docs/PLAN-TERMINAL-REWRITE.md`.
      */
-    private val _experimentalNativeTerminal = MutableStateFlow(false)
+    private val _experimentalNativeTerminal = MutableStateFlow(true)
     val experimentalNativeTerminal: StateFlow<Boolean> = _experimentalNativeTerminal.asStateFlow()
 
     /**
@@ -143,7 +144,7 @@ class AppearanceStore : ViewModel() {
             ?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
             ?: ThemeMode.System
         _collapseTurns.value = p.getBoolean(KEY_COLLAPSE, false)
-        _experimentalNativeTerminal.value = p.getBoolean(KEY_EXPERIMENTAL_NATIVE_TERMINAL, false)
+        _experimentalNativeTerminal.value = p.getBoolean(KEY_EXPERIMENTAL_NATIVE_TERMINAL, true)
         _bodyPointSize.value = p.getFloat(KEY_BODY_POINT_SIZE, DEFAULT_BODY_POINT_SIZE)
             .coerceIn(BODY_POINT_SIZE_RANGE)
         _terminalFontSize.value = p.getFloat(KEY_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_FONT_SIZE)
