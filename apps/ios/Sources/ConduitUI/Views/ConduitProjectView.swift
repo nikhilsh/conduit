@@ -299,12 +299,23 @@ extension ConduitUI {
                     .allowsHitTesting(tab == .terminal)
                     .accessibilityHidden(tab != .terminal)
                     .zIndex(tab == .terminal ? 1 : 0)
+                    // Render surfaces must NOT participate in the ZStack's
+                    // keyboard-avoidance negotiation. They're full-screen and
+                    // carry their own input bar; left in the negotiation, their
+                    // safe-area treatment skewed the shared ZStack layout so the
+                    // Chat sibling's `.safeAreaInset(.bottom)` composer no longer
+                    // lifted above the keyboard (composer-behind-keyboard bug,
+                    // phone-only — tablet renders Chat without this ZStack and
+                    // works). Ignoring `.keyboard` here leaves Chat to negotiate
+                    // the keyboard alone, like the tablet path.
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
 
                 BrowserTab(session: session, mode: .preview)
                     .opacity(tab == .browser ? 1 : 0)
                     .allowsHitTesting(tab == .browser)
                     .accessibilityHidden(tab != .browser)
                     .zIndex(tab == .browser ? 1 : 0)
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
             }
         }
 
