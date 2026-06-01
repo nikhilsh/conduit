@@ -66,6 +66,12 @@ extension ConduitUI {
         @State private var attachError: String? = nil
         @State private var isUploading = false
         @FocusState private var composerFocused: Bool
+        /// Global-space bottom Y of the composer row, measured via a backing
+        /// GeometryReader. Logged in the keyboard diag so we can tell from
+        /// Sentry whether the composer actually sits above the keyboard
+        /// (composerMaxY ≤ keyboard top) or behind it — the missing signal that
+        /// made the composer-behind-keyboard bug guesswork for many rounds.
+        @State private var composerMaxY: CGFloat = 0
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
@@ -266,6 +272,18 @@ extension ConduitUI {
                                 // there's no color seam at the composer/keyboard
                                 // inset.
                                 .background(neon.surfaceSolid)
+                                // Diagnostic: record the composer's global
+                                // bottom edge so the keyboard diag can prove
+                                // whether it's above or behind the keyboard.
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear
+                                            .onAppear { composerMaxY = geo.frame(in: .global).maxY }
+                                            .onChange(of: geo.frame(in: .global).maxY) { _, v in
+                                                composerMaxY = v
+                                            }
+                                    }
+                                )
                         }
                     }
                 }
@@ -399,18 +417,26 @@ extension ConduitUI {
         private func logKeyboardDiag(_ reason: String, keyboardFrame: CGRect? = nil) {
             var safeBottom: CGFloat = 0
             var kbHeight: CGFloat = 0
+            var kbTop: CGFloat = 0
             if let scene = UIApplication.shared.connectedScenes
                 .first(where: { $0 is UIWindowScene }) as? UIWindowScene,
                let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
                 safeBottom = window.safeAreaInsets.bottom
                 if let frame = keyboardFrame {
                     kbHeight = max(0, window.bounds.maxY - frame.minY)
+                    kbTop = frame.minY
                 }
             }
+            // overlap > 0 ⇒ the composer's bottom edge is BELOW the keyboard top,
+            // i.e. hidden behind it. The definitive signal for this bug.
+            let overlap = (kbTop > 0) ? max(0, composerMaxY - kbTop) : 0
             Telemetry.debug("keyboard", reason, data: [
                 "composerFocused": "\(composerFocused)",
                 "isActive": "\(isActive)",
                 "kbHeight": String(format: "%.0f", kbHeight),
+                "kbTop": String(format: "%.0f", kbTop),
+                "composerMaxY": String(format: "%.0f", composerMaxY),
+                "overlap": String(format: "%.0f", overlap),
                 "screenH": String(format: "%.0f", UIScreen.main.bounds.height),
                 "safeBottom": String(format: "%.0f", safeBottom),
             ])
