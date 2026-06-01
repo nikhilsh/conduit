@@ -280,12 +280,6 @@ extension ConduitUI {
                             // so there is no flat dark "bar" the chips sit on.
                             suggestionBar
                             composer
-                                // Device feedback v0.0.47 #4: the composer (and
-                                // the safe-area band it pushes above the
-                                // keyboard) uses the chat surface color, so
-                                // there's no color seam at the composer/keyboard
-                                // inset.
-                                .background(neon.surfaceSolid)
                                 // Diagnostic: record the composer's global
                                 // bottom edge so the keyboard diag can prove
                                 // whether it's above or behind the keyboard.
@@ -298,11 +292,20 @@ extension ConduitUI {
                                             }
                                     }
                                 )
+                                // Manual keyboard lift (see `keyboardInset`): the
+                                // view ignores the .keyboard safe area, so this
+                                // padding raises the composer to the keyboard top.
+                                .padding(.bottom, keyboardInset)
+                                // Surface applied AFTER the lift padding so it
+                                // fills the lifted band too — the composer's
+                                // chat-surface colour runs continuously down to
+                                // (and behind) the keyboard top, so there's no
+                                // dark app-background strip showing through at the
+                                // keyboard's rounded top edge (device feedback).
+                                // Device feedback v0.0.47 #4: same surface colour
+                                // means no seam at the composer/keyboard inset.
+                                .background(neon.surfaceSolid)
                         }
-                        // Manual keyboard lift (see `keyboardInset`): the view
-                        // ignores the .keyboard safe area, so this padding is
-                        // what raises the composer to exactly the keyboard top.
-                        .padding(.bottom, keyboardInset)
                     }
                 }
                 // Measure distance from the bottom edge so the controller
