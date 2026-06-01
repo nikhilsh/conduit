@@ -93,8 +93,11 @@
     border:1px solid var(--line);background:var(--panel);transition:transform .16s,border-color .16s,box-shadow .16s;}
   .store:hover{transform:translateY(-2px);border-color:rgba(62,240,160,0.5);box-shadow:0 10px 30px rgba(0,0,0,0.4),0 0 18px rgba(62,240,160,0.14);}
   .store svg{width:26px;height:26px;flex:none;}
-  .store .st-sub{font-family:var(--mono);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--faint);line-height:1;}
-  .store .st-main{font-size:17px;font-weight:600;letter-spacing:-0.01em;line-height:1.25;}
+  /* Stack the small label over the title — they're two spans in one wrapper
+     and were flowing inline (running into each other) without this. */
+  .store>span{display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;}
+  .store .st-sub{font-family:var(--mono);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--faint);line-height:1.1;}
+  .store .st-main{font-size:17px;font-weight:600;letter-spacing:-0.01em;line-height:1.2;}
   .hero-note{margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:8px;align-items:center;}
   .hero-note b{color:var(--green);font-weight:600;}
 
@@ -220,7 +223,7 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <span class="eyebrow"><span class="pip"></span>Open beta · v0.9</span>
+        <span class="eyebrow"><span class="pip"></span>Open beta · <span data-version>v0.9</span></span>
         <h1 class="display">Your agents,<br />in your pocket.<span class="cursor">_</span></h1>
         <p class="lead">Conduit drives <b style="color:var(--text)">Claude</b> and <b style="color:var(--text)">Codex</b> on your dev box — from your phone or tablet. Start a session, watch it plan, run commands, edit files, and approve actions. Anywhere.</p>
         <div class="stores">
@@ -434,6 +437,7 @@
         + ' <span class="sep">·</span> iOS '+((d.ios&&d.ios.size)||'')+' '+((d.ios&&d.ios.minOS)||'')
         + ' <span class="sep">·</span> APK '+((d.android&&d.android.size)||'')+' '+((d.android&&d.android.minOS)||'');
       document.querySelectorAll('[data-dl-meta]').forEach(function(el){ el.innerHTML = meta; });
+      if(ver){ document.querySelectorAll('[data-version]').forEach(function(el){ el.textContent = ver; }); }
     }
     // inline defaults first, then try to override with the live file
     var fallback = {};

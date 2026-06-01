@@ -127,6 +127,15 @@ async function build() {
         /(<script type="application\/json" id="release-data">)[\s\S]*?(<\/script>)/,
         `$1\n${json}\n$2`,
     );
+    // Bake the real version into the eyebrow badge so it's correct in the
+    // static HTML (no-JS / first paint), not just after the runtime
+    // version.json fetch updates `[data-version]`.
+    if (version) {
+        html = html.replace(
+            /(<span data-version>)[^<]*(<\/span>)/g,
+            `$1v${version}$2`,
+        );
+    }
 
     await mkdir(outDir, { recursive: true });
     await mkdir(path.join(outDir, "ios"), { recursive: true });
