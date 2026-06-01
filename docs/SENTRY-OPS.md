@@ -16,9 +16,15 @@ This script:
 
 Default scope:
 
-- org: `conduit`
-- projects: `apple-ios,android`
+- org: `conduit` (post-migration org slug; the old `swe-kitty` org is retired)
+- projects: `conduit-ios,conduit-android`
 - query: `is:unresolved`
+
+> The `conduit` org needs a token that is a **member** of it. A token scoped
+> only to the old `swe-kitty` org returns `403 You do not have permission`.
+> Drop a fresh conduit-scoped token at `/root/.config/sentry/auth-token`.
+> Pre-migration history lives in the `swe-kitty` org (projects `apple-ios` /
+> `android`) — reach it with `SENTRY_ORG=swe-kitty SENTRY_PROJECTS=apple-ios,android`.
 
 ## Usage
 
@@ -33,7 +39,7 @@ Only auth token is required. Everything else has defaults.
 
 ```bash
 SENTRY_ORG=conduit \
-SENTRY_PROJECTS=apple-ios,android \
+SENTRY_PROJECTS=conduit-ios,conduit-android \
 SENTRY_QUERY='is:unresolved level:error' \
 SENTRY_LIMIT=50 \
 SENTRY_SHOW_EVENTS=1 \

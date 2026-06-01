@@ -48,18 +48,33 @@ object Telemetry {
 
     /**
      * Structured diagnostic telemetry meant to be READ BACK from Sentry
-     * (org `conduit`, project `android`): an INFO-level event tagged
+     * (org `swe-kitty`, project `conduit-android`): an INFO-level event tagged
      * `diag=<category>` with `data` as searchable extras. Use it for runtime
      * state that can't be reproduced on the dev box — layout / render /
      * timing — so the on-device numbers can be read remotely instead of asked
      * for and transcribed.
      *
      * Standing practice: instrument new features with `Telemetry.debug` so
-     * they're always debuggable from Sentry. Keep it LOW VOLUME — dedupe to
-     * once per distinct state — because every call is a Sentry event.
+     * they're always debuggable from Sentry. It is meant to be LOW VOLUME —
+     * every call is a full Sentry event, so a high-frequency caller would
+     * otherwise flood the project and burn quota. Consecutive-identical events
+     * for a category are dropped here, so only a *distinct state* gets through
+     * regardless of the caller.
      */
     fun debug(category: String, message: String, data: Map<String, String> = emptyMap()) {
         if (BuildConfig.SENTRY_DSN.trim().isEmpty()) return
+        // Collapse repeats: skip when this category's payload matches the last
+        // one we sent for it. Mirrors the iOS `Telemetry.debug` dedupe.
+        val payload = buildString {
+            append(message)
+            data.entries.sortedBy { it.key }.forEach {
+                append("::").append(it.key).append('=').append(it.value)
+            }
+        }
+        synchronized(lastDebugPayload) {
+            if (lastDebugPayload[category] == payload) return
+            lastDebugPayload[category] = payload
+        }
         Sentry.withScope { scope ->
             scope.level = SentryLevel.INFO
             scope.setTag("diag", category)
@@ -67,6 +82,9 @@ object Telemetry {
             Sentry.captureMessage("[$category] $message", SentryLevel.INFO)
         }
     }
+
+    /** Last payload emitted per `diag` category, used to drop consecutive duplicates. */
+    private val lastDebugPayload = mutableMapOf<String, String>()
 
     /** Leave a breadcrumb so it shows up in the trail of the next event. */
     fun breadcrumb(message: String, data: Map<String, String> = emptyMap()) {
