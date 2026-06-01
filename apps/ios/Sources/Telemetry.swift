@@ -67,6 +67,11 @@ enum Telemetry {
             SentrySDK.capture(message: "[\(category)] \(message)") { scope in
                 scope.setLevel(.info)
                 scope.setTag(value: category, key: "diag")
+                // Collapse ALL events of a diag category into a SINGLE Sentry
+                // issue (otherwise each distinct message — "keyboard will show",
+                // "...will hide", "composer focused" — files its own issue and
+                // floods the project). One issue per category, many events.
+                scope.setFingerprint(["diag", category])
                 data.forEach { scope.setExtra(value: $0.value, key: $0.key) }
             }
         }

@@ -85,6 +85,10 @@ object Telemetry {
         Sentry.withScope { scope ->
             scope.level = SentryLevel.INFO
             scope.setTag("diag", category)
+            // Collapse all events of a diag category into a SINGLE Sentry issue
+            // (otherwise each distinct message files its own issue and floods
+            // the project). One issue per category, many events.
+            scope.fingerprint = listOf("diag", category)
             data.forEach { (key, value) -> scope.setExtra(key, value) }
             Sentry.captureMessage("[$category] $message", SentryLevel.INFO)
         }
