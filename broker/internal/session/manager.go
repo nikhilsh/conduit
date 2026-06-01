@@ -73,14 +73,20 @@ type Session struct {
 	handoffTimeout  time.Duration
 	workspaceDir    string
 	requestedCWD    string
-	reasonCode      string
-	exitCode        int
-	hooks           agents.Hooks
-	phase           string
-	health          string
-	lastOutput      time.Time
-	lastCheckpoint  time.Time
-	startedAt       time.Time
+	// previewPort is the per-session dev-server port (3000–3019) exported to
+	// the agent as $PORT and reverse-proxied to the app via `/preview/<id>/`.
+	// 0 when the pool was exhausted at create time (the session simply has no
+	// preview). Set once under Manager.mu before the session is shared, then
+	// read-only — safe to read without s.mu.
+	previewPort    int
+	reasonCode     string
+	exitCode       int
+	hooks          agents.Hooks
+	phase          string
+	health         string
+	lastOutput     time.Time
+	lastCheckpoint time.Time
+	startedAt      time.Time
 	// Per-session token/cost usage, folded from each turn's usage event
 	// (claude `result` / codex `turn.completed`). Guarded by mu; surfaced
 	// via Usage() into the status frame. See usage.go.
@@ -1169,6 +1175,37 @@ func (m *Manager) GetOrCreate(id, assistant string) (*Session, bool, error) {
 
 // GetOrCreateWithOptions is like GetOrCreate but accepts creation options.
 // Options are honored only when a new session is created.
+// Preview dev-server port pool. Each live session gets one port in
+// [previewPortBase, previewPortBase+previewPortCount) exported as $PORT; the
+// agent's dev server binds it and the broker reverse-proxies `/preview/<id>/`
+// to 127.0.0.1:<port>. Mirrors sweswe's preview surface (AGENT-ADAPTERS.md §2.3).
+const (
+	previewPortBase  = 3000
+	previewPortCount = 20
+)
+
+// allocatePreviewPortLocked returns the lowest preview port not currently held
+// by a live session, or 0 if the pool is exhausted. Caller must hold m.mu.
+// Ports free themselves: a closed session is removed from m.sessions, so its
+// port stops counting as used on the next allocation.
+func (m *Manager) allocatePreviewPortLocked() int {
+	used := make(map[int]bool, len(m.sessions))
+	for _, s := range m.sessions {
+		if s.previewPort > 0 {
+			used[s.previewPort] = true
+		}
+	}
+	for p := previewPortBase; p < previewPortBase+previewPortCount; p++ {
+		if !used[p] {
+			return p
+		}
+	}
+	return 0
+}
+
+// PreviewPort returns the session's allocated preview port (0 if none).
+func (s *Session) PreviewPort() int { return s.previewPort }
+
 func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOptions) (*Session, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1213,6 +1250,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		}
 		return s.Switch(nextAdapter)
 	}
+	s.previewPort = m.allocatePreviewPortLocked()
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)
 	go func() {
