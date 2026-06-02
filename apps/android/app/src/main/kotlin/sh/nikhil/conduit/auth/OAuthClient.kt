@@ -3,6 +3,7 @@ package sh.nikhil.conduit.auth
 import android.content.Context
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -10,6 +11,8 @@ import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Android port of `apps/ios/Sources/Models/OAuthClient.swift` (Stages
@@ -43,16 +46,22 @@ enum class OAuthProvider(val raw: String) {
                 // Codex CLI public client ID — see PLAN §C.2.
                 clientId = "app_EMoamEEZ73f0CkXaXp7hrann",
                 scopes = listOf("openid", "profile", "email", "offline_access"),
-                redirectUri = "conduit://oauth/openai/callback",
+                // Loopback redirect — the exact one the codex CLI's login
+                // server uses (DEFAULT_PORT 1455, /auth/callback). This
+                // client_id whitelists it; an in-app AgentLoginLoopbackServer
+                // catches the browser redirect on the device.
+                redirectUri = "http://localhost:1455/auth/callback",
                 callbackScheme = "conduit",
+                captureMode = OAuthCaptureMode.Loopback(port = 1455, path = "/auth/callback"),
                 authorizePath = "oauth/authorize",
                 tokenUrl = "https://auth.openai.com/oauth/token",
             )
             ANTHROPIC -> OAuthConfig(
                 // Claude Code CLI OAuth params reverse-engineered from
-                // the `claude` CLI binary — same constants iOS pins.
-                // Anthropic splits authorize (claude.ai) from token
-                // exchange (platform.claude.com).
+                // the `claude` CLI binary and confirmed against
+                // `claude auth login --claudeai`'s stdout. Anthropic
+                // splits authorize (claude.ai) from token exchange
+                // (platform.claude.com) and uses a CODE-PASTE flow.
                 issuer = "https://claude.ai",
                 clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
                 scopes = listOf(
@@ -62,10 +71,15 @@ enum class OAuthProvider(val raw: String) {
                     "user:mcp_servers",
                     "user:sessions:claude_code",
                 ),
-                redirectUri = "conduit://oauth/anthropic/callback",
+                // The real, whitelisted redirect — a remote page that
+                // displays a `code#state` string (no loopback to catch).
+                redirectUri = "https://platform.claude.com/oauth/code/callback",
                 callbackScheme = "conduit",
+                captureMode = OAuthCaptureMode.CodePaste,
                 authorizePath = "oauth/authorize",
                 tokenUrl = "https://platform.claude.com/v1/oauth/token",
+                // `code=true` selects the copy-paste code-display page.
+                extraAuthorizeParams = mapOf("code" to "true"),
             )
         }
 
@@ -78,6 +92,18 @@ enum class OAuthProvider(val raw: String) {
     }
 }
 
+/**
+ * How the phone captures the authorization `code` after the browser
+ * consent step — the one thing that differs between providers. Mirror
+ * of iOS `OAuthCaptureMode`.
+ */
+sealed class OAuthCaptureMode {
+    /** RFC 8252 loopback (OpenAI/Codex) — caught by AgentLoginLoopbackServer. */
+    data class Loopback(val port: Int, val path: String) : OAuthCaptureMode()
+    /** Code-display (Anthropic/Claude) — user copies `code#state` and pastes it. */
+    data object CodePaste : OAuthCaptureMode()
+}
+
 data class OAuthConfig(
     val issuer: String,
     val clientId: String,
@@ -85,8 +111,12 @@ data class OAuthConfig(
     val redirectUri: String,
     /** Must match `redirectUri`'s scheme — matches the intent filter. */
     val callbackScheme: String,
+    /** How the `code` comes back — loopback (codex) vs paste (claude). */
+    val captureMode: OAuthCaptureMode,
     val authorizePath: String,
     val tokenUrl: String,
+    /** Extra authorize query items (e.g. Claude's `code=true`). */
+    val extraAuthorizeParams: Map<String, String> = emptyMap(),
 ) {
     val authorizeUrl: String get() = "$issuer/$authorizePath"
     val scopeString: String get() = scopes.joinToString(" ")
@@ -264,18 +294,9 @@ class OAuthClient(
     private val deterministicVerifier: String? = null,
 ) {
 
-    /**
-     * Build the authorize URL with PKCE S256 and launch Chrome Custom
-     * Tabs. Returns the [OAuthRequest] holding the verifier so the
-     * caller can finish the exchange when the redirect lands.
-     */
-    fun startLogin(context: Context): OAuthRequest {
-        val cfg = provider.config
-        val verifier = deterministicVerifier ?: generateCodeVerifier()
-        val challenge = codeChallenge(verifier)
-        val state = generateRandomUrlSafe(16)
-
-        val authorizeUri = Uri.parse(cfg.authorizeUrl).buildUpon().apply {
+    /** Build the authorize URL with PKCE S256 + provider extras. */
+    private fun buildAuthorizeUri(cfg: OAuthConfig, challenge: String, state: String): Uri =
+        Uri.parse(cfg.authorizeUrl).buildUpon().apply {
             appendQueryParameter("response_type", "code")
             appendQueryParameter("client_id", cfg.clientId)
             appendQueryParameter("redirect_uri", cfg.redirectUri)
@@ -283,14 +304,86 @@ class OAuthClient(
             appendQueryParameter("code_challenge", challenge)
             appendQueryParameter("code_challenge_method", "S256")
             appendQueryParameter("state", state)
+            for (key in cfg.extraAuthorizeParams.keys.sorted()) {
+                appendQueryParameter(key, cfg.extraAuthorizeParams[key])
+            }
         }.build()
 
-        val tabsIntent = CustomTabsIntent.Builder()
-            .setShowTitle(true)
-            .build()
-        tabsIntent.launchUrl(context, authorizeUri)
+    private fun launchTab(context: Context, uri: Uri) {
+        CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, uri)
+    }
 
+    /**
+     * Loopback flow (OpenAI/Codex). Binds an in-app loopback listener,
+     * opens the browser, awaits the redirect, exchanges the code, and
+     * returns the credential. Throws for code-paste providers.
+     */
+    suspend fun startLoopbackLogin(context: Context): OAuthCredential {
+        val cfg = provider.config
+        val mode = cfg.captureMode as? OAuthCaptureMode.Loopback
+            ?: throw OAuthClientError.Underlying("startLoopbackLogin() is for loopback providers; use the code-paste API")
+        val verifier = deterministicVerifier ?: generateCodeVerifier()
+        val challenge = codeChallenge(verifier)
+        val state = generateRandomUrlSafe(16)
+        val authorizeUri = buildAuthorizeUri(cfg, challenge, state)
+
+        val server = AgentLoginLoopbackServer(mode.port, mode.path)
+        val code = try {
+            suspendCancellableCoroutine { cont ->
+                try {
+                    server.start(timeoutMillis = TimeUnit.SECONDS.toMillis(600)) { result ->
+                        result.fold(
+                            onSuccess = { cb ->
+                                when {
+                                    cb.errorReason.isNotEmpty() ->
+                                        cont.resumeWithException(OAuthClientError.Underlying("provider error: ${cb.errorReason}"))
+                                    cb.code.isEmpty() ->
+                                        cont.resumeWithException(OAuthClientError.MissingCode)
+                                    else -> cont.resume(cb.code)
+                                }
+                            },
+                            onFailure = { cont.resumeWithException(it) },
+                        )
+                    }
+                } catch (t: Throwable) {
+                    cont.resumeWithException(t)
+                    return@suspendCancellableCoroutine
+                }
+                // Custom Tabs has no completion callback (unlike iOS
+                // ASWebAuthenticationSession) — only the loopback (or its
+                // timeout) resumes us.
+                runCatching { launchTab(context, authorizeUri) }
+                cont.invokeOnCancellation { server.stop() }
+            }
+        } finally {
+            server.stop()
+        }
+        return exchangeCode(code, verifier, state)
+    }
+
+    /**
+     * Code-paste flow step 1 (Anthropic/Claude). Opens the browser and
+     * returns the [OAuthRequest] holding the verifier/state for step 2.
+     * The provider displays a `code#state` string the user copies.
+     */
+    fun beginCodePaste(context: Context): OAuthRequest {
+        val cfg = provider.config
+        val verifier = deterministicVerifier ?: generateCodeVerifier()
+        val challenge = codeChallenge(verifier)
+        val state = generateRandomUrlSafe(16)
+        runCatching { launchTab(context, buildAuthorizeUri(cfg, challenge, state)) }
         return OAuthRequest(provider = provider, verifier = verifier, state = state)
+    }
+
+    /**
+     * Code-paste flow step 2. Splits the pasted `code#state`, exchanges
+     * the code, and returns the credential.
+     */
+    suspend fun finishCodePaste(pasted: String, req: OAuthRequest): OAuthCredential {
+        val segs = pasted.trim().split("#", limit = 2)
+        val code = segs.firstOrNull()?.takeIf { it.isNotEmpty() } ?: throw OAuthClientError.MissingCode
+        val state = if (segs.size > 1) segs[1] else req.state
+        return exchangeCode(code, req.verifier, state)
     }
 
     /**
@@ -298,15 +391,20 @@ class OAuthClient(
      * [completeWithCallbackUri]; pulled out into its own suspend fn so
      * the test layer can drive it directly.
      */
-    suspend fun exchangeCode(code: String, verifier: String): OAuthCredential {
+    suspend fun exchangeCode(code: String, verifier: String, state: String = ""): OAuthCredential {
         val cfg = provider.config
-        val body = FormBody.Builder()
+        val bodyBuilder = FormBody.Builder()
             .add("grant_type", "authorization_code")
             .add("client_id", cfg.clientId)
             .add("code", code)
             .add("redirect_uri", cfg.redirectUri)
             .add("code_verifier", verifier)
-            .build()
+        // Anthropic's code-paste token exchange echoes the `state` from
+        // the displayed `code#state`; OpenAI's loopback exchange omits it.
+        if (provider == OAuthProvider.ANTHROPIC && state.isNotEmpty()) {
+            bodyBuilder.add("state", state)
+        }
+        val body = bodyBuilder.build()
         val req = Request.Builder()
             .url(cfg.tokenUrl)
             .post(body)
@@ -342,7 +440,7 @@ class OAuthClient(
             throw OAuthClientError.Underlying("state mismatch: cross-site / replay")
         }
         val code = extractAuthorizationCode(uri)
-        return exchangeCode(code, req.verifier)
+        return exchangeCode(code, req.verifier, req.state)
     }
 
     companion object {

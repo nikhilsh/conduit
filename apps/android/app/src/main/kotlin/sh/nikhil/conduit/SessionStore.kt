@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import sh.nikhil.conduit.auth.AgentCredentialEnvelope
 import sh.nikhil.conduit.auth.OAuthCredential
 import sh.nikhil.conduit.auth.OAuthRequest
 import sh.nikhil.conduit.state.NetworkReachabilityObserver
@@ -500,16 +499,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * iOS, which currently `print()`s the credential and defers
      * the WS send to Stage 2.
      */
-    fun sendAgentCredentials(credential: OAuthCredential) {
-        val envelope = AgentCredentialEnvelope.build(credential)
-        android.util.Log.i(
-            "SessionStore",
-            "set_agent_credentials envelope (${credential.provider.raw}): $envelope",
-        )
-        // TODO(stage-2): wire to a raw `client?.sendJson(envelope)`
-        // once the UDL exposes one. The envelope is already the exact
-        // shape PLAN §D.1 specifies; flipping this to a real send is
-        // a one-line change.
+    suspend fun sendAgentCredentials(credential: OAuthCredential) {
+        val c = client ?: throw IllegalStateException("no active conduit client")
+        // The broker's set_agent_credentials handler keys the blob by
+        // bearer-token identity, not per-session — the core carries it
+        // over any live session WS. We ship the credential's native
+        // on-disk JSON (auth.json / .credentials.json) so the broker
+        // writes it through verbatim. Mirrors iOS sendAgentCredentials.
+        c.setAgentCredentials(credential.provider.raw, credential.toJson())
     }
 
     // Agent OAuth login v2 (outbound) — forward the three control frames
