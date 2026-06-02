@@ -154,7 +154,7 @@ class PKCETest {
     @Test fun anthropicProviderConfigMatchesClaudeCLI() {
         val cfg = OAuthProvider.ANTHROPIC.config
         assertEquals("9d1c250a-e61b-44d9-88ed-5944d1962f5e", cfg.clientId)
-        assertEquals("https://claude.ai", cfg.issuer)
+        assertEquals("https://claude.com", cfg.issuer)
         assertEquals(
             "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
             cfg.scopeString,
@@ -164,7 +164,7 @@ class PKCETest {
         assertEquals("https://platform.claude.com/oauth/code/callback", cfg.redirectUri)
         assertEquals("conduit", cfg.callbackScheme)
         assertEquals(OAuthCaptureMode.CodePaste, cfg.captureMode)
-        assertEquals("https://claude.ai/oauth/authorize", cfg.authorizeUrl)
+        assertEquals("https://claude.com/cai/oauth/authorize", cfg.authorizeUrl)
         assertEquals("https://platform.claude.com/v1/oauth/token", cfg.tokenUrl)
         assertEquals(mapOf("code" to "true"), cfg.extraAuthorizeParams)
     }

@@ -1350,24 +1350,37 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // Factor in `isActive`: the view can attach to a window while its tab
         // is hidden (it's kept mounted), and in that case it must stay
         // occluded.
-        let visible = window != nil && isActive
-        #if canImport(GhosttyVT)
-        terminal?.setVisible(visible)
-        if visible {
-            // clauntty toggles focus false→true to wake the renderer
-            // thread when a surface becomes visible; mirror that, then
-            // ask for a full refresh so a reattach doesn't show stale
-            // (or blank) layer content.
-            terminal?.setFocus(false)
-            terminal?.setFocus(true)
-            terminal?.refresh()
-        } else {
-            terminal?.setFocus(false)
+        // Defer the libghostty visibility/focus/refresh calls (and the draw
+        // pump) OFF the CoreAnimation commit. `didMoveToWindow` runs INSIDE
+        // the mount's `_UIApplicationFlushCATransaction`; these calls drive
+        // libghostty's renderer synchronously, which touches the surface's
+        // layer mid-commit → freed-object access (`NSTaggedPointerString
+        // bounds` / EXC_BAD_ACCESS) right after a session's terminal mounts.
+        // The Sentry trail showed the crash lands here (after "attach done",
+        // before any draw). One runloop tick lets the commit settle.
+        Telemetry.breadcrumb("terminal", "didMoveToWindow (deferring setVisible/refresh)")
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let visible = self.window != nil && self.isActive
+            #if canImport(GhosttyVT)
+            self.terminal?.setVisible(visible)
+            if visible {
+                // clauntty toggles focus false→true to wake the renderer
+                // thread when a surface becomes visible; mirror that, then
+                // ask for a full refresh so a reattach doesn't show stale
+                // (or blank) layer content.
+                self.terminal?.setFocus(false)
+                self.terminal?.setFocus(true)
+                self.terminal?.refresh()
+            } else {
+                self.terminal?.setFocus(false)
+            }
+            #endif
+            // Gate the draw pump on BOTH window presence and app-foreground
+            // state (a view can be on-window while the app is backgrounded).
+            self.updateFrameDisplayLinkRunning()
+            Telemetry.breadcrumb("terminal", "didMoveToWindow applied (deferred)")
         }
-        #endif
-        // Gate the draw pump on BOTH window presence and app-foreground
-        // state (a view can be on-window while the app is backgrounded).
-        updateFrameDisplayLinkRunning()
     }
 
     /// Run the frame `CADisplayLink` only while the surface is actually
