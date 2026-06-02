@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 // MARK: - ConduitAgentPickerSheet
@@ -83,7 +84,17 @@ extension ConduitUI {
                                 model: model,
                                 initialPrompt: initialPrompt
                             )
-                            dismiss()
+                            // Defer the dismiss one runloop tick. createSession
+                            // mutates the store → the app tree rebuilds; tearing
+                            // down this pushed DirectoryPicker (a representable
+                            // subtree) in the SAME CoreAnimation transaction can
+                            // message a freed CALayer →
+                            // `-[NSIndirectTaggedPointerString bounds]` at CA
+                            // commit (Sentry CONDUIT-IOS-N/M, the dominant 0.0.83
+                            // crash). Letting the create commit first, then
+                            // dismissing, avoids the collision. Best-effort —
+                            // needs on-device verification.
+                            DispatchQueue.main.async { dismiss() }
                         }
                     )
                 }

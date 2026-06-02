@@ -35,13 +35,27 @@ import SwiftUI
 // when the user is on `.system` mode.
 
 struct AppearanceColorSchemeModifier: ViewModifier {
-    @Environment(AppearanceStore.self) private var appearance
+    // OPTIONAL lookup (not a plain `@Environment(AppearanceStore.self)`):
+    // a sheet is its own `UIHostingController`, and during a presentation
+    // teardown (e.g. Settings → "Forget server?", which tears down the
+    // connected tree while the sheet is still on screen) that controller
+    // can render for a beat WITHOUT the app-root `AppearanceStore`
+    // injection in scope. A non-optional read traps hard there —
+    // `EXC_BREAKPOINT: No Observable object of type AppearanceStore`
+    // (Sentry CONDUIT-IOS-V). The optional form returns nil instead, and
+    // we fall back to a default store so the sheet renders with the
+    // persisted theme rather than crashing the whole app.
+    @Environment(AppearanceStore.self) private var appearanceStore: AppearanceStore?
     // The live OS appearance — needed so `themeMode == .system` resolves
     // the neon tokens against the device setting, exactly like the
     // app-root `NeonThemeInjector`.
     @Environment(\.colorScheme) private var systemScheme
 
     func body(content: Content) -> some View {
+        // Fall back to a default store (reads the persisted theme) only in
+        // the missing-environment window described above — the common path
+        // always has the injected store.
+        let appearance = appearanceStore ?? AppearanceStore()
         // Re-resolve the NeonTheme too (not just `.preferredColorScheme`):
         // a sheet is its own UIHostingController and keeps the stale
         // `\.neonTheme` injected at the app root, so a runtime Dark↔Light
