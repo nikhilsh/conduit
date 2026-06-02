@@ -86,7 +86,7 @@ fun NeonTabletRightPane(store: SessionStore, session: ProjectSession) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth().background(neon.bg)) {
             when (tab) {
                 RightPaneTab.Terminal ->
-                    if (experimentalNativeTerminal) TermuxTerminalView(store, session)
+                    if (experimentalNativeTerminal) TermuxTerminalView(store, session, modifier = Modifier.fillMaxSize())
                     else TerminalPage(store, session)
                 RightPaneTab.Browser -> BrowserPage(store, session, BrowserMode.Preview)
                 RightPaneTab.Info -> SessionInfoScreen(store, session, onDismiss = {}, embedded = true)

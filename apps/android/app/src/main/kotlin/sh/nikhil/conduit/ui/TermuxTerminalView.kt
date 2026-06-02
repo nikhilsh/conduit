@@ -154,9 +154,11 @@ fun TermuxTerminalView(
             val decision = computeFeed(rawBuffer, mount.lastFedByteCount)
             if (decision.reset) {
                 runCatching { session.reset() }
+                mount.queryStripper.reset()
             }
-            if (decision.bytes.isNotEmpty()) {
-                emulator.append(decision.bytes, decision.bytes.size)
+            val feed = mount.queryStripper.strip(decision.bytes)
+            if (feed.isNotEmpty()) {
+                emulator.append(feed, feed.size)
                 mount.terminalView?.invalidate()
             }
             mount.lastFedByteCount = decision.newCursor
@@ -174,9 +176,11 @@ fun TermuxTerminalView(
         val decision = computeFeed(rawBuffer, mount.lastFedByteCount)
         if (decision.reset) {
             runCatching { s.reset() }
+            mount.queryStripper.reset()
         }
-        if (decision.bytes.isNotEmpty()) {
-            emulator.append(decision.bytes, decision.bytes.size)
+        val feed = mount.queryStripper.strip(decision.bytes)
+        if (feed.isNotEmpty()) {
+            emulator.append(feed, feed.size)
             mount.terminalView?.invalidate()
         }
         mount.lastFedByteCount = decision.newCursor
@@ -248,6 +252,140 @@ internal fun computeFeed(buffer: ByteArray, lastFedByteCount: Int): FeedDecision
 }
 
 /**
+ * Drops the terminal *query* control sequences that Termux's emulator
+ * would auto-answer — DA1 (`CSI c`), DA2 (`CSI > c`), XTVERSION
+ * (`CSI > q`), DSR (`CSI 5 n` / `CSI 6 n`), and OSC colour queries
+ * (`OSC 10/11/12 ; ?`).
+ *
+ * Why this exists: the broker PTY is headless, so the agent's queries
+ * arrive as program output and get fed into the emulator. Termux is a
+ * *real* emulator, so on `append()` it generates the replies and writes
+ * them to its local backstop PTY; that PTY's line discipline echoes them
+ * straight back into the same emulator, which renders the replies
+ * (`^[[?64;…c`, `^[]10;rgb:…`) as literal garbage. The replies never reach
+ * the agent (it's a different PTY), so dropping the queries before the
+ * emulator sees them is loss-free and breaks the echo loop. xterm.js is
+ * immune because it has no local PTY to echo.
+ *
+ * Conservative by construction: only the *exact* query forms are dropped;
+ * SGR, cursor moves, OSC titles, colour *sets*, and all text pass through
+ * byte-for-byte. A sequence split across feed deltas is held in [carry]
+ * until the next delta completes it, so a query straddling a chunk
+ * boundary is still caught. Pulled out as a plain class so JUnit can
+ * exercise it without an Android Context.
+ */
+internal class TerminalQueryStripper {
+    private var carry: ByteArray = ByteArray(0)
+
+    /** Forget any half-seen sequence — call on a snapshot replay/reset. */
+    fun reset() {
+        carry = ByteArray(0)
+    }
+
+    fun strip(input: ByteArray): ByteArray {
+        if (input.isEmpty() && carry.isEmpty()) return input
+        val data = if (carry.isEmpty()) input else carry + input
+        carry = ByteArray(0)
+        val out = java.io.ByteArrayOutputStream(data.size)
+        var i = 0
+        while (i < data.size) {
+            if (data[i] == ESC) {
+                when (val m = matchQuery(data, i)) {
+                    INCOMPLETE -> {
+                        // ESC + a prefix that might still complete into a
+                        // query — hold it for the next delta.
+                        carry = data.copyOfRange(i, data.size)
+                        return out.toByteArray()
+                    }
+                    NO_MATCH -> {
+                        out.write(ESC.toInt())
+                        i++
+                    }
+                    else -> i += m // drop the matched query
+                }
+            } else {
+                out.write(data[i].toInt())
+                i++
+            }
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * Length of the query starting at [start] (which is ESC), or
+     * [NO_MATCH] if it isn't one we drop, or [INCOMPLETE] if more bytes
+     * are needed to decide.
+     */
+    private fun matchQuery(data: ByteArray, start: Int): Int {
+        if (start + 1 >= data.size) return INCOMPLETE
+        return when (data[start + 1].toInt()) {
+            '['.code -> matchCsiQuery(data, start)
+            ']'.code -> matchOscQuery(data, start)
+            else -> NO_MATCH
+        }
+    }
+
+    // ESC [ <params/intermediates> <final 0x40..0x7E>. Only DA/DSR/
+    // XTVERSION query forms are dropped; everything else (SGR, CUP, …) is
+    // NO_MATCH and passes through.
+    private fun matchCsiQuery(data: ByteArray, start: Int): Int {
+        var i = start + 2
+        val params = StringBuilder()
+        while (i < data.size) {
+            val c = data[i].toInt() and 0xFF
+            if (c in 0x40..0x7E) {
+                val p = params.toString()
+                val isQuery = when (c.toChar()) {
+                    'c' -> p == "" || p == "0" || p == ">" || p == ">0"
+                    'q' -> p == ">" || p == ">0"
+                    'n' -> p == "5" || p == "6"
+                    else -> false
+                }
+                return if (isQuery) i - start + 1 else NO_MATCH
+            }
+            params.append(c.toChar())
+            i++
+        }
+        return INCOMPLETE
+    }
+
+    // ESC ] <body> <ST>, ST = BEL (0x07) or ESC \ (0x1b 0x5c). Only the
+    // colour *queries* "10;?" / "11;?" / "12;?" are dropped — a colour
+    // *set* ("11;rgb:…") or a title ("0;…") stops matching at the first
+    // non-prefix byte and passes through.
+    private fun matchOscQuery(data: ByteArray, start: Int): Int {
+        var i = start + 2
+        val body = StringBuilder()
+        while (i < data.size) {
+            val c = data[i].toInt() and 0xFF
+            if (c == 0x07) return if (isColorQuery(body.toString())) i - start + 1 else NO_MATCH
+            if (c == 0x1b) {
+                if (i + 1 >= data.size) return INCOMPLETE
+                return if (data[i + 1].toInt() == 0x5c && isColorQuery(body.toString())) i - start + 2
+                else NO_MATCH
+            }
+            body.append(c.toChar())
+            i++
+            if (!isColorQueryPrefix(body.toString())) return NO_MATCH
+        }
+        return INCOMPLETE
+    }
+
+    private fun isColorQuery(body: String) =
+        body == "10;?" || body == "11;?" || body == "12;?"
+
+    private fun isColorQueryPrefix(s: String) =
+        COLOR_QUERIES.any { it.startsWith(s) }
+
+    private companion object {
+        const val ESC: Byte = 0x1b
+        const val INCOMPLETE = -1
+        const val NO_MATCH = 0
+        val COLOR_QUERIES = listOf("10;?", "11;?", "12;?")
+    }
+}
+
+/**
  * Mutable per-session mount state. Holds the [TerminalView] and
  * [TerminalSession] handles so the `update` lambda can feed bytes
  * without re-running the factory, and the `lastFedByteCount` cursor
@@ -259,6 +397,12 @@ internal class TermuxMount {
     var terminalView: TerminalView? = null
     var session: TerminalSession? = null
     var lastFedByteCount: Int = 0
+    // Drops the agent's DA/DSR/OSC-colour *query* sequences before they
+    // reach the emulator, so it never auto-answers them into the local
+    // backstop PTY (whose echo would loop the replies back as garbage —
+    // see [TerminalQueryStripper]). Stateful across feed deltas, so it
+    // lives with the mount, not the (pure) feed helpers.
+    val queryStripper = TerminalQueryStripper()
 }
 
 /**

@@ -186,7 +186,7 @@ fun ProjectScreen(
                             // Off by default. See
                             // docs/PLAN-TERMINAL-REWRITE.md (Android).
                             if (experimentalNativeTerminal) {
-                                TermuxTerminalView(store, session)
+                                TermuxTerminalView(store, session, modifier = Modifier.fillMaxSize())
                             } else {
                                 TerminalPage(store, session)
                             }
