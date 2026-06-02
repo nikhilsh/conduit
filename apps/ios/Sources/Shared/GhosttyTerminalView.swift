@@ -765,6 +765,15 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             // scale UIKit will actually render at and matches what libghostty
             // reads off the view at attach time.
             let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+            // FFI-boundary breadcrumbs: the crash frame is inside libghostty
+            // (a Zig symbol with no dSYM), so the only way to pin which
+            // native call faults is to crumb around each one. If the trail
+            // ends at "attach begin" the fault is inside ghostty_surface_new /
+            // its synchronous addSublayer; if it reaches "attach done" the
+            // fault is later (draw/visible). See CLAUDE.md "Standing order".
+            Telemetry.breadcrumb("terminal", "attach begin (ghostty_surface_new)", data: [
+                "pxW": "\(UInt32(bounds.width * scale))", "pxH": "\(UInt32(bounds.height * scale))", "scale": "\(Double(scale))",
+            ])
             term.attach(
                 hostView: self,
                 pixelWidth: UInt32(bounds.width * scale),
@@ -772,6 +781,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
                 scaleFactor: Double(scale)
             )
             terminal = term
+            Telemetry.breadcrumb("terminal", "attach done (surface created)")
         }
         #endif
 
@@ -1172,25 +1182,34 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // A font-size change rebuilds the surface, which hands us a fresh
         // IOSurfaceLayer. Detach the previous one so we don't stack stale
         // (now-orphaned) render layers on top of each other.
+        Telemetry.breadcrumb("terminal", "addSublayer (libghostty parenting IOSurfaceLayer)")
         if let old = ghosttySublayer, old !== sublayer {
             old.removeFromSuperlayer()
         }
         ghosttySublayer = sublayer
-        layer.addSublayer(sublayer)
-        // Defer sizing to the NEXT runloop. `addSublayer:` is invoked
-        // SYNCHRONOUSLY from inside `term.attach()` — libghostty parents
-        // its IOSurfaceLayer while still constructing the surface, before
-        // `terminal` has even been assigned (see configure(): `terminal =
-        // term` runs only after `attach` returns). `sizeGhosttyLayer()`
-        // runs a synchronous `CATransaction.commit()`, which flushes
-        // CoreAnimation mid-construction: CA drives the freshly-parented
-        // layer's display, which calls into the half-initialized surface's
-        // mailbox (`apprt.surface.Mailbox.push`) and dereferences a null
-        // base → EXC_BAD_ACCESS on opening the Terminal tab (Sentry
-        // APPLE-IOS-S, KERN_INVALID_ADDRESS). Deferring lets `attach()`
-        // finish and `terminal` get assigned before any commit; the layer
-        // is sized on the next runloop (and again on every layout).
-        DispatchQueue.main.async { [weak self] in self?.sizeGhosttyLayer() }
+        // Defer BOTH the parenting AND the sizing to the next runloop.
+        // `addSublayer:` is invoked SYNCHRONOUSLY from inside `term.attach()`
+        // — libghostty parents its IOSurfaceLayer while still constructing
+        // the surface, before `terminal` has even been assigned (configure()
+        // assigns `terminal = term` only after `attach` returns).
+        //
+        // The earlier fix deferred only `sizeGhosttyLayer()` (its
+        // `CATransaction.commit()`), but `layer.addSublayer(sublayer)` ITSELF
+        // puts the IOSurfaceLayer into the live layer tree mid-construction,
+        // so the in-flight mount CA commit (`_UIApplicationFlushCATransaction`)
+        // drives the freshly-parented layer into the half-initialized
+        // surface's mailbox (`apprt.surface.Mailbox.push`) → null/freed
+        // deref → EXC_BAD_ACCESS when a session's Terminal first mounts
+        // (Sentry 7520185391, garbled `object.Object.getProperty` = a
+        // libghostty Zig frame, no dSYM). Deferring the PARENTING too lets
+        // `attach()` return and the surface finish building before the layer
+        // is ever in a committed tree.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let sub = self.ghosttySublayer, sub === sublayer else { return }
+            self.layer.addSublayer(sub)
+            self.sizeGhosttyLayer()
+            Telemetry.breadcrumb("terminal", "IOSurfaceLayer parented + sized (deferred)")
+        }
     }
 
     /// Keep libghostty's render target sized to our bounds at the real
