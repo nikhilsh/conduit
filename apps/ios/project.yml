@@ -117,6 +117,11 @@ targets:
         CFBundleDisplayName: Conduit
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Conduit only uses standard TLS/HTTPS (exempt encryption), so we
+        # declare non-exempt = false. Without this key every TestFlight
+        # upload stalls on a manual "export compliance" prompt before the
+        # build becomes available to testers. Harmless to the ad-hoc flow.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen:
           UIColorName: ""
         UISupportedInterfaceOrientations:
