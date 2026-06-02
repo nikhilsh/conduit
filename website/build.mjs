@@ -10,7 +10,7 @@
 //                      assets/*, .deploy.yaml}.
 // `fyra push` from website/out/ ships it.
 
-import { mkdir, writeFile, copyFile, readFile, readdir } from "node:fs/promises";
+import { mkdir, writeFile, copyFile, readFile, readdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,18 @@ const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
 if (token) headers.Authorization = `Bearer ${token}`;
 
 async function fetchLatestRelease() {
-    const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=20`, { headers });
+    // Bound the build on a hung api.github.com instead of stalling forever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    let res;
+    try {
+        res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=20`, {
+            headers,
+            signal: ctrl.signal,
+        });
+    } finally {
+        clearTimeout(timer);
+    }
     if (!res.ok) throw new Error(`github releases fetch: ${res.status}`);
     const releases = await res.json();
     if (!Array.isArray(releases) || releases.length === 0) throw new Error("no releases");
@@ -118,6 +129,9 @@ async function build() {
         },
     };
     const json = JSON.stringify(releaseData, null, 2);
+    // Escape `<` so a release field can never break out of the inline
+    // <script type="application/json"> block (e.g. a stray `</script`).
+    const jsonForHtml = json.replace(/</g, "\\u003c");
 
     // Render the page: inject the real release data into the inline
     // `#release-data` fallback so the page is correct even before the
@@ -125,7 +139,7 @@ async function build() {
     let html = await readFile(templatePath, "utf8");
     html = html.replace(
         /(<script type="application\/json" id="release-data">)[\s\S]*?(<\/script>)/,
-        `$1\n${json}\n$2`,
+        `$1\n${jsonForHtml}\n$2`,
     );
     // Bake the real version into the eyebrow badge so it's correct in the
     // static HTML (no-JS / first paint), not just after the runtime
@@ -137,6 +151,9 @@ async function build() {
         );
     }
 
+    // Clean first so each build is hermetic — otherwise stale artifacts from a
+    // previous toolchain (e.g. an old Next.js export) survive and get shipped.
+    await rm(outDir, { recursive: true, force: true });
     await mkdir(outDir, { recursive: true });
     await mkdir(path.join(outDir, "ios"), { recursive: true });
     await mkdir(path.join(outDir, "assets"), { recursive: true });
