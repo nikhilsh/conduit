@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Conduit — your coding agents, in your pocket</title>
 <meta name="description" content="Conduit is a mobile + tablet client for coding agents. Drive Claude and Codex on your dev box from anywhere — terminal, browser, voice, and generative UI in your pocket." />
+<meta name="theme-color" content="#04050a" />
+<link rel="canonical" href="https://conduit.kaopeh.com/" />
+<!-- Open Graph / social link previews -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Conduit" />
+<meta property="og:title" content="Conduit — your coding agents, in your pocket" />
+<meta property="og:description" content="Drive Claude and Codex on your dev box from your phone or tablet — terminal, browser, live preview, and approvals. Anywhere." />
+<meta property="og:url" content="https://conduit.kaopeh.com/" />
+<meta property="og:image" content="https://conduit.kaopeh.com/assets/conduit-512.png" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="Conduit — your coding agents, in your pocket" />
+<meta name="twitter:description" content="Drive Claude and Codex on your dev box from your phone or tablet — terminal, browser, live preview, and approvals. Anywhere." />
+<meta name="twitter:image" content="https://conduit.kaopeh.com/assets/conduit-512.png" />
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png" />
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
@@ -16,7 +29,6 @@
   :root{
     --bg:#04050a;
     --panel:rgba(16,24,42,0.55);
-    --panel-solid:#0a1120;
     --line:rgba(34,211,238,0.14);
     --line-soft:rgba(160,184,224,0.10);
     --text:#eaf3ff;
@@ -26,14 +38,13 @@
     --cyan:#22d3ee;
     --blue:#4f8cff;
     --amber:#ffb627;
-    --orange:#ff7847;
     --claude:#ff9d4d;
     --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
     --sans:'Space Grotesk',system-ui,-apple-system,Segoe UI,sans-serif;
     --maxw:1180px;
   }
   *{box-sizing:border-box;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
-  html{scroll-behavior:smooth;}
+  @media(prefers-reduced-motion:no-preference){html{scroll-behavior:smooth;}}
   body{
     margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
     line-height:1.55;overflow-x:hidden;
@@ -207,7 +218,7 @@
 
 <header class="nav">
   <div class="wrap nav-in">
-    <a class="brand" href="#top"><img src="assets/conduit-512.png" alt="Conduit" />Conduit</a>
+    <a class="brand" href="#top"><img src="assets/conduit-512.png" alt="" width="34" height="34" />Conduit</a>
     <nav class="nav-links">
       <a href="#remote">Remote</a>
       <a href="#terminal">Terminal</a>
@@ -224,11 +235,11 @@
     <div class="wrap hero-grid">
       <div class="hero-copy">
         <span class="eyebrow"><span class="pip"></span>Open beta · <span data-version>v0.9</span></span>
-        <h1 class="display">Your agents,<br />in your pocket.<span class="cursor">_</span></h1>
+        <h1 class="display">Your agents,<br />in your pocket.<span class="cursor" aria-hidden="true">_</span></h1>
         <p class="lead">Conduit drives <b style="color:var(--text)">Claude</b> and <b style="color:var(--text)">Codex</b> on your dev box — from your phone or tablet. Start a session, watch it plan, run commands, edit files, and approve actions. Anywhere.</p>
         <div class="stores">
           <a class="store" data-dl="ios" href="#" aria-label="Install on iPhone over the air">
-            <svg viewBox="0 0 24 24" fill="#eaf3ff"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
+            <svg viewBox="0 0 24 24" fill="#eaf3ff" aria-hidden="true"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
             <span><span class="st-sub">Over-the-air install</span><span class="st-main">Install on iPhone</span></span>
           </a>
           <a class="store" data-dl="android" href="#" aria-label="Download the Android APK">
@@ -236,10 +247,10 @@
             <span><span class="st-sub">Direct APK · sideload</span><span class="st-main">Download for Android</span></span>
           </a>
         </div>
-        <div class="hero-note" data-dl-meta>Loading the latest build…</div>
+        <div class="hero-note" data-dl-meta aria-live="polite">Loading the latest build…</div>
       </div>
       <div class="phone-stage">
-        <img class="phone-img" src="assets/phone-home.png" alt="Conduit home screen with recent sessions and connected servers" />
+        <img class="phone-img" src="assets/phone-home.png" width="686" height="506" decoding="async" alt="Conduit home screen with recent sessions and connected servers" />
       </div>
     </div>
   </section>
@@ -262,13 +273,13 @@
         <h2 class="display">Your dev machine.<br />Anywhere.</h2>
         <p class="lead">Pair to a box on your network or across the world. Sessions run on the real thing — your repos, your branches, your toolchain — streamed straight to your hand.</p>
         <ul class="feat-list">
-          <li><span class="tick">›|</span>Live command output with exit codes &amp; timing, exactly as it runs on the box.</li>
-          <li><span class="tick">›|</span>Per-file diffs you can read and approve before anything lands.</li>
-          <li><span class="tick">›|</span>Reconnect mid-session — the broker keeps the agent working while you're away.</li>
+          <li><span class="tick" aria-hidden="true">›|</span>Live command output with exit codes &amp; timing, exactly as it runs on the box.</li>
+          <li><span class="tick" aria-hidden="true">›|</span>Per-file diffs you can read and approve before anything lands.</li>
+          <li><span class="tick" aria-hidden="true">›|</span>Reconnect mid-session — the broker keeps the agent working while you're away.</li>
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/phone-chat.png" alt="A live Conduit session: the agent working in a repo with diffs and approvals" />
+        <img src="assets/phone-chat.png" width="686" height="506" loading="lazy" decoding="async" alt="A live Conduit session: the agent working in a repo with diffs and approvals" />
       </div>
     </div>
   </section>
@@ -281,13 +292,13 @@
         <h2 class="display" style="color:var(--text)">A real shell,<br />in your thumb.</h2>
         <p class="lead">Not a toy console — a full terminal on the box, with streamed stdout, real exit codes, and the hard keys one tap away. Drop in whenever you want to drive by hand.</p>
         <ul class="feat-list">
-          <li><span class="tick">›_</span>Live stdout streamed line by line, with exit codes and timing.</li>
-          <li><span class="tick">›_</span>An esc / tab / ctrl / arrow accessory bar for the keys phones forget.</li>
-          <li><span class="tick">›_</span>Hand off between the agent and yourself without dropping the session.</li>
+          <li><span class="tick" aria-hidden="true">›_</span>Live stdout streamed line by line, with exit codes and timing.</li>
+          <li><span class="tick" aria-hidden="true">›_</span>An esc / tab / ctrl / arrow accessory bar for the keys phones forget.</li>
+          <li><span class="tick" aria-hidden="true">›_</span>Hand off between the agent and yourself without dropping the session.</li>
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/phone-terminal.png" alt="Conduit terminal tab streaming command output on the remote box" />
+        <img src="assets/phone-terminal.png" width="686" height="506" loading="lazy" decoding="async" alt="Conduit terminal tab streaming command output on the remote box" />
       </div>
     </div>
   </section>
@@ -300,13 +311,13 @@
         <h2 class="display">See the build,<br />as it builds.</h2>
         <p class="lead">Point the in-app browser at the dev server running on your box and watch the thing you're shipping render in your hand — refreshing the instant the agent saves a file.</p>
         <ul class="feat-list">
-          <li><span class="tick">›_</span>Render localhost from the remote box, right inside the session.</li>
-          <li><span class="tick">›_</span>A hot-reload pill that fires the moment a file changes.</li>
-          <li><span class="tick">›_</span>Flip between Chat, Terminal, and Browser without losing your place.</li>
+          <li><span class="tick" aria-hidden="true">›_</span>Render localhost from the remote box, right inside the session.</li>
+          <li><span class="tick" aria-hidden="true">›_</span>A hot-reload pill that fires the moment a file changes.</li>
+          <li><span class="tick" aria-hidden="true">›_</span>Flip between Chat, Terminal, and Browser without losing your place.</li>
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/phone-browser.png" alt="Conduit browser tab previewing the running dev server" />
+        <img src="assets/phone-browser.png" width="686" height="506" loading="lazy" decoding="async" alt="Conduit browser tab previewing the running dev server" />
       </div>
     </div>
   </section>
@@ -358,12 +369,12 @@
   <section class="cta" id="download">
     <div class="wrap">
       <div class="cta-card reveal">
-        <img class="cta-icon" src="assets/conduit-1024.png" alt="Conduit" />
+        <img class="cta-icon" src="assets/conduit-256.png" width="88" height="88" loading="lazy" decoding="async" alt="Conduit app icon" />
         <h2>Your agents, in your pocket.</h2>
         <p class="lead">Free during the open beta — no App Store, no Play Store. Install straight from here, pair a box, and let it cook while you do something else.</p>
         <div class="stores">
           <a class="store" data-dl="ios" href="#" aria-label="Install on iPhone over the air">
-            <svg viewBox="0 0 24 24" fill="#eaf3ff"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
+            <svg viewBox="0 0 24 24" fill="#eaf3ff" aria-hidden="true"><path d="M16.36 12.78c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-2.99-.79-1.54.02-2.96.9-3.75 2.27-1.6 2.78-.41 6.89 1.15 9.14.76 1.1 1.67 2.34 2.86 2.29 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.78.74 2.99.72 1.23-.02 2.02-1.12 2.78-2.23.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.64zM14.13 6.02c.64-.78 1.07-1.85.95-2.92-.92.04-2.03.61-2.69 1.38-.59.68-1.11 1.78-.97 2.82 1.02.08 2.07-.52 2.71-1.28z"/></svg>
             <span><span class="st-sub">Over-the-air install</span><span class="st-main">Install on iPhone</span></span>
           </a>
           <a class="store" data-dl="android" href="#" aria-label="Download the Android APK">
@@ -371,7 +382,7 @@
             <span><span class="st-sub">Direct APK · sideload</span><span class="st-main">Download for Android</span></span>
           </a>
         </div>
-        <div class="cta-meta" data-dl-meta>Loading the latest build…</div>
+        <div class="cta-meta" data-dl-meta aria-live="polite">Loading the latest build…</div>
         <p class="cta-help">iOS installs over the air — tap <b>Install</b>, then trust the profile in <b>Settings › General › VPN &amp; Device Management</b>. Android: open the <b>.apk</b> and allow install from this source.</p>
       </div>
     </div>
@@ -381,7 +392,7 @@
 <footer>
   <div class="wrap">
     <div class="foot-in">
-      <a class="foot-brand" href="#top"><img src="assets/conduit-512.png" alt="" />Conduit</a>
+      <a class="foot-brand" href="#top"><img src="assets/conduit-512.png" alt="" width="30" height="30" />Conduit</a>
       <nav class="foot-links">
         <a href="#remote">Remote</a>
         <a href="#terminal">Terminal</a>
