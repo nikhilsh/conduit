@@ -495,6 +495,8 @@ internal fun SettingsSection(title: String, content: @Composable ColumnScope.() 
             fontFamily = neon.mono,
             fontWeight = FontWeight.Bold,
             color = neon.textDim,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
         )
         // Neon section card — a neon surface fill + hairline border + the

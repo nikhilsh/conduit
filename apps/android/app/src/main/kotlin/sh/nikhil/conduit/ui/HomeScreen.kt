@@ -233,6 +233,8 @@ fun HomeScreen(
                 fontSize = 12.sp,
                 letterSpacing = 2.sp,
                 color = neon.accent,
+                maxLines = 1,
+                softWrap = false,
             )
             Spacer(Modifier.weight(1f))
             Row(

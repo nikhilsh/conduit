@@ -149,6 +149,8 @@ private fun SectionLabel(text: String, neon: NeonTheme) {
         fontWeight = FontWeight.Bold,
         fontSize = 11.sp,
         color = neon.textDim,
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
     )
 }

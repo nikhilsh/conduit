@@ -30,8 +30,12 @@ extension ConduitUI {
 
         var body: some View {
             let dark = neon.dark
-            let eyeColor = neon.glow ? Self.eye : neon.text
-            let showGlow = glow && neon.glow
+            // Eyes/smile key off the *mode*, not the glow toggle: glow is an
+            // independent switch that can be on in light mode, and the near-white
+            // `eye` colour is invisible on a light canvas. Use dark text glyphs in
+            // light mode (and suppress the cyan halo there — it reads as a dark blob).
+            let eyeColor = dark ? Self.eye : neon.text
+            let showGlow = glow && neon.glow && dark
             return Canvas { ctx, canvasSize in
                 let s = canvasSize.width / 32.0
                 func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * s, y: y * s) }

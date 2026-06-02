@@ -120,8 +120,14 @@ fun NeonTabletRail(
                     Text("conduit", fontFamily = neon.mono, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = neon.text)
                 }
             }
-            Spacer(Modifier.weight(1f))
-            ServerChip(harness = harness, host = endpoint.displayHost, neon = neon)
+            // The chip lives in the *weighted* slot so it's measured after the
+            // fixed-width gear reserves its space — otherwise a long endpoint
+            // (e.g. 103.107.51.48:1977) eats the rail width and clips the gear
+            // off the 272dp edge (device feedback: "missing settings icon on
+            // tablet"). End-aligned so it still hugs the gear; ellipsizes when tight.
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                ServerChip(harness = harness, host = endpoint.displayHost, neon = neon)
+            }
             Box {
                 // A gear, not a `•••`: the dim ellipsis was undiscoverable as the
                 // route to Settings on tablet (device feedback 2026-06-01).

@@ -237,7 +237,9 @@ extension ConduitUI {
                     .tracking(2)
                     .foregroundStyle(neon.accent)
                     .neonTextGlow(neon.glow ? neon.textGlow : nil)
-                Spacer()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 8)
                 Button(action: action) {
                     HStack(spacing: 5) {
                         Image(systemName: actionIcon).font(.system(size: 12, weight: .semibold))

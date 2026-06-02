@@ -43,7 +43,10 @@ fun ConduitMark(size: Dp, modifier: Modifier = Modifier, color: Color? = null) {
     // cyan→green gradient + bright eyes.
     val markTop = if (color != null) color else if (neon.dark) MarkCyan else neon.accent
     val markBottom = if (color != null) color else if (neon.dark) MarkGreen else neon.accent
-    val eyeColor = if (neon.glow) MarkEye else neon.text
+    // Eyes/smile key off the *mode*, not the glow toggle: glow is independent and
+    // can be on in light mode, where the near-white eye colour vanishes. Use dark
+    // text glyphs in light mode for contrast.
+    val eyeColor = if (neon.dark) MarkEye else neon.text
     Canvas(modifier = modifier.size(size)) {
         val s = this.size.width / 32f
         fun p(x: Float, y: Float) = Offset(x * s, y * s)

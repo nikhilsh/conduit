@@ -496,6 +496,8 @@ extension ConduitUI {
                     .font(neon.mono(11).weight(.bold))
                     .foregroundStyle(neon.textFaint)
                     .textCase(.uppercase)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 4)
                 // Neon section surface: hairline border + glow (or light-
                 // mode elevation) via the shared card-surface rule.
