@@ -497,10 +497,24 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         guard let url = comps.url else {
             throw OAuthClientError.underlying("authorize URL build failed")
         }
-        // Log the exact authorize URL we hand to the browser (code_challenge
-        // + state are ephemeral, not secrets) so the request is verifiable
-        // from Sentry without a device — see CLAUDE.md "Standing order".
-        Telemetry.debug("agent_login_url", "authorize", data: ["provider": provider.rawValue, "url": url.absoluteString])
+        // Log the authorize request as SEPARATE structural fields — NOT the
+        // full URL. Sentry's data scrubber redacted the whole-URL value to
+        // `[Filtered]` (the high-entropy code_challenge/state tripped it),
+        // which blinded us. These short, non-secret parts survive scrubbing
+        // and are exactly what we diff against the working CLI request. We
+        // deliberately omit the code_challenge/state VALUES (only lengths).
+        Telemetry.debug("oauth_authorize", "request \(provider.rawValue)", data: [
+            "provider": provider.rawValue,
+            "host": config.authorizeURL.host ?? "",
+            "path": config.authorizeURL.path,
+            "redirect": config.redirectURI.absoluteString,
+            "scope": config.scopeString,
+            "response_type": "code",
+            "client": config.clientID,
+            "extra": config.extraAuthorizeParams.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: "&"),
+            "cc_len": "\(codeChallenge.count)",
+            "state_len": "\(state.count)",
+        ])
         return url
     }
 
@@ -592,8 +606,19 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         guard let http = response as? HTTPURLResponse else {
             throw OAuthClientError.underlying("non-HTTP token response")
         }
+        Telemetry.breadcrumb("oauth_token", "exchange http \(http.statusCode) \(provider.rawValue)")
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
+            // Log the OAuth error body (NOT a success body — that has tokens).
+            // A failed token exchange returns `{"error":"..."}` which is the
+            // single most useful signal for "auth page succeeded but the app
+            // errored" (e.g. codex). Truncated; non-secret.
+            Telemetry.debug("oauth_token", "exchange FAILED \(provider.rawValue)", data: [
+                "provider": provider.rawValue,
+                "status": "\(http.statusCode)",
+                "redirect": config.redirectURI.absoluteString,
+                "body": String(body.prefix(400)),
+            ])
             throw OAuthClientError.tokenExchangeFailed(status: http.statusCode, body: body)
         }
 

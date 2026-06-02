@@ -318,7 +318,21 @@ class OAuthClient(
                 appendQueryParameter(key, cfg.extraAuthorizeParams[key])
             }
         }.build()
-        Telemetry.debug("agent_login_url", "authorize", mapOf("provider" to provider.raw, "url" to uri.toString()))
+        // Log the request as SEPARATE structural fields, NOT the full URL —
+        // Sentry scrubbed the whole-URL value to `[Filtered]` (high-entropy
+        // code_challenge/state). These short non-secret parts survive
+        // scrubbing and are what we diff against the working CLI request.
+        Telemetry.debug("oauth_authorize", "request ${provider.raw}", mapOf(
+            "provider" to provider.raw,
+            "authorize" to cfg.authorizeUrl,
+            "redirect" to cfg.redirectUri,
+            "scope" to cfg.scopeString,
+            "response_type" to "code",
+            "client" to cfg.clientId,
+            "extra" to cfg.extraAuthorizeParams.entries.sortedBy { it.key }.joinToString("&") { "${it.key}=${it.value}" },
+            "cc_len" to challenge.length.toString(),
+            "state_len" to state.length.toString(),
+        ))
         return uri
     }
 
@@ -431,7 +445,17 @@ class OAuthClient(
         }.getOrElse { t ->
             throw OAuthClientError.Underlying("token POST failed: ${t.message ?: t}")
         }
+        Telemetry.breadcrumb("oauth_token", "exchange http $status ${provider.raw}")
         if (status !in 200..299) {
+            // Log the OAuth error body (a failed exchange returns
+            // `{"error":"..."}`, not tokens) — the key signal for "auth page
+            // succeeded but the app errored" (e.g. codex). Truncated.
+            Telemetry.debug("oauth_token", "exchange FAILED ${provider.raw}", mapOf(
+                "provider" to provider.raw,
+                "status" to status.toString(),
+                "redirect" to cfg.redirectUri,
+                "body" to payload.take(400),
+            ))
             throw OAuthClientError.TokenExchangeFailed(status = status, body = payload)
         }
         val bytes = payload.toByteArray()

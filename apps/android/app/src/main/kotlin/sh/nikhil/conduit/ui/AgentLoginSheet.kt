@@ -97,7 +97,9 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
             store.sendAgentCredentials(cred)
             statusMessage = "Signed in. The broker now has your ${cred.provider.raw} credentials for future sessions."
             errorMessage = null
-            Telemetry.breadcrumb("agent_login", "credential shipped ok", mapOf("provider" to cred.provider.raw))
+            // Standalone visible event for every terminal outcome (a
+            // breadcrumb alone is invisible unless a later event fires).
+            Telemetry.debug("oauth_result", "shipped ${cred.provider.raw}", mapOf("provider" to cred.provider.raw))
         } catch (t: Throwable) {
             // Token exchange succeeded and the credential is saved locally.
             // The broker hand-off needs a live session (the core carries it
@@ -106,7 +108,7 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
             // failure. Show a benign "saved" message, not a scary error.
             statusMessage = "Signed in — saved. It’ll sync to the broker when you start a session."
             errorMessage = null
-            Telemetry.breadcrumb("agent_login", "broker hand-off deferred (no live session); saved locally", mapOf("provider" to cred.provider.raw, "error" to (t.message ?: t.toString())))
+            Telemetry.debug("oauth_result", "saved-deferred ${cred.provider.raw}", mapOf("provider" to cred.provider.raw, "reason" to (t.message ?: t.toString())))
         }
     }
 
