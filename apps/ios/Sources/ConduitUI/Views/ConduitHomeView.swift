@@ -342,6 +342,18 @@ extension ConduitUI {
             let snap = snapshot
             let rows = ConduitUI.HomeViewModel.rows(snap)
             List {
+                // Ambient account-usage strip (design handoff §3b) — Claude plan
+                // limits at a glance, above the session list. Self-hides when
+                // there's no usage data yet.
+                if store.accountUsage.hasData {
+                    Section {
+                        ConduitUI.HomeUsageStrip()
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 2, trailing: 14))
+                    }
+                }
+
                 Section {
                     if rows.isEmpty {
                         emptySessionsView(snap)

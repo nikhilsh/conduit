@@ -41,6 +41,7 @@ extension ConduitUI {
                     ScrollView {
                         VStack(spacing: 18) {
                             accountSection
+                            usageLimitsSection
                             themeSection
                             neonSection
                             ConduitUI.NeonThemePreviewChip()
@@ -134,6 +135,17 @@ extension ConduitUI {
                     }
                     .buttonStyle(.plain)
                 }
+            }
+        }
+
+        /// "Usage & limits" — ambient account-level Claude plan limits (design
+        /// handoff §3b). Collapsed shows two sparks; tap to expand to full bars
+        /// + reset countdowns. Account-wide (not per-box).
+        private var usageLimitsSection: some View {
+            sectionCard(title: "Usage & limits") {
+                ConduitUI.UsageLimitsCard()
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
             }
         }
 

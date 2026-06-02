@@ -1126,6 +1126,48 @@ final class SessionStore {
         Task { try? await client.refreshAccountUsage(sessionId: sessionID) }
     }
 
+    /// Account-level Claude subscription usage, surfaced ambiently on Home and
+    /// in Settings (design handoff §3b). The numbers are per-account, not
+    /// per-session, so we just need any Claude session carrying the latest
+    /// fetched values. Codex has no equivalent endpoint, so this is Claude-only
+    /// by design — the ambient surfaces show Claude and omit Codex rather than
+    /// fabricating a number.
+    struct AccountUsageSnapshot {
+        var fivePct: Double?
+        var fiveResetsAt: String?
+        var weekPct: Double?
+        var weekResetsAt: String?
+        var sourceSessionID: String?
+        var hasData: Bool { fivePct != nil || weekPct != nil }
+    }
+
+    /// The freshest account-usage values across Claude sessions (live status
+    /// frame preferred, session snapshot as fallback).
+    var accountUsage: AccountUsageSnapshot {
+        for s in sessions where s.assistant == "claude" {
+            let st = statusBySession[s.id]
+            let five = st?.account5hPct ?? s.account5hPct
+            let week = st?.account7dPct ?? s.account7dPct
+            if five != nil || week != nil {
+                return AccountUsageSnapshot(
+                    fivePct: five,
+                    fiveResetsAt: st?.account5hResetsAt ?? s.account5hResetsAt,
+                    weekPct: week,
+                    weekResetsAt: st?.account7dResetsAt ?? s.account7dResetsAt,
+                    sourceSessionID: s.id
+                )
+            }
+        }
+        return AccountUsageSnapshot(sourceSessionID: sessions.first(where: { $0.assistant == "claude" })?.id)
+    }
+
+    /// Session-independent refresh for the ambient usage surfaces — drives the
+    /// broker fetch via any Claude session. No-op when none is connected.
+    func refreshAccountUsage() {
+        guard let id = sessions.first(where: { $0.assistant == "claude" })?.id else { return }
+        refreshAccountUsage(sessionID: id)
+    }
+
     /// Upload a composer attachment to the session's
     /// `<workspace>/uploads/<sessionID>/<filename>` via the core 0x01
     /// binary frame (`ConduitClient.sendFile`). Awaited by the chat
