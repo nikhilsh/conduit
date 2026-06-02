@@ -98,14 +98,11 @@ import uniffi.conduit_core.ViewEventFile
 internal val LocalSessionStore = compositionLocalOf<SessionStore?> { null }
 internal val LocalSessionId = compositionLocalOf<String?> { null }
 
-private sealed class ConversationRole(
-    val label: String,
-    val accent: Color,
-) {
-    data object User : ConversationRole("You", Color(0xFF00A56A))
-    data object Assistant : ConversationRole("Assistant", Color(0xFF4F8CFF))
-    data object Tool : ConversationRole("Tool", Color(0xFFF39C3D))
-    data object System : ConversationRole("System", Color(0xFF8C8C94))
+private sealed class ConversationRole {
+    data object User : ConversationRole()
+    data object Assistant : ConversationRole()
+    data object Tool : ConversationRole()
+    data object System : ConversationRole()
 
     companion object {
         fun from(raw: String): ConversationRole = when (raw.lowercase()) {
@@ -1487,17 +1484,6 @@ private fun TypingIndicatorRow(assistant: String, @Suppress("UNUSED_PARAMETER") 
 }
 
 @Composable
-private fun RoleIcon(role: ConversationRole, tint: Color = role.accent) {
-    val icon = when (role) {
-        ConversationRole.User -> Icons.Outlined.AccountCircle
-        ConversationRole.Assistant -> Icons.Outlined.SmartToy
-        ConversationRole.Tool -> Icons.Outlined.Build
-        ConversationRole.System -> Icons.Outlined.Info
-    }
-    Icon(icon, null, modifier = Modifier.size(14.dp), tint = tint)
-}
-
-@Composable
 private fun MarkdownBlock(text: String, role: ConversationRole) {
     val neon = LocalNeonTheme.current
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
@@ -2235,11 +2221,6 @@ private fun LabeledOutputBlock(title: String, text: String) {
     }
 }
 
-@Composable
-private fun StatusChip(status: String) {
-    NeonStatusChip(status, LocalNeonTheme.current)
-}
-
 /** Neon status pill — running=accent2, pending=blue, failed=red, else green. */
 @Composable
 private fun NeonStatusChip(status: String, neon: NeonTheme) {
@@ -2652,66 +2633,6 @@ internal fun humanReadableSize(bytes: Int): String = when {
     bytes < 1024 -> "$bytes B"
     bytes < 1024 * 1024 -> "${bytes / 1024} KB"
     else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
-}
-
-/**
- * Compact agent switcher pill — mirror of iOS ChatTab's inline Menu.
- * Reachable while the keyboard is up.
- */
-@Composable
-private fun AgentSwitchChip(
-    currentAssistant: String,
-    tint: Color,
-    onSwitch: (String) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        AssistChip(
-            onClick = { expanded = true },
-            label = { Text(currentAssistant, style = MaterialTheme.typography.labelMedium) },
-            leadingIcon = {
-                Icon(
-                    Icons.Outlined.SmartToy,
-                    contentDescription = null,
-                    tint = tint,
-                    modifier = Modifier.size(14.dp),
-                )
-            },
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("Switch to Claude") },
-                enabled = currentAssistant != "claude",
-                onClick = { expanded = false; onSwitch("claude") },
-            )
-            DropdownMenuItem(
-                text = { Text("Switch to Codex") },
-                enabled = currentAssistant != "codex",
-                onClick = { expanded = false; onSwitch("codex") },
-            )
-        }
-    }
-}
-
-/**
- * Render an ISO-8601 timestamp as a relative string ("just now",
- * "5 min ago"). Falls back to the raw text when unparseable.
- * Mirrors iOS `ConversationTimestamp.relative`.
- */
-internal object ConversationTimestamp {
-    fun relative(rawTimestamp: String): String {
-        val trimmed = rawTimestamp.trim()
-        if (trimmed.isEmpty()) return ""
-        val instant = runCatching { java.time.Instant.parse(trimmed) }.getOrNull() ?: return trimmed
-        val nowMs = System.currentTimeMillis()
-        val tsMs = instant.toEpochMilli()
-        return android.text.format.DateUtils.getRelativeTimeSpanString(
-            tsMs,
-            nowMs,
-            android.text.format.DateUtils.MINUTE_IN_MILLIS,
-            android.text.format.DateUtils.FORMAT_ABBREV_RELATIVE,
-        ).toString()
-    }
 }
 
 private object QuickReplyDetector {
