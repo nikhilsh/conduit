@@ -88,6 +88,7 @@ final class AgentLoginCoordinator {
     func start(_ provider: AgentLoginProvider) async throws {
         self.provider = provider
         state = .waitingForBrokerURL
+        Telemetry.debug("agent_login", "start", data: ["provider": provider.wireName])
         try await transport.sendStartAgentLogin(provider: provider.wireName)
         // The transport's reply lands via `handleViewEvent(_:)` —
         // typically routed from SessionStore's WS dispatcher. We
@@ -99,6 +100,16 @@ final class AgentLoginCoordinator {
     /// `SessionStore` dispatcher. Idempotent: a second event with a
     /// fresh token aborts the previous attempt.
     func handleAgentLoginURL(loopbackPort: UInt16, sessionToken: String, authorizeURL: URL) {
+        // loopback_port == 0 is the smoking gun for the Anthropic
+        // code-paste flow: the CLI advertised a remote redirect
+        // (platform.claude.com), not a localhost loopback, so there is
+        // nothing for this loopback server to ever receive and the flow
+        // will stall until the 600s timeout. Surfaced to Sentry so the
+        // mismatch is visible without a device in hand.
+        Telemetry.debug("agent_login", "url received", data: [
+            "provider": provider?.wireName ?? "unknown",
+            "loopback_port": String(loopbackPort),
+        ])
         // Bind the loopback listener BEFORE opening the browser, so a
         // very fast OAuth completion (cached browser session) doesn't
         // redirect into a void.
@@ -188,6 +199,17 @@ final class AgentLoginCoordinator {
     // MARK: - Private
 
     private func fail(_ reason: String) {
+        // Every failure terminus routes through here (broker
+        // agent_login_failed, loopback bind/timeout, provider error,
+        // forward error, browser error) — so one capture here covers the
+        // whole flow. ERROR-level so it's readable remotely from Sentry
+        // (org swe-kitty / conduit-ios) without a device.
+        Telemetry.capture(
+            error: AgentLoginFailure(reason: reason),
+            message: "agent login failed: \(reason)",
+            tags: ["flow": "agent_login", "provider": provider?.wireName ?? "unknown"],
+            extras: ["reason": reason]
+        )
         loopback?.stop()
         loopback = nil
         #if canImport(AuthenticationServices)
@@ -228,6 +250,13 @@ final class AgentLoginCoordinator {
             }
         }
     }
+}
+
+/// Carrier error so `Telemetry.capture(error:)` has a typed Error to
+/// attach for the OAuth-login failure path (the coordinator otherwise
+/// only deals in human-readable reason strings).
+struct AgentLoginFailure: Error {
+    let reason: String
 }
 
 /// Provider identity for the v2 flow. Distinct from

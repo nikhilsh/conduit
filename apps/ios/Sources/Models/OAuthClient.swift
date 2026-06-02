@@ -4,52 +4,37 @@ import Foundation
 import Security
 import UIKit
 
-// MARK: - DEPRECATED (v1 — superseded by v2 server-side login flow)
+// MARK: - Phone-side OAuth (litter-faithful) — the LIVE login path
 //
-// This file implements the v1 PKCE-on-the-phone approach documented
-// in `docs/PLAN-AGENT-OAUTH.md` "v1 archive". It is **deprecated**:
-// both Anthropic and OpenAI reject the `conduit://` custom-scheme
-// redirect URI at the authorize endpoint, so this code path doesn't
-// reach token exchange in practice. PRs #100/#104/#110/#112 shipped
-// it; the dead-code state was confirmed end-to-end against both
-// providers in May 2026.
+// This file drives the in-app OAuth flow that lets a phone-side user
+// log in to ChatGPT (Codex/OpenAI) and Claude (Anthropic) on their own
+// account: PKCE on the phone → native browser → token exchange on the
+// phone → ship the provider-native credential blob to the broker via
+// `set_agent_credentials`. The broker stores it encrypted and
+// materializes a per-session `~/.codex/auth.json` /
+// `~/.claude/.credentials.json` (see `broker/internal/credentials/`).
 //
-// The replacement is `AgentLoginCoordinator` + `AgentLoginLoopbackServer`,
-// which mirrors upstream's pattern: the broker spawns `codex login` /
-// `claude auth login` on the broker host, the phone hosts a tiny
-// HTTP listener on `127.0.0.1:<port>` to catch the provider's
-// redirect, and ships the captured query string back over WS. See
-// `docs/PLAN-AGENT-OAUTH.md` "Approach v2".
-//
-// This file is retained (rather than deleted) so existing Settings
-// surfaces and the `OAuthCredentialStore` Keychain reads continue to
-// compile during the v2 transition. Stage 4 of the v2 plan removes
-// it (and `set_agent_credentials` / `AgentCredentialEnvelope` /
-// `replayStoredAgentCredentials`). Do not extend the code below;
-// any new work should target `AgentLoginCoordinator`.
+// History: the earlier attempt used a `conduit://` custom-scheme
+// redirect, which BOTH providers reject at `/oauth/authorize`. The fix
+// (this revision) follows litter (`dnakov/litter`): use the providers'
+// real, whitelisted redirects —
+//   - OpenAI/Codex: a loopback `http://localhost:1455/auth/callback`
+//     captured by an in-app `AgentLoginLoopbackServer` (RFC 8252),
+//   - Anthropic/Claude: the `https://platform.claude.com/oauth/code/callback`
+//     code-display page; the user copies the shown code and pastes it
+//     back into the app (the `claude` CLI's own flow).
+// — never a custom scheme at the authorize step. `captureMode` on
+// `OAuthConfig` is the seam between the two.
 
-/// Stages 0–1 of `docs/PLAN-AGENT-OAUTH.md` v1 (deprecated) — iOS
-/// OAuth driver for the two agent providers we ship: ChatGPT
+/// iOS OAuth driver for the two agent providers we ship: ChatGPT
 /// (OpenAI / Codex) and Claude (Anthropic).
 ///
-/// Drives PKCE S256 → `ASWebAuthenticationSession` → token exchange
-/// against the provider's token endpoint. Returns an `OAuthCredential`
-/// case whose payload matches what the CLI persists on disk
-/// (`~/.codex/auth.json` for OpenAI, `~/.claude/.credentials.json` for
-/// Anthropic — see PLAN §B.1 / §C.1 for verbatim schemas). Stage 2's
-/// broker can write either blob to disk unmodified.
-///
-/// Out of scope for this PR: refresh, broker wiring.
-///
-/// Why `conduit://` custom scheme instead of loopback `http://127.0.0.1:1455/auth/callback`
-/// (which is what the codex CLI uses): `ASWebAuthenticationSession`
-/// requires a `callbackURLScheme:` that is a non-http custom scheme —
-/// it won't intercept http loopback URLs (upstream works around this by
-/// running its own loopback HTTP server on the phone, which we
-/// deliberately don't replicate, see §A.4 "Borrow vs diverge"). The
-/// risk this exposes — either provider may reject the custom-scheme
-/// redirect at `/oauth/authorize` — is documented in the PR; if so
-/// we'll fall back to upstream's loopback server in a follow-up.
+/// Drives PKCE S256 → native browser → token exchange against the
+/// provider's token endpoint. Returns an `OAuthCredential` case whose
+/// payload matches what the CLI persists on disk (`~/.codex/auth.json`
+/// for OpenAI, `~/.claude/.credentials.json` for Anthropic — see PLAN
+/// §B.1 / §C.1 for verbatim schemas). The broker writes either blob to
+/// disk unmodified.
 enum OAuthProvider: String, Sendable {
     case openai
     case anthropic
@@ -62,31 +47,37 @@ enum OAuthProvider: String, Sendable {
                 // Codex CLI public client ID — see PLAN §C.2.
                 clientID: "app_EMoamEEZ73f0CkXaXp7hrann",
                 scopes: ["openid", "profile", "email", "offline_access"],
-                redirectURI: URL(string: "conduit://oauth/openai/callback")!,
+                // Loopback redirect — the exact one the codex CLI's own
+                // login server uses (`codex-rs/login/src/server.rs`:
+                // DEFAULT_PORT 1455, path /auth/callback). This client_id
+                // whitelists it; an in-app `AgentLoginLoopbackServer`
+                // catches the browser redirect on the device.
+                redirectURI: URL(string: "http://localhost:1455/auth/callback")!,
                 callbackURLScheme: "conduit",
+                captureMode: .loopback(port: 1455, path: "/auth/callback"),
                 authorizePath: "oauth/authorize",
                 tokenURL: URL(string: "https://auth.openai.com/oauth/token")!
             )
         case .anthropic:
             // Claude Code CLI's OAuth params. The client_id + endpoints
             // here were reverse-engineered from the `claude` CLI binary
-            // (see PR body for source link) — Anthropic doesn't publish
-            // these in their docs. Risks:
+            // and confirmed against `claude auth login --claudeai`'s
+            // actual stdout (authorize host claude.ai, redirect
+            // platform.claude.com/oauth/code/callback, the `code=true`
+            // flag that selects the code-display page). Anthropic
+            // doesn't publish these. Risks:
             //
             //   1. Anthropic may rotate the client_id without notice; we
-            //      ship an app update if it happens.
-            //   2. The real CLI's flow uses redirect_uri =
-            //      `https://platform.claude.com/oauth/code/callback`
-            //      (a server-side bounce that displays the code for
-            //      copy-paste). We instead use a custom-scheme URI so
-            //      ASWebAuthenticationSession can intercept it. If
-            //      Anthropic's authorize endpoint refuses arbitrary
-            //      redirect_uris (likely whitelisted), this fails at
-            //      `/oauth/authorize` and we fall back in a follow-up
-            //      (loopback HTTP server, or a relay on the conduit
-            //      website that 302s into `conduit://...`).
+            //      ship an app update if it happens (same risk litter
+            //      accepts for Codex).
+            //   2. Claude uses a CODE-PASTE flow, not a loopback: the
+            //      browser lands on platform.claude.com which *displays*
+            //      a `code#state` string; the user copies it and pastes
+            //      it back into the app (captureMode `.codePaste`). The
+            //      token exchange still happens on the phone.
             //
-            // TODO(stage-1): Verify the flow end-to-end on-device.
+            // NEEDS ON-DEVICE VERIFICATION: token endpoint shape + whether
+            // the exchange requires `state` are reverse-engineered.
             return OAuthConfig(
                 issuer: URL(string: "https://claude.ai")!,
                 clientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
@@ -97,13 +88,19 @@ enum OAuthProvider: String, Sendable {
                     "user:mcp_servers",
                     "user:sessions:claude_code",
                 ],
-                redirectURI: URL(string: "conduit://oauth/anthropic/callback")!,
+                // The real, whitelisted redirect the CLI uses — a remote
+                // page that displays the code (no loopback to intercept).
+                redirectURI: URL(string: "https://platform.claude.com/oauth/code/callback")!,
                 callbackURLScheme: "conduit",
+                captureMode: .codePaste,
                 // Anthropic splits authorize (claude.ai) from token
                 // exchange (platform.claude.com) — `issuer` alone
                 // can't derive both, hence the explicit `tokenURL`.
                 authorizePath: "oauth/authorize",
-                tokenURL: URL(string: "https://platform.claude.com/v1/oauth/token")!
+                tokenURL: URL(string: "https://platform.claude.com/v1/oauth/token")!,
+                // `code=true` selects the copy-paste code-display page
+                // instead of an auto-redirect; observed in the CLI's URL.
+                extraAuthorizeParams: ["code": "true"]
             )
         }
     }
@@ -111,6 +108,19 @@ enum OAuthProvider: String, Sendable {
     /// Keychain account used to persist the resulting credential blob.
     /// Service is `"sh.nikhil.conduit.oauth"` (see `OAuthCredentialStore`).
     var keychainAccount: String { rawValue }
+}
+
+/// How the phone captures the authorization `code` after the user
+/// finishes the browser consent step — the one thing that genuinely
+/// differs between the two providers.
+enum OAuthCaptureMode: Sendable, Equatable {
+    /// RFC 8252 loopback: the provider redirects the browser to
+    /// `http://localhost:<port><path>?code=...`; an in-app
+    /// `AgentLoginLoopbackServer` catches it. Used by OpenAI/Codex.
+    case loopback(port: UInt16, path: String)
+    /// Code-display: the provider shows a `code#state` string the user
+    /// copies and pastes back into the app. Used by Anthropic/Claude.
+    case codePaste
 }
 
 struct OAuthConfig: Sendable {
@@ -122,6 +132,8 @@ struct OAuthConfig: Sendable {
     /// — must match `redirectURI.scheme`. Hoisted out so the test layer
     /// can assert it without rebuilding URLComponents.
     var callbackURLScheme: String
+    /// How the `code` comes back — loopback (codex) vs paste (claude).
+    var captureMode: OAuthCaptureMode
     /// Path appended to `issuer` for the authorize endpoint. OpenAI
     /// uses `oauth/authorize` on `auth.openai.com`; Anthropic uses
     /// `oauth/authorize` on `claude.ai`.
@@ -131,6 +143,9 @@ struct OAuthConfig: Sendable {
     /// (`platform.claude.com`) across two hosts — see
     /// `OAuthProvider.anthropic`.
     var tokenURL: URL
+    /// Extra query items appended to the authorize URL (e.g. Claude's
+    /// `code=true` code-display selector). Empty for OpenAI.
+    var extraAuthorizeParams: [String: String] = [:]
 
     var authorizeURL: URL { issuer.appendingPathComponent(authorizePath) }
     var scopeString: String { scopes.joined(separator: " ") }
@@ -259,36 +274,140 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// fixed verifier to make `state` + `code_challenge` deterministic.
     var deterministicVerifier: String?
 
+    // Transient per-attempt state. `pending*` bridge the gap between
+    // opening the browser and the user pasting the code (code-paste
+    // flow). The continuation + handles drive the loopback flow and are
+    // cleared by `resumeLogin` exactly once.
+    private var pendingVerifier: String?
+    private var pendingState: String?
+    private var loginContinuation: CheckedContinuation<String, Error>?
+    private var loopbackServer: AgentLoginLoopbackServer?
+    private var webSession: ASWebAuthenticationSession?
+
     init(provider: OAuthProvider, urlSession: URLSession = .shared) {
         self.provider = provider
         self.urlSession = urlSession
     }
 
-    // MARK: - Public entry point
+    // MARK: - Public entry points
 
+    /// Loopback flow (OpenAI/Codex). Opens the browser, captures the
+    /// redirect on an in-app loopback listener, exchanges the code, and
+    /// returns the credential. Throws for code-paste providers — use
+    /// `beginCodePasteAuthorize()` / `finishCodePaste(_:)` for those.
     func startLogin() async throws -> OAuthCredential {
+        let cfg = provider.config
+        guard case .loopback(let port, let path) = cfg.captureMode else {
+            throw OAuthClientError.underlying("startLogin() is for loopback providers; use the code-paste API")
+        }
+        let verifier = deterministicVerifier ?? Self.generateCodeVerifier()
+        let challenge = Self.codeChallenge(from: verifier)
+        let state = Self.generateRandomURLSafe(byteCount: 16)
+        let authorizeURL = try buildAuthorizeURL(config: cfg, codeChallenge: challenge, state: state)
+
+        let code = try await captureLoopbackCode(authorizeURL: authorizeURL, cfg: cfg, port: port, path: path)
+        return try await exchangeCodeForCredential(code: code, verifier: verifier, state: state, config: cfg)
+    }
+
+    /// Code-paste flow step 1 (Anthropic/Claude). Generates PKCE, stashes
+    /// the verifier/state for step 2, and returns the authorize URL the
+    /// caller should open in the system browser. The provider displays a
+    /// `code#state` string the user copies.
+    func beginCodePasteAuthorize() throws -> URL {
         let cfg = provider.config
         let verifier = deterministicVerifier ?? Self.generateCodeVerifier()
         let challenge = Self.codeChallenge(from: verifier)
         let state = Self.generateRandomURLSafe(byteCount: 16)
+        pendingVerifier = verifier
+        pendingState = state
+        return try buildAuthorizeURL(config: cfg, codeChallenge: challenge, state: state)
+    }
 
-        let authorizeURL = try buildAuthorizeURL(
-            config: cfg,
-            codeChallenge: challenge,
-            state: state
-        )
+    /// Code-paste flow step 2. Takes what the user pasted (the provider
+    /// shows `code#state`; we split on `#`), exchanges it, and returns
+    /// the credential.
+    func finishCodePaste(pasted: String) async throws -> OAuthCredential {
+        let cfg = provider.config
+        guard let verifier = pendingVerifier else {
+            throw OAuthClientError.underlying("no pending code-paste flow — call beginCodePasteAuthorize() first")
+        }
+        let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Claude's code-display page shows "<code>#<state>". Split off the
+        // code; prefer the pasted state for the exchange, else the one we
+        // generated.
+        let segs = trimmed.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+        let code = segs.first.map(String.init) ?? trimmed
+        let state = segs.count > 1 ? String(segs[1]) : (pendingState ?? "")
+        guard !code.isEmpty else { throw OAuthClientError.missingCode }
+        defer { pendingVerifier = nil; pendingState = nil }
+        return try await exchangeCodeForCredential(code: code, verifier: verifier, state: state, config: cfg)
+    }
 
-        let callbackURL = try await runWebAuthSession(
-            authorizeURL: authorizeURL,
-            callbackScheme: cfg.callbackURLScheme
-        )
+    // MARK: - Loopback capture
 
-        let code = try Self.extractAuthorizationCode(from: callbackURL)
-        return try await exchangeCodeForCredential(
-            code: code,
-            verifier: verifier,
-            config: cfg
-        )
+    private func captureLoopbackCode(authorizeURL: URL, cfg: OAuthConfig, port: UInt16, path: String) async throws -> String {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+            self.loginContinuation = cont
+            let server = AgentLoginLoopbackServer(port: port, path: path)
+            self.loopbackServer = server
+            do {
+                try server.start(timeout: 600) { [weak self] result in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        switch result {
+                        case .success(let cb):
+                            if !cb.errorReason.isEmpty {
+                                self.resumeLogin(.failure(OAuthClientError.underlying("provider error: \(cb.errorReason)")))
+                            } else if cb.code.isEmpty {
+                                self.resumeLogin(.failure(OAuthClientError.missingCode))
+                            } else {
+                                self.resumeLogin(.success(cb.code))
+                            }
+                        case .failure(let err):
+                            self.resumeLogin(.failure(err))
+                        }
+                    }
+                }
+            } catch {
+                self.resumeLogin(.failure(error))
+                return
+            }
+            // Open the browser. The loopback redirect is http://localhost,
+            // which ASWebAuthenticationSession won't treat as its callback
+            // scheme — so its success closure never fires; the loopback
+            // listener above delivers the code. This completion only fires
+            // on user-cancel / error.
+            let session = ASWebAuthenticationSession(url: authorizeURL, callbackURLScheme: cfg.callbackURLScheme) { [weak self] _, error in
+                Task { @MainActor in
+                    guard let self, let error else { return }
+                    if let asErr = error as? ASWebAuthenticationSessionError, asErr.code == .canceledLogin {
+                        self.resumeLogin(.failure(OAuthClientError.userCancelled))
+                    } else {
+                        self.resumeLogin(.failure(OAuthClientError.underlying("\(error)")))
+                    }
+                }
+            }
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            self.webSession = session
+            session.start()
+        }
+    }
+
+    /// Resolves the loopback continuation exactly once and tears down the
+    /// listener + browser. Safe to call from either the loopback callback
+    /// or the web-session completion (whichever wins the race).
+    private func resumeLogin(_ result: Result<String, Error>) {
+        guard let cont = loginContinuation else { return }
+        loginContinuation = nil
+        loopbackServer?.stop()
+        loopbackServer = nil
+        webSession?.cancel()
+        webSession = nil
+        switch result {
+        case .success(let code): cont.resume(returning: code)
+        case .failure(let err): cont.resume(throwing: err)
+        }
     }
 
     // MARK: - PKCE math (unit-tested)
@@ -339,7 +458,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         state: String
     ) throws -> URL {
         var comps = URLComponents(url: config.authorizeURL, resolvingAgainstBaseURL: false)
-        comps?.queryItems = [
+        var items = [
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "client_id", value: config.clientID),
             URLQueryItem(name: "redirect_uri", value: config.redirectURI.absoluteString),
@@ -348,6 +467,12 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "state", value: state),
         ]
+        // Provider-specific extras (e.g. Claude's `code=true`). Sorted so
+        // the generated URL is deterministic for the test layer.
+        for key in config.extraAuthorizeParams.keys.sorted() {
+            items.append(URLQueryItem(name: key, value: config.extraAuthorizeParams[key]))
+        }
+        comps?.queryItems = items
         guard let url = comps?.url else {
             throw OAuthClientError.underlying("authorize URL build failed")
         }
@@ -364,40 +489,6 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
             throw OAuthClientError.missingCode
         }
         return code
-    }
-
-    // MARK: - ASWebAuthenticationSession driver
-
-    private func runWebAuthSession(
-        authorizeURL: URL,
-        callbackScheme: String
-    ) async throws -> URL {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
-            let session = ASWebAuthenticationSession(
-                url: authorizeURL,
-                callbackURLScheme: callbackScheme
-            ) { callbackURL, error in
-                if let error {
-                    if let asErr = error as? ASWebAuthenticationSessionError,
-                       asErr.code == .canceledLogin {
-                        cont.resume(throwing: OAuthClientError.userCancelled)
-                    } else {
-                        cont.resume(throwing: OAuthClientError.underlying("\(error)"))
-                    }
-                    return
-                }
-                guard let callbackURL else {
-                    cont.resume(throwing: OAuthClientError.missingCallback)
-                    return
-                }
-                cont.resume(returning: callbackURL)
-            }
-            session.presentationContextProvider = self
-            // Share cookies with Safari so a user already signed in to
-            // ChatGPT in Safari skips the password prompt.
-            session.prefersEphemeralWebBrowserSession = false
-            session.start()
-        }
     }
 
     // MARK: - ASWebAuthenticationPresentationContextProviding
@@ -439,6 +530,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     private func exchangeCodeForCredential(
         code: String,
         verifier: String,
+        state: String,
         config: OAuthConfig
     ) async throws -> OAuthCredential {
         var req = URLRequest(url: config.tokenURL)
@@ -450,13 +542,20 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
         var form = URLComponents()
-        form.queryItems = [
+        var items = [
             URLQueryItem(name: "grant_type", value: "authorization_code"),
             URLQueryItem(name: "client_id", value: config.clientID),
             URLQueryItem(name: "code", value: code),
             URLQueryItem(name: "redirect_uri", value: config.redirectURI.absoluteString),
             URLQueryItem(name: "code_verifier", value: verifier),
         ]
+        // Anthropic's code-paste token exchange echoes the `state` from
+        // the displayed `code#state` string; OpenAI's loopback exchange
+        // does not need it (and we don't send it).
+        if provider == .anthropic, !state.isEmpty {
+            items.append(URLQueryItem(name: "state", value: state))
+        }
+        form.queryItems = items
         req.httpBody = form.percentEncodedQuery?.data(using: .utf8)
 
         let (data, response): (Data, URLResponse)

@@ -135,10 +135,14 @@ class PKCETest {
         assertEquals("app_EMoamEEZ73f0CkXaXp7hrann", cfg.clientId)
         assertEquals("https://auth.openai.com", cfg.issuer)
         assertEquals("openid profile email offline_access", cfg.scopeString)
-        assertEquals("conduit://oauth/openai/callback", cfg.redirectUri)
+        // Loopback redirect — the codex CLI's own (RFC 8252), caught
+        // in-app by AgentLoginLoopbackServer.
+        assertEquals("http://localhost:1455/auth/callback", cfg.redirectUri)
         assertEquals("conduit", cfg.callbackScheme)
+        assertEquals(OAuthCaptureMode.Loopback(1455, "/auth/callback"), cfg.captureMode)
         assertEquals("https://auth.openai.com/oauth/authorize", cfg.authorizeUrl)
         assertEquals("https://auth.openai.com/oauth/token", cfg.tokenUrl)
+        assertEquals(emptyMap<String, String>(), cfg.extraAuthorizeParams)
     }
 
     /**
@@ -155,10 +159,14 @@ class PKCETest {
             "user:profile user:inference user:file_upload user:mcp_servers user:sessions:claude_code",
             cfg.scopeString,
         )
-        assertEquals("conduit://oauth/anthropic/callback", cfg.redirectUri)
+        // Claude uses the real code-display redirect (no loopback) and a
+        // code-paste capture; `code=true` selects the display page.
+        assertEquals("https://platform.claude.com/oauth/code/callback", cfg.redirectUri)
         assertEquals("conduit", cfg.callbackScheme)
+        assertEquals(OAuthCaptureMode.CodePaste, cfg.captureMode)
         assertEquals("https://claude.ai/oauth/authorize", cfg.authorizeUrl)
         assertEquals("https://platform.claude.com/v1/oauth/token", cfg.tokenUrl)
+        assertEquals(mapOf("code" to "true"), cfg.extraAuthorizeParams)
     }
 
     // MARK: - OpenAI token-response decode

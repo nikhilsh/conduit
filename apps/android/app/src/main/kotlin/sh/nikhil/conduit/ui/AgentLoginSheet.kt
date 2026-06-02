@@ -1,8 +1,5 @@
 package sh.nikhil.conduit.ui
 
-import android.content.Context
-import android.net.Uri
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,18 +16,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,30 +40,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import sh.nikhil.conduit.SessionStore
-import sh.nikhil.conduit.auth.AgentLoginCoordinator
-import sh.nikhil.conduit.auth.AgentLoginProvider
-import sh.nikhil.conduit.auth.SessionStoreAgentLoginTransport
+import sh.nikhil.conduit.auth.OAuthClient
+import sh.nikhil.conduit.auth.OAuthClientError
+import sh.nikhil.conduit.auth.OAuthCredential
+import sh.nikhil.conduit.auth.OAuthProvider
+import sh.nikhil.conduit.auth.OAuthRequest
+import sh.nikhil.conduit.auth.OAuthStore
 
 /**
  * Android port of `apps/ios/Sources/ConduitUI/Views/ConduitAgentLoginSheet.swift`.
  *
- * v2 (upstream-pattern, broker-driven) agent login. Two rows kick off the
- * `AgentLoginCoordinator` flow for OpenAI / Anthropic:
+ * Litter-faithful phone-side agent login: the phone runs PKCE + the
+ * browser flow and exchanges the code itself, then ships the
+ * provider-native credential blob to the broker via
+ * `SessionStore.sendAgentCredentials`.
  *
- *   1. Sheet builds a [SessionStoreAgentLoginTransport] + an
- *      [AgentLoginCoordinator], registers it on
- *      [SessionStore.activeLoginCoordinator], and calls `start(provider)`.
- *   2. The broker mints an authorize URL + loopback port and emits an
- *      `agent_login_url` view_event; the core routes it back into the
- *      coordinator (via `SessionStore.routeAgentLoginViewEvent`), which
- *      binds the loopback and moves to `AwaitingBrowserRedirect`.
- *   3. This sheet observes that state and opens the authorize URL in a
- *      Chrome Custom Tab. The coordinator's loopback captures the
- *      redirect and ships `agent_login_callback`; the broker completes
- *      the CLI token exchange and emits `agent_login_complete`.
+ *   - ChatGPT/Codex: loopback redirect (`http://localhost:1455`) caught
+ *     in-app by `AgentLoginLoopbackServer`; code captured automatically.
+ *   - Claude/Anthropic: the code-display page on platform.claude.com;
+ *     the user copies the shown `code#state` and pastes it here.
  *
- * The legacy client-side PKCE flow (`OAuthClient` + `conduit://` deep
- * link) is replaced here; `OAuthClient` itself is deleted in Stage 4.
+ * The credential is also saved to EncryptedSharedPreferences so a
+ * transient WS outage doesn't lose it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,79 +70,101 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var coordinator by remember { mutableStateOf<AgentLoginCoordinator?>(null) }
     var isWorking by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    // Guards against re-opening the browser if the StateFlow replays
-    // AwaitingBrowserRedirect to a fresh collector.
-    var launchedToken by remember { mutableStateOf<String?>(null) }
+    var awaitingPaste by remember { mutableStateOf(false) }
+    var pastedCode by remember { mutableStateOf("") }
+    // Holds the in-flight Claude request (PKCE verifier/state) between
+    // opening the browser and the user pasting the code.
+    var pasteClient by remember { mutableStateOf<OAuthClient?>(null) }
+    var pasteRequest by remember { mutableStateOf<OAuthRequest?>(null) }
 
-    // Observe the active coordinator's state and drive UI + the browser
-    // hand-off. Keyed on the coordinator instance so a new login attempt
-    // re-subscribes cleanly.
-    LaunchedEffect(coordinator) {
-        val coord = coordinator ?: return@LaunchedEffect
-        coord.state.collect { state ->
-            when (state) {
-                is AgentLoginCoordinator.State.Idle -> {}
-                is AgentLoginCoordinator.State.WaitingForBrokerURL -> {
-                    statusMessage = "Waiting for the broker to mint the login URL…"
-                    errorMessage = null
-                }
-                is AgentLoginCoordinator.State.AwaitingBrowserRedirect -> {
-                    statusMessage = "Complete the sign-in in the browser, then return here."
-                    errorMessage = null
-                    if (launchedToken != state.sessionToken) {
-                        launchedToken = state.sessionToken
-                        openAuthorizeUrl(ctx, state.authorizeUrl.toString())
-                    }
-                }
-                is AgentLoginCoordinator.State.ForwardingCallback -> {
-                    statusMessage = "Finishing sign-in with the broker…"
-                }
-                is AgentLoginCoordinator.State.Succeeded -> {
-                    isWorking = false
-                    statusMessage = "Signed in. The broker has your credentials for future sessions."
-                    errorMessage = null
-                }
-                is AgentLoginCoordinator.State.Failed -> {
-                    isWorking = false
-                    statusMessage = null
-                    errorMessage = "Sign-in failed: ${state.reason}"
-                }
-                is AgentLoginCoordinator.State.Cancelled -> {
-                    isWorking = false
-                    statusMessage = null
-                }
+    fun describe(e: OAuthClientError): String = when (e) {
+        is OAuthClientError.UserCancelled -> "Sign-in cancelled."
+        is OAuthClientError.MissingCallback -> "The browser didn't return a result."
+        is OAuthClientError.MissingCode -> "No authorization code came back. If you pasted, check you copied the whole code."
+        is OAuthClientError.TokenExchangeFailed -> "Token exchange failed (HTTP ${e.status})."
+        is OAuthClientError.MalformedTokenResponse -> "The provider's token response was malformed."
+        is OAuthClientError.Underlying -> "Sign-in failed: ${e.message}"
+    }
+
+    suspend fun deliver(cred: OAuthCredential) {
+        runCatching { OAuthStore.save(ctx, cred) }
+        try {
+            store.sendAgentCredentials(cred)
+            statusMessage = "Signed in. The broker now has your ${cred.provider.raw} credentials for future sessions."
+            errorMessage = null
+        } catch (t: Throwable) {
+            // Token exchange succeeded; only the broker hand-off failed.
+            // The local copy survives — surface a retry.
+            statusMessage = null
+            errorMessage = "Signed in, but couldn't reach the broker. Reconnect and try again — your login is saved locally."
+        }
+    }
+
+    fun loginChatGPT() {
+        isWorking = true
+        statusMessage = "Opening ChatGPT sign-in…"
+        errorMessage = null
+        awaitingPaste = false
+        scope.launch {
+            try {
+                val cred = OAuthClient(OAuthProvider.OPENAI).startLoopbackLogin(ctx)
+                deliver(cred)
+            } catch (e: OAuthClientError) {
+                statusMessage = null; errorMessage = describe(e)
+            } catch (t: Throwable) {
+                statusMessage = null; errorMessage = "Sign-in failed: ${t.message ?: t}"
+            } finally {
+                isWorking = false
             }
         }
     }
 
-    // If the sheet leaves composition mid-flow, cancel so the broker
-    // tears down the spawned CLI login subprocess.
-    DisposableEffect(Unit) {
-        onDispose {
-            coordinator?.cancel()
-            store.activeLoginCoordinator = null
+    fun beginClaude() {
+        isWorking = true
+        errorMessage = null
+        scope.launch {
+            try {
+                val client = OAuthClient(OAuthProvider.ANTHROPIC)
+                val req = client.beginCodePaste(ctx)
+                pasteClient = client
+                pasteRequest = req
+                awaitingPaste = true
+                statusMessage = "Sign in, copy the code Claude shows, then paste it below."
+            } catch (t: Throwable) {
+                statusMessage = null; errorMessage = "Could not start Claude sign-in: ${t.message ?: t}"
+            } finally {
+                isWorking = false
+            }
         }
     }
 
-    fun startLogin(provider: AgentLoginProvider) {
+    fun finishClaude() {
+        val client = pasteClient
+        val req = pasteRequest
+        if (client == null || req == null) {
+            errorMessage = "Start the Claude sign-in first."
+            return
+        }
         isWorking = true
-        statusMessage = "Asking the broker to start the ${provider.wireName} login flow…"
+        statusMessage = "Exchanging the Claude code…"
         errorMessage = null
-        launchedToken = null
-        val coord = AgentLoginCoordinator(transport = SessionStoreAgentLoginTransport(store))
-        coordinator = coord
-        store.activeLoginCoordinator = coord
         scope.launch {
             try {
-                coord.start(provider)
+                val cred = client.finishCodePaste(pastedCode, req)
+                deliver(cred)
+                awaitingPaste = false
+                pastedCode = ""
+                pasteClient = null
+                pasteRequest = null
+            } catch (e: OAuthClientError) {
+                statusMessage = null; errorMessage = describe(e)
             } catch (t: Throwable) {
+                statusMessage = null; errorMessage = "Sign-in failed: ${t.message ?: t}"
+            } finally {
                 isWorking = false
-                store.activeLoginCoordinator = null
-                errorMessage = "Sign-in failed to start: ${t.message ?: t}"
             }
         }
     }
@@ -166,8 +183,9 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "Sign in on the broker host. The agent CLI's own login runs there; " +
-                    "you just complete the browser step and the broker keeps the credentials.",
+                "Sign in to the model providers you want to use through Conduit. " +
+                    "You sign in in your own browser; Conduit ships the resulting credential " +
+                    "to the broker so agents run on your account.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -180,17 +198,51 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
                     ProviderRow(
                         title = "Login with ChatGPT",
-                        subtitle = "Codex / ChatGPT OAuth · runs `codex login` on the broker",
+                        subtitle = "Codex / ChatGPT OAuth · auth.openai.com",
                         enabled = !isWorking,
-                        onClick = { startLogin(AgentLoginProvider.OPENAI) },
+                        onClick = { loginChatGPT() },
                     )
                     HorizontalDivider()
                     ProviderRow(
                         title = "Login with Claude",
-                        subtitle = "Claude OAuth · runs `claude` login on the broker",
+                        subtitle = "Claude OAuth · claude.ai (paste code)",
                         enabled = !isWorking,
-                        onClick = { startLogin(AgentLoginProvider.ANTHROPIC) },
+                        onClick = { beginClaude() },
                     )
+                }
+            }
+
+            if (awaitingPaste) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            "After signing in, Claude shows a code. Copy it and paste it here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            value = pastedCode,
+                            onValueChange = { pastedCode = it },
+                            label = { Text("code#state") },
+                            singleLine = true,
+                            enabled = !isWorking,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Button(
+                            onClick = { finishClaude() },
+                            enabled = !isWorking && pastedCode.trim().isNotEmpty(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Submit code")
+                        }
+                    }
                 }
             }
 
@@ -199,12 +251,6 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
 
             Spacer(Modifier.height(8.dp))
         }
-    }
-}
-
-private fun openAuthorizeUrl(ctx: Context, url: String) {
-    runCatching {
-        CustomTabsIntent.Builder().build().launchUrl(ctx, Uri.parse(url))
     }
 }
 

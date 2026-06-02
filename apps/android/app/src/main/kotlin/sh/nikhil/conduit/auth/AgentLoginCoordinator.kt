@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import sh.nikhil.conduit.Telemetry
 import java.net.URI
 
 /**
@@ -88,6 +89,7 @@ class AgentLoginCoordinator(
             this.provider = provider
             _state.value = State.WaitingForBrokerURL
         }
+        Telemetry.debug("agent_login", "start", mapOf("provider" to provider.wireName))
         scope.launch { transport.sendStartAgentLogin(provider.wireName) }
     }
 
@@ -104,6 +106,20 @@ class AgentLoginCoordinator(
         sessionToken: String,
         authorizeUrl: URI,
     ) {
+        // loopback_port == 0 is the smoking gun for the Anthropic
+        // code-paste flow: the CLI advertised a remote redirect
+        // (platform.claude.com), not a localhost loopback, so this
+        // listener can never receive the callback and the flow stalls
+        // until timeout. Surfaced to Sentry so the mismatch is visible
+        // without a device in hand.
+        Telemetry.debug(
+            "agent_login",
+            "url received",
+            mapOf(
+                "provider" to (provider?.wireName ?: "unknown"),
+                "loopback_port" to loopbackPort.toString(),
+            ),
+        )
         val server = loopbackFactory(loopbackPort)
         try {
             server.start { result -> handleLoopbackResult(result, sessionToken) }
@@ -157,6 +173,17 @@ class AgentLoginCoordinator(
     }
 
     private fun fail(reason: String) {
+        // Every failure terminus routes through here (broker
+        // agent_login_failed, loopback bind/timeout, provider error,
+        // forward error) — so one capture here covers the whole flow.
+        // ERROR-level so it's readable remotely from Sentry (org
+        // swe-kitty / conduit-android) without a device.
+        Telemetry.capture(
+            error = RuntimeException("agent login failed: $reason"),
+            message = "agent login failed: $reason",
+            tags = mapOf("flow" to "agent_login", "provider" to (provider?.wireName ?: "unknown")),
+            extras = mapOf("reason" to reason),
+        )
         synchronized(lock) {
             loopback?.stop()
             loopback = null

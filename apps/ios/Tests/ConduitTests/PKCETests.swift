@@ -134,10 +134,14 @@ struct PKCETests {
         #expect(cfg.clientID == "app_EMoamEEZ73f0CkXaXp7hrann")
         #expect(cfg.issuer == URL(string: "https://auth.openai.com")!)
         #expect(cfg.scopeString == "openid profile email offline_access")
-        #expect(cfg.redirectURI == URL(string: "conduit://oauth/openai/callback")!)
+        // Loopback redirect — the codex CLI's own (RFC 8252). Captured
+        // in-app by AgentLoginLoopbackServer.
+        #expect(cfg.redirectURI == URL(string: "http://localhost:1455/auth/callback")!)
         #expect(cfg.callbackURLScheme == "conduit")
+        #expect(cfg.captureMode == .loopback(port: 1455, path: "/auth/callback"))
         #expect(cfg.authorizeURL == URL(string: "https://auth.openai.com/oauth/authorize")!)
         #expect(cfg.tokenURL == URL(string: "https://auth.openai.com/oauth/token")!)
+        #expect(cfg.extraAuthorizeParams.isEmpty)
     }
 
     /// Pins the Claude Code CLI public OAuth constants reverse-engineered
@@ -154,10 +158,14 @@ struct PKCETests {
         #expect(cfg.clientID == "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
         #expect(cfg.issuer == URL(string: "https://claude.ai")!)
         #expect(cfg.scopeString == "user:profile user:inference user:file_upload user:mcp_servers user:sessions:claude_code")
-        #expect(cfg.redirectURI == URL(string: "conduit://oauth/anthropic/callback")!)
+        // Claude uses the real code-display redirect (no loopback) and a
+        // code-paste capture. `code=true` selects the display page.
+        #expect(cfg.redirectURI == URL(string: "https://platform.claude.com/oauth/code/callback")!)
         #expect(cfg.callbackURLScheme == "conduit")
+        #expect(cfg.captureMode == .codePaste)
         #expect(cfg.authorizeURL == URL(string: "https://claude.ai/oauth/authorize")!)
         #expect(cfg.tokenURL == URL(string: "https://platform.claude.com/v1/oauth/token")!)
+        #expect(cfg.extraAuthorizeParams == ["code": "true"])
     }
 
     // MARK: - OpenAI token-response decode

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -918,13 +919,16 @@ func (c *client) broadcastRenameStatus() {
 func (c *client) handleStartAgentLogin(provider string) {
 	server := c.serverRef()
 	if server == nil || server.OAuth == nil {
+		log.Printf("oauth: start_agent_login provider=%q rejected: no oauth manager", provider)
 		c.emitAgentLoginFailed(provider, "broker has no oauth manager configured")
 		return
 	}
 	if oauth.ProviderFor(provider) == nil {
+		log.Printf("oauth: start_agent_login provider=%q rejected: unknown provider", provider)
 		c.emitAgentLoginFailed(provider, "unknown provider: "+provider)
 		return
 	}
+	log.Printf("oauth: start_agent_login provider=%q session=%s", provider, c.sess.ID)
 	// Run the spawn off the WS read loop. The handler returns
 	// immediately; the view_event arrives whenever Start completes.
 	go func() {
@@ -932,9 +936,16 @@ func (c *client) handleStartAgentLogin(provider string) {
 		defer cancel()
 		sess, err := server.OAuth.StartSession(ctx, provider)
 		if err != nil {
+			log.Printf("oauth: start_agent_login provider=%q FAILED: %v", provider, err)
 			c.emitAgentLoginFailed(provider, err.Error())
 			return
 		}
+		// loopback_port=0 here means the CLI advertised a non-loopback
+		// redirect (e.g. Anthropic's remote platform.claude.com
+		// code-paste callback) — the phone's loopback-forward path does
+		// not apply and Forward will reject. Logged so this shows up in
+		// the journal instead of silently stalling the phone.
+		log.Printf("oauth: start_agent_login provider=%q url-captured loopback_port=%d", provider, sess.LoopbackPort)
 		c.emitAgentLoginURL(sess)
 	}()
 }
@@ -956,9 +967,11 @@ func (c *client) handleAgentLoginCallback(sessionToken, queryString string) {
 	}
 	go func() {
 		if err := server.OAuth.ForwardCallback(sessionToken, queryString); err != nil {
+			log.Printf("oauth: agent_login_callback FAILED: %v", err)
 			c.emitAgentLoginFailed("", "forward callback: "+err.Error())
 			return
 		}
+		log.Printf("oauth: agent_login_callback complete session=%s", c.sess.ID)
 		c.emitAgentLoginComplete()
 	}()
 }
