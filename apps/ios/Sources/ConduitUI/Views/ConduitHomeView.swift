@@ -177,56 +177,7 @@ extension ConduitUI {
             )
         }
 
-        // MARK: Connection card + Boxes (design-reference home)
-
-        /// Connection-status card for the active broker — server icon, name,
-        /// `broker :PORT` sub, and a live status dot (`connected`/`connecting…`/
-        /// `offline`). Green-tinted when connected. Mirrors screens.jsx.
-        private var connectionCard: some View {
-            let activeName = store.savedServers.first(where: { $0.endpoint == store.endpoint })?.name
-                ?? store.endpoint.displayHost
-            let (dot, statusText, connected): (Color, String, Bool) = {
-                switch store.harness {
-                case .live, .linked:        return (neon.green, "connected", true)
-                case .connecting:           return (neon.yellow, "connecting…", false)
-                case .reconnecting:         return (neon.yellow, "reconnecting…", false)
-                case .disconnected:         return (neon.textFaint, "offline", false)
-                case .failed:               return (neon.textFaint, "offline", false)
-                }
-            }()
-            return HStack(spacing: 9) {
-                Image(systemName: "server.rack")
-                    .font(.system(size: 16))
-                    .foregroundStyle(connected ? neon.green : neon.textDim)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(activeName)
-                        .font(neon.sans(13).weight(.semibold))
-                        .foregroundStyle(neon.text)
-                        .lineLimit(1)
-                    Text("broker · \(store.endpoint.displayHost)")
-                        .font(neon.mono(10.5))
-                        .foregroundStyle(neon.textFaint)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 6)
-                HStack(spacing: 5) {
-                    Circle().fill(dot).frame(width: 6, height: 6)
-                        .neonGlowBox(connected && neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
-                    Text(statusText)
-                        .font(neon.mono(11))
-                        .foregroundStyle(connected ? neon.green : neon.textFaint)
-                }
-            }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 10)
-            .neonCardSurface(
-                neon,
-                fill: connected ? neon.green.opacity(neon.dark ? 0.07 : 0.05) : neon.surface,
-                cornerRadius: 12,
-                border: connected ? neon.green.opacity(0.27) : neon.border,
-                glowTint: connected && neon.glow ? neon.green : nil
-            )
-        }
+        // MARK: Boxes (design-reference home)
 
         /// Mono uppercase section label (cyan) with an optional trailing action,
         /// matching the design's `ACTIVE SESSIONS` / `BOXES` headers.
@@ -254,19 +205,33 @@ extension ConduitUI {
             .listRowBackground(Color.clear)
         }
 
-        /// A paired-machine ("box") row: tinted server/ssh glyph, name, endpoint
-        /// sub, and a status word. Mirrors the design's Boxes list.
+        /// A paired-machine ("box") row: tinted server glyph, name, endpoint sub,
+        /// and a status word. The active (connected) machine is pinned first and
+        /// styled active — an `ACTIVE` badge + `connected` and a green-tinted
+        /// surface — folding in what used to be a separate connection card
+        /// (design handoff §3a). Per-box rows never show quota: plan limits are
+        /// per-account, surfaced ambiently elsewhere (§3b).
         private func boxRow(_ server: SavedServer) -> some View {
             let isActive = store.endpoint == server.endpoint
-            let online = isActive && store.harness.canIssueCommands
+            let connected = isActive && store.harness.canIssueCommands
+            let (statusText, statusColor): (String, Color) = {
+                guard isActive else { return ("tap to connect", neon.textFaint) }
+                switch store.harness {
+                case .live, .linked:   return ("connected", neon.green)
+                case .connecting:      return ("connecting…", neon.yellow)
+                case .reconnecting:    return ("reconnecting…", neon.yellow)
+                case .disconnected, .failed: return ("offline", neon.textFaint)
+                }
+            }()
+            let glyphColor = connected ? neon.green : (isActive ? neon.accent : neon.textFaint)
             return HStack(spacing: 11) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill((online ? neon.green : neon.textFaint).opacity(0.12))
+                    .fill(glyphColor.opacity(0.12))
                     .frame(width: 30, height: 30)
                     .overlay(
                         Image(systemName: "server.rack")
                             .font(.system(size: 14))
-                            .foregroundStyle(online ? neon.green : neon.textFaint)
+                            .foregroundStyle(glyphColor)
                     )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(server.name)
@@ -279,13 +244,32 @@ extension ConduitUI {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                Text(online ? "online" : "tap to connect")
-                    .font(neon.mono(11))
-                    .foregroundStyle(online ? neon.green : neon.textFaint)
+                if isActive {
+                    Text("ACTIVE")
+                        .font(neon.mono(9).weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(neon.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(neon.green.opacity(0.14)))
+                }
+                HStack(spacing: 5) {
+                    Circle().fill(statusColor).frame(width: 6, height: 6)
+                        .neonGlowBox(connected && neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
+                    Text(statusText)
+                        .font(neon.mono(11))
+                        .foregroundStyle(statusColor)
+                }
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
-            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12, border: neon.border, glowTint: nil)
+            .neonCardSurface(
+                neon,
+                fill: connected ? neon.green.opacity(neon.dark ? 0.07 : 0.05) : neon.surface,
+                cornerRadius: 12,
+                border: connected ? neon.green.opacity(0.27) : neon.border,
+                glowTint: connected && neon.glow ? neon.green : nil
+            )
         }
 
         private var snapshot: ConduitUI.HomeSnapshot {
@@ -350,22 +334,14 @@ extension ConduitUI {
         }
 
         /// The design-reference home body as one sectioned, scrollable List:
-        /// connection card → "Active sessions" → "Boxes". Session rows keep
+        /// "Active sessions" → "Boxes" (the connected box is pinned first and
+        /// styled active — no separate connection card). Session rows keep
         /// swipe-to-archive / tap-to-open; box rows tap to connect.
         @ViewBuilder
         private var homeList: some View {
             let snap = snapshot
             let rows = ConduitUI.HomeViewModel.rows(snap)
             List {
-                if store.endpoint.isComplete {
-                    Section {
-                        connectionCard
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
-                    }
-                }
-
                 Section {
                     if rows.isEmpty {
                         emptySessionsView(snap)
@@ -418,8 +394,13 @@ extension ConduitUI {
                 }
 
                 if !store.savedServers.isEmpty {
+                    // One machine = one row. The connected box is pinned first
+                    // and styled active (ACTIVE badge + `connected`); there is no
+                    // separate connection status card above (design handoff §3a).
+                    let boxes = store.savedServers.filter { $0.endpoint == store.endpoint }
+                        + store.savedServers.filter { $0.endpoint != store.endpoint }
                     Section {
-                        ForEach(store.savedServers) { server in
+                        ForEach(boxes) { server in
                             boxRow(server)
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
