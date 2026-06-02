@@ -1491,6 +1491,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.refreshAccountUsage(sessionId) } } }
     }
 
+    // Session-independent refresh for the ambient usage surfaces (Home strip /
+    // Settings card, design handoff §3b) — drives the broker fetch via any
+    // Claude session. No-op when none is connected. Usage is per-account and
+    // Claude-only, so any claude session yields the account-wide numbers.
+    fun refreshAccountUsage() {
+        val id = _sessions.value.firstOrNull { it.assistant == "claude" }?.id ?: return
+        refreshAccountUsage(id)
+    }
+
     fun sendChat(sessionId: String, msg: String) {
         // The user has answered — clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233). Done before the

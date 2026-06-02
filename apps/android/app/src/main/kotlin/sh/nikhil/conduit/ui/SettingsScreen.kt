@@ -154,6 +154,14 @@ fun SettingsScreen(
                 )
             }
 
+            // Usage & limits — ambient account-level Claude plan limits (design
+            // handoff §3b). Collapsed shows sparks; tap to expand to full bars +
+            // reset countdowns. Account-wide, not per-box. Expanded by default in
+            // the tablet Settings pane.
+            SettingsSection("Usage & limits") {
+                UsageLimitsCard(store, startExpanded = embedded)
+            }
+
             // Font (inline)
             SettingsSection("Font") {
                 AppearanceStore.FontFamily.values().forEachIndexed { idx, choice ->

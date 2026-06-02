@@ -154,6 +154,14 @@ fun HomeScreen(
             CircleIconButton(Icons.AutoMirrored.Filled.List, "Sessions", onClick = onOpenDrawer)
         }
 
+        // Ambient account-usage strip (design handoff §3b) — Claude plan limits
+        // at a glance, above the session list. Self-hides until usage data
+        // exists so it never dominates the list; gate the spacer too.
+        if (accountUsageSnapshot(sessions, statuses).hasData) {
+            Spacer(Modifier.height(12.dp))
+            HomeUsageStrip(store, modifier = Modifier.padding(horizontal = 14.dp))
+        }
+
         Spacer(Modifier.height(14.dp))
 
         // The connected machine is no longer a separate status card here — it's
