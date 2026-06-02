@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import kotlinx.coroutines.suspendCancellableCoroutine
+import sh.nikhil.conduit.Telemetry
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -299,8 +300,13 @@ class OAuthClient(
 ) {
 
     /** Build the authorize URL with PKCE S256 + provider extras. */
-    private fun buildAuthorizeUri(cfg: OAuthConfig, challenge: String, state: String): Uri =
-        Uri.parse(cfg.authorizeUrl).buildUpon().apply {
+    private fun buildAuthorizeUri(cfg: OAuthConfig, challenge: String, state: String): Uri {
+        // `appendQueryParameter` already fully percent-encodes values
+        // (`:` → %3A, `/` → %2F), so redirect_uri/scope arrive encoded —
+        // unlike iOS URLComponents, this side was never affected by the
+        // "Invalid request format" bug. Log the exact URL anyway so the
+        // request is verifiable from Sentry (CLAUDE.md "Standing order").
+        val uri = Uri.parse(cfg.authorizeUrl).buildUpon().apply {
             appendQueryParameter("response_type", "code")
             appendQueryParameter("client_id", cfg.clientId)
             appendQueryParameter("redirect_uri", cfg.redirectUri)
@@ -312,6 +318,9 @@ class OAuthClient(
                 appendQueryParameter(key, cfg.extraAuthorizeParams[key])
             }
         }.build()
+        Telemetry.debug("agent_login_url", "authorize", mapOf("provider" to provider.raw, "url" to uri.toString()))
+        return uri
+    }
 
     private fun launchTab(context: Context, uri: Uri) {
         CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, uri)

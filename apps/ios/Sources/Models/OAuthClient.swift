@@ -462,25 +462,45 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         codeChallenge: String,
         state: String
     ) throws -> URL {
-        var comps = URLComponents(url: config.authorizeURL, resolvingAgainstBaseURL: false)
-        var items = [
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "client_id", value: config.clientID),
-            URLQueryItem(name: "redirect_uri", value: config.redirectURI.absoluteString),
-            URLQueryItem(name: "scope", value: config.scopeString),
-            URLQueryItem(name: "code_challenge", value: codeChallenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "state", value: state),
+        var pairs: [(String, String)] = [
+            ("response_type", "code"),
+            ("client_id", config.clientID),
+            ("redirect_uri", config.redirectURI.absoluteString),
+            ("scope", config.scopeString),
+            ("code_challenge", codeChallenge),
+            ("code_challenge_method", "S256"),
+            ("state", state),
         ]
         // Provider-specific extras (e.g. Claude's `code=true`). Sorted so
         // the generated URL is deterministic for the test layer.
         for key in config.extraAuthorizeParams.keys.sorted() {
-            items.append(URLQueryItem(name: key, value: config.extraAuthorizeParams[key]))
+            pairs.append((key, config.extraAuthorizeParams[key] ?? ""))
         }
-        comps?.queryItems = items
-        guard let url = comps?.url else {
+        // FULLY percent-encode every value (RFC 3986 unreserved set only),
+        // exactly like the real `claude` CLI sends them. `URLComponents`
+        // `.queryItems` leaves `:` and `/` RAW in query values, so we'd send
+        // `redirect_uri=https://platform.claude.com/...` unencoded —
+        // Anthropic's authorize endpoint rejects that as "Authorization
+        // failed: Invalid request format" (OpenAI's looser endpoint
+        // tolerated it, which masked the bug). Build the query string by
+        // hand so `redirect_uri` / `scope` arrive encoded (`https%3A%2F%2F…`,
+        // `org%3Acreate_api_key%20…`).
+        let unreserved = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let query = pairs.map { name, value in
+            "\(name)=\(value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "")"
+        }.joined(separator: "&")
+        guard var comps = URLComponents(url: config.authorizeURL, resolvingAgainstBaseURL: false) else {
             throw OAuthClientError.underlying("authorize URL build failed")
         }
+        comps.percentEncodedQuery = query
+        guard let url = comps.url else {
+            throw OAuthClientError.underlying("authorize URL build failed")
+        }
+        // Log the exact authorize URL we hand to the browser (code_challenge
+        // + state are ephemeral, not secrets) so the request is verifiable
+        // from Sentry without a device — see CLAUDE.md "Standing order".
+        Telemetry.debug("agent_login_url", "authorize", data: ["provider": provider.rawValue, "url": url.absoluteString])
         return url
     }
 
