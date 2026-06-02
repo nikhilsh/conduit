@@ -156,7 +156,7 @@ class PKCETest {
         assertEquals("9d1c250a-e61b-44d9-88ed-5944d1962f5e", cfg.clientId)
         assertEquals("https://claude.ai", cfg.issuer)
         assertEquals(
-            "user:profile user:inference user:file_upload user:mcp_servers user:sessions:claude_code",
+            "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
             cfg.scopeString,
         )
         // Claude uses the real code-display redirect (no loopback) and a

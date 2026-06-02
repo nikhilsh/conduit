@@ -81,12 +81,17 @@ enum OAuthProvider: String, Sendable {
             return OAuthConfig(
                 issuer: URL(string: "https://claude.ai")!,
                 clientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+                // EXACT scope set the real `claude auth login --claudeai`
+                // sends (captured from the CLI's authorize URL). Missing
+                // `org:create_api_key` made claude.ai reject the request
+                // with "Authorization failed: Invalid request format".
                 scopes: [
+                    "org:create_api_key",
                     "user:profile",
                     "user:inference",
-                    "user:file_upload",
-                    "user:mcp_servers",
                     "user:sessions:claude_code",
+                    "user:mcp_servers",
+                    "user:file_upload",
                 ],
                 // The real, whitelisted redirect the CLI uses — a remote
                 // page that displays the code (no loopback to intercept).

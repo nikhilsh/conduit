@@ -157,7 +157,7 @@ struct PKCETests {
         let cfg = OAuthProvider.anthropic.config
         #expect(cfg.clientID == "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
         #expect(cfg.issuer == URL(string: "https://claude.ai")!)
-        #expect(cfg.scopeString == "user:profile user:inference user:file_upload user:mcp_servers user:sessions:claude_code")
+        #expect(cfg.scopeString == "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload")
         // Claude uses the real code-display redirect (no loopback) and a
         // code-paste capture. `code=true` selects the display page.
         #expect(cfg.redirectURI == URL(string: "https://platform.claude.com/oauth/code/callback")!)

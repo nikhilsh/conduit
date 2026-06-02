@@ -64,12 +64,16 @@ enum class OAuthProvider(val raw: String) {
                 // (platform.claude.com) and uses a CODE-PASTE flow.
                 issuer = "https://claude.ai",
                 clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+                // EXACT scope set the real `claude auth login --claudeai`
+                // sends. Missing `org:create_api_key` made claude.ai reject
+                // the request with "Invalid request format".
                 scopes = listOf(
+                    "org:create_api_key",
                     "user:profile",
                     "user:inference",
-                    "user:file_upload",
-                    "user:mcp_servers",
                     "user:sessions:claude_code",
+                    "user:mcp_servers",
+                    "user:file_upload",
                 ),
                 // The real, whitelisted redirect — a remote page that
                 // displays a `code#state` string (no loopback to catch).
