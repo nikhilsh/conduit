@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Conduit — Privacy Policy</title>
+<meta name="description" content="How Conduit handles your data. Your sessions stay between your device and the broker you run; we don't store your terminal, chat, or browser content." />
+<link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png" />
+<link rel="apple-touch-icon" href="assets/conduit-256.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#04050a;
+    --panel:rgba(16,24,42,0.55);
+    --line:rgba(34,211,238,0.14);
+    --line-soft:rgba(160,184,224,0.10);
+    --text:#eaf3ff;
+    --dim:rgba(196,214,244,0.78);
+    --faint:rgba(160,184,224,0.46);
+    --cyan:#22d3ee;
+    --green:#3ef0a0;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'Space Grotesk',system-ui,-apple-system,Segoe UI,sans-serif;
+    --maxw:760px;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.62;}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px;}
+  a{color:var(--cyan);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  header{border-bottom:1px solid var(--line-soft);padding:28px 0;}
+  .brand{display:inline-flex;align-items:center;gap:10px;font-weight:600;font-size:18px;color:var(--text);}
+  .brand img{width:26px;height:26px;border-radius:7px;}
+  main{padding:48px 0 72px;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);}
+  h1{font-size:34px;line-height:1.1;margin:10px 0 6px;letter-spacing:-.01em;}
+  .updated{color:var(--faint);font-family:var(--mono);font-size:13px;margin-bottom:8px;}
+  .lede{color:var(--dim);font-size:17px;margin:18px 0 8px;}
+  h2{font-size:19px;margin:38px 0 8px;color:var(--text);}
+  p,li{color:var(--dim);font-size:15.5px;}
+  ul{padding-left:20px;}
+  li{margin:6px 0;}
+  strong{color:var(--text);font-weight:600;}
+  .callout{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:16px 18px;margin:22px 0;}
+  .callout p{margin:0;color:var(--text);}
+  footer{border-top:1px solid var(--line-soft);padding:28px 0 48px;color:var(--faint);font-size:13px;}
+  footer .mono{font-family:var(--mono);}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="brand" href="/"><img src="assets/conduit-512.png" alt="" />Conduit</a>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <div class="eyebrow">Privacy</div>
+    <h1>Privacy Policy</h1>
+    <div class="updated">Last updated: June 2, 2026</div>
+
+    <p class="lede">Conduit is a mobile and tablet client for driving coding agents
+    on a development machine you control. The short version: your sessions stay
+    between your device and your own broker — we don't run servers that receive,
+    store, or read your terminal output, chat, or browser content.</p>
+
+    <div class="callout">
+      <p>Conduit is self-hosted by design. You pair the app with a broker/harness
+      that <strong>you</strong> run on <strong>your</strong> machine. Your work
+      flows directly between your device and that broker. There is no Conduit
+      cloud account, and we have no access to your session data.</p>
+    </div>
+
+    <h2>What stays on your device and your broker</h2>
+    <ul>
+      <li><strong>Session content</strong> — terminal output, chat messages,
+      commands, and browser previews flow between your device and the broker you
+      pair with. We do not proxy, store, or read it.</li>
+      <li><strong>Pairing credentials</strong> — the QR code / token you use to
+      connect to a broker is stored locally on your device.</li>
+      <li><strong>Sign-in tokens</strong> — if you sign in with Anthropic, the
+      resulting OAuth tokens are stored on your device and/or your broker so the
+      agent can call Anthropic's API. Use of Anthropic's API is governed by
+      Anthropic's own privacy policy.</li>
+    </ul>
+
+    <h2>Diagnostics we do collect</h2>
+    <ul>
+      <li><strong>Crash and error reports</strong> — to find and fix bugs, the app
+      sends crash reports and limited diagnostic logs to our error-monitoring
+      provider, <strong>Sentry</strong>. These may include device model, OS
+      version, app version, and technical breadcrumbs about what the app was doing.
+      They are used solely to improve the app — never for advertising, and never
+      sold.</li>
+    </ul>
+
+    <h2>Device permissions</h2>
+    <ul>
+      <li><strong>Camera &amp; Photos</strong> — used only to scan or import a
+      pairing QR code. Images are processed on-device and are not uploaded.</li>
+      <li><strong>Microphone &amp; Speech Recognition</strong> — used only for
+      optional voice dictation. Speech is transcribed on-device; we do not receive
+      your audio.</li>
+      <li><strong>Local network</strong> — used to discover brokers advertising on
+      your Wi-Fi (Bonjour/mDNS). This discovery stays on your local network.</li>
+    </ul>
+
+    <h2>What we don't do</h2>
+    <ul>
+      <li>No advertising and no third-party ad or analytics trackers (beyond the
+      crash reporting described above).</li>
+      <li>No sale or sharing of personal data.</li>
+      <li>No Conduit-operated account system that stores your content.</li>
+    </ul>
+
+    <h2>Children</h2>
+    <p>Conduit is a developer tool and is not directed to children under 13.</p>
+
+    <h2>Changes</h2>
+    <p>If this policy changes, we'll update the date above and post the revised
+    policy at this URL.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about privacy? Email
+    <a href="mailto:me@nikhil.sh">me@nikhil.sh</a>.</p>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Conduit</span> · <a href="/">Home</a> · <span class="mono">›_ conduit</span>
+  </div>
+</footer>
+</body>
+</html>

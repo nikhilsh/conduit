@@ -19,6 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(__dirname, "out");
 const assetsSrc = path.join(__dirname, "public", "assets");
 const templatePath = path.join(__dirname, "index.template.html");
+const privacyPath = path.join(__dirname, "privacy.template.html");
 const deployYaml = path.join(__dirname, ".deploy.yaml");
 
 const repo = process.env.GITHUB_REPO || "nikhilsh/conduit";
@@ -149,6 +150,9 @@ async function build() {
     for (const name of await readdir(assetsSrc)) {
         await copyFile(path.join(assetsSrc, name), path.join(outDir, "assets", name));
     }
+    // Privacy policy is a static standalone page (no release data injected) —
+    // emitted at /privacy.html, which is the URL given to App Store Connect.
+    await writeFile(path.join(outDir, "privacy.html"), await readFile(privacyPath, "utf8"));
     if (existsSync(deployYaml)) {
         await copyFile(deployYaml, path.join(outDir, ".deploy.yaml"));
     }
