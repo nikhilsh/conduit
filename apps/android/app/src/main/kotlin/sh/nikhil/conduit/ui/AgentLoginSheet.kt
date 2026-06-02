@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.auth.OAuthClient
 import sh.nikhil.conduit.auth.OAuthClientError
 import sh.nikhil.conduit.auth.OAuthCredential
@@ -91,15 +92,21 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
 
     suspend fun deliver(cred: OAuthCredential) {
         runCatching { OAuthStore.save(ctx, cred) }
+        Telemetry.breadcrumb("agent_login", "shipping credential to broker", mapOf("provider" to cred.provider.raw))
         try {
             store.sendAgentCredentials(cred)
             statusMessage = "Signed in. The broker now has your ${cred.provider.raw} credentials for future sessions."
             errorMessage = null
+            Telemetry.breadcrumb("agent_login", "credential shipped ok", mapOf("provider" to cred.provider.raw))
         } catch (t: Throwable) {
-            // Token exchange succeeded; only the broker hand-off failed.
-            // The local copy survives — surface a retry.
-            statusMessage = null
-            errorMessage = "Signed in, but couldn't reach the broker. Reconnect and try again — your login is saved locally."
+            // Token exchange succeeded and the credential is saved locally.
+            // The broker hand-off needs a live session (the core carries it
+            // over an active session WS); if none is live yet, the store
+            // resends it when the user starts a session — so this is NOT a
+            // failure. Show a benign "saved" message, not a scary error.
+            statusMessage = "Signed in — saved. It’ll sync to the broker when you start a session."
+            errorMessage = null
+            Telemetry.breadcrumb("agent_login", "broker hand-off deferred (no live session); saved locally", mapOf("provider" to cred.provider.raw, "error" to (t.message ?: t.toString())))
         }
     }
 
@@ -108,14 +115,18 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
         statusMessage = "Opening ChatGPT sign-in…"
         errorMessage = null
         awaitingPaste = false
+        Telemetry.breadcrumb("agent_login", "openai: start (loopback)")
         scope.launch {
             try {
                 val cred = OAuthClient(OAuthProvider.OPENAI).startLoopbackLogin(ctx)
+                Telemetry.breadcrumb("agent_login", "openai: token exchange ok")
                 deliver(cred)
             } catch (e: OAuthClientError) {
                 statusMessage = null; errorMessage = describe(e)
+                Telemetry.capture(e, "agent login failed: openai", mapOf("flow" to "agent_login", "provider" to "openai"), mapOf("reason" to describe(e)))
             } catch (t: Throwable) {
                 statusMessage = null; errorMessage = "Sign-in failed: ${t.message ?: t}"
+                Telemetry.capture(t, "agent login failed: openai", mapOf("flow" to "agent_login", "provider" to "openai"))
             } finally {
                 isWorking = false
             }
@@ -125,6 +136,7 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     fun beginClaude() {
         isWorking = true
         errorMessage = null
+        Telemetry.breadcrumb("agent_login", "anthropic: begin code-paste, opening browser")
         scope.launch {
             try {
                 val client = OAuthClient(OAuthProvider.ANTHROPIC)
@@ -135,6 +147,7 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                 statusMessage = "Sign in, copy the code Claude shows, then paste it below."
             } catch (t: Throwable) {
                 statusMessage = null; errorMessage = "Could not start Claude sign-in: ${t.message ?: t}"
+                Telemetry.capture(t, "agent login failed: anthropic begin", mapOf("flow" to "agent_login", "provider" to "anthropic"))
             } finally {
                 isWorking = false
             }
@@ -151,9 +164,11 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
         isWorking = true
         statusMessage = "Exchanging the Claude code…"
         errorMessage = null
+        Telemetry.breadcrumb("agent_login", "anthropic: submit pasted code, exchanging")
         scope.launch {
             try {
                 val cred = client.finishCodePaste(pastedCode, req)
+                Telemetry.breadcrumb("agent_login", "anthropic: token exchange ok")
                 deliver(cred)
                 awaitingPaste = false
                 pastedCode = ""
@@ -161,8 +176,10 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                 pasteRequest = null
             } catch (e: OAuthClientError) {
                 statusMessage = null; errorMessage = describe(e)
+                Telemetry.capture(e, "agent login failed: anthropic", mapOf("flow" to "agent_login", "provider" to "anthropic"), mapOf("reason" to describe(e)))
             } catch (t: Throwable) {
                 statusMessage = null; errorMessage = "Sign-in failed: ${t.message ?: t}"
+                Telemetry.capture(t, "agent login failed: anthropic", mapOf("flow" to "agent_login", "provider" to "anthropic"))
             } finally {
                 isWorking = false
             }

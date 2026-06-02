@@ -892,6 +892,7 @@ final class SessionStore {
         sessionCreationError = nil
         let pendingID = "pending-\(UUID().uuidString)"
         sessionLifecycle[pendingID] = .creating
+        Telemetry.breadcrumb("session", "create start", data: ["assistant": assistant, "hasCwd": "\(startupCwd?.isEmpty == false)", "hasModel": "\(model?.isEmpty == false)"])
         if useRustStore {
             rustStore.applyLifecycle(sessionId: pendingID, lifecycle: .creating)
         }
@@ -907,6 +908,7 @@ final class SessionStore {
                 let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let pickedModel = (trimmedModel?.isEmpty == false) ? trimmedModel : nil
                 let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: nil, model: pickedModel, cwd: startup)
+                Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
                 if let startup {
                     self.rememberRecentDirectory(startup)
                 }
@@ -964,6 +966,7 @@ final class SessionStore {
                 self.replayStoredAgentCredentials()
             } catch {
                 let detail = Self.describe(error)
+                Telemetry.capture(error: error, message: "iOS create session failed", tags: ["flow": "session", "assistant": assistant], extras: ["detail": detail])
                 self.sessionLifecycle[pendingID] = .failed(detail)
                 if self.useRustStore {
                     self.rustStore.applyLifecycle(

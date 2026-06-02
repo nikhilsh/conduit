@@ -71,7 +71,7 @@ object QrImageDecoder {
             if (payload == null) {
                 Telemetry.diagnostic("QR-from-image: no QR decoded from bitmap", extras = diag)
             } else {
-                Telemetry.breadcrumb("QR-from-image: decoded", diag)
+                Telemetry.breadcrumb("qr", "QR-from-image: decoded", diag)
             }
             payload
         } catch (t: Throwable) {

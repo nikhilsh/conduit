@@ -1227,6 +1227,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _sessionCreationError.value = null
         val pendingId = "pending-${UUID.randomUUID()}"
         updateLifecycle { it + (pendingId to SessionLifecycle.Creating) }
+        Telemetry.breadcrumb("session", "create start", mapOf("assistant" to assistant, "hasCwd" to (startupCwd?.isNotBlank() == true).toString(), "hasModel" to (model?.isNotBlank() == true).toString()))
         viewModelScope.launch {
             try {
                 // Pass the selected folder as the agent's cwd so the broker
@@ -1237,6 +1238,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val startup = startupCwd?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedModel = model?.trim()?.takeIf { it.isNotEmpty() }
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, null, pickedModel, startup) }
+                Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
                 startup?.let { rememberRecentDirectory(it) }
                 initialPrompt?.trim()?.takeIf { it.isNotEmpty() }?.let { prompt ->
                     runCatching { withContext(Dispatchers.IO) { c.sendChat(id, prompt) } }

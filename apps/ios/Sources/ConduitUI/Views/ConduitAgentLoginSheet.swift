@@ -215,16 +215,20 @@ extension ConduitUI {
             errorMessage = nil
             awaitingPaste = false
             defer { isWorking = false }
+            Telemetry.breadcrumb("agent_login", "openai: start (loopback)")
             do {
                 let client = OAuthClient(provider: .openai)
                 let credential = try await client.startLogin()
+                Telemetry.breadcrumb("agent_login", "openai: token exchange ok")
                 try await deliver(credential, provider: .openai)
             } catch let err as OAuthClientError {
                 statusMessage = nil
                 errorMessage = describe(err)
+                Telemetry.capture(error: err, message: "agent login failed: openai", tags: ["flow": "agent_login", "provider": "openai"], extras: ["reason": describe(err)])
             } catch {
                 statusMessage = nil
                 errorMessage = "Sign-in failed: \(error.localizedDescription)"
+                Telemetry.capture(error: error, message: "agent login failed: openai", tags: ["flow": "agent_login", "provider": "openai"])
             }
         }
 
@@ -235,6 +239,7 @@ extension ConduitUI {
             isWorking = true
             errorMessage = nil
             defer { isWorking = false }
+            Telemetry.breadcrumb("agent_login", "anthropic: begin code-paste, opening browser")
             do {
                 let client = OAuthClient(provider: .anthropic)
                 let url = try client.beginCodePasteAuthorize()
@@ -245,6 +250,7 @@ extension ConduitUI {
             } catch {
                 statusMessage = nil
                 errorMessage = "Could not start Claude sign-in: \(error.localizedDescription)"
+                Telemetry.capture(error: error, message: "agent login failed: anthropic begin", tags: ["flow": "agent_login", "provider": "anthropic"])
             }
         }
 
@@ -259,8 +265,10 @@ extension ConduitUI {
             statusMessage = "Exchanging the Claude code…"
             errorMessage = nil
             defer { isWorking = false }
+            Telemetry.breadcrumb("agent_login", "anthropic: submit pasted code, exchanging")
             do {
                 let credential = try await client.finishCodePaste(pasted: pastedCode)
+                Telemetry.breadcrumb("agent_login", "anthropic: token exchange ok")
                 try await deliver(credential, provider: .anthropic)
                 awaitingPaste = false
                 pastedCode = ""
@@ -268,26 +276,35 @@ extension ConduitUI {
             } catch let err as OAuthClientError {
                 statusMessage = nil
                 errorMessage = describe(err)
+                Telemetry.capture(error: err, message: "agent login failed: anthropic", tags: ["flow": "agent_login", "provider": "anthropic"], extras: ["reason": describe(err)])
             } catch {
                 statusMessage = nil
                 errorMessage = "Sign-in failed: \(error.localizedDescription)"
+                Telemetry.capture(error: error, message: "agent login failed: anthropic", tags: ["flow": "agent_login", "provider": "anthropic"])
             }
         }
 
-        /// Stash the credential locally (so a WS outage doesn't lose it)
-        /// and ship it to the broker.
+        /// Stash the credential locally (so it survives a WS outage / a
+        /// not-yet-connected session) and ship it to the broker.
         @MainActor
         private func deliver(_ credential: OAuthCredential, provider: OAuthProvider) async throws {
             try? OAuthCredentialStore.save(credential)
+            Telemetry.breadcrumb("agent_login", "shipping credential to broker", data: ["provider": provider.rawValue])
             do {
                 try await store.sendAgentCredentials(provider: provider, credential: credential)
                 statusMessage = "Signed in. The broker now has your \(provider.rawValue) credentials for future sessions."
                 errorMessage = nil
+                Telemetry.breadcrumb("agent_login", "credential shipped ok", data: ["provider": provider.rawValue])
             } catch {
-                // Token exchange succeeded; only the broker hand-off
-                // failed. The Keychain copy survives — surface a retry.
-                statusMessage = nil
-                errorMessage = "Signed in, but couldn't reach the broker. Reconnect and try again — your login is saved locally."
+                // Token exchange succeeded and the credential is saved in the
+                // Keychain. The broker hand-off needs a live session (the core
+                // carries it over an active session WS); if none is live yet,
+                // `replayStoredAgentCredentials()` resends it the moment the
+                // user starts a session — so this is NOT a failure. Show a
+                // benign "saved" message, not a scary error.
+                statusMessage = "Signed in — saved. It’ll sync to the broker when you start a session."
+                errorMessage = nil
+                Telemetry.breadcrumb("agent_login", "broker hand-off deferred (no live session); saved locally for replay", data: ["provider": provider.rawValue, "error": "\(error)"])
             }
         }
 

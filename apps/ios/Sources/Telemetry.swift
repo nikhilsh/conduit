@@ -31,6 +31,25 @@ enum Telemetry {
 #endif
     }
 
+    /// Leave a lightweight breadcrumb in the trail attached to the NEXT
+    /// event (crash/error). Unlike `debug`, a breadcrumb is NOT a full
+    /// Sentry event — it's ring-buffered by the SDK and costs nothing
+    /// until something fails, so scatter these liberally across any flow
+    /// or screen that can fail (see CLAUDE.md "Standing order").
+    /// `category` groups crumbs (e.g. "agent_login", "session",
+    /// "connect", "browser", "upload"); `data` is searchable key/values.
+    static func breadcrumb(_ category: String, _ message: String, data: [String: String] = [:]) {
+#if canImport(Sentry)
+        guard !sentryDSN.isEmpty else { return }
+        let crumb = Breadcrumb(level: .info, category: category)
+        crumb.message = message
+        if !data.isEmpty { crumb.data = data }
+        SentrySDK.addBreadcrumb(crumb)
+#else
+        _ = (category, message, data)
+#endif
+    }
+
     /// Structured diagnostic telemetry meant to be READ BACK from Sentry
     /// (org `swe-kitty`, project `conduit-ios`): an INFO-level event tagged
     /// `diag=<category>` with `data` as searchable extras. Use it for runtime

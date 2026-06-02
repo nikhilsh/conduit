@@ -97,11 +97,19 @@ object Telemetry {
     /** Last payload emitted per `diag` category, used to drop consecutive duplicates. */
     private val lastDebugPayload = mutableMapOf<String, String>()
 
-    /** Leave a breadcrumb so it shows up in the trail of the next event. */
-    fun breadcrumb(message: String, data: Map<String, String> = emptyMap()) {
+    /**
+     * Leave a lightweight breadcrumb in the trail attached to the NEXT
+     * event (crash/error). Unlike [debug], a breadcrumb is NOT a full
+     * Sentry event — it's ring-buffered by the SDK and costs nothing until
+     * something fails, so scatter these liberally across any flow or
+     * screen that can fail (see CLAUDE.md "Standing order"). [category]
+     * groups crumbs (e.g. "agent_login", "session", "connect", "browser").
+     */
+    fun breadcrumb(category: String, message: String, data: Map<String, String> = emptyMap()) {
         if (BuildConfig.SENTRY_DSN.trim().isEmpty()) return
         val crumb = Breadcrumb(message)
-        crumb.category = "qr"
+        crumb.category = category
+        crumb.level = SentryLevel.INFO
         data.forEach { (key, value) -> crumb.setData(key, value) }
         Sentry.addBreadcrumb(crumb)
     }

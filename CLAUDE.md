@@ -11,6 +11,18 @@ Operating principles for Claude agents working in this repo.
 
 ## Working in this repo
 
+**Standing order: instrument everything that can fail with Sentry breadcrumbs.**
+Because mobile is CI-compile-only (below), on-device failures and crashes are
+otherwise invisible. For ANY new flow or screen that can fail, drop
+`Telemetry.breadcrumb(category, message, data)` at each meaningful step (screen
+open, network start/finish/fail, OAuth steps, session create, connect/reconnect,
+browser-preview load, file upload, chat send) and a `Telemetry.capture(...)`
+ERROR on the failure terminus. Breadcrumbs are lightweight (ring-buffered,
+attached to the next event — not a full event each), so scatter them freely.
+Use `Telemetry.debug` for runtime state you'll want to read back. Helpers live
+in `apps/ios/Sources/Telemetry.swift` and `apps/android/.../Telemetry.kt`. The
+goal: the next crash/error is self-diagnosing from Sentry without a device.
+
 **Mobile is CI-compile-only on the dev box.** There is no Mac/Xcode and no
 Android SDK on the machine agents run on. Only the Go **broker** (`broker/`) and
 Rust **core** (`core/`) are locally buildable/testable. iOS (`apps/ios/`) and
