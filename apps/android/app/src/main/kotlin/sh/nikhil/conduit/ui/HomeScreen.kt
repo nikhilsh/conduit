@@ -79,6 +79,11 @@ fun HomeScreen(
     onNewSession: () -> Unit,
     onSearch: () -> Unit,
     onVoice: () -> Unit,
+    // On the 3-pane tablet the rail header already owns the Settings gear,
+    // so the center home screen must not render a second one (two gears on
+    // the tablet home — device feedback 2026-06-02). Phone keeps it: the
+    // rail isn't present there, so this is the only Settings affordance.
+    showSettingsButton: Boolean = true,
 ) {
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
@@ -112,7 +117,9 @@ fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            CircleIconButton(Icons.Default.Settings, "Settings", onClick = onOpenSettings)
+            if (showSettingsButton) {
+                CircleIconButton(Icons.Default.Settings, "Settings", onClick = onOpenSettings)
+            }
             Spacer(Modifier.weight(1f))
             Row(
                 verticalAlignment = Alignment.CenterVertically,

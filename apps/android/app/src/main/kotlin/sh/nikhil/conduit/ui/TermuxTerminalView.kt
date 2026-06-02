@@ -30,6 +30,7 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import sh.nikhil.conduit.AppearanceStore
+import sh.nikhil.conduit.BuildConfig
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionStore
 import uniffi.conduit_core.ProjectSession
@@ -352,11 +353,18 @@ private fun buildTermuxTerminalView(
     // the first layout pass — defer the append until then so we
     // don't NPE. The LaunchedEffect in the Composable will also
     // (idempotently) replay any broker buffer that arrived early.
+    //
+    // The banner is a dev diagnostic ("Termux Stage 2 mounted — awaiting
+    // broker bytes…"). Release builds must not show it to users (device
+    // feedback 2026-06-02) — gate it to dev so the first frame is a clean
+    // terminal, not a debug line.
     view.post {
         try {
-            val bytes = STAGE2_BANNER.toByteArray(Charsets.UTF_8)
             val emulator = session.emulator
-            emulator?.append(bytes, bytes.size)
+            if (BuildConfig.RELEASE_TAG == "dev") {
+                val bytes = STAGE2_BANNER.toByteArray(Charsets.UTF_8)
+                emulator?.append(bytes, bytes.size)
+            }
             // Re-apply once the emulator is live so the per-colour
             // table sees the user's palette on the first frame.
             applyAppearance(view, session, initialPalette, initialFontFamily, initialFontSize)

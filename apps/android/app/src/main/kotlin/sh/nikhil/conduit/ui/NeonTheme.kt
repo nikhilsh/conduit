@@ -205,10 +205,19 @@ data class NeonTheme(
                 accentText = Color(0xFF03121A)
                 codeBg = Color(red = 0, green = 4, blue = 12, alpha = (0.6f * 255).toInt())
                 codeText = text
-                // radial-gradient(... {A}14, #0a1020 34%, #05060d 70%, #04050a 100%)
+                // Design anchors the accent bloom at the TOP (`at 50% -12%`),
+                // but Compose's Brush.radialGradient with center =
+                // Offset.Unspecified paints from the SCREEN CENTRE — so an
+                // accent-tinted centre stop renders as a soft glow orb floating
+                // in the middle of every screen (decorative noise that doesn't
+                // track content — device feedback 2026-06-02, and the same
+                // "circular thing in the middle" that already got the light
+                // canvas flattened below). Drop the central accent stop: start
+                // the ramp at the dark navy so there's no orb, keeping only the
+                // edge vignette. The grid overlay still carries the texture.
                 appBg = Brush.radialGradient(
                     colorStops = arrayOf(
-                        0.0f to withAlpha(palette.accent, 0x14),
+                        0.0f to Color(0xFF0A1020),
                         0.34f to Color(0xFF0A1020),
                         0.70f to Color(0xFF05060D),
                         1.0f to Color(0xFF04050A),

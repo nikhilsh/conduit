@@ -101,6 +101,9 @@ fun AppRoot(store: SessionStore) {
                                 onNewSession = onNewSession,
                                 onSearch = { showSearch = true },
                                 onVoice = { showVoice = true },
+                                // The tablet rail header already shows a Settings
+                                // gear — don't render a second one in the center.
+                                showSettingsButton = false,
                             )
                         }
                     }
