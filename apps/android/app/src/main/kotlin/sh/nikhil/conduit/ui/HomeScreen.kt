@@ -58,6 +58,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.HarnessState
+import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionNaming
@@ -153,72 +154,11 @@ fun HomeScreen(
             CircleIconButton(Icons.AutoMirrored.Filled.List, "Sessions", onClick = onOpenDrawer)
         }
 
-        Spacer(Modifier.height(12.dp))
-
-        // Connection-status card for the active broker — server glyph, name,
-        // `broker · host`, and a live status dot (green when connected).
-        // Mirrors iOS + the design-reference home (replaces the pill strip).
-        run {
-            val connected = harness is HarnessState.Live || harness is HarnessState.Linked
-            val connecting = harness is HarnessState.Connecting || harness is HarnessState.Reconnecting
-            val dotColor = when {
-                connected -> neon.green
-                connecting -> neon.yellow
-                else -> neon.textFaint
-            }
-            val statusText = when {
-                connected -> "connected"
-                connecting -> "connecting…"
-                else -> "offline"
-            }
-            val activeName = savedServers.firstOrNull { it.endpoint == endpoint }?.name
-                ?: if (endpoint.isComplete) endpoint.displayHost else "no server"
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp)
-                    .neonCardSurface(
-                        neon = neon,
-                        shape = RoundedCornerShape(12.dp),
-                        fill = if (connected) neon.green.copy(alpha = 0.07f) else neon.surface,
-                        borderColor = if (connected) neon.green.copy(alpha = 0.27f) else neon.border,
-                        glowTint = if (connected) neon.green else null,
-                    )
-                    .padding(horizontal = 13.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                Icon(Icons.Filled.Storage, null, modifier = Modifier.size(18.dp), tint = if (connected) neon.green else neon.textDim)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        activeName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontFamily = neon.sans,
-                        fontWeight = FontWeight.SemiBold,
-                        color = neon.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        "broker · " + (if (endpoint.isComplete) endpoint.displayHost else "—"),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        color = neon.textFaint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Box(modifier = Modifier.size(6.dp).background(dotColor, CircleShape))
-                Text(
-                    statusText,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.mono,
-                    color = if (connected) neon.green else neon.textFaint,
-                )
-            }
-        }
-
         Spacer(Modifier.height(14.dp))
+
+        // The connected machine is no longer a separate status card here — it's
+        // the first, active-styled row of the BOXES list below the sessions
+        // (design handoff §3a: one machine = one row). See HomeBoxRow.
 
         // ACTIVE SESSIONS section label (mono uppercase, cyan) + New session,
         // matching the design-reference home.
@@ -432,6 +372,58 @@ fun HomeScreen(
             }
         }
 
+        // BOXES — one row per saved machine, connected pinned first + ACTIVE
+        // badge; folds in the old connection status card (design handoff §3a:
+        // one machine = one row). Sits below the sessions, above the action bar
+        // (canonical order: usage strip → active sessions → boxes). No quota
+        // here — plan limits are per-account (§3b), not per box.
+        if (savedServers.isNotEmpty()) {
+            val boxes = savedServers.filter { it.endpoint == endpoint } +
+                savedServers.filter { it.endpoint != endpoint }
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "BOXES",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        letterSpacing = 2.sp,
+                        color = neon.accent,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier.clickable { onAddServer() },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(Icons.Default.Wifi, null, modifier = Modifier.size(14.dp), tint = neon.textDim)
+                        Text(
+                            "Pair box",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = neon.sans,
+                            fontWeight = FontWeight.SemiBold,
+                            color = neon.textDim,
+                        )
+                    }
+                }
+                boxes.forEach { server ->
+                    HomeBoxRow(
+                        neon = neon,
+                        server = server,
+                        isActive = server.endpoint == endpoint,
+                        harness = harness,
+                        onClick = { store.selectSavedServer(server.id, autoConnect = true) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
         // Bottom action bar — audit §A.1.5 / PR 3. Conduit uses 44dp
         // for ALL three controls (not 52/68); the prior 68dp filled
         // accent + plus over-built the FAB relative to the mic/search
@@ -486,6 +478,96 @@ fun HomeScreen(
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
             },
+        )
+    }
+}
+
+/**
+ * A paired-machine ("box") row on Home: tinted server glyph, name, endpoint
+ * sub, and a status word. The active (connected) machine is pinned first and
+ * styled active — an `ACTIVE` badge + `connected` and a green-tinted surface —
+ * folding in what used to be a separate connection status card (design handoff
+ * §3a). Mirrors iOS `ConduitHomeView.boxRow`. Never shows quota: plan limits are
+ * per-account (§3b), surfaced via the usage strip, not per box.
+ */
+@Composable
+private fun HomeBoxRow(
+    neon: NeonTheme,
+    server: SavedServer,
+    isActive: Boolean,
+    harness: HarnessState,
+    onClick: () -> Unit,
+) {
+    val connected = isActive && (harness is HarnessState.Live || harness is HarnessState.Linked)
+    val (statusText, statusColor) = when {
+        !isActive -> "tap to connect" to neon.textFaint
+        connected -> "connected" to neon.green
+        harness is HarnessState.Connecting -> "connecting…" to neon.yellow
+        harness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
+        else -> "offline" to neon.textFaint
+    }
+    val glyphColor = if (connected) neon.green else if (isActive) neon.accent else neon.textFaint
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = RoundedCornerShape(12.dp),
+                fill = if (connected) neon.green.copy(alpha = 0.07f) else neon.surface,
+                borderColor = if (connected) neon.green.copy(alpha = 0.27f) else neon.border,
+                glowTint = if (connected) neon.green else null,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .background(glyphColor.copy(alpha = 0.12f), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Storage, null, modifier = Modifier.size(14.dp), tint = glyphColor)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                server.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                server.endpoint.displayHost,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (isActive) {
+            Text(
+                "ACTIVE",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.sp,
+                letterSpacing = 0.8.sp,
+                color = neon.green,
+                modifier = Modifier
+                    .background(neon.green.copy(alpha = 0.14f), CircleShape)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
+        Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
+        Text(
+            statusText,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = neon.mono,
+            color = statusColor,
         )
     }
 }
