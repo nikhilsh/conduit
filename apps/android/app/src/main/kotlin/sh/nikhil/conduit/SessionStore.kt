@@ -1227,7 +1227,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _sessionCreationError.value = null
         val pendingId = "pending-${UUID.randomUUID()}"
         updateLifecycle { it + (pendingId to SessionLifecycle.Creating) }
-        Telemetry.breadcrumb("session", "create start", mapOf("assistant" to assistant, "hasCwd" to (startupCwd?.isNotBlank() == true).toString(), "hasModel" to (model?.isNotBlank() == true).toString()))
+        // Log the ACTUAL model slug, not just a bool — codex `--model` is
+        // passed to the backend unvalidated, so a bad slug (a model the backend
+        // doesn't know) lets the session spawn fine but fails every turn.
+        // Without the slug here that failure is undiagnosable from Sentry.
+        // "inherit" = no override.
+        val modelCrumb = model?.trim()?.takeIf { it.isNotEmpty() } ?: "inherit"
+        Telemetry.breadcrumb("session", "create start", mapOf("assistant" to assistant, "hasCwd" to (startupCwd?.isNotBlank() == true).toString(), "model" to modelCrumb))
         viewModelScope.launch {
             try {
                 // Pass the selected folder as the agent's cwd so the broker
@@ -1257,7 +1263,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 Telemetry.capture(
                     error = t,
                     message = "Android create session failed",
-                    tags = mapOf("surface" to "android", "phase" to "create_session", "assistant" to assistant),
+                    tags = mapOf("surface" to "android", "phase" to "create_session", "assistant" to assistant, "model" to modelCrumb),
                     extras = mapOf("endpoint" to _endpoint.value.displayHost, "detail" to reason),
                 )
                 // Sweep the placeholder after a short delay so the user can

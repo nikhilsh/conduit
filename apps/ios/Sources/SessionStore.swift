@@ -892,7 +892,13 @@ final class SessionStore {
         sessionCreationError = nil
         let pendingID = "pending-\(UUID().uuidString)"
         sessionLifecycle[pendingID] = .creating
-        Telemetry.breadcrumb("session", "create start", data: ["assistant": assistant, "hasCwd": "\(startupCwd?.isEmpty == false)", "hasModel": "\(model?.isEmpty == false)"])
+        // Log the ACTUAL model slug, not just a bool — codex `--model` is
+        // passed to the backend unvalidated, so a bad slug (e.g. a model the
+        // backend doesn't know) lets the session spawn fine but fails every
+        // turn. Without the slug here, that failure is undiagnosable from
+        // Sentry. "inherit" = no override.
+        let modelCrumb = (model?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "inherit"
+        Telemetry.breadcrumb("session", "create start", data: ["assistant": assistant, "hasCwd": "\(startupCwd?.isEmpty == false)", "model": modelCrumb])
         if useRustStore {
             rustStore.applyLifecycle(sessionId: pendingID, lifecycle: .creating)
         }
@@ -978,7 +984,7 @@ final class SessionStore {
                 self.replayStoredAgentCredentials()
             } catch {
                 let detail = Self.describe(error)
-                Telemetry.capture(error: error, message: "iOS create session failed", tags: ["flow": "session", "assistant": assistant], extras: ["detail": detail])
+                Telemetry.capture(error: error, message: "iOS create session failed", tags: ["flow": "session", "assistant": assistant, "model": modelCrumb], extras: ["detail": detail])
                 self.sessionLifecycle[pendingID] = .failed(detail)
                 if self.useRustStore {
                     self.rustStore.applyLifecycle(
@@ -993,7 +999,7 @@ final class SessionStore {
                 Telemetry.capture(
                     error: error,
                     message: "iOS create session failed",
-                    tags: ["surface": "ios", "phase": "create_session", "assistant": assistant],
+                    tags: ["surface": "ios", "phase": "create_session", "assistant": assistant, "model": modelCrumb],
                     extras: ["endpoint": self.endpoint.displayHost, "detail": detail]
                 )
                 // Sweep the placeholder after a short delay so the user can
