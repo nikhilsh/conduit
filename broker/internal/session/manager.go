@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -389,6 +390,14 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			_, _ = s.cmd.Process.Wait()
 		}
 		return nil, err
+	}
+	// Record the per-session model/effort override the broker actually
+	// applies. `--model` is passed UNVALIDATED, so a bad slug (a model the
+	// backend doesn't recognise) spawns fine but fails every turn — this log
+	// line is the only on-box record of which slug a session got. Logged for
+	// every create so a working vs broken model is comparable.
+	if extra := opts.override.extraArgsFor(adapter.Name); len(extra) > 0 {
+		log.Printf("session %s: model override applied (%s): %v", id, adapter.Name, extra)
 	}
 	switch structuredChatBackend(adapter.ChatMode) {
 	case "claude":
