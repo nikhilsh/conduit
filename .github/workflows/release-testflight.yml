@@ -1,0 +1,340 @@
+name: release-testflight
+
+# SEPARATE from the normal release flow. The standard `v*` tag → release.yml
+# path still ships the ad-hoc sideload IPA (release-ios.yml) and is UNTOUCHED.
+# This workflow only runs when you EXPLICITLY ask for a TestFlight build:
+#   - manually: Actions → release-testflight → Run workflow (pick a ref), or
+#   - by pushing a `tf-v*` tag (e.g. `tf-v0.1.0`) — note `tf-v*` does NOT
+#     match the `v*` trigger on release.yml, so the two never collide.
+#
+# It uploads the build to App Store Connect / TestFlight. PREREQUISITES (one
+# time — see docs/RELEASE-TESTFLIGHT.md):
+#   1. An App record must exist for sh.nikhil.conduit (My Apps → + → New App).
+#   2. An IOS_APP_STORE provisioning profile must exist and be pushed as the
+#      IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 secret.
+#   3. ASC API key secrets must be set: ASC_API_KEY_ID, ASC_API_ISSUER_ID,
+#      ASC_API_KEY_P8_BASE64.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Version label to stamp into the build (e.g. v0.1.0). Optional.
+        required: false
+        type: string
+  push:
+    tags: ['tf-v*']
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-testflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-testflight:
+    name: App Store signed IPA → TestFlight
+    runs-on: macos-26
+    env:
+      APP_NAME: Conduit
+      SCHEME: Conduit
+      CONFIGURATION: Release
+      BUNDLE_ID: sh.nikhil.conduit
+      TEAM_ID: EHW7L3679R
+      PROJECT_PATH: apps/ios/Conduit.xcodeproj
+      ARCHIVE_PATH: ${{ github.workspace }}/apps/ios/build/Conduit.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/apps/ios/build/export
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_PROJECT_IOS: ${{ secrets.SENTRY_PROJECT_IOS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            tag="${{ github.event.inputs.release_tag }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/tf-* ]]; then
+            # strip the tf- prefix so the stamped version is plain vX.Y.Z
+            tag="${GITHUB_REF_NAME#tf-}"
+          else
+            tag="tf-${GITHUB_SHA::7}-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+          echo "TestFlight release tag: $tag"
+
+      - name: Select Xcode 26.4.1
+        run: sudo xcode-select -s /Applications/Xcode_26.4.1.app
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Decode signing assets
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          # NOTE: the App Store profile, NOT the ad-hoc one.
+          IOS_APPSTORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          if [ -z "$IOS_APPSTORE_PROVISIONING_PROFILE_BASE64" ]; then
+            echo "::error title=Missing App Store profile::Set IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 (an IOS_APP_STORE profile). See docs/RELEASE-TESTFLIGHT.md." >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/signing"
+          echo "$IOS_CERTIFICATE_P12_BASE64"                 | base64 --decode > "$RUNNER_TEMP/signing/cert.p12"
+          echo "$IOS_APPSTORE_PROVISIONING_PROFILE_BASE64"   | base64 --decode > "$RUNNER_TEMP/signing/profile.mobileprovision"
+
+      - name: Install provisioning profile (by UUID)
+        run: |
+          PROFILE_SRC="$RUNNER_TEMP/signing/profile.mobileprovision"
+          security cms -D -i "$PROFILE_SRC" > "$RUNNER_TEMP/signing/profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/signing/profile.plist")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/signing/profile.plist")
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_SRC" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+      - name: Create temp keychain + import cert
+        env:
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/signing/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$IOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Build Rust xcframework
+        working-directory: apps/ios
+        run: ./build-rust.sh
+
+      - name: Inject signing settings into app target
+        working-directory: apps/ios
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("project.yml")
+          text = path.read_text()
+          marker = "        ENABLE_MODULE_VERIFIER: NO\n"
+          replacement = (
+              "        ENABLE_MODULE_VERIFIER: NO\n"
+              "        CODE_SIGN_STYLE: Manual\n"
+              "        CODE_SIGN_IDENTITY: Apple Distribution\n"
+              "        DEVELOPMENT_TEAM: ${TEAM_ID}\n"
+              "        PROVISIONING_PROFILE_SPECIFIER: ${PROFILE_NAME}\n"
+          )
+          if marker not in text:
+              raise SystemExit("expected project.yml target settings marker not found")
+          path.write_text(text.replace(marker, replacement, 1))
+          PY
+
+      - name: Stamp BuildInfo.swift with git SHA + release tag
+        working-directory: apps/ios
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          GIT_SHA=$(git rev-parse --short=7 HEAD)
+          echo "Stamping BuildInfo.swift: gitSHA=$GIT_SHA releaseTag=$RELEASE_TAG"
+          python3 - <<PY
+          from pathlib import Path
+          import re
+
+          path = Path("Sources/Models/BuildInfo.swift")
+          text = path.read_text()
+          text, n1 = re.subn(
+              r'static let gitSHA: String = "dev"',
+              f'static let gitSHA: String = "${GIT_SHA}"',
+              text,
+              count=1,
+          )
+          text, n2 = re.subn(
+              r'static let releaseTag: String = "dev"',
+              f'static let releaseTag: String = "${RELEASE_TAG}"',
+              text,
+              count=1,
+          )
+          if n1 != 1 or n2 != 1:
+              raise SystemExit(f"BuildInfo.swift stamp failed — gitSHA replacements={n1} releaseTag replacements={n2}")
+          path.write_text(text)
+          PY
+
+      # TestFlight requires a UNIQUE, monotonically increasing build number per
+      # marketing version. github.run_number is monotonic across the repo so two
+      # TF uploads never collide. Semver tags drive the marketing version; the
+      # tf-… fallback leaves it untouched but still gets a unique build number.
+      - name: Stamp app version + build number from release tag
+        working-directory: apps/ios
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.value }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          tag = (os.environ.get("RELEASE_TAG") or "").strip()
+          build = (os.environ.get("BUILD_NUMBER") or "").strip() or "1"
+          path = Path("project.yml")
+          text = path.read_text()
+
+          m = re.match(r'^v?(\d+\.\d+\.\d+)$', tag)
+          if m:
+              marketing = m.group(1)
+              text, n1 = re.subn(
+                  r'MARKETING_VERSION: "[^"]*"',
+                  f'MARKETING_VERSION: "{marketing}"',
+                  text, count=1,
+              )
+              if n1 != 1:
+                  raise SystemExit("MARKETING_VERSION key not found in project.yml")
+              print(f"MARKETING_VERSION -> {marketing}")
+          else:
+              print(f"release tag {tag!r} is not semver — leaving MARKETING_VERSION as-is")
+
+          text, n2 = re.subn(
+              r'CURRENT_PROJECT_VERSION: "[^"]*"',
+              f'CURRENT_PROJECT_VERSION: "{build}"',
+              text, count=1,
+          )
+          if n2 != 1:
+              raise SystemExit("CURRENT_PROJECT_VERSION key not found in project.yml")
+          print(f"CURRENT_PROJECT_VERSION -> {build}")
+          path.write_text(text)
+          PY
+
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+      # The ONLY material differences from the ad-hoc export: method=app-store
+      # and destination=upload (xcodebuild uploads to App Store Connect during
+      # export, authenticated by the ASC API key staged below).
+      - name: Generate ExportOptions.plist (App Store)
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>destination</key>
+            <string>upload</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${TEAM_ID}</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key>
+              <string>${PROFILE_NAME}</string>
+            </dict>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Stage App Store Connect API key
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+        run: |
+          if [ -z "$ASC_API_KEY_ID" ] || [ -z "$ASC_API_ISSUER_ID" ] || [ -z "$ASC_API_KEY_P8_BASE64" ]; then
+            echo "::error title=Missing ASC API key::Set ASC_API_KEY_ID / ASC_API_ISSUER_ID / ASC_API_KEY_P8_BASE64. See docs/RELEASE-TESTFLIGHT.md." >&2
+            exit 1
+          fi
+          # xcodebuild -exportArchive with destination=upload looks for the key
+          # under ~/.appstoreconnect/private_keys (or ~/private_keys). altool
+          # (the fallback below) uses the same locations.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$ASC_API_KEY_P8_BASE64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
+
+      - name: Archive
+        env:
+          SENTRY_DSN_IOS: ${{ secrets.SENTRY_DSN_IOS }}
+        run: |
+          xcodebuild archive \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -archivePath "$ARCHIVE_PATH" \
+            -destination 'generic/platform=iOS' \
+            SENTRY_DSN="$SENTRY_DSN_IOS" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID"
+
+      # Export + upload in one step. -allowProvisioningUpdates is NOT used
+      # (manual signing); the API key authenticates the upload leg only.
+      - name: Export IPA + upload to TestFlight
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -authenticationKeyID "$ASC_API_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
+            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
+
+      - name: Check Sentry dSYM upload prerequisites
+        run: |
+          missing=""
+          [ -z "$SENTRY_AUTH_TOKEN" ] && missing="$missing SENTRY_AUTH_TOKEN"
+          [ -z "$SENTRY_ORG" ] && missing="$missing SENTRY_ORG"
+          [ -z "$SENTRY_PROJECT_IOS" ] && missing="$missing SENTRY_PROJECT_IOS"
+          if [ -n "$missing" ]; then
+            echo "::warning title=Sentry dSYM upload skipped::Missing secret(s):$missing — TestFlight crashes will NOT symbolicate."
+          else
+            echo "Sentry dSYM upload prerequisites present."
+          fi
+
+      - name: Install sentry-cli
+        if: ${{ env.SENTRY_AUTH_TOKEN != '' && env.SENTRY_ORG != '' && env.SENTRY_PROJECT_IOS != '' }}
+        run: curl -sL https://sentry.io/get-cli/ | SENTRY_CLI_VERSION="2.40.0" sh
+
+      - name: Upload dSYMs to Sentry
+        if: ${{ env.SENTRY_AUTH_TOKEN != '' && env.SENTRY_ORG != '' && env.SENTRY_PROJECT_IOS != '' }}
+        run: |
+          if [ ! -d "$ARCHIVE_PATH/dSYMs" ]; then
+            echo "::error title=No dSYMs in archive::Expected $ARCHIVE_PATH/dSYMs — check DEBUG_INFORMATION_FORMAT."
+            exit 1
+          fi
+          sentry-cli debug-files upload \
+            --auth-token "$SENTRY_AUTH_TOKEN" \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT_IOS" \
+            --include-sources \
+            "$ARCHIVE_PATH/dSYMs"
+
+      - name: Summary
+        run: |
+          echo "### TestFlight upload submitted :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Bundle: \`$BUNDLE_ID\`  build \`${{ github.run_number }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Apple now PROCESSES the build (~5–30 min). Watch App Store Connect → TestFlight." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Internal testers get it immediately after processing; external testers need a one-time Beta App Review." >> "$GITHUB_STEP_SUMMARY"
