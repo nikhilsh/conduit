@@ -20,6 +20,23 @@ The workflow archives, signs with the **App Store** profile, exports with
 key. After it finishes, Apple **processes** the build (~5–30 min) before it shows
 up in TestFlight.
 
+## Automated post-upload (no manual ASC clicking)
+
+After the upload, the workflow runs `apps/ios/scripts/testflight-postprocess.py`
+(litter-style automation) which, via the ASC API:
+
+1. **Waits** for Apple to finish processing the build.
+2. Sets the per-build **"What to Test"** from the recent commit log
+   (`git log -n 8`).
+3. **Assigns the build to the beta group(s)** — default `Conduit Internal` — so
+   it lands for internal testers with no manual step.
+
+Two `workflow_dispatch` inputs tune this: `beta_group_names` (comma-separated,
+default `Conduit Internal`) and `wait_for_processing` (default true). Tag-triggered
+runs use the defaults. External (public-link) distribution and beta-review
+submission are intentionally **not** automated yet — we're internal-only until a
+reviewer demo-mode exists (Conduit can't be tested without a live broker).
+
 ## One-time setup (required before the first TestFlight build)
 
 These touch the Apple Developer / App Store Connect account, so they're done by a

@@ -22,6 +22,16 @@ on:
         description: Version label to stamp into the build (e.g. v0.1.0). Optional.
         required: false
         type: string
+      beta_group_names:
+        description: Comma-separated TestFlight beta groups to auto-assign the build to.
+        required: false
+        default: Conduit Internal
+        type: string
+      wait_for_processing:
+        description: Wait for Apple to finish processing, then assign to the group(s).
+        required: false
+        default: true
+        type: boolean
   push:
     tags: ['tf-v*']
 
@@ -53,6 +63,10 @@ jobs:
       SENTRY_PROJECT_IOS: ${{ secrets.SENTRY_PROJECT_IOS }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the post-process step can build "What to Test"
+          # from the recent commit log (shallow checkout would give 1 commit).
+          fetch-depth: 0
 
       - name: Resolve release tag
         id: tag
@@ -331,10 +345,36 @@ jobs:
             --include-sources \
             "$ARCHIVE_PATH/dSYMs"
 
+      # ---- Automated TestFlight post-processing (litter-style) ----
+      # Generate the per-build "What to Test" from the recent commit log.
+      - name: Generate What to Test
+        run: |
+          {
+            git log --no-merges -n 8 --pretty='- %s' | sed '/^[[:space:]]*$/d'
+          } > "$RUNNER_TEMP/whats-new.txt"
+          echo "What to Test:"; cat "$RUNNER_TEMP/whats-new.txt"
+
+      # Wait for processing, set What to Test, and assign the build to the beta
+      # group(s) so it lands for internal testers without any manual ASC step.
+      - name: Assign build to beta group + set What to Test
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          BUNDLE_ID: ${{ env.BUNDLE_ID }}
+          BUILD_VERSION: ${{ github.run_number }}
+          BETA_GROUP_NAMES: ${{ github.event.inputs.beta_group_names || 'Conduit Internal' }}
+          WAIT_FOR_PROCESSING: ${{ (github.event.inputs.wait_for_processing == 'false') && '0' || '1' }}
+          WHAT_TO_TEST_FILE: ${{ runner.temp }}/whats-new.txt
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyjwt cryptography
+          export ASC_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
+          python3 apps/ios/scripts/testflight-postprocess.py
+
       - name: Summary
         run: |
-          echo "### TestFlight upload submitted :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "### TestFlight build distributed :rocket:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Bundle: \`$BUNDLE_ID\`  build \`${{ github.run_number }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Apple now PROCESSES the build (~5–30 min). Watch App Store Connect → TestFlight." >> "$GITHUB_STEP_SUMMARY"
-          echo "- Internal testers get it immediately after processing; external testers need a one-time Beta App Review." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Auto-assigned to: \`${{ github.event.inputs.beta_group_names || 'Conduit Internal' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- What to Test was generated from the recent commit log." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Internal testers get it immediately; external testers still need a one-time Beta App Review." >> "$GITHUB_STEP_SUMMARY"
