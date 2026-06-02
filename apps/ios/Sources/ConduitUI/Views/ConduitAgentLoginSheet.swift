@@ -294,7 +294,9 @@ extension ConduitUI {
                 try await store.sendAgentCredentials(provider: provider, credential: credential)
                 statusMessage = "Signed in. The broker now has your \(provider.rawValue) credentials for future sessions."
                 errorMessage = nil
-                Telemetry.breadcrumb("agent_login", "credential shipped ok", data: ["provider": provider.rawValue])
+                // Standalone visible event for every terminal outcome (a
+                // breadcrumb alone is invisible unless a later event fires).
+                Telemetry.debug("oauth_result", "shipped \(provider.rawValue)", data: ["provider": provider.rawValue])
             } catch {
                 // Token exchange succeeded and the credential is saved in the
                 // Keychain. The broker hand-off needs a live session (the core
@@ -304,7 +306,7 @@ extension ConduitUI {
                 // benign "saved" message, not a scary error.
                 statusMessage = "Signed in — saved. It’ll sync to the broker when you start a session."
                 errorMessage = nil
-                Telemetry.breadcrumb("agent_login", "broker hand-off deferred (no live session); saved locally for replay", data: ["provider": provider.rawValue, "error": "\(error)"])
+                Telemetry.debug("oauth_result", "saved-deferred \(provider.rawValue)", data: ["provider": provider.rawValue, "reason": "\(error)"])
             }
         }
 
