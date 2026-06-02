@@ -49,7 +49,7 @@ e.g. `Conduit AppStore`. Download it.
 (The ASC API can also create it: `POST /v1/profiles` with
 `profileType: IOS_APP_STORE`, bundleId `H5KWA98RP6`, certificate `F7Z295M652`.)
 
-### 3. Push GitHub secrets to `nikhilsh/swe-kitty`
+### 3. Push GitHub secrets to `nikhilsh/conduit`
 
 New secrets this flow needs (the cert/keychain/Sentry secrets are shared with the
 ad-hoc flow and already set):
@@ -62,10 +62,10 @@ ad-hoc flow and already set):
 | `ASC_API_KEY_P8_BASE64` | `base64 -w0 /root/.appstoreconnect/AuthKey_75Z4CZ6SJ5.p8` |
 
 ```sh
-gh secret set IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 -R nikhilsh/swe-kitty < <(base64 -w0 Conduit_AppStore.mobileprovision)
-gh secret set ASC_API_KEY_ID -R nikhilsh/swe-kitty --body 75Z4CZ6SJ5
-gh secret set ASC_API_ISSUER_ID -R nikhilsh/swe-kitty --body 69a6de81-788e-47e3-e053-5b8c7c11a4d1
-gh secret set ASC_API_KEY_P8_BASE64 -R nikhilsh/swe-kitty < <(base64 -w0 /root/.appstoreconnect/AuthKey_75Z4CZ6SJ5.p8)
+gh secret set IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 -R nikhilsh/conduit < <(base64 -w0 Conduit_AppStore.mobileprovision)
+gh secret set ASC_API_KEY_ID -R nikhilsh/conduit --body 75Z4CZ6SJ5
+gh secret set ASC_API_ISSUER_ID -R nikhilsh/conduit --body 69a6de81-788e-47e3-e053-5b8c7c11a4d1
+gh secret set ASC_API_KEY_P8_BASE64 -R nikhilsh/conduit < <(base64 -w0 /root/.appstoreconnect/AuthKey_75Z4CZ6SJ5.p8)
 ```
 
 ### 4. (One time) Set up testers
