@@ -272,22 +272,32 @@ extension ConduitUI {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Browse")
                 breadcrumb
-                if isLoading {
-                    HStack {
-                        Spacer()
-                        ProgressView().controlSize(.small)
-                        Spacer()
-                    }
-                    .padding(.vertical, 24)
-                } else if let loadError {
-                    Text(loadError)
+                // iOS-26.5 crash hardening (CONDUIT-IOS-N / -M). This subtree
+                // must stay structurally STABLE. We previously swapped between
+                // ProgressView / error Text / folderList with if·else·if; when
+                // /api/fs/list returned and flipped @State, SwiftUI
+                // restructured the tree *inside* the freshly-pushed picker's
+                // CoreAnimation commit and corrupted the AttributeGraph →
+                // crash in CA::Transaction::commit
+                // (-[NSTaggedPointerString bounds]). Keeping all three
+                // branches resident and toggling opacity means only opacity
+                // changes; the view identity never moves.
+                ZStack {
+                    folderList
+                        .opacity(isLoading || loadError != nil ? 0 : 1)
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.vertical, 24)
+                        .opacity(isLoading ? 1 : 0)
+                    Text(loadError ?? " ")
                         .font(neon.sans(13))
                         .foregroundStyle(neon.red)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 16)
-                } else {
-                    folderList
+                        .opacity(loadError != nil ? 1 : 0)
+                        .accessibilityHidden(loadError == nil)
                 }
+                .frame(maxWidth: .infinity)
             }
         }
 
@@ -318,27 +328,31 @@ extension ConduitUI {
             }
         }
 
-        @ViewBuilder
         private var folderList: some View {
             let folders = (listing?.entries ?? []).filter { $0.is_dir }
-            if folders.isEmpty {
+            // Stable container (no empty/non-empty if·else swap — see
+            // browseSection note). The "No sub-folders" copy is an opacity
+            // overlay so the subtree shape never changes when the listing
+            // lands inside the picker's CoreAnimation commit.
+            return VStack(spacing: 6) {
+                ForEach(folders) { entry in
+                    Button {
+                        currentPath = entry.path
+                    } label: {
+                        ConduitUI.navRow(icon: "folder", title: entry.name, iconTint: neon.accent)
+                            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: folders.isEmpty ? 44 : nil)
+            .overlay {
                 Text("No sub-folders here.")
                     .font(neon.sans(13))
                     .foregroundStyle(neon.textDim)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 16)
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(folders) { entry in
-                        Button {
-                            currentPath = entry.path
-                        } label: {
-                            ConduitUI.navRow(icon: "folder", title: entry.name, iconTint: neon.accent)
-                                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+                    .opacity(folders.isEmpty ? 1 : 0)
+                    .accessibilityHidden(!folders.isEmpty)
             }
         }
 
