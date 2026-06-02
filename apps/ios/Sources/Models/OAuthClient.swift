@@ -79,7 +79,7 @@ enum OAuthProvider: String, Sendable {
             // NEEDS ON-DEVICE VERIFICATION: token endpoint shape + whether
             // the exchange requires `state` are reverse-engineered.
             return OAuthConfig(
-                issuer: URL(string: "https://claude.ai")!,
+                issuer: URL(string: "https://claude.com")!,
                 clientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
                 // EXACT scope set the real `claude auth login --claudeai`
                 // sends (captured from the CLI's authorize URL). Missing
@@ -98,10 +98,15 @@ enum OAuthProvider: String, Sendable {
                 redirectURI: URL(string: "https://platform.claude.com/oauth/code/callback")!,
                 callbackURLScheme: "conduit",
                 captureMode: .codePaste,
-                // Anthropic splits authorize (claude.ai) from token
-                // exchange (platform.claude.com) — `issuer` alone
-                // can't derive both, hence the explicit `tokenURL`.
-                authorizePath: "oauth/authorize",
+                // Authorize on `claude.com/cai/oauth/authorize` — the EXACT
+                // endpoint the real `claude auth login` opens. Hitting
+                // `claude.ai/oauth/authorize` directly returned
+                // "Authorization failed: Invalid request format" even with a
+                // correctly-encoded request + full scope set; the CLI's
+                // `/cai/` entry is the only remaining structural difference.
+                // Token exchange stays on platform.claude.com (explicit
+                // `tokenURL`), so `issuer` only drives the authorize URL.
+                authorizePath: "cai/oauth/authorize",
                 tokenURL: URL(string: "https://platform.claude.com/v1/oauth/token")!,
                 // `code=true` selects the copy-paste code-display page
                 // instead of an auto-redirect; observed in the CLI's URL.

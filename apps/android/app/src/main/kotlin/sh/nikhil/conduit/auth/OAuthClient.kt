@@ -3,7 +3,9 @@ package sh.nikhil.conduit.auth
 import android.content.Context
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import sh.nikhil.conduit.Telemetry
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
@@ -63,7 +65,11 @@ enum class OAuthProvider(val raw: String) {
                 // `claude auth login --claudeai`'s stdout. Anthropic
                 // splits authorize (claude.ai) from token exchange
                 // (platform.claude.com) and uses a CODE-PASTE flow.
-                issuer = "https://claude.ai",
+                // Authorize on claude.com/cai/oauth/authorize (the exact
+                // endpoint the real `claude auth login` opens). claude.ai
+                // direct returned "Invalid request format" even with a
+                // correct request; `/cai/` is the remaining difference.
+                issuer = "https://claude.com",
                 clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
                 // EXACT scope set the real `claude auth login --claudeai`
                 // sends. Missing `org:create_api_key` made claude.ai reject
@@ -81,7 +87,7 @@ enum class OAuthProvider(val raw: String) {
                 redirectUri = "https://platform.claude.com/oauth/code/callback",
                 callbackScheme = "conduit",
                 captureMode = OAuthCaptureMode.CodePaste,
-                authorizePath = "oauth/authorize",
+                authorizePath = "cai/oauth/authorize",
                 tokenUrl = "https://platform.claude.com/v1/oauth/token",
                 // `code=true` selects the copy-paste code-display page.
                 extraAuthorizeParams = mapOf("code" to "true"),
@@ -438,12 +444,20 @@ class OAuthClient(
             .header("Accept", "application/json")
             .build()
 
-        val (status, payload) = runCatching {
-            httpClient.newCall(req).execute().use { resp ->
-                resp.code to (resp.body?.string() ?: "")
+        // Run the BLOCKING okhttp call on the IO dispatcher. The loopback
+        // (codex) and code-paste (claude) flows resume this suspend fn on
+        // the Main dispatcher (the sheet launches on rememberCoroutineScope),
+        // so a bare `execute()` ran network on the main thread →
+        // `android.os.NetworkOnMainThreadException` → "token POST failed"
+        // (the codex error surfaced in Sentry once OpenAI auth succeeded).
+        val (status, payload) = withContext(Dispatchers.IO) {
+            runCatching {
+                httpClient.newCall(req).execute().use { resp ->
+                    resp.code to (resp.body?.string() ?: "")
+                }
+            }.getOrElse { t ->
+                throw OAuthClientError.Underlying("token POST failed: ${t.message ?: t}")
             }
-        }.getOrElse { t ->
-            throw OAuthClientError.Underlying("token POST failed: ${t.message ?: t}")
         }
         Telemetry.breadcrumb("oauth_token", "exchange http $status ${provider.raw}")
         if (status !in 200..299) {
