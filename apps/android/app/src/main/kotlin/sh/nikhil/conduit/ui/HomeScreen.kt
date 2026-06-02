@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -106,7 +107,12 @@ fun HomeScreen(
 
     val neon = LocalNeonTheme.current
 
-    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(top = 8.dp)) {
+    // Read real insets top AND bottom (design handoff §4.1): statusBarsPadding
+    // keeps the header off the status bar; navigationBarsPadding keeps the
+    // bottom action bar + BOXES off the gesture pill / 3-button nav. The app is
+    // edge-to-edge (the chat composer already does this), so without it the home
+    // footer collided with the system nav.
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 8.dp)) {
         // Top row. Conduit parity put settings behind a hidden long-press
         // on the title — undiscoverable in practice (user feedback
         // 2026-05-23). Restore a visible gear in the leading slot; the
