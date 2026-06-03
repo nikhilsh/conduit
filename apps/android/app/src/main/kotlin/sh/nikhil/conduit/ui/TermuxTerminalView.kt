@@ -255,7 +255,10 @@ internal fun computeFeed(buffer: ByteArray, lastFedByteCount: Int): FeedDecision
  * Drops the terminal *query* control sequences that Termux's emulator
  * would auto-answer — DA1 (`CSI c`), DA2 (`CSI > c`), XTVERSION
  * (`CSI > q`), DSR (`CSI 5 n` / `CSI 6 n`), and OSC colour queries
- * (`OSC 10/11/12 ; ?`).
+ * (`OSC 10/11/12 ; ?`) — **and** the DECSET/DECRST mouse-tracking
+ * enables (`CSI ? 1000/1002/1006/… h|l`) so the shared emulator never
+ * enters mouse mode and a touch can't be encoded as an `^[[<…M` report
+ * (which the local backstop PTY would echo back as prompt garbage).
  *
  * Why this exists: the broker PTY is headless, so the agent's queries
  * arrive as program output and get fed into the emulator. Termux is a
@@ -339,6 +342,14 @@ internal class TerminalQueryStripper {
                     'c' -> p == "" || p == "0" || p == ">" || p == ">0"
                     'q' -> p == ">" || p == ">0"
                     'n' -> p == "5" || p == "6"
+                    // DECSET/DECRST mouse-tracking enables (`CSI ? 1000h`,
+                    // `1002h`, `1006h`, …). Dropped so the shared emulator
+                    // never enters mouse mode — otherwise Termux encodes
+                    // every touch as an SGR mouse report and writes it to the
+                    // local backstop PTY, whose echo renders as `^[[<0;..M`
+                    // garbage at the prompt (device feedback: terminal
+                    // touch-scroll leaked mouse codes). Touches scroll instead.
+                    'h', 'l' -> isMouseModeSet(p)
                     else -> false
                 }
                 return if (isQuery) i - start + 1 else NO_MATCH
@@ -371,6 +382,19 @@ internal class TerminalQueryStripper {
         return INCOMPLETE
     }
 
+    /**
+     * True when [p] is a private-mode parameter list (`?` marker) whose
+     * modes are ALL mouse-tracking modes — i.e. a pure mouse enable/disable
+     * we can safely drop. Mixed lists that also carry a non-mouse mode (e.g.
+     * `?1049h` alt-screen, `?2004h` bracketed paste, `?25h` cursor) return
+     * false and pass through untouched.
+     */
+    private fun isMouseModeSet(p: String): Boolean {
+        if (!p.startsWith("?")) return false
+        val modes = p.removePrefix("?").split(';').filter { it.isNotEmpty() }
+        return modes.isNotEmpty() && modes.all { it in MOUSE_MODES }
+    }
+
     private fun isColorQuery(body: String) =
         body == "10;?" || body == "11;?" || body == "12;?"
 
@@ -382,6 +406,10 @@ internal class TerminalQueryStripper {
         const val INCOMPLETE = -1
         const val NO_MATCH = 0
         val COLOR_QUERIES = listOf("10;?", "11;?", "12;?")
+        // X10/normal/button/any-motion mouse tracking + the UTF-8/SGR/urxvt/
+        // pixel extended-coordinate modes. A pure set/reset of these is
+        // dropped so the emulator never reports mouse on a touch device.
+        val MOUSE_MODES = setOf("1000", "1001", "1002", "1003", "1005", "1006", "1015", "1016")
     }
 }
 
@@ -692,10 +720,15 @@ internal class BrokerTerminalViewClient(
 ) : TerminalViewClient {
     override fun onScale(scale: Float): Float = 1f
     override fun onSingleTapUp(e: MotionEvent) {
-        // Match WebTerminal's behaviour — a tap summons the soft
-        // keyboard. TerminalView is already focusable; we only need
-        // to request focus.
-        getTerminalView()?.requestFocus()
+        // A tap summons the soft keyboard. Requesting focus alone does NOT
+        // raise the IME for a custom View (device feedback: tapping the
+        // terminal focused it but the keyboard never came up) — explicitly
+        // ask the InputMethodManager to show it for the focused TerminalView.
+        val view = getTerminalView() ?: return
+        view.requestFocus()
+        val imm = view.context.getSystemService(Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager
+        imm?.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
     }
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = false

@@ -37,6 +37,31 @@ class TerminalQueryStripperTest {
         assertArrayEquals(b(""), strip("$esc[c$esc[>c$esc]10;?$bel$esc]11;?$st"))
     }
 
+    // ── mouse-tracking enables get dropped (touch must not emit mouse) ──
+
+    @Test fun dropsSgrMouseEnable() = assertArrayEquals(b(""), strip("$esc[?1006h"))
+    @Test fun dropsX10MouseEnable() = assertArrayEquals(b(""), strip("$esc[?1000h"))
+    @Test fun dropsButtonMotionEnable() = assertArrayEquals(b(""), strip("$esc[?1002h"))
+    @Test fun dropsAnyMotionEnable() = assertArrayEquals(b(""), strip("$esc[?1003h"))
+    @Test fun dropsMouseDisable() = assertArrayEquals(b(""), strip("$esc[?1000l"))
+    @Test fun dropsCombinedMouseModes() = assertArrayEquals(b(""), strip("$esc[?1002;1006h"))
+
+    @Test fun dropsTmuxMouseEnableBurst() {
+        // What tmux `mouse on` actually emits — several separate DECSETs.
+        assertArrayEquals(b(""), strip("$esc[?1000h$esc[?1002h$esc[?1006h"))
+    }
+
+    // ── but non-mouse private modes pass through ──
+
+    @Test fun keepsAltScreenEnter() = assertArrayEquals(b("$esc[?1049h"), strip("$esc[?1049h"))
+    @Test fun keepsBracketedPaste() = assertArrayEquals(b("$esc[?2004h"), strip("$esc[?2004h"))
+    @Test fun keepsCursorVisibility() = assertArrayEquals(b("$esc[?25l"), strip("$esc[?25l"))
+    @Test fun keepsCursorKeysAppMode() = assertArrayEquals(b("$esc[?1h"), strip("$esc[?1h"))
+    @Test fun keepsMixedModeListWithNonMouse() =
+        // A mouse mode bundled with cursor visibility must NOT be dropped —
+        // dropping would also lose the ?25 cursor change.
+        assertArrayEquals(b("$esc[?25;1000h"), strip("$esc[?25;1000h"))
+
     // ── everything else passes through byte-for-byte ──
 
     @Test fun keepsSgr() = assertArrayEquals(b("$esc[31mhi$esc[0m"), strip("$esc[31mhi$esc[0m"))
