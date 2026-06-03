@@ -67,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -97,6 +98,14 @@ import uniffi.conduit_core.ViewEventFile
  */
 internal val LocalSessionStore = compositionLocalOf<SessionStore?> { null }
 internal val LocalSessionId = compositionLocalOf<String?> { null }
+
+/**
+ * Lets the command card jump the session to its Terminal tab ("Open in
+ * terminal", and the post-Re-run focus). Provided by [ProjectScreen] for
+ * the live phone pager (where a Terminal tab exists); null in read-only /
+ * tablet chat-only panes, which disables the action.
+ */
+internal val LocalOpenInTerminal = compositionLocalOf<(() -> Unit)?> { null }
 
 private sealed class ConversationRole {
     data object User : ConversationRole()
@@ -329,6 +338,13 @@ fun ChatPage(
      * log maps. Mirror of iOS `ConduitUI.ChatView(session, readOnlyItems:)`.
      */
     readOnlyItems: List<ConversationItem>? = null,
+    /**
+     * Jump this session to its Terminal tab. Wired by [ProjectScreen] for
+     * the live phone pager so the command card's "Open in terminal" (and
+     * the post-Re-run focus) can switch tabs; null elsewhere (read-only /
+     * tablet chat-only) where there is no sibling Terminal tab.
+     */
+    onOpenTerminal: (() -> Unit)? = null,
 ) {
     val agentAccent = neonAgentColor(session.assistant, LocalNeonTheme.current)
     val typedLog by store.conversationLog.collectAsState()
@@ -520,12 +536,38 @@ fun ChatPage(
         }
     }
 
+    // Dismiss the soft keyboard when the user scrolls the thread. iOS uses
+    // `.scrollDismissesKeyboard(.interactively)`; on Android we hook the
+    // list's nested-scroll so any user-driven scroll lowers the IME (device
+    // feedback: "can't dismiss keyboard so can't scroll well"). Programmatic
+    // autoscroll (animateScrollToItem) does NOT dispatch through nestedScroll,
+    // so streaming follow won't fight the keyboard.
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val dismissKeyboardOnScroll = remember(focusManager, keyboardController) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(
+                available: Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
+            ): Offset {
+                if (available.y != 0f) {
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
     CompositionLocalProvider(
         LocalParsedMarkdownCache provides markdownCache,
         // Read-only transcripts have no live WS to write into, so don't
         // expose the store there — the command card's Re-run stays disabled.
         LocalSessionStore provides (if (readOnly) null else store),
         LocalSessionId provides session.id,
+        // Only the live tabbed pager wires a Terminal jump; read-only / tablet
+        // panes pass null, which disables "Open in terminal".
+        LocalOpenInTerminal provides (if (readOnly) null else onOpenTerminal),
     ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -533,6 +575,7 @@ fun ChatPage(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
+                    .nestedScroll(dismissKeyboardOnScroll)
                     .padding(horizontal = 12.dp, vertical = 10.dp)
                     // Finger-down is the user taking manual control — latch
                     // `userScrolledUp` so the stream stops yanking them back.
@@ -1914,6 +1957,7 @@ private fun NeonCommandCard(ev: ConversationItem) {
     val neon = LocalNeonTheme.current
     val store = LocalSessionStore.current
     val sessionId = LocalSessionId.current
+    val openInTerminal = LocalOpenInTerminal.current
     val clipboard = LocalClipboardManager.current
     var expanded by remember { mutableStateOf(true) }
 
@@ -2032,15 +2076,20 @@ private fun NeonCommandCard(ev: ConversationItem) {
                     clipboard.setText(AnnotatedString(command))
                 }
                 NeonActionButton("Re-run", neon, enabled = sessionId != null && store != null) {
-                    // Wired to SessionStore.sendInput (terminal write): send
-                    // the command + newline into the live session's TUI.
+                    // Resend the command as a chat message so the agent
+                    // re-executes it and the result is VISIBLE in the thread
+                    // — matches iOS. The prior sendInput wrote into the PTY,
+                    // which is invisible from the Chat tab (device feedback:
+                    // "re-run doesn't work").
                     if (sessionId != null && store != null && command.isNotBlank()) {
-                        store.sendInput(sessionId, (command + "\n").toByteArray())
+                        store.sendChat(sessionId, command)
                     }
                 }
-                // TODO(neon): no SessionStore action navigates to / focuses the
-                // Terminal tab from a card; needs a tab-switch hook (PHASE 2).
-                NeonActionButton("Open in terminal", neon, enabled = false) { /* stub */ }
+                // Switch the session to its Terminal tab. Disabled when no
+                // jump is wired (read-only / tablet chat-only pane).
+                NeonActionButton("Open in terminal", neon, enabled = openInTerminal != null) {
+                    openInTerminal?.invoke()
+                }
             }
         }
     }

@@ -300,6 +300,10 @@ extension ConduitUI {
                 // scroll position warm, so the first focus lifts correctly.
                 // `isActive` lets it release the keyboard while hidden.
                 ConduitUI.ChatView(session: session, isActive: tab == .chat)
+                    // Let the chat's command card jump to the Terminal tab
+                    // ("Open in terminal"). Only the live tabbed pane wires
+                    // this; read-only / tablet chat-only panes leave it nil.
+                    .environment(\.openTerminalAction, { tab = .terminal })
                     .opacity(tab == .chat ? 1 : 0)
                     .allowsHitTesting(tab == .chat)
                     .accessibilityHidden(tab != .chat)
