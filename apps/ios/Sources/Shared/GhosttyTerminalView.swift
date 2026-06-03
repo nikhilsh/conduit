@@ -309,6 +309,20 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// and a fast drag's leftover isn't dropped.
     private var scrollWheelRemainder: CGFloat = 0
 
+    /// Monotonic timestamp of the last wheel-event burst we sent to the PTY.
+    /// Used to RATE-LIMIT wheel sends: each wheel event makes tmux redraw the
+    /// whole screen and stream it back, and every redraw schedules a
+    /// `ghostty_app_tick` on the main queue. A pan's `.changed` fires at the
+    /// display refresh (~120 Hz); emitting a wheel per callback floods the
+    /// render pump and stalls the main thread (App Hanging:
+    /// `Thread.Futex.Deadline.wait`) — the screen freezes blank mid-scroll.
+    /// Coalescing to ~22 Hz keeps the redraw rate near normal streaming output.
+    private var lastWheelSentAt: CFTimeInterval = 0
+    private static let minWheelInterval: CFTimeInterval = 0.045
+    /// Max wheel ticks emitted per burst, so a long pause + fast flick can't
+    /// dump a dozen full-screen redraws into one frame.
+    private static let maxWheelTicksPerBurst = 4
+
 
     #if canImport(GhosttyVT)
     private var terminal: Terminal?
@@ -1003,6 +1017,7 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         case .began:
             scrollPanLastY = 0
             scrollWheelRemainder = 0
+            lastWheelSentAt = 0 // first .changed sends immediately, no throttle lag
         case .changed:
             let translationY = recognizer.translation(in: self).y
             let deltaPoints = translationY - scrollPanLastY
@@ -1039,19 +1054,29 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         let step = Self.scrollPointsPerWheel
         guard step > 0 else { return }
         scrollWheelRemainder += deltaPoints
+        // RATE-LIMIT: only emit a burst every `minWheelInterval`. The remainder
+        // keeps accumulating between bursts so no travel is lost; we just stop
+        // sending a wheel per `.changed`. Without this, a fast drag fires a
+        // wheel ~per-frame → tmux full-screen redraw per wheel → render-pump
+        // flood → main-thread hang + blank screen (the v0.0.96 regression).
+        let now = CACurrentMediaTime()
+        guard now - lastWheelSentAt >= Self.minWheelInterval else { return }
+        // Net whole ticks currently owed, capped so one burst can't dump a
+        // dozen redraws. Leftover stays in the remainder for the next burst.
+        let owed = Int(scrollWheelRemainder / step)
+        guard owed != 0 else { return }
+        lastWheelSentAt = now
+        let ticks = max(-Self.maxWheelTicksPerBurst, min(Self.maxWheelTicksPerBurst, owed))
+        scrollWheelRemainder -= CGFloat(ticks) * step
         // gridCell returns 0-based row/col clamped to the grid; SGR mouse
         // coordinates are 1-based. Clamp to >= 1 defensively. tmux routes the
         // wheel to the pane under these coords, so they must land in the grid.
         let cell = gridCell(at: point)
         let cx = max(1, cell.col + 1)
         let cy = max(1, cell.row + 1)
-        while scrollWheelRemainder >= step {
-            scrollWheelRemainder -= step
-            sendWheel(buttonCode: 64, col: cx, row: cy) // finger DOWN → wheel UP
-        }
-        while scrollWheelRemainder <= -step {
-            scrollWheelRemainder += step
-            sendWheel(buttonCode: 65, col: cx, row: cy) // finger UP → wheel DOWN
+        let code = ticks > 0 ? 64 : 65 // finger DOWN → wheel UP (64); UP → DOWN (65)
+        for _ in 0..<abs(ticks) {
+            sendWheel(buttonCode: code, col: cx, row: cy)
         }
     }
 
