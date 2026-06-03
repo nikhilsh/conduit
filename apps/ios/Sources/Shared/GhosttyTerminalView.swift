@@ -588,6 +588,15 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// libghostty uses focus to drive cursor blink + (potentially) focus
     /// reporting. Mirrors geistty / libghostty-spm wiring focus to the
     /// host view's responder state.
+    /// One-shot diagnostics so the native terminal's input path is readable
+    /// off-device (Sentry `diag=terminal_input`). The terminal only became
+    /// reachable once the mount crash was fixed (v0.0.90), so on-device typing
+    /// was never observed before — these pin WHERE input breaks: focus not
+    /// acquired (keyboard never shows), `insertText` never firing (keyboard
+    /// shows but key events don't land), or input sent but not echoed.
+    private var didLogFirstResponder = false
+    private var didLogInsertText = false
+
     @discardableResult
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
@@ -595,6 +604,16 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             #if canImport(GhosttyVT)
             terminal?.setFocus(true)
             #endif
+        }
+        if !didLogFirstResponder {
+            didLogFirstResponder = true
+            Telemetry.debug("terminal_input", "becomeFirstResponder", data: [
+                "became": "\(became)",
+                "in_window": "\(window != nil)",
+                "is_first_responder": "\(isFirstResponder)",
+                "is_active": "\(isActive)",
+                "terminal_live": "\(terminal != nil)",
+            ])
         }
         return became
     }
@@ -630,6 +649,14 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             }
         }
         if !data.isEmpty { onInput(data) }
+        if !didLogInsertText {
+            didLogInsertText = true
+            Telemetry.debug("terminal_input", "insertText reached PTY", data: [
+                "bytes": "\(data.count)",
+                "in_window": "\(window != nil)",
+                "is_first_responder": "\(isFirstResponder)",
+            ])
+        }
     }
 
     func deleteBackward() {
@@ -820,10 +847,21 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         return (row, col)
     }
 
+    private var didLogTap = false
+
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
         // Single tap: become first responder (summons soft keyboard
         // via UIKeyInput) AND clear any open selection. Hides the
         // edit menu, matching iOS-system behaviour.
+        if !didLogTap {
+            didLogTap = true
+            // Distinguishes "tap never reached the terminal view" (no event)
+            // from "tap landed but focus failed" (becomeFirstResponder event).
+            Telemetry.debug("terminal_input", "tap → becomeFirstResponder", data: [
+                "in_window": "\(window != nil)",
+                "is_active": "\(isActive)",
+            ])
+        }
         _ = becomeFirstResponder()
         if selectionRange != nil {
             selectionRange = nil
