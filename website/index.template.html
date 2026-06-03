@@ -158,6 +158,24 @@
     .feat-phone{max-width:360px;margin:0 auto;}
   }
 
+  /* ===== tablet showcase ===== */
+  .tablet{padding:40px 0 80px;}
+  .tablet-head{text-align:center;max-width:680px;margin:0 auto 40px;}
+  .tablet-head h2{font-size:clamp(28px,3.8vw,44px);margin:16px 0 0;}
+  .tablet-head .lead{margin:16px auto 0;}
+  .tablet-stage{position:relative;}
+  .tablet-stage::before{content:"";position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);
+    width:88%;height:90%;border-radius:50%;
+    background:radial-gradient(closest-side,rgba(34,211,238,0.18),rgba(62,240,160,0.07) 50%,transparent 74%);
+    filter:blur(14px);z-index:0;}
+  .tablet-frame{position:relative;z-index:1;width:100%;max-width:1040px;margin:0 auto;display:block;
+    border-radius:22px;border:1px solid var(--line);box-shadow:0 30px 90px rgba(0,0,0,0.55),0 0 30px rgba(34,211,238,0.10);}
+  .tablet-points{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:920px;margin:38px auto 0;}
+  .tablet-point{text-align:center;padding:0 8px;}
+  .tablet-point h4{font-family:var(--mono);font-size:14px;margin:0 0 6px;color:var(--text);letter-spacing:-0.01em;}
+  .tablet-point p{margin:0;font-size:13px;color:var(--dim);line-height:1.5;}
+  @media(max-width:760px){.tablet-points{grid-template-columns:1fr;gap:22px;}}
+
   /* ===== capabilities grid ===== */
   .caps{padding:30px 0 96px;}
   .caps-head{text-align:center;max-width:640px;margin:0 auto 48px;}
@@ -223,6 +241,7 @@
       <a href="#remote">Remote</a>
       <a href="#terminal">Terminal</a>
       <a href="#browser">Browser</a>
+      <a href="#tablet">Tablet</a>
       <a href="#everything">Everything</a>
     </nav>
     <a class="nav-cta" href="#download">Get the app</a>
@@ -250,7 +269,7 @@
         <div class="hero-note" data-dl-meta aria-live="polite">Loading the latest build…</div>
       </div>
       <div class="phone-stage">
-        <img class="phone-img" src="assets/phone-home.png" width="686" height="506" decoding="async" alt="Conduit home screen with recent sessions and connected servers" />
+        <img class="phone-img" src="assets/phone-home.svg" width="390" height="660" decoding="async" alt="Conduit home screen with recent sessions and connected servers" />
       </div>
     </div>
   </section>
@@ -279,7 +298,7 @@
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/phone-chat.png" width="686" height="506" loading="lazy" decoding="async" alt="A live Conduit session: the agent working in a repo with diffs and approvals" />
+        <img src="assets/phone-chat.svg" width="390" height="720" loading="lazy" decoding="async" alt="A live Conduit session: the agent working in a repo with diffs and approvals" />
       </div>
     </div>
   </section>
@@ -298,7 +317,7 @@
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/phone-terminal.png" width="686" height="506" loading="lazy" decoding="async" alt="Conduit terminal tab streaming command output on the remote box" />
+        <img src="assets/phone-terminal.svg" width="390" height="720" loading="lazy" decoding="async" alt="Conduit terminal tab streaming command output on the remote box" />
       </div>
     </div>
   </section>
@@ -317,7 +336,26 @@
         </ul>
       </div>
       <div class="feat-phone">
-        <img src="assets/phone-browser.png" width="686" height="506" loading="lazy" decoding="async" alt="Conduit browser tab previewing the running dev server" />
+        <img src="assets/phone-browser.svg" width="390" height="720" loading="lazy" decoding="async" alt="Conduit browser tab previewing the running dev server" />
+      </div>
+    </div>
+  </section>
+
+  <!-- TABLET SHOWCASE -->
+  <section class="tablet" id="tablet">
+    <div class="wrap">
+      <div class="tablet-head reveal">
+        <span class="eyebrow"><span class="pip"></span>On tablet</span>
+        <h2 class="display">The whole IDE,<br />on the iPad.</h2>
+        <p class="lead">On a bigger screen Conduit fans out into a three-pane workspace — your sessions, the live chat thread, and a terminal or browser pane side by side. The same session, more room to work.</p>
+      </div>
+      <div class="tablet-stage reveal">
+        <img class="tablet-frame" src="assets/tablet-ide.svg" width="1194" height="800" loading="lazy" decoding="async" alt="Conduit on iPad: a three-pane IDE with the session rail, chat thread, and a terminal pane" />
+      </div>
+      <div class="tablet-points">
+        <div class="tablet-point reveal"><h4>Sessions rail</h4><p>Every active and recent session one tap away, with ⌘K search across all of them.</p></div>
+        <div class="tablet-point reveal"><h4>Chat &amp; diffs</h4><p>The full thread — plans, diffs, and approvals — in the center, where your attention lives.</p></div>
+        <div class="tablet-point reveal"><h4>Terminal &amp; usage</h4><p>A live terminal, browser preview, and usage limits docked in the side pane.</p></div>
       </div>
     </div>
   </section>
