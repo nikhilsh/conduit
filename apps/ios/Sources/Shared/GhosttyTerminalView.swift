@@ -266,6 +266,25 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// `diag=terminal_input`) — only reachable since the mount crash was
     /// fixed. Pins whether the scroll pan fires and reaches libghostty.
     private var didLogScroll = false
+    /// One-shot: did libghostty EMIT an SGR wheel report (button 64/65) out of
+    /// its HOST_MANAGED backend? Confirms it forwards scroll to tmux on our ABI
+    /// — the crux of dropping the manual wheel-forward.
+    private var didLogEmittedWheel = false
+
+    /// Forward bytes libghostty emits from its HOST_MANAGED backend to the PTY,
+    /// noting (once) when it emits a mouse-wheel report so we can confirm
+    /// off-device that scroll reaches tmux via libghostty's own mouse reporting.
+    private func forwardEmittedInput(_ bytes: Data) {
+        if !didLogEmittedWheel,
+           let s = String(data: bytes, encoding: .utf8),
+           s.contains("\u{1B}[<64") || s.contains("\u{1B}[<65") {
+            didLogEmittedWheel = true
+            Telemetry.debug("terminal_input", "libghostty emitted wheel report", data: [
+                "bytes": "\(bytes.count)",
+            ])
+        }
+        onInput(bytes)
+    }
 
     /// Accumulated pan translation (points) consumed by the scroll handler,
     /// so each `.changed` callback feeds libghostty only the INCREMENTAL
@@ -1335,7 +1354,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // Forward user input libghostty emits from its HOST_MANAGED backend
         // (mouse-reporting, bracketed-paste framing) to the harness PTY —
         // analog of clauntty's set_pty_input_callback.
-        term.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
+        term.onReceiveInput = { [weak self] bytes in self?.forwardEmittedInput(bytes) }
         let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
         Telemetry.breadcrumb("terminal", "attach begin (ghostty_surface_new)", data: [
             "pxW": "\(UInt32(bounds.width * scale))", "pxH": "\(UInt32(bounds.height * scale))", "scale": "\(Double(scale))",
@@ -1584,7 +1603,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
                 fontSize: Float(ghosttyFontSize),
                 theme: Self.mapTheme(ghosttyTheme)
             )
-            term.onReceiveInput = { [weak self] inBytes in self?.onInput(inBytes) }
+            term.onReceiveInput = { [weak self] inBytes in self?.forwardEmittedInput(inBytes) }
             let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
             term.attach(
                 hostView: self,
