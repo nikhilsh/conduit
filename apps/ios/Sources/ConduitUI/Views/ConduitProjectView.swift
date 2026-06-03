@@ -55,6 +55,15 @@ extension ConduitUI {
         var chatOnly: Bool = false
 
         @State private var tab: ProjectTab = .chat
+        // Lazy-mount gate for the native terminal. The libghostty surface is
+        // built in GhosttyTerminalView's mount; #294 made the terminal
+        // ALWAYS-mounted (opacity) to keep it warm, which moved that surface
+        // creation into the session-CREATE CoreAnimation commit → the
+        // terminal-mount EXC_BAD_ACCESS (it crashes while you're still on the
+        // Chat tab). Gate the mount until the Terminal tab is first opened:
+        // session-create never touches libghostty, and once opened the
+        // terminal stays mounted (opacity) so #294's no-rebuild warmth holds.
+        @State private var terminalActivated = false
         @State private var showInfo = false
 
         /// A session whose agent has exited / been archived is read-only:
@@ -88,7 +97,13 @@ extension ConduitUI {
             // bar); without this, switching Terminal→Chat left that
             // keyboard up and the chat composer inherited the dirty state
             // and disappeared (device bug #31). A clean slate per tab.
-            .onChange(of: tab) { _, _ in dismissKeyboard() }
+            .onChange(of: tab) { _, newTab in
+                dismissKeyboard()
+                // First time the Terminal tab opens, allow the native terminal
+                // to mount (and stay mounted thereafter). Deliberate, outside
+                // the session-create CA commit.
+                if newTab == .terminal { terminalActivated = true }
+            }
             .sheet(isPresented: $showInfo) {
                 ConduitUI.SessionInfoView(session: session)
             }
@@ -302,11 +317,17 @@ extension ConduitUI {
                 // initialized laggily. Mounting once keeps the surface warm;
                 // `isActive` pauses its draw pump + marks it occluded while
                 // hidden (no battery cost off-tab).
-                terminalContent
-                    .opacity(tab == .terminal ? 1 : 0)
-                    .allowsHitTesting(tab == .terminal)
-                    .accessibilityHidden(tab != .terminal)
-                    .zIndex(tab == .terminal ? 1 : 0)
+                // Lazy-mount: don't instantiate the terminal (and its
+                // libghostty surface) until the Terminal tab is first opened,
+                // so it never mounts inside the session-create CA commit. Once
+                // activated it stays mounted (opacity), preserving #294's
+                // no-rebuild-on-switch warmth.
+                if terminalActivated {
+                    terminalContent
+                        .opacity(tab == .terminal ? 1 : 0)
+                        .allowsHitTesting(tab == .terminal)
+                        .accessibilityHidden(tab != .terminal)
+                        .zIndex(tab == .terminal ? 1 : 0)
                     // Render surfaces must NOT participate in the ZStack's
                     // keyboard-avoidance negotiation. They're full-screen and
                     // carry their own input bar; left in the negotiation, their
@@ -317,6 +338,7 @@ extension ConduitUI {
                     // works). Ignoring `.keyboard` here leaves Chat to negotiate
                     // the keyboard alone, like the tablet path.
                     .ignoresSafeArea(.keyboard, edges: .bottom)
+                }
 
                 BrowserTab(session: session, mode: .preview)
                     .opacity(tab == .browser ? 1 : 0)

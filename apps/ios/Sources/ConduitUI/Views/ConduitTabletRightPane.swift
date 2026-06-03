@@ -40,6 +40,13 @@ extension ConduitUI {
         @Environment(AppearanceStore.self) private var appearance
         @Environment(\.neonTheme) private var neon
         @State private var tab: RightPaneTab = .terminal
+        // Lazy-mount gate for the native terminal (same fix as phone
+        // ConduitProjectView). The right pane defaults to the Terminal tab, so
+        // an eager mount builds libghostty's surface inside the session-create
+        // CA commit → terminal-mount EXC_BAD_ACCESS. We mount it one runloop
+        // AFTER the pane appears (`.task` below) so the create commit settles
+        // first; it then stays mounted (opacity) per #294.
+        @State private var terminalActivated = false
 
         var body: some View {
             VStack(spacing: 0) {
@@ -64,6 +71,9 @@ extension ConduitUI {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .background(GlassAppBackground().ignoresSafeArea(.container, edges: .all))
+            // Defer the native-terminal mount to the next runloop, off the
+            // session-create CA commit (see terminalActivated).
+            .task { terminalActivated = true }
         }
 
         // Keep Terminal + Browser MOUNTED across the right-pane tab switches
@@ -75,11 +85,13 @@ extension ConduitUI {
         // plain switch overlaid on top when selected.
         @ViewBuilder private var content: some View {
             ZStack {
-                terminalContent
-                    .opacity(tab == .terminal ? 1 : 0)
-                    .allowsHitTesting(tab == .terminal)
-                    .accessibilityHidden(tab != .terminal)
-                    .zIndex(tab == .terminal ? 1 : 0)
+                if terminalActivated {
+                    terminalContent
+                        .opacity(tab == .terminal ? 1 : 0)
+                        .allowsHitTesting(tab == .terminal)
+                        .accessibilityHidden(tab != .terminal)
+                        .zIndex(tab == .terminal ? 1 : 0)
+                }
 
                 BrowserTab(session: session, mode: .preview)
                     .opacity(tab == .browser ? 1 : 0)
