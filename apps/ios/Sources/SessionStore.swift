@@ -330,6 +330,12 @@ final class SessionStore {
     /// re-feeds the WKTerminalView on appear / after reconnect.
     var terminalBuffer: [String: Data] = [:]
 
+    /// Session ids whose `terminalBuffer` changed since the last disk flush.
+    /// Drives the coalesced write-through in `scheduleTerminalPersist`.
+    private var terminalPersistDirty: Set<String> = []
+    /// At most one debounced flush in flight at a time.
+    private var terminalPersistScheduled = false
+
     /// Per-session xterm.js serialized render state, captured by
     /// `WKTerminalView.dismantleUIView` (tab switch / background) and
     /// replayed by the next attach so the user doesn't see an empty
@@ -394,6 +400,7 @@ final class SessionStore {
     private var foregroundObserver: NSObjectProtocol?
     private var networkReachableObserver: NSObjectProtocol?
     private var networkInterfaceObserver: NSObjectProtocol?
+    private var backgroundObserver: NSObjectProtocol?
 
     /// Shadow-write target: the shared Rust reducer (`core::store::SessionStoreCore`).
     /// In this PR the Swift maps above are still the read source of truth;
@@ -475,6 +482,17 @@ final class SessionStore {
             object: nil,
             queue: .main
         ) { _ in nudge() }
+
+        // App is about to background — flush any dirty terminal scrollback to
+        // disk NOW so a subsequent kill (or our own crash) still leaves the
+        // last-known terminal on disk for an instant cold-launch restore.
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flushTerminalPersist() }
+        }
 
         // Path-level reachability is owned by NetworkReachabilityObserver
         // (instantiated at app launch by ConduitApp). We just listen for
@@ -667,6 +685,9 @@ final class SessionStore {
             let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
             throw NSError(domain: "SessionStore", code: 106, userInfo: [NSLocalizedDescriptionKey: "Session delete failed (\(code))"])
         }
+        // Session is gone server-side — drop its cached scrollback so a
+        // recycled id can't resurrect a stale terminal on next launch.
+        discardPersistedTerminal(sessionID)
     }
 
     /// Convenience flow: optionally switch endpoint, connect, then create a
@@ -1640,6 +1661,7 @@ final class SessionStore {
     // as `ingestChat` / `ingestStatus`.
     func ingestPtyData(_ sessionID: String, _ bytes: Data) {
         terminalBuffer[sessionID, default: Data()].append(bytes)
+        scheduleTerminalPersist(sessionID)
         if useRustStore {
             // Synthesize the session in Rust if Swift hasn't seen it yet —
             // PTY data can race ahead of `register_session` from
@@ -1802,12 +1824,98 @@ final class SessionStore {
     func ingestSnapshot(_ sessionID: String, _ gunzipped: Data) {
         // Replace terminal scrollback with the authoritative snapshot from the server.
         terminalBuffer[sessionID] = gunzipped
+        scheduleTerminalPersist(sessionID)
         if useRustStore {
             ensureRustSessionPresent(sessionID)
             _ = rustStore.applySnapshot(sessionId: sessionID, gunzipped: gunzipped)
             #if DEBUG
             assertRustScrollbackParity(sessionID)
             #endif
+        }
+    }
+
+    // MARK: - Terminal scrollback disk persistence (cold-launch restore)
+    //
+    // The broker keeps the authoritative scrollback (256KB ring, persisted to
+    // `scrollback.bin`) and replays it on re-attach. But the client's
+    // `terminalBuffer` is in-memory only, so after an app kill a reopened
+    // session shows a BLANK terminal until the socket reconnects and the live
+    // snapshot arrives. We mirror the buffer to a small per-session file so a
+    // cold launch can paint the last-known terminal instantly; the live
+    // snapshot then REPLACES it. Mirrored on Android in `SessionStore.kt`.
+
+    /// Cap each persisted file to the broker ring size — keep the TAIL (most
+    /// recent bytes), matching the broker's circular scrollback.
+    private static let terminalPersistCap = 256 * 1024
+
+    private static var terminalScrollbackDir: URL? {
+        let fm = FileManager.default
+        guard let base = fm.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let dir = base.appendingPathComponent("terminal-scrollback", isDirectory: true)
+        if !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    private static func terminalScrollbackURL(_ sessionID: String) -> URL? {
+        // Session ids are UUIDs; sanitize defensively to keep them path-safe.
+        let safe = sessionID.replacingOccurrences(of: "/", with: "_")
+        guard !safe.isEmpty else { return nil }
+        return terminalScrollbackDir?.appendingPathComponent("\(safe).bin")
+    }
+
+    /// Mark a session dirty and schedule a coalesced disk flush. Debounced
+    /// (~3s) so a streaming PTY doesn't thrash I/O — the broker is
+    /// authoritative on reconnect, so a slightly-stale on-disk copy is fine.
+    private func scheduleTerminalPersist(_ sessionID: String) {
+        terminalPersistDirty.insert(sessionID)
+        guard !terminalPersistScheduled else { return }
+        terminalPersistScheduled = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            self.terminalPersistScheduled = false
+            self.flushTerminalPersist()
+        }
+    }
+
+    /// Write every dirty session's tail-capped buffer to disk. No-op when
+    /// nothing is dirty. Also invoked on app background.
+    func flushTerminalPersist() {
+        guard !terminalPersistDirty.isEmpty else { return }
+        let dirty = terminalPersistDirty
+        terminalPersistDirty.removeAll()
+        for id in dirty {
+            guard let data = terminalBuffer[id], !data.isEmpty,
+                  let url = Self.terminalScrollbackURL(id) else { continue }
+            let tail = data.count > Self.terminalPersistCap
+                ? Data(data.suffix(Self.terminalPersistCap))
+                : data
+            try? tail.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Load a session's persisted scrollback into the in-memory buffer when we
+    /// don't already hold live bytes. Called on (re)attach so a cold launch
+    /// shows the last-known terminal instantly; the broker's live snapshot
+    /// later REPLACES this via `ingestSnapshot`. Seeds the Rust mirror too so
+    /// the DEBUG scrollback-parity assertion stays consistent.
+    func hydrateTerminalBuffer(_ sessionID: String) {
+        guard terminalBuffer[sessionID]?.isEmpty ?? true else { return }
+        guard let url = Self.terminalScrollbackURL(sessionID),
+              let data = try? Data(contentsOf: url), !data.isEmpty else { return }
+        terminalBuffer[sessionID] = data
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applySnapshot(sessionId: sessionID, gunzipped: data)
+        }
+    }
+
+    /// Drop a session's persisted scrollback (session deleted server-side).
+    func discardPersistedTerminal(_ sessionID: String) {
+        terminalPersistDirty.remove(sessionID)
+        if let url = Self.terminalScrollbackURL(sessionID) {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
@@ -2241,6 +2349,11 @@ final class SessionStore {
             switchTo(sessionID: sessionID)
             return
         }
+        // Cold-launch restore: seed the terminal from the last persisted
+        // scrollback so the view paints instantly instead of waiting for the
+        // socket. The broker's authoritative snapshot REPLACES this once
+        // `joinSession` lands (`ingestSnapshot`).
+        hydrateTerminalBuffer(sessionID)
         Task { @MainActor in
             do {
                 try await waitUntilCommandReady()
