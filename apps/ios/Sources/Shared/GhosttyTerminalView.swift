@@ -262,6 +262,10 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// selection was already anchored; latched for the gesture's lifetime
     /// so a mid-drag selection clear can't flip it into selection mode.
     private var panIsScrolling = false
+    /// One-shot triage for the native terminal scroll path (Sentry
+    /// `diag=terminal_input`) — only reachable since the mount crash was
+    /// fixed. Pins whether the scroll pan fires and reaches libghostty.
+    private var didLogScroll = false
 
     /// Accumulated pan translation (points) consumed by the scroll handler,
     /// so each `.changed` callback feeds libghostty only the INCREMENTAL
@@ -979,6 +983,16 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             terminal?.scroll(deltaY: scrollDelta)
             // Forward discrete wheel clicks to the PTY for tmux copy-mode.
             forwardWheel(deltaPoints: deltaPoints, at: recognizer.location(in: self))
+            if !didLogScroll {
+                didLogScroll = true
+                let g = terminal?.gridSize()
+                Telemetry.debug("terminal_input", "scroll pan → libghostty", data: [
+                    "delta_points": "\(Int(deltaPoints))",
+                    "scroll_delta": "\(Int(scrollDelta))",
+                    "terminal_live": "\(terminal != nil)",
+                    "grid": g.map { "\($0.cols)x\($0.rows)" } ?? "nil",
+                ])
+            }
         default:
             break
         }

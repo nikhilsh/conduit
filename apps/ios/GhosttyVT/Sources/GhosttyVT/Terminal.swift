@@ -947,7 +947,8 @@ public final class GhosttySurface {
     /// `int`). Layout (from `src/input/mouse.zig`, mirrored by the
     /// reference apps): bit 0 = precision (pixel-precise) flag, bits 1–3 =
     /// momentum phase. Touch scrolling uses precision deltas with momentum
-    /// phase "changed" (3) during an active drag.
+    /// phase NONE (0) during an active finger drag — momentum phases describe
+    /// the inertial fling AFTER a lift, not the drag itself.
     private static func scrollMods(precision: Bool, momentum: UInt8 = 0) -> Int32 {
         var mods: Int32 = 0
         if precision { mods |= 1 }                 // bit 0
@@ -964,7 +965,12 @@ public final class GhosttySurface {
     /// new viewport without waiting for the next PTY byte.
     public func scroll(deltaY: Double) {
         guard let surface = _surface, deltaY != 0 else { return }
-        let mods = GhosttySurface.scrollMods(precision: true, momentum: 3)
+        // Momentum phase NONE (0), not "changed" (3): a finger drag is an
+        // ACTIVE scroll, not the inertial fling that follows a lift. ghostty's
+        // momentum phases (began/changed/ended) describe post-release inertia;
+        // emitting "changed" with no preceding "began" is a stray momentum
+        // event the renderer can drop — leaving touch scroll dead on device.
+        let mods = GhosttySurface.scrollMods(precision: true, momentum: 0)
         ghostty_surface_mouse_scroll(surface, 0, deltaY, mods)
         ghostty_surface_refresh(surface)
         GhosttyDiagnostics.shared.incScroll()
