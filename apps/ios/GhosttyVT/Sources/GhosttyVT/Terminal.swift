@@ -956,13 +956,14 @@ public final class GhosttySurface {
         return mods
     }
 
-    /// Scroll libghostty's OWN scrollback by a pixel-precise vertical
-    /// delta (points). Sign convention matches the reference touch apps
-    /// and native iOS terminals: a POSITIVE `deltaY` reveals OLDER content
-    /// (scrolls up into scrollback), so callers pass the negated finger
-    /// translation (finger dragging DOWN → reveal history above). After
-    /// scrolling we refresh + tick so the event-driven renderer paints the
-    /// new viewport without waiting for the next PTY byte.
+    /// Scroll libghostty's OWN scrollback by a pixel-precise vertical delta.
+    /// `deltaY` is in PIXELS (libghostty accumulates a precision scroll against
+    /// the cell height in pixels — the surface is sized in pixels via
+    /// `set_size`), so the caller converts finger points→pixels with the
+    /// backing scale. A POSITIVE `deltaY` reveals OLDER content (ghostty maps
+    /// `y.delta>0` to scroll-up), so the caller passes a positive delta for a
+    /// finger dragging DOWN. After scrolling we refresh + tick so the
+    /// event-driven renderer paints the new viewport immediately.
     public func scroll(deltaY: Double) {
         guard let surface = _surface, deltaY != 0 else { return }
         // Momentum phase NONE (0), not "changed" (3): a finger drag is an

@@ -266,6 +266,25 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// `diag=terminal_input`) — only reachable since the mount crash was
     /// fixed. Pins whether the scroll pan fires and reaches libghostty.
     private var didLogScroll = false
+    /// One-shot: did libghostty EMIT an SGR wheel report (button 64/65) out of
+    /// its HOST_MANAGED backend? Confirms it forwards scroll to tmux on our ABI
+    /// — the crux of dropping the manual wheel-forward.
+    private var didLogEmittedWheel = false
+
+    /// Forward bytes libghostty emits from its HOST_MANAGED backend to the PTY,
+    /// noting (once) when it emits a mouse-wheel report so we can confirm
+    /// off-device that scroll reaches tmux via libghostty's own mouse reporting.
+    private func forwardEmittedInput(_ bytes: Data) {
+        if !didLogEmittedWheel,
+           let s = String(data: bytes, encoding: .utf8),
+           s.contains("\u{1B}[<64") || s.contains("\u{1B}[<65") {
+            didLogEmittedWheel = true
+            Telemetry.debug("terminal_input", "libghostty emitted wheel report", data: [
+                "bytes": "\(bytes.count)",
+            ])
+        }
+        onInput(bytes)
+    }
 
     /// Accumulated pan translation (points) consumed by the scroll handler,
     /// so each `.changed` callback feeds libghostty only the INCREMENTAL
@@ -279,18 +298,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// faster/slower.
     private static let scrollSensitivity: Double = 1.0
 
-    /// Points of vertical finger travel that equal one mouse-wheel "click"
-    /// forwarded to the broker PTY. ~24pt ≈ one line-height of drag at the
-    /// default font, so a slow drag scrolls roughly line-for-finger while a
-    /// fast drag emits several wheel ticks per `.changed`. The remainder is
-    /// carried in `scrollWheelRemainder` so no travel is lost between
-    /// callbacks. Tunable if device testing wants it faster/slower.
-    private static let scrollPointsPerWheel: CGFloat = 24
-
-    /// Sub-tick vertical travel not yet converted to a wheel event. Carried
-    /// across `.changed` callbacks so a slow drag still accumulates to a
-    /// click and a fast drag's leftover doesn't get dropped.
-    private var scrollWheelRemainder: CGFloat = 0
 
     #if canImport(GhosttyVT)
     private var terminal: Terminal?
@@ -917,7 +924,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             // Latch the role once: selection extend vs scroll.
             panIsScrolling = (selectionRange == nil)
             scrollPanLastY = 0
-            scrollWheelRemainder = 0
             if panIsScrolling {
                 handleScrollPan(recognizer)
             } else {
@@ -937,61 +943,57 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             }
             panIsScrolling = false
             scrollPanLastY = 0
-            scrollWheelRemainder = 0
         default:
             break
         }
     }
 
-    /// Forward the pan's vertical travel to the broker PTY as SGR (1006)
-    /// mouse-wheel events so tmux scrolls its OWN copy-mode history.
+    /// Drive scrollback from a one-finger pan. Every broker session runs under
+    /// `tmux … set -g mouse on`, which turns ON mouse reporting — so libghostty's
+    /// `ghostty_surface_mouse_scroll` does NOT walk an (empty) local scrollback;
+    /// when mouse reporting is active it EMITS SGR wheel reports to the program
+    /// (tmux), which scrolls tmux's copy-mode history. That's the canonical
+    /// ghostty/macOS path (verified in `Surface.scrollCallback`'s
+    /// `isMouseReporting()` branch), so we just feed it the pan delta and let
+    /// libghostty forward the wheel events.
     ///
-    /// Why not libghostty-local scroll: the broker runs every session under
-    /// tmux, which owns the screen (status-line scroll region). Scrolled-off
-    /// lines never reach libghostty's scrollback, so `terminal?.scroll(...)`
-    /// walks an empty buffer and does nothing on device. tmux only scrolls
-    /// when it receives mouse-wheel reports over the PTY (mouse mode must be
-    /// enabled server-side). So we encode wheel events ourselves and ship
-    /// them through `onInput` (→ `SessionStore.sendInput`).
-    ///
-    /// Direction: a finger dragging DOWN reveals OLDER content above → wheel
-    /// UP (button 64); finger UP → wheel DOWN (button 65). Matches natural
-    /// iOS content-follows-finger scrolling.
-    ///
-    /// Quantization: vertical translation is accumulated and converted into
-    /// discrete wheel "clicks", one per `scrollPointsPerWheel` points, with
-    /// the leftover carried in `scrollWheelRemainder` so a slow drag still
-    /// scrolls smoothly and a fast drag emits several ticks per callback.
-    ///
-    /// We still call `terminal?.scroll(deltaY:)` too — harmless (a no-op
-    /// under tmux), but it keeps libghostty-local scrollback working if the
-    /// server is ever run without tmux.
+    /// History: this used to ALSO hand-encode SGR wheel events (`forwardWheel`)
+    /// as a workaround, because the libghostty scroll "did nothing" — but that
+    /// was the points-vs-pixels + sign bug below preventing `y.delta` from ever
+    /// being nonzero (so libghostty emitted no report). With the delta fixed,
+    /// libghostty forwards correctly and the manual path only DOUBLE-sent, so
+    /// it was removed.
     private func handleScrollPan(_ recognizer: UIPanGestureRecognizer) {
         #if canImport(GhosttyVT)
         switch recognizer.state {
         case .began:
-            // Dragging the terminal dismisses any open edit menu + soft
-            // keyboard focus is irrelevant to scrolling; leave it alone.
             scrollPanLastY = 0
-            scrollWheelRemainder = 0
         case .changed:
             let translationY = recognizer.translation(in: self).y
             let deltaPoints = translationY - scrollPanLastY
             scrollPanLastY = translationY
             guard deltaPoints != 0 else { return }
-            // Negate: finger DOWN → reveal history ABOVE (scroll up).
-            let scrollDelta = -Double(deltaPoints) * Self.scrollSensitivity
+            // libghostty accumulates a PRECISION scroll delta against the cell
+            // height in PIXELS (we size the surface in pixels via set_size), so
+            // the delta must be in pixels too — convert points→pixels with the
+            // backing scale. Raw points were ≈`scale`× (≈3×) too weak, so short
+            // drags never crossed one cell and nothing scrolled. Sign: ghostty
+            // maps a POSITIVE delta to scroll-up/older (its `y.delta>0` path),
+            // and a finger dragging DOWN should reveal older history → positive
+            // delta, so do NOT negate. Both confirmed from `Surface.scrollCallback`.
+            let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+            let scrollDelta = Double(deltaPoints) * Double(scale) * Self.scrollSensitivity
             terminal?.scroll(deltaY: scrollDelta)
-            // Forward discrete wheel clicks to the PTY for tmux copy-mode.
-            forwardWheel(deltaPoints: deltaPoints, at: recognizer.location(in: self))
             if !didLogScroll {
                 didLogScroll = true
                 let g = terminal?.gridSize()
                 Telemetry.debug("terminal_input", "scroll pan → libghostty", data: [
                     "delta_points": "\(Int(deltaPoints))",
-                    "scroll_delta": "\(Int(scrollDelta))",
+                    "scroll_delta_px": "\(Int(scrollDelta))",
+                    "scale": "\(Double(scale))",
                     "terminal_live": "\(terminal != nil)",
                     "grid": g.map { "\($0.cols)x\($0.rows)" } ?? "nil",
+                    "cell_px": g.map { "\($0.cellWidthPx)x\($0.cellHeightPx)" } ?? "nil",
                 ])
             }
         default:
@@ -1000,45 +1002,6 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         #else
         _ = recognizer
         #endif
-    }
-
-    /// Accumulate incremental pan travel into whole mouse-wheel clicks and
-    /// emit one SGR (1006) wheel event per click to the broker PTY.
-    ///
-    /// `deltaPoints` is the incremental finger movement since the last
-    /// callback (positive = finger moved DOWN). One wheel UP (button 64) per
-    /// `scrollPointsPerWheel` of downward travel reveals older history; one
-    /// wheel DOWN (button 65) per equal upward travel returns toward the
-    /// newest output.
-    private func forwardWheel(deltaPoints: CGFloat, at point: CGPoint) {
-        scrollWheelRemainder += deltaPoints
-        let step = Self.scrollPointsPerWheel
-        guard step > 0 else { return }
-        // Wheel UP (64) for downward finger travel; DOWN (65) for upward.
-        // Emit as many clicks as the accumulated travel covers, carrying the
-        // remainder so no movement is lost between callbacks.
-        let cell = gridCell(at: point)
-        // gridCell returns 0-based row/col clamped to the grid; SGR mouse
-        // coordinates are 1-based. Clamp to >= 1 defensively.
-        let cx = max(1, cell.col + 1)
-        let cy = max(1, cell.row + 1)
-        while scrollWheelRemainder >= step {
-            scrollWheelRemainder -= step
-            sendWheel(buttonCode: 64, col: cx, row: cy) // finger DOWN → wheel UP
-        }
-        while scrollWheelRemainder <= -step {
-            scrollWheelRemainder += step
-            sendWheel(buttonCode: 65, col: cx, row: cy) // finger UP → wheel DOWN
-        }
-    }
-
-    /// Encode and send a single xterm SGR (1006) mouse-wheel event:
-    /// `ESC [ < Cb ; Cx ; Cy M`. Wheel events use the press form `M`; there
-    /// is no separate release. `Cb` is 64 (wheel up) or 65 (wheel down),
-    /// `Cx`/`Cy` are 1-based cell column/row under the touch point.
-    private func sendWheel(buttonCode: Int, col: Int, row: Int) {
-        let seq = "\u{1B}[<\(buttonCode);\(col);\(row)M"
-        onInput(Data(seq.utf8))
     }
 
     private func handleSelectionPan(_ recognizer: UIPanGestureRecognizer) {
@@ -1391,7 +1354,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // Forward user input libghostty emits from its HOST_MANAGED backend
         // (mouse-reporting, bracketed-paste framing) to the harness PTY —
         // analog of clauntty's set_pty_input_callback.
-        term.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
+        term.onReceiveInput = { [weak self] bytes in self?.forwardEmittedInput(bytes) }
         let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
         Telemetry.breadcrumb("terminal", "attach begin (ghostty_surface_new)", data: [
             "pxW": "\(UInt32(bounds.width * scale))", "pxH": "\(UInt32(bounds.height * scale))", "scale": "\(Double(scale))",
@@ -1640,7 +1603,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
                 fontSize: Float(ghosttyFontSize),
                 theme: Self.mapTheme(ghosttyTheme)
             )
-            term.onReceiveInput = { [weak self] inBytes in self?.onInput(inBytes) }
+            term.onReceiveInput = { [weak self] inBytes in self?.forwardEmittedInput(inBytes) }
             let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
             term.attach(
                 hostView: self,
