@@ -174,7 +174,7 @@ struct GhosttyTerminalView: UIViewRepresentable {
 /// keystrokes back to the harness. Lives at the file level (not nested
 /// inside the representable) so it can be exercised from a snapshot
 /// test without standing up a SwiftUI host.
-final class GhosttyRenderView: UIView, UIKeyInput {
+final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     var onInput: (Data) -> Void = { _ in }
     var onResize: (Int, Int) -> Void = { _, _ in }
     /// Mirrors WKTerminalView.Coordinator.lastFedByteCount — index
@@ -262,6 +262,12 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// selection was already anchored; latched for the gesture's lifetime
     /// so a mid-drag selection clear can't flip it into selection mode.
     private var panIsScrolling = false
+    /// One-shot: did the pan gesture fire AT ALL (any state)? If this logs but
+    /// `didLogScroll` doesn't, the pan reaches us but routes to selection; if
+    /// NEITHER logs, an ancestor recognizer is stealing the drag (the bug the
+    /// `pan.delegate`/simultaneous-recognition fix targets). Sentry
+    /// `diag=terminal_input`.
+    private var didLogPan = false
     /// One-shot triage for the native terminal scroll path (Sentry
     /// `diag=terminal_input`) — only reachable since the mount crash was
     /// fixed. Pins whether the scroll pan fires and reaches libghostty.
@@ -758,6 +764,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         addGestureRecognizer(tap)
 
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        longPress.delegate = self
         addGestureRecognizer(longPress)
 
         // Single one-finger pan with a dual role (standard mobile-terminal
@@ -771,6 +778,17 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
         pan.require(toFail: longPress)
+        // CRITICAL: set the delegate and allow simultaneous recognition. The
+        // terminal lives in a tabbed ZStack (chat/terminal/browser) whose
+        // ancestors carry their own pan/drag recognizers (tab swipe, a sibling
+        // ChatView `DragGesture`, SwiftUI scroll containers). Without a delegate
+        // that returns `true` from `shouldRecognizeSimultaneouslyWith`, UIKit's
+        // gesture arbitration lets one of those EXCLUSIVELY claim the drag and
+        // our pan never fires — the confirmed cause of "can't scroll" (Sentry:
+        // the `scroll pan` diag never logged). Reference apps clauntty/geistty
+        // host the surface with no ancestor scroll view; geistty additionally
+        // sets this delegate. We need it because we DO have competing ancestors.
+        pan.delegate = self
         addGestureRecognizer(pan)
 
         // iOS 16+ edit-menu surface. UIMenuController was deprecated in
@@ -919,6 +937,13 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// scrollback. Scrolling never starts a selection, so a plain drag on
     /// fresh output just walks history — the standard mobile-terminal feel.
     @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        if !didLogPan {
+            didLogPan = true
+            Telemetry.debug("terminal_input", "pan gesture fired", data: [
+                "state": "\(recognizer.state.rawValue)",
+                "has_selection": "\(selectionRange != nil)",
+            ])
+        }
         switch recognizer.state {
         case .began:
             // Latch the role once: selection extend vs scroll.
@@ -943,54 +968,48 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             }
             panIsScrolling = false
             scrollPanLastY = 0
+            scrollWheelRemainder = 0
         default:
             break
         }
     }
 
-    /// Drive scrollback from a one-finger pan. Every broker session runs under
-    /// `tmux … set -g mouse on`, which turns ON mouse reporting — so libghostty's
-    /// `ghostty_surface_mouse_scroll` does NOT walk an (empty) local scrollback;
-    /// when mouse reporting is active it EMITS SGR wheel reports to the program
-    /// (tmux), which scrolls tmux's copy-mode history. That's the canonical
-    /// ghostty/macOS path (verified in `Surface.scrollCallback`'s
-    /// `isMouseReporting()` branch), so we just feed it the pan delta and let
-    /// libghostty forward the wheel events.
+    /// Drive scrollback from a one-finger pan by hand-encoding SGR (1006)
+    /// mouse-wheel reports straight to the broker PTY.
     ///
-    /// History: this used to ALSO hand-encode SGR wheel events (`forwardWheel`)
-    /// as a workaround, because the libghostty scroll "did nothing" — but that
-    /// was the points-vs-pixels + sign bug below preventing `y.delta` from ever
-    /// being nonzero (so libghostty emitted no report). With the delta fixed,
-    /// libghostty forwards correctly and the manual path only DOUBLE-sent, so
-    /// it was removed.
+    /// WHY NOT libghostty-local scroll: every broker session runs under
+    /// `tmux … set -g mouse on`. tmux owns the alternate screen, so libghostty's
+    /// OWN scrollback is always empty — `terminal.scroll()` /
+    /// `ghostty_surface_mouse_scroll` walk nothing. And ghostty's encoder DROPS
+    /// the wheel report unless the surface's mouse cursor is in-bounds (it sits
+    /// at the default `(-1,-1)` because a touchscreen never calls
+    /// `ghostty_surface_mouse_pos`), so libghostty emits ZERO bytes — confirmed
+    /// in Sentry (the "emitted wheel report" diag never fired across v0.0.92-95).
+    ///
+    /// The reliable path is what tmux actually consumes: write the SGR wheel
+    /// bytes (`ESC[<64;col;rowM` = up, `…65…` = down) to the PTY ourselves via
+    /// the SAME `onInput` channel keystrokes use (proven to work — typing
+    /// works). Verified end-to-end server-side: injecting these bytes into a
+    /// tmux client PTY with the broker's exact config enters copy-mode and
+    /// scrolls. `forwardWheel` does the points→clicks quantization + encoding.
     private func handleScrollPan(_ recognizer: UIPanGestureRecognizer) {
         #if canImport(GhosttyVT)
         switch recognizer.state {
         case .began:
             scrollPanLastY = 0
+            scrollWheelRemainder = 0
         case .changed:
             let translationY = recognizer.translation(in: self).y
             let deltaPoints = translationY - scrollPanLastY
             scrollPanLastY = translationY
             guard deltaPoints != 0 else { return }
-            // libghostty accumulates a PRECISION scroll delta against the cell
-            // height in PIXELS (we size the surface in pixels via set_size), so
-            // the delta must be in pixels too — convert points→pixels with the
-            // backing scale. Raw points were ≈`scale`× (≈3×) too weak, so short
-            // drags never crossed one cell and nothing scrolled. Sign: ghostty
-            // maps a POSITIVE delta to scroll-up/older (its `y.delta>0` path),
-            // and a finger dragging DOWN should reveal older history → positive
-            // delta, so do NOT negate. Both confirmed from `Surface.scrollCallback`.
-            let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
-            let scrollDelta = Double(deltaPoints) * Double(scale) * Self.scrollSensitivity
-            terminal?.scroll(deltaY: scrollDelta)
+            forwardWheel(deltaPoints: deltaPoints, at: recognizer.location(in: self))
             if !didLogScroll {
                 didLogScroll = true
                 let g = terminal?.gridSize()
-                Telemetry.debug("terminal_input", "scroll pan → libghostty", data: [
+                Telemetry.debug("terminal_input", "scroll pan → SGR wheel to PTY", data: [
                     "delta_points": "\(Int(deltaPoints))",
-                    "scroll_delta_px": "\(Int(scrollDelta))",
-                    "scale": "\(Double(scale))",
+                    "step_pts": "\(Int(Self.scrollPointsPerWheel))",
                     "terminal_live": "\(terminal != nil)",
                     "grid": g.map { "\($0.cols)x\($0.rows)" } ?? "nil",
                     "cell_px": g.map { "\($0.cellWidthPx)x\($0.cellHeightPx)" } ?? "nil",
@@ -1002,6 +1021,42 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         #else
         _ = recognizer
         #endif
+    }
+
+    /// Accumulate incremental pan travel into whole mouse-wheel clicks and emit
+    /// one SGR (1006) wheel event per click to the broker PTY. `deltaPoints` is
+    /// the incremental finger movement since the last callback (positive = finger
+    /// moved DOWN). Finger DOWN reveals OLDER history → wheel UP (button 64);
+    /// finger UP → wheel DOWN (button 65). The remainder is carried across
+    /// callbacks so a slow drag still accumulates to a click and a fast drag's
+    /// leftover isn't dropped.
+    private func forwardWheel(deltaPoints: CGFloat, at point: CGPoint) {
+        let step = Self.scrollPointsPerWheel
+        guard step > 0 else { return }
+        scrollWheelRemainder += deltaPoints
+        // gridCell returns 0-based row/col clamped to the grid; SGR mouse
+        // coordinates are 1-based. Clamp to >= 1 defensively. tmux routes the
+        // wheel to the pane under these coords, so they must land in the grid.
+        let cell = gridCell(at: point)
+        let cx = max(1, cell.col + 1)
+        let cy = max(1, cell.row + 1)
+        while scrollWheelRemainder >= step {
+            scrollWheelRemainder -= step
+            sendWheel(buttonCode: 64, col: cx, row: cy) // finger DOWN → wheel UP
+        }
+        while scrollWheelRemainder <= -step {
+            scrollWheelRemainder += step
+            sendWheel(buttonCode: 65, col: cx, row: cy) // finger UP → wheel DOWN
+        }
+    }
+
+    /// Encode and send a single xterm SGR (1006) mouse-wheel event:
+    /// `ESC [ < Cb ; Cx ; Cy M`. Wheel events use the press form `M`; there is
+    /// no release. `Cb` is 64 (wheel up) or 65 (wheel down); `Cx`/`Cy` are
+    /// 1-based cell column/row under the touch point.
+    private func sendWheel(buttonCode: Int, col: Int, row: Int) {
+        let seq = "\u{1B}[<\(buttonCode);\(col);\(row)M"
+        onInput(Data(seq.utf8))
     }
 
     private func handleSelectionPan(_ recognizer: UIPanGestureRecognizer) {
@@ -1694,6 +1749,25 @@ extension GhosttyRenderView: UIEditMenuInteractionDelegate {
         // Terminal tab (Sentry APPLE-IOS-Q / -P). nil matches this method's
         // own doc comment and preserves the Copy/Paste filtering.
         nil
+    }
+}
+
+extension GhosttyRenderView {
+    /// Allow our recognizers to fire ALONGSIDE any competing recognizer instead
+    /// of being arbitrated away. The terminal sits in a tabbed ZStack whose
+    /// ancestors own pan/drag recognizers (tab swipe, sibling `DragGesture`,
+    /// SwiftUI scroll containers). Returning `true` here is what lets our
+    /// one-finger scroll pan actually begin — without it UIKit can let an
+    /// ancestor EXCLUSIVELY claim the drag, which is why the scroll pan never
+    /// fired (Sentry: the `scroll pan` diag never logged). Reference: geistty's
+    /// `SurfaceView` sets the same delegate. We keep our own tap/long-press
+    /// `require(toFail:)` ordering separately; this only governs cross-view
+    /// (ancestor) simultaneity.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        true
     }
 }
 
