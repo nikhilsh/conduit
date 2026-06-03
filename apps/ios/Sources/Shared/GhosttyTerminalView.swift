@@ -884,6 +884,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         switch recognizer.state {
         case .began:
             _ = becomeFirstResponder()
+            refreshSnapshot()   // on-demand: feed() no longer keeps this warm
             selectionRange = TerminalSelectionRange(start: cell, end: cell)
             setNeedsDisplay()
             showEditMenu(at: point)
@@ -1067,6 +1068,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         let point = recognizer.location(in: self)
         let cell = gridCell(at: point)
         _ = becomeFirstResponder()
+        refreshSnapshot()   // on-demand: feed() no longer keeps this warm
         guard let snap = cachedSnapshot,
               snap.rows > 0,
               snap.cols > 0,
@@ -1101,6 +1103,7 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         let point = recognizer.location(in: self)
         let cell = gridCell(at: point)
         _ = becomeFirstResponder()
+        refreshSnapshot()   // on-demand: feed() no longer keeps this warm
         let lastCol = max(0, (cachedSnapshot?.cols ?? cols) - 1)
         selectionRange = TerminalSelectionRange(
             start: (cell.row, 0),
@@ -1612,7 +1615,14 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             pendingFeed.append(bytes)
         }
         #endif
-        refreshSnapshot()
+        // Do NOT rebuild the cell snapshot per PTY chunk. libghostty renders the
+        // grid directly; `cachedSnapshot` is consumed ONLY by text selection,
+        // which now refreshes it on demand at gesture start. Rebuilding it here
+        // ran an O(rows×cols) FFI read + array allocation on the main thread for
+        // EVERY chunk — and kept firing for an off-tab (opacity-0) terminal
+        // whose `updateUIView` still runs on streaming output, starving the
+        // visible Chat into a blank-screen hang (Sentry App Hanging — a
+        // SwiftUI/AttributeGraph main-thread stall, no libghostty frames).
     }
 
     func resetAndFeed(_ bytes: Data) {

@@ -1881,18 +1881,42 @@ final class SessionStore {
 
     /// Write every dirty session's tail-capped buffer to disk. No-op when
     /// nothing is dirty. Also invoked on app background.
+    ///
+    /// The tail bytes are captured on the main actor (reading `terminalBuffer`),
+    /// then the actual file I/O is handed to a background queue — a synchronous
+    /// ≤256KB `Data.write` on the main thread every few seconds was a periodic
+    /// main-thread stall that compounds the terminal render hang.
     func flushTerminalPersist() {
         guard !terminalPersistDirty.isEmpty else { return }
         let dirty = terminalPersistDirty
         terminalPersistDirty.removeAll()
+        var writes: [(URL, Data)] = []
         for id in dirty {
             guard let data = terminalBuffer[id], !data.isEmpty,
                   let url = Self.terminalScrollbackURL(id) else { continue }
             let tail = data.count > Self.terminalPersistCap
                 ? Data(data.suffix(Self.terminalPersistCap))
                 : data
-            try? tail.write(to: url, options: .atomic)
+            writes.append((url, tail))
         }
+        guard !writes.isEmpty else { return }
+        Self.terminalPersistIOQueue.async {
+            for (url, tail) in writes {
+                try? tail.write(to: url, options: .atomic)
+            }
+        }
+    }
+
+    /// Serial background queue for terminal-scrollback disk writes — keeps the
+    /// best-effort cache off the main thread.
+    private static let terminalPersistIOQueue =
+        DispatchQueue(label: "sh.nikhil.conduit.terminal-persist", qos: .utility)
+
+    /// Block until all queued scrollback writes have hit disk. Test-only seam
+    /// (`flushTerminalPersist` is now async) — a barrier on the serial IO queue
+    /// returns once every prior write has run.
+    func waitForTerminalPersistIO() {
+        Self.terminalPersistIOQueue.sync {}
     }
 
     /// Load a session's persisted scrollback into the in-memory buffer when we
