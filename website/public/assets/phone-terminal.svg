@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 720" width="390" height="720" fill="none" font-family="ui-monospace, 'SF Mono', Menlo, monospace">
+  <defs>
+    <radialGradient id="tGlow" cx="50%" cy="0%" r="75%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.18"/>
+      <stop offset="50%" stop-color="#22d3ee" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#04050a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="390" height="720" rx="44" fill="#05070e"/>
+  <rect x="0" y="0" width="390" height="360" rx="44" fill="url(#tGlow)"/>
+
+  <!-- status bar -->
+  <text x="22" y="34" fill="#eaf3ff" font-size="15" font-weight="600">9:41</text>
+  <rect x="156" y="20" width="78" height="22" rx="11" fill="#01030a"/>
+  <g fill="#eaf3ff" opacity="0.92">
+    <rect x="300" y="29" width="3" height="5" rx="1"/><rect x="305" y="26" width="3" height="8" rx="1"/>
+    <rect x="310" y="23" width="3" height="11" rx="1"/><rect x="315" y="20" width="3" height="14" rx="1"/>
+    <path d="M326 28 a7 7 0 0 1 11 0 M329 31 a3.4 3.4 0 0 1 5 0" stroke="#eaf3ff" stroke-width="1.7" fill="none"/>
+    <rect x="346" y="22" width="21" height="11" rx="3" stroke="#eaf3ff" stroke-width="1.3" fill="none"/>
+    <rect x="348" y="24" width="16" height="7" rx="1.5"/>
+  </g>
+
+  <!-- session header -->
+  <path d="M34 84l-9 9 9 9" stroke="#9fb2d0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="52" y="99" fill="#eaf3ff" font-size="16" font-weight="600">Fix auth refresh loop</text>
+  <circle cx="350" cy="93" r="13" fill="#1a1108" stroke="#ff9d4d" stroke-opacity="0.5"/>
+  <circle cx="345" cy="92" r="1.5" fill="#ff9d4d"/><circle cx="355" cy="92" r="1.5" fill="#ff9d4d"/>
+  <path d="M345 97 q5 3 10 0" stroke="#ff9d4d" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  <line x1="20" y1="120" x2="370" y2="120" stroke="#22d3ee" stroke-opacity="0.10"/>
+
+  <!-- terminal body -->
+  <g font-size="13.5">
+    <text x="24" y="152"><tspan fill="#3ef0a0">~/envoy</tspan><tspan fill="#7d92b4"> (fix/auth)</tspan><tspan fill="#22d3ee"> $</tspan><tspan fill="#eaf3ff"> go test ./...</tspan></text>
+    <text x="24" y="178" fill="#c4d6f4">ok  <tspan fill="#7d92b4">envoy/auth</tspan>   0.42s  <tspan fill="#3ef0a0">PASS</tspan></text>
+    <text x="24" y="210"><tspan fill="#22d3ee">$</tspan><tspan fill="#eaf3ff"> git status</tspan></text>
+    <text x="24" y="236" fill="#c4d6f4">On branch <tspan fill="#3ef0a0">fix/auth</tspan></text>
+    <text x="24" y="258" fill="#7d92b4">Changes not staged for commit:</text>
+    <text x="40" y="282"><tspan fill="#ffb627">modified:</tspan><tspan fill="#eaf3ff">   auth/refresh.go</tspan></text>
+    <text x="40" y="304"><tspan fill="#ffb627">modified:</tspan><tspan fill="#eaf3ff">   auth/token.go</tspan></text>
+    <text x="24" y="338"><tspan fill="#22d3ee">$</tspan><tspan fill="#eaf3ff"> ./scripts/redeploy.sh</tspan></text>
+    <text x="24" y="360" fill="#c4d6f4">→ building broker (linux/arm64)…</text>
+    <text x="24" y="382" fill="#3ef0a0">✓ deployed · pid 48213 · 1.8s</text>
+    <text x="24" y="414"><tspan fill="#22d3ee">$</tspan><tspan fill="#eaf3ff"> tail -f broker.log</tspan></text>
+    <text x="24" y="436" fill="#7d92b4">[ws] subscriber joined s-7f3a</text>
+    <text x="24" y="458"><tspan fill="#22d3ee">$ </tspan><tspan fill="#eaf3ff">▊</tspan></text>
+  </g>
+
+  <!-- accessory key bar -->
+  <rect x="0" y="612" width="390" height="44" fill="#0a1120"/>
+  <line x1="0" y1="612" x2="390" y2="612" stroke="#22d3ee" stroke-opacity="0.12"/>
+  <g font-size="12" fill="#c4d6f4" text-anchor="middle">
+    <rect x="14" y="624" width="40" height="22" rx="6" fill="#13203a"/><text x="34" y="639">esc</text>
+    <rect x="60" y="624" width="40" height="22" rx="6" fill="#13203a"/><text x="80" y="639">tab</text>
+    <rect x="106" y="624" width="40" height="22" rx="6" fill="#13203a"/><text x="126" y="639">ctrl</text>
+    <rect x="152" y="624" width="34" height="22" rx="6" fill="#13203a"/><text x="169" y="640">↑</text>
+    <rect x="192" y="624" width="34" height="22" rx="6" fill="#13203a"/><text x="209" y="640">↓</text>
+    <rect x="232" y="624" width="34" height="22" rx="6" fill="#13203a"/><text x="249" y="640">←</text>
+    <rect x="272" y="624" width="34" height="22" rx="6" fill="#13203a"/><text x="289" y="640">→</text>
+    <rect x="318" y="624" width="58" height="22" rx="6" fill="#13203a"/><text x="347" y="639">/ ~ |</text>
+  </g>
+
+  <!-- tab bar -->
+  <rect x="0" y="656" width="390" height="64" fill="#070d18"/>
+  <line x1="0" y1="656" x2="390" y2="656" stroke="#22d3ee" stroke-opacity="0.12"/>
+  <g text-anchor="middle" font-size="11" font-weight="600">
+    <g fill="#7d92b4">
+      <path d="M58 676 h18 a2 2 0 0 1 2 2 v10 a2 2 0 0 1 -2 2 h-9 l-5 4 v-4 h-4 a2 2 0 0 1 -2 -2 v-10 a2 2 0 0 1 2 -2z" fill="none" stroke="#7d92b4" stroke-width="1.6"/>
+      <text x="65" y="706">Chat</text>
+    </g>
+    <g fill="#22d3ee">
+      <rect x="178" y="675" width="34" height="22" rx="4" fill="none" stroke="#22d3ee" stroke-width="1.6"/>
+      <path d="M184 681l4 4-4 4M194 691h6" stroke="#22d3ee" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="195" y="710">Terminal</text>
+    </g>
+    <g fill="#7d92b4">
+      <rect x="306" y="675" width="30" height="22" rx="3" fill="none" stroke="#7d92b4" stroke-width="1.6"/>
+      <path d="M306 681h30" stroke="#7d92b4" stroke-width="1.4"/>
+      <text x="321" y="710">Browser</text>
+    </g>
+  </g>
+</svg>

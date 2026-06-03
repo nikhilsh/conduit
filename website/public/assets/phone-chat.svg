@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 720" width="390" height="720" fill="none" font-family="ui-monospace, 'SF Mono', Menlo, monospace">
+  <defs>
+    <radialGradient id="cGlow" cx="50%" cy="0%" r="75%">
+      <stop offset="0%" stop-color="#3ef0a0" stop-opacity="0.16"/>
+      <stop offset="50%" stop-color="#3ef0a0" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#04050a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="390" height="720" rx="44" fill="#05070e"/>
+  <rect x="0" y="0" width="390" height="360" rx="44" fill="url(#cGlow)"/>
+
+  <!-- status bar -->
+  <text x="22" y="34" fill="#eaf3ff" font-size="15" font-weight="600">9:41</text>
+  <rect x="156" y="20" width="78" height="22" rx="11" fill="#01030a"/>
+  <g fill="#eaf3ff" opacity="0.92">
+    <rect x="300" y="29" width="3" height="5" rx="1"/><rect x="305" y="26" width="3" height="8" rx="1"/>
+    <rect x="310" y="23" width="3" height="11" rx="1"/><rect x="315" y="20" width="3" height="14" rx="1"/>
+    <path d="M326 28 a7 7 0 0 1 11 0 M329 31 a3.4 3.4 0 0 1 5 0" stroke="#eaf3ff" stroke-width="1.7" fill="none"/>
+    <rect x="346" y="22" width="21" height="11" rx="3" stroke="#eaf3ff" stroke-width="1.3" fill="none"/>
+    <rect x="348" y="24" width="16" height="7" rx="1.5"/>
+  </g>
+
+  <!-- session header -->
+  <path d="M34 84l-9 9 9 9" stroke="#9fb2d0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="52" y="99" fill="#eaf3ff" font-size="16" font-weight="600">Fix auth refresh loop</text>
+  <circle cx="350" cy="93" r="13" fill="#1a1108" stroke="#ff9d4d" stroke-opacity="0.5"/>
+  <circle cx="345" cy="92" r="1.5" fill="#ff9d4d"/><circle cx="355" cy="92" r="1.5" fill="#ff9d4d"/>
+  <path d="M345 97 q5 3 10 0" stroke="#ff9d4d" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  <line x1="20" y1="120" x2="370" y2="120" stroke="#22d3ee" stroke-opacity="0.10"/>
+
+  <!-- user bubble (right) -->
+  <rect x="120" y="138" width="250" height="44" rx="14" fill="#13251c" stroke="#3ef0a0" stroke-opacity="0.30"/>
+  <text x="138" y="160" fill="#eaf3ff" font-size="13">the token refresh is looping —</text>
+  <text x="138" y="176" fill="#eaf3ff" font-size="13">find the cause and fix it.</text>
+
+  <!-- assistant: label + text -->
+  <text x="22" y="208" fill="#ff9d4d" font-size="11" font-weight="700" letter-spacing="1">CLAUDE</text>
+  <text x="22" y="230" fill="#c4d6f4" font-size="13">Found it — the refresh fires before the old</text>
+  <text x="22" y="248" fill="#c4d6f4" font-size="13">token's expiry is checked. Patching the guard:</text>
+
+  <!-- diff card -->
+  <rect x="22" y="262" width="348" height="118" rx="12" fill="#0a1322" stroke="#22d3ee" stroke-opacity="0.14"/>
+  <text x="36" y="284" fill="#7d92b4" font-size="11.5">auth/refresh.go</text>
+  <text x="320" y="284" fill="#3ef0a0" font-size="11" text-anchor="end">+6 −2</text>
+  <line x1="36" y1="294" x2="356" y2="294" stroke="#22d3ee" stroke-opacity="0.08"/>
+  <g font-size="12">
+    <rect x="28" y="300" width="336" height="16" fill="#3a120f" opacity="0.55"/>
+    <text x="36" y="312"><tspan fill="#ff7a6b">-</tspan><tspan fill="#c4d6f4"> if now &gt; token.exp {</tspan></text>
+    <rect x="28" y="318" width="336" height="16" fill="#0e2c1c" opacity="0.6"/>
+    <text x="36" y="330"><tspan fill="#3ef0a0">+</tspan><tspan fill="#c4d6f4"> if now &gt;= token.exp-skew {</tspan></text>
+    <rect x="28" y="336" width="336" height="16" fill="#0e2c1c" opacity="0.6"/>
+    <text x="36" y="348"><tspan fill="#3ef0a0">+</tspan><tspan fill="#c4d6f4">   refresh.Do(once)</tspan></text>
+    <text x="36" y="366" fill="#7d92b4">   return cached, nil</text>
+  </g>
+
+  <!-- approval card -->
+  <rect x="22" y="392" width="348" height="84" rx="12" fill="#16120a" stroke="#ffb627" stroke-opacity="0.35"/>
+  <g transform="translate(38,408)"><path d="M8 0l8 14H0z" fill="none" stroke="#ffb627" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 5v4" stroke="#ffb627" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.5" r="0.9" fill="#ffb627"/></g>
+  <text x="64" y="416" fill="#eaf3ff" font-size="13" font-weight="600">Run tests + commit to fix/auth?</text>
+  <text x="64" y="433" fill="#7d92b4" font-size="11.5">go test ./... &amp;&amp; git commit -am …</text>
+  <rect x="64" y="444" width="92" height="24" rx="7" fill="#3ef0a0"/><text x="110" y="460" fill="#04140d" font-size="12" font-weight="700" text-anchor="middle">Approve</text>
+  <rect x="164" y="444" width="78" height="24" rx="7" fill="none" stroke="#7d92b4" stroke-opacity="0.5"/><text x="203" y="460" fill="#c4d6f4" font-size="12" text-anchor="middle">Deny</text>
+
+  <!-- quick-reply chips -->
+  <g font-size="11.5">
+    <rect x="22" y="540" width="116" height="26" rx="13" fill="#0e1a2e" stroke="#3ef0a0" stroke-opacity="0.3"/><text x="80" y="557" fill="#3ef0a0" text-anchor="middle">run the tests</text>
+    <rect x="146" y="540" width="120" height="26" rx="13" fill="#0e1a2e" stroke="#22d3ee" stroke-opacity="0.3"/><text x="206" y="557" fill="#22d3ee" text-anchor="middle">show full diff</text>
+    <rect x="274" y="540" width="96" height="26" rx="13" fill="#0e1a2e" stroke="#7d92b4" stroke-opacity="0.3"/><text x="322" y="557" fill="#c4d6f4" text-anchor="middle">open PR</text>
+  </g>
+
+  <!-- composer -->
+  <rect x="22" y="580" width="348" height="46" rx="16" fill="#0b1322" stroke="#22d3ee" stroke-opacity="0.18"/>
+  <text x="40" y="608" fill="#6b7e9e" font-size="13.5">Message claude…</text>
+  <circle cx="346" cy="603" r="16" fill="#3ef0a0"/>
+  <path d="M340 603h11M347 598l5 5-5 5" stroke="#04140d" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- tab bar -->
+  <rect x="0" y="656" width="390" height="64" fill="#070d18"/>
+  <line x1="0" y1="656" x2="390" y2="656" stroke="#22d3ee" stroke-opacity="0.12"/>
+  <g text-anchor="middle" font-size="11" font-weight="600">
+    <g fill="#3ef0a0">
+      <path d="M58 676 h18 a2 2 0 0 1 2 2 v10 a2 2 0 0 1 -2 2 h-9 l-5 4 v-4 h-4 a2 2 0 0 1 -2 -2 v-10 a2 2 0 0 1 2 -2z" fill="none" stroke="#3ef0a0" stroke-width="1.6"/>
+      <text x="65" y="710">Chat</text>
+    </g>
+    <g fill="#7d92b4">
+      <rect x="178" y="675" width="34" height="22" rx="4" fill="none" stroke="#7d92b4" stroke-width="1.6"/>
+      <path d="M184 681l4 4-4 4M194 691h6" stroke="#7d92b4" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="195" y="710">Terminal</text>
+    </g>
+    <g fill="#7d92b4">
+      <rect x="306" y="675" width="30" height="22" rx="3" fill="none" stroke="#7d92b4" stroke-width="1.6"/>
+      <path d="M306 681h30" stroke="#7d92b4" stroke-width="1.4"/>
+      <text x="321" y="710">Browser</text>
+    </g>
+  </g>
+</svg>
