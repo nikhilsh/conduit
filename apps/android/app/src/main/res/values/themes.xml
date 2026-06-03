@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Conduit" parent="android:Theme.Material.NoActionBar" />
+    <!-- windowBackground doubles as the Android-12+ splash background when
+         it's a single solid colour: the system cold-start splash now paints
+         brand-dark with the launcher mark instead of Material grey, so it
+         blends into the in-app AnimatedSplash instead of reading as a
+         separate first splash (device feedback: "two splash screens"). -->
+    <style name="Theme.Conduit" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+    </style>
 </resources>

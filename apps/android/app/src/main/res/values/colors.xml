@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#04050A</color>
+    <!-- Cold-start window/splash background. Matches the launcher-icon
+         background so the system splash shows the brand mark on brand-dark
+         instead of the default Material grey, blending into AnimatedSplash. -->
+    <color name="splash_background">#04050A</color>
 </resources>
