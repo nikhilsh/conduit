@@ -692,11 +692,27 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private var client: ConduitClient? = null
     private var prefs: android.content.SharedPreferences? = null
     private var reachability: NetworkReachabilityObserver? = null
+
+    /// Directory holding per-session terminal scrollback for cold-launch
+    /// restore (set in [hydrate]). See the persistence section below.
+    private var scrollbackDir: java.io.File? = null
+    private val terminalPersistDirty =
+        java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val terminalPersistScheduled =
+        java.util.concurrent.atomic.AtomicBoolean(false)
+
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onResume(owner: LifecycleOwner) {
             // App came back from background — local sockets may be
             // silently dead. Nudge every worker into reconnect.
             client?.notifyNetworkChange()
+        }
+
+        override fun onStop(owner: LifecycleOwner) {
+            // App is backgrounding — flush dirty terminal scrollback NOW so a
+            // subsequent process death still leaves the last-known terminal on
+            // disk for an instant cold-launch restore.
+            flushTerminalPersist()
         }
     }
 
@@ -726,6 +742,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
             }
+            scrollbackDir = java.io.File(ctx.applicationContext.cacheDir, "terminal-scrollback")
             installNetworkAndLifecycleHooks(ctx.applicationContext)
             hostKeyTrustStore = SshHostKeyTrustStore.forContext(ctx.applicationContext)
         }
@@ -1151,6 +1168,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
             switchTo(sessionID)
             return
         }
+        // Cold-launch restore: seed the terminal from the last persisted
+        // scrollback so the view paints instantly instead of waiting for the
+        // socket. The broker's authoritative snapshot REPLACES this once
+        // [joinSession] lands ([onSnapshot]).
+        hydrateTerminalBuffer(sessionID)
         viewModelScope.launch {
             try {
                 if (!waitUntilCommandReady()) return@launch
@@ -1854,6 +1876,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 conn.disconnect()
             }
         }
+        // Session is gone server-side — drop its cached scrollback so a
+        // recycled id can't resurrect a stale terminal on next launch.
+        discardPersistedTerminal(sessionId)
     }
 
     fun resize(sessionId: String, rows: UShort, cols: UShort) {
@@ -1978,6 +2003,68 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
     }
 
+    // --- Terminal scrollback disk persistence (cold-launch restore) ---
+    //
+    // The broker keeps the authoritative scrollback and replays it on
+    // re-attach, but the client's `terminalBuffer` is in-memory only — after a
+    // process death a reopened session shows a BLANK terminal until the socket
+    // reconnects. We mirror the buffer to a small per-session cache file so a
+    // cold launch paints the last-known terminal instantly; the live snapshot
+    // then REPLACES it. Mirror of iOS `SessionStore.swift`.
+
+    /**
+     * Mark a session dirty and schedule a coalesced disk flush. Debounced
+     * (~3s) so a streaming PTY doesn't thrash I/O — the broker is
+     * authoritative on reconnect, so a slightly-stale on-disk copy is fine.
+     * Callbacks arrive on UniFFI worker threads, so the dirty set is
+     * synchronized and the flush hops to [Dispatchers.IO].
+     */
+    private fun scheduleTerminalPersist(sessionId: String) {
+        terminalPersistDirty.add(sessionId)
+        if (terminalPersistScheduled.compareAndSet(false, true)) {
+            viewModelScope.launch(Dispatchers.IO) {
+                delay(3_000)
+                terminalPersistScheduled.set(false)
+                flushTerminalPersist()
+            }
+        }
+    }
+
+    /** Write every dirty session's tail-capped buffer to disk. */
+    fun flushTerminalPersist() {
+        val dir = scrollbackDir ?: return
+        val dirty: List<String>
+        synchronized(terminalPersistDirty) {
+            dirty = terminalPersistDirty.toList()
+            terminalPersistDirty.clear()
+        }
+        val buffers = _terminalBuffer.value
+        for (id in dirty) {
+            val data = buffers[id] ?: continue
+            TerminalScrollbackCache.write(dir, id, data)
+        }
+    }
+
+    /**
+     * Load a session's persisted scrollback into the in-memory buffer when we
+     * don't already hold live bytes. Called on (re)attach so a cold launch
+     * shows the last-known terminal instantly; the broker's live snapshot
+     * later REPLACES it ([onSnapshot]).
+     */
+    fun hydrateTerminalBuffer(sessionId: String) {
+        val existing = _terminalBuffer.value[sessionId]
+        if (existing != null && existing.isNotEmpty()) return
+        val dir = scrollbackDir ?: return
+        val data = TerminalScrollbackCache.read(dir, sessionId) ?: return
+        _terminalBuffer.value = _terminalBuffer.value + (sessionId to data)
+    }
+
+    /** Drop a session's persisted scrollback (session deleted server-side). */
+    fun discardPersistedTerminal(sessionId: String) {
+        terminalPersistDirty.remove(sessionId)
+        scrollbackDir?.let { TerminalScrollbackCache.delete(it, sessionId) }
+    }
+
     // ConduitDelegate — callbacks arrive on UniFFI worker threads; mutate
     // StateFlows directly (they're thread-safe) but no UI assumptions here.
 
@@ -1986,6 +2073,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             val prev = m[sessionId] ?: ByteArray(0)
             m[sessionId] = prev + data
         }
+        scheduleTerminalPersist(sessionId)
     }
 
     override fun onChatEvent(sessionId: String, event: ChatEvent) {
@@ -2105,6 +2193,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     override fun onSnapshot(sessionId: String, gunzipped: ByteArray) {
         _terminalBuffer.value = _terminalBuffer.value + (sessionId to gunzipped)
+        scheduleTerminalPersist(sessionId)
     }
 
     override fun onExit(sessionId: String, code: Int) {
