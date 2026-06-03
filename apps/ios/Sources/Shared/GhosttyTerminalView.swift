@@ -297,12 +297,17 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// delta since the last callback.
     private var scrollPanLastY: CGFloat = 0
 
-    /// Points-of-finger-travel → pixel-precise scroll-delta multiplier.
-    /// 1.0 = content-following (the surface scrolls with the finger), the
-    /// natural iOS feel; libghostty divides the pixel delta by its cell
-    /// height to land on rows. Tunable if device testing wants it
-    /// faster/slower.
-    private static let scrollSensitivity: Double = 1.0
+    /// Points of vertical finger travel that equal one mouse-wheel "click"
+    /// forwarded to the broker PTY. ~24pt ≈ one line-height of drag at the
+    /// default font, so a slow drag scrolls roughly line-for-finger while a
+    /// fast drag emits several wheel ticks per `.changed`. Tunable if device
+    /// testing wants it faster/slower.
+    private static let scrollPointsPerWheel: CGFloat = 24
+
+    /// Sub-tick vertical travel not yet converted to a wheel event. Carried
+    /// across `.changed` callbacks so a slow drag still accumulates to a click
+    /// and a fast drag's leftover isn't dropped.
+    private var scrollWheelRemainder: CGFloat = 0
 
 
     #if canImport(GhosttyVT)
