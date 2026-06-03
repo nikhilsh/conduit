@@ -979,8 +979,21 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             let deltaPoints = translationY - scrollPanLastY
             scrollPanLastY = translationY
             guard deltaPoints != 0 else { return }
-            // Negate: finger DOWN → reveal history ABOVE (scroll up).
-            let scrollDelta = -Double(deltaPoints) * Self.scrollSensitivity
+            // libghostty accumulates a PRECISION scroll delta against the cell
+            // height in PIXELS (we size the surface in pixels via set_size),
+            // so the delta must be in pixels too — convert points→pixels with
+            // the backing scale. Sending raw points made it ≈`scale`× (≈3×)
+            // too weak, so short drags accumulated below one cell and never
+            // scrolled (looked frozen — confirmed from ghostty's
+            // `Surface.scrollCallback`).
+            //
+            // Sign: ghostty maps a POSITIVE delta to "scroll up / reveal older"
+            // (its `y.delta>0` → UP-arrow path). A finger dragging DOWN
+            // (`deltaPoints>0`) should reveal older history → positive delta, so
+            // do NOT negate. The old `-deltaPoints` scrolled toward the bottom
+            // we were already pinned to, which is why dragging down did nothing.
+            let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+            let scrollDelta = Double(deltaPoints) * Double(scale) * Self.scrollSensitivity
             terminal?.scroll(deltaY: scrollDelta)
             // Forward discrete wheel clicks to the PTY for tmux copy-mode.
             forwardWheel(deltaPoints: deltaPoints, at: recognizer.location(in: self))
@@ -989,9 +1002,11 @@ final class GhosttyRenderView: UIView, UIKeyInput {
                 let g = terminal?.gridSize()
                 Telemetry.debug("terminal_input", "scroll pan → libghostty", data: [
                     "delta_points": "\(Int(deltaPoints))",
-                    "scroll_delta": "\(Int(scrollDelta))",
+                    "scroll_delta_px": "\(Int(scrollDelta))",
+                    "scale": "\(Double(scale))",
                     "terminal_live": "\(terminal != nil)",
                     "grid": g.map { "\($0.cols)x\($0.rows)" } ?? "nil",
+                    "cell_px": g.map { "\($0.cellWidthPx)x\($0.cellHeightPx)" } ?? "nil",
                 ])
             }
         default:
