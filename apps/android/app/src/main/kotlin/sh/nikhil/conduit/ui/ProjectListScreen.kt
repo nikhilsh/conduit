@@ -25,9 +25,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
@@ -61,35 +65,52 @@ fun ProjectListScreen(
     val visible = remember(sessions, lifecycle) { store.visibleSessions() }
     val connected = harness is HarnessState.Live || harness is HarnessState.Linked
 
-    ModalDrawerSheet(modifier = Modifier.fillMaxHeight()) {
-        // statusBarsPadding so the "Conduit" title clears the system clock —
+    val neon = LocalNeonTheme.current
+    ModalDrawerSheet(
+        modifier = Modifier.fillMaxHeight(),
+        // Match the neon backdrop instead of the bright Material surface so the
+        // drawer reads as part of the app, not a stock sheet (device feedback:
+        // the home/list "looks bad" — flat Material in a neon app).
+        drawerContainerColor = neon.bg,
+    ) {
+        // statusBarsPadding so the brand lockup clears the system clock —
         // applies both as the phone nav drawer and the tablet left pane
         // (device bug: top cuts into the status bar).
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-            // Title + actions — Material header (title + endpoint subtitle).
+            // Brand lockup (daemon mark + `>conduit` wordmark) + endpoint
+            // subtitle + actions, themed to the neon tokens to match Home.
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                AnimatedBrandMark(size = 26.dp)
+                Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "Conduit",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(color = if (neon.glow) neon.accent else neon.textDim)) { append(">") }
+                            withStyle(SpanStyle(color = neon.text)) { append("conduit") }
+                        },
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        letterSpacing = 1.sp,
                     )
                     Text(
                         endpoint.displayHost,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, "Settings") }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Default.Settings, "Settings", tint = neon.accent)
+                }
                 IconButton(onClick = {
                     if (harness.canIssueCommands) showAgentPicker = true else showAddServer = true
-                }) { Icon(Icons.Default.Add, "New session") }
+                }) { Icon(Icons.Default.Add, "New session", tint = neon.accent) }
             }
 
             HarnessStatusStrip(
@@ -219,12 +240,17 @@ private data class DrawerSessionDeleteTarget(val id: String, val title: String)
 
 @Composable
 private fun SectionHeader(label: String, modifier: Modifier = Modifier) {
+    val neon = LocalNeonTheme.current
     Text(
         label.uppercase(),
         modifier = modifier,
-        style = MaterialTheme.typography.titleSmall,
+        fontFamily = neon.mono,
         fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp,
+        letterSpacing = 2.sp,
+        color = neon.accent,
+        maxLines = 1,
+        softWrap = false,
     )
 }
 
@@ -250,11 +276,15 @@ fun HarnessStatusStrip(
     onReconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(ConduitTheme.smallCornerRadiusDp.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-        tonalElevation = 1.dp,
+    val neon = LocalNeonTheme.current
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = RoundedCornerShape(ConduitTheme.smallCornerRadiusDp.dp),
+                fill = neon.surface,
+            ),
     ) {
         Row(
             modifier = Modifier
@@ -268,14 +298,15 @@ fun HarnessStatusStrip(
                 Text(
                     harness.badgeLabel,
                     style = MaterialTheme.typography.labelLarge,
+                    fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = neon.text,
                 )
                 harness.failureReason?.let {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = neon.red,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -400,34 +431,35 @@ private fun SessionRow(
     onTap: () -> Unit,
     onLongPress: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     val isFailed = lifecycle is SessionLifecycle.FailedToStart
     // device bug #30 parity: only "live" when the connection is actually
     // up — a stale "running" phase must not read green while offline.
     val isRunning = entry is VisibleSession.Real &&
         connected && !(phase ?: "ready").startsWith("exited")
 
-    // Material tonal containers instead of the iOS copper glass pill:
-    //  - selected → accent-tinted secondary container (copper, Material way)
-    //  - failed   → errorContainer
-    //  - else     → surfaceVariant tonal card
-    val containerColor = when {
-        selected -> LocalNeonTheme.current.accent.copy(alpha = 0.16f)
-        isFailed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f)
-        else     -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-    }
-
-    Card(
+    // Neon card surface (flat, bordered, optional glow) instead of an
+    // elevated Material Card — the M3 elevation cast a heavy grey shadow
+    // "blob" in light mode (device feedback: the list "looks bad"). Selected
+    // brightens the border + adds the accent glow; failed tints red.
+    val shape = RoundedCornerShape(ConduitTheme.smallCornerRadiusDp.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
+            .neonCardSurface(
+                neon = neon,
+                shape = shape,
+                fill = if (isFailed) neon.red.copy(alpha = 0.08f) else neon.surface,
+                borderColor = if (selected) neon.accent.copy(alpha = 0.7f) else neon.border,
+                failed = isFailed,
+                glowTint = if (selected) neon.accent else null,
+            )
             .combinedClickable(
                 enabled = entry is VisibleSession.Real,
                 onClick = onTap,
                 onLongClick = onLongPress,
             ),
-        shape = RoundedCornerShape(ConduitTheme.smallCornerRadiusDp.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 2.dp else 1.dp),
     ) {
         Row(
             modifier = Modifier
@@ -437,25 +469,26 @@ private fun SessionRow(
         ) {
             when {
                 lifecycle is SessionLifecycle.Creating ->
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = neon.accent,
+                    )
                 isFailed ->
                     Icon(
                         Icons.Outlined.Warning,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
+                        tint = neon.red,
                         modifier = Modifier.size(14.dp),
                     )
                 else ->
-                    // Leading status dot: copper accent when live/running,
-                    // muted onSurfaceVariant when exited/idle.
+                    // Leading status dot: green when live/running, muted when
+                    // exited/idle — mirrors the neon HomeScreen rows.
                     Box(
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(
-                                if (isRunning) LocalNeonTheme.current.accent
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            ),
+                            .background(if (isRunning) neon.green else neon.textFaint),
                     )
             }
             Spacer(Modifier.width(12.dp))
@@ -463,15 +496,17 @@ private fun SessionRow(
                 Text(
                     rowTitle(entry, displayName),
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     rowSubtitle(entry, phase, lifecycle),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

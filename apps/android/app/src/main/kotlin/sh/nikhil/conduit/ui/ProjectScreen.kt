@@ -191,7 +191,13 @@ fun ProjectScreen(
                                 TerminalPage(store, session)
                             }
                         }
-                        ProjectTab.Chat     -> ChatPage(store, session)
+                        ProjectTab.Chat     -> ChatPage(
+                            store,
+                            session,
+                            onOpenTerminal = {
+                                scope.launch { pagerState.animateScrollToPage(ProjectTab.Terminal.ordinal) }
+                            },
+                        )
                         ProjectTab.Browser  -> BrowserPage(store, session, browserMode)
                     }
                 }

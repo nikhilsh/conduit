@@ -1637,6 +1637,21 @@ private struct ConduitNeonToolCard: View {
 
 // MARK: - Command card (§4.1 — the headline)
 
+/// Switches the enclosing session to its Terminal tab. Set by
+/// `ProjectView` on the live tabbed chat; nil in read-only / tablet
+/// chat-only panes (no sibling Terminal tab), which disables the command
+/// card's "Open in terminal" action.
+private struct OpenTerminalActionKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var openTerminalAction: (() -> Void)? {
+        get { self[OpenTerminalActionKey.self] }
+        set { self[OpenTerminalActionKey.self] = newValue }
+    }
+}
+
 private struct ConduitNeonCommandCard: View {
     let event: ConversationItem
     var sessionID: String = ""
@@ -1644,6 +1659,7 @@ private struct ConduitNeonCommandCard: View {
     @State private var blink = false
     @Environment(\.neonTheme) private var neon
     @Environment(SessionStore.self) private var store
+    @Environment(\.openTerminalAction) private var openTerminalAction
 
     private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
     private var command: String { ConversationRenderer.extractCommand(from: event) ?? event.content }
@@ -1839,10 +1855,13 @@ private struct ConduitNeonCommandCard: View {
             }
             actionDivider
             actionButton("Open in terminal", icon: "terminal") {
-                // TODO: needs store hook — SessionStore has no "switch to
-                // terminal tab + paste command" action; the tab host owns
-                // that. Left as a no-op stub until that seam exists.
+                // Switch the session to its Terminal tab (the tab host
+                // provides this via the environment). Disabled when absent
+                // (read-only / tablet chat-only pane).
+                openTerminalAction?()
             }
+            .disabled(openTerminalAction == nil)
+            .opacity(openTerminalAction == nil ? 0.4 : 1)
         }
         .overlay(alignment: .top) {
             Rectangle().fill(neon.border).frame(height: 1)
