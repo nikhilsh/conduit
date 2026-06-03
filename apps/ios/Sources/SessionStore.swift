@@ -1912,6 +1912,13 @@ final class SessionStore {
     private static let terminalPersistIOQueue =
         DispatchQueue(label: "sh.nikhil.conduit.terminal-persist", qos: .utility)
 
+    /// Block until all queued scrollback writes have hit disk. Test-only seam
+    /// (`flushTerminalPersist` is now async) — a barrier on the serial IO queue
+    /// returns once every prior write has run.
+    func waitForTerminalPersistIO() {
+        Self.terminalPersistIOQueue.sync {}
+    }
+
     /// Load a session's persisted scrollback into the in-memory buffer when we
     /// don't already hold live bytes. Called on (re)attach so a cold launch
     /// shows the last-known terminal instantly; the broker's live snapshot

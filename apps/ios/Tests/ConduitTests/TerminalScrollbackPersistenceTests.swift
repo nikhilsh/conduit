@@ -16,6 +16,7 @@ struct TerminalScrollbackPersistenceTests {
         let writer = SessionStore()
         writer.ingestPtyData(sessionID, Data("scrollback survives a kill".utf8))
         writer.flushTerminalPersist()
+        writer.waitForTerminalPersistIO()   // writes are async now
 
         // A fresh store models the next app launch: nothing in memory yet.
         let reader = SessionStore()
@@ -31,6 +32,7 @@ struct TerminalScrollbackPersistenceTests {
         let writer = SessionStore()
         writer.ingestPtyData(sessionID, Data("stale-on-disk".utf8))
         writer.flushTerminalPersist()
+        writer.waitForTerminalPersistIO()   // writes are async now
 
         let store = SessionStore()
         // Live bytes already present (e.g. a fresh snapshot arrived first).
@@ -53,6 +55,7 @@ struct TerminalScrollbackPersistenceTests {
         let writer = SessionStore()
         writer.ingestPtyData(sessionID, big)
         writer.flushTerminalPersist()
+        writer.waitForTerminalPersistIO()   // writes are async now
 
         let reader = SessionStore()
         reader.hydrateTerminalBuffer(sessionID)
@@ -69,6 +72,7 @@ struct TerminalScrollbackPersistenceTests {
         let writer = SessionStore()
         writer.ingestPtyData(sessionID, Data("temporary".utf8))
         writer.flushTerminalPersist()
+        writer.waitForTerminalPersistIO()   // writes are async now
         writer.discardPersistedTerminal(sessionID)
 
         let reader = SessionStore()
