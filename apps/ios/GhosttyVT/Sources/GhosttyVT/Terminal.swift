@@ -903,6 +903,13 @@ public final class GhosttySurface {
     public func teardown() {
         guard let surface = _surface else { return }
         _surface = nil
+        // Stand the renderer DOWN before freeing (vvterm/remux ordering): clear
+        // focus + mark occluded so libghostty's renderer stops, so no queued
+        // draw/wakeup fires into a half-freed surface during the free. Without
+        // this, a draw callback racing `ghostty_surface_free` is another
+        // `[uiview bounds]`-during-CA-commit UAF window.
+        ghostty_surface_set_focus(surface, false)
+        ghostty_surface_set_occlusion(surface, false)
         GhosttyApp.unregisterSurface(key: _clipboardKey)
         ghostty_surface_free(surface)
         // Balance init's `passRetained(host)`: the surface is freed, so

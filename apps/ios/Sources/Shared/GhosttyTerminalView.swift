@@ -183,6 +183,13 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     /// this on every refresh so we only ever ship the new tail.
     var lastFedByteCount: Int = 0
 
+    /// PTY bytes that arrived before the libghostty surface existed (it's now
+    /// created lazily in `didMoveToWindow`). The representable advances
+    /// `lastFedByteCount` even while we're surface-less, so a byte dropped here
+    /// would never be re-sent — hold it and flush on surface creation
+    /// (`createGhosttySurfaceIfNeeded`).
+    private var pendingFeed = Data()
+
     /// Base point size before Dynamic Type scaling. Stays at 13pt — the
     /// xterm.js default — so toggling the flag at the same accessibility
     /// setting doesn't shift cell density.
@@ -740,50 +747,19 @@ final class GhosttyRenderView: UIView, UIKeyInput {
             addSubview(diagLabel)
         }
 
-        #if canImport(GhosttyVT)
-        // Faithful init: with `GhosttyApp.shared` booted (real
-        // wakeup/action callbacks), instantiate the surface WITH this
-        // host UIView so libghostty's iOS platform slot
-        // (`ghostty_platform_ios_s.uiview`) targets our layer and its
-        // renderer attaches its IOSurface sublayer here.
-        if Terminal.isAvailable {
-            let term = Terminal(
-                cols: UInt(cols),
-                rows: UInt(rows),
-                fontSize: Float(ghosttyFontSize),
-                theme: Self.mapTheme(ghosttyTheme)
-            )
-            // Forward user input libghostty emits from its HOST_MANAGED
-            // backend (mouse-reporting, bracketed-paste framing) to the
-            // harness PTY — analog of clauntty's set_pty_input_callback.
-            term.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
-            // Attach with the real (now non-zero) pixel size so the
-            // renderer initializes against a sized view. `sizeGhosttyLayer`
-            // re-pushes the true size on every `layoutSubviews`. Use the
-            // view's own `contentScaleFactor` (geistty passes
-            // `view.contentScaleFactor` as `scale_factor`); it's the backing
-            // scale UIKit will actually render at and matches what libghostty
-            // reads off the view at attach time.
-            let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
-            // FFI-boundary breadcrumbs: the crash frame is inside libghostty
-            // (a Zig symbol with no dSYM), so the only way to pin which
-            // native call faults is to crumb around each one. If the trail
-            // ends at "attach begin" the fault is inside ghostty_surface_new /
-            // its synchronous addSublayer; if it reaches "attach done" the
-            // fault is later (draw/visible). See CLAUDE.md "Standing order".
-            Telemetry.breadcrumb("terminal", "attach begin (ghostty_surface_new)", data: [
-                "pxW": "\(UInt32(bounds.width * scale))", "pxH": "\(UInt32(bounds.height * scale))", "scale": "\(Double(scale))",
-            ])
-            term.attach(
-                hostView: self,
-                pixelWidth: UInt32(bounds.width * scale),
-                pixelHeight: UInt32(bounds.height * scale),
-                scaleFactor: Double(scale)
-            )
-            terminal = term
-            Telemetry.breadcrumb("terminal", "attach done (surface created)")
-        }
-        #endif
+        // NOTE: the libghostty surface is created LAZILY in `didMoveToWindow`
+        // (see `createGhosttySurfaceIfNeeded`), NOT here. Creating it in
+        // `init`/`configure` — while the view is still window-less and sized
+        // to the synthetic 800x600 placeholder above — made libghostty's
+        // renderer capture host-view/layer state that the subsequent
+        // window-insertion CoreAnimation commit then invalidated. Its renderer
+        // would later read `[uiview bounds]` off that stale/recycled pointer
+        // during `CA::Context::commit_transaction` on terminal-open and fault
+        // (EXC_BAD_ACCESS — the `object.Object.getProperty` /
+        // `NSTaggedPointerString bounds` UAF, CONDUIT-IOS-M/N). The working
+        // iOS embedders (vvterm/remux) all create the surface in
+        // `didMoveToWindow`, against a view that already has a real window +
+        // bounds, for exactly this reason.
 
         // Occlusion lifecycle: when the app backgrounds we mark the
         // surface occluded (libghostty's renderer stands down) and pause
@@ -1339,6 +1315,49 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         }
     }
 
+    #if canImport(GhosttyVT)
+    /// Create the libghostty surface the FIRST time the view is settled in a
+    /// real window — never in `init`/`configure`. Creating it window-less (at
+    /// the synthetic 800x600 placeholder) made the renderer capture host-view
+    /// state that the window-insertion CA commit invalidated, then fault
+    /// reading `[uiview bounds]` during `CA::Context::commit_transaction` on
+    /// open (CONDUIT-IOS-M/N). Called from `didMoveToWindow`'s deferred block,
+    /// i.e. AFTER the mount commit has settled and against a fully-windowed
+    /// view. Idempotent: guarded on `terminal == nil` + `window != nil`, so a
+    /// tab-switch-back (view re-enters a window) reuses the existing surface.
+    private func createGhosttySurfaceIfNeeded() {
+        guard terminal == nil, window != nil, Terminal.isAvailable else { return }
+        let term = Terminal(
+            cols: UInt(cols),
+            rows: UInt(rows),
+            fontSize: Float(ghosttyFontSize),
+            theme: Self.mapTheme(ghosttyTheme)
+        )
+        // Forward user input libghostty emits from its HOST_MANAGED backend
+        // (mouse-reporting, bracketed-paste framing) to the harness PTY —
+        // analog of clauntty's set_pty_input_callback.
+        term.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+        Telemetry.breadcrumb("terminal", "attach begin (ghostty_surface_new)", data: [
+            "pxW": "\(UInt32(bounds.width * scale))", "pxH": "\(UInt32(bounds.height * scale))", "scale": "\(Double(scale))",
+        ])
+        term.attach(
+            hostView: self,
+            pixelWidth: UInt32(bounds.width * scale),
+            pixelHeight: UInt32(bounds.height * scale),
+            scaleFactor: Double(scale)
+        )
+        terminal = term
+        Telemetry.breadcrumb("terminal", "attach done (surface created in window)")
+        // Replay any PTY bytes that arrived before the surface existed.
+        if !pendingFeed.isEmpty {
+            term.write(pendingFeed)
+            pendingFeed.removeAll()
+        }
+        refreshSnapshot()
+    }
+    #endif
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         // Toggle visibility/focus so libghostty paints (and shows a live
@@ -1358,9 +1377,15 @@ final class GhosttyRenderView: UIView, UIKeyInput {
         // bounds` / EXC_BAD_ACCESS) right after a session's terminal mounts.
         // The Sentry trail showed the crash lands here (after "attach done",
         // before any draw). One runloop tick lets the commit settle.
-        Telemetry.breadcrumb("terminal", "didMoveToWindow (deferring setVisible/refresh)")
+        Telemetry.breadcrumb("terminal", "didMoveToWindow (deferring create/setVisible/refresh)")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            #if canImport(GhosttyVT)
+            // Create the surface here — one runloop tick after the mount CA
+            // commit has settled, against a view that is now in a real window.
+            // This is the crux of the terminal-open crash fix (CONDUIT-IOS-M/N).
+            self.createGhosttySurfaceIfNeeded()
+            #endif
             let visible = self.window != nil && self.isActive
             #if canImport(GhosttyVT)
             self.terminal?.setVisible(visible)
@@ -1527,7 +1552,13 @@ final class GhosttyRenderView: UIView, UIKeyInput {
     func feed(_ bytes: Data) {
         guard !bytes.isEmpty else { return }
         #if canImport(GhosttyVT)
-        terminal?.write(bytes)
+        if let terminal {
+            terminal.write(bytes)
+        } else {
+            // Surface not created yet (lazy create in `didMoveToWindow`).
+            // Buffer so the bytes aren't lost — see `pendingFeed`.
+            pendingFeed.append(bytes)
+        }
         #endif
         refreshSnapshot()
     }
