@@ -322,6 +322,12 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// Max wheel ticks emitted per burst, so a long pause + fast flick can't
     /// dump a dozen full-screen redraws into one frame.
     private static let maxWheelTicksPerBurst = 4
+    /// Last SGR wheel coordinate actually sent + the live grid rows it was
+    /// clamped to — surfaced in the scroll diag so a keyboard-up failure shows
+    /// whether the coord was in-bounds for tmux's pane.
+    private var lastWheelCol = 0
+    private var lastWheelRow = 0
+    private var lastWheelLiveRows = 0
 
 
     #if canImport(GhosttyVT)
@@ -640,6 +646,7 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             #if canImport(GhosttyVT)
             terminal?.setFocus(true)
             #endif
+            didLogScroll = false // re-capture a scroll diag in the keyboard-UP state
         }
         if !didLogFirstResponder {
             didLogFirstResponder = true
@@ -663,6 +670,7 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             #if canImport(GhosttyVT)
             terminal?.setFocus(false)
             #endif
+            didLogScroll = false // re-capture a scroll diag in the keyboard-DOWN state
         }
         return resigned
     }
@@ -1033,6 +1041,9 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
                     "terminal_live": "\(terminal != nil)",
                     "grid": g.map { "\($0.cols)x\($0.rows)" } ?? "nil",
                     "cell_px": g.map { "\($0.cellWidthPx)x\($0.cellHeightPx)" } ?? "nil",
+                    "sent_col_row": "\(lastWheelCol),\(lastWheelRow)",
+                    "clamp_live_rows": "\(lastWheelLiveRows)",
+                    "keyboard_up": "\(isFirstResponder)",
                 ])
             }
         default:
@@ -1068,12 +1079,28 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         lastWheelSentAt = now
         let ticks = max(-Self.maxWheelTicksPerBurst, min(Self.maxWheelTicksPerBurst, owed))
         scrollWheelRemainder -= CGFloat(ticks) * step
-        // gridCell returns 0-based row/col clamped to the grid; SGR mouse
-        // coordinates are 1-based. Clamp to >= 1 defensively. tmux routes the
-        // wheel to the pane under these coords, so they must land in the grid.
+        // SGR mouse coords are 1-based and tmux DROPS a wheel report whose
+        // row/col lands outside the pane. The keyboard resizes the grid
+        // (~32 rows up vs ~43 down), and `gridCell` clamps to possibly-stale
+        // instance metrics — so a touch-derived row could exceed tmux's
+        // current pane height and the wheel is silently ignored (the
+        // "keyboard-up won't scroll" bug). Clamp to the LIVE libghostty grid
+        // (which matches tmux's pane), so the coord is always in-bounds. For
+        // our single-pane sessions the exact cell doesn't matter for scroll
+        // direction — only that it lands in the pane.
+        #if canImport(GhosttyVT)
+        let live = terminal?.gridSize()
+        #else
+        let live: (cols: UInt16, rows: UInt16, cellWidthPx: UInt32, cellHeightPx: UInt32)? = nil
+        #endif
+        let liveCols = Int(live?.cols ?? UInt16(max(1, cols)))
+        let liveRows = Int(live?.rows ?? UInt16(max(1, rows)))
         let cell = gridCell(at: point)
-        let cx = max(1, cell.col + 1)
-        let cy = max(1, cell.row + 1)
+        let cx = min(max(1, cell.col + 1), max(1, liveCols))
+        let cy = min(max(1, cell.row + 1), max(1, liveRows))
+        lastWheelCol = cx
+        lastWheelRow = cy
+        lastWheelLiveRows = liveRows
         let code = ticks > 0 ? 64 : 65 // finger DOWN → wheel UP (64); UP → DOWN (65)
         for _ in 0..<abs(ticks) {
             sendWheel(buttonCode: code, col: cx, row: cy)
