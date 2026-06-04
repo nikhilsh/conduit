@@ -54,20 +54,6 @@ struct AppearanceStoreTests {
         #expect(second.experimentalConduitUI == false)
     }
 
-    @Test func persistsExperimentalNativeTerminal() {
-        // Stage 0 feature flag for the Ghostty-libghostty rewrite.
-        // Persistence is the only behavior we can lock down at this
-        // stage — the actual `GhosttyTerminalView` is a placeholder
-        // until Stage 1 wires libghostty. See
-        // docs/PLAN-TERMINAL-REWRITE.md.
-        let defaults = freshDefaults()
-        let first = AppearanceStore(defaults: defaults)
-        first.experimentalNativeTerminal = true
-
-        let second = AppearanceStore(defaults: defaults)
-        #expect(second.experimentalNativeTerminal == true)
-    }
-
     // MARK: - Defaults
 
     @Test func freshInstallDefaultsToSerif() {
@@ -87,14 +73,6 @@ struct AppearanceStoreTests {
     @Test func freshInstallDoesNotCollapseTurns() {
         let store = AppearanceStore(defaults: freshDefaults())
         #expect(store.collapseTurns == false)
-    }
-
-    @Test func freshInstallHasExperimentalNativeTerminalOn() {
-        // The native Ghostty path is the default renderer now that it has
-        // reached parity; xterm.js is the retained fallback. A fresh
-        // install (no stored pref) must come up on native.
-        let store = AppearanceStore(defaults: freshDefaults())
-        #expect(store.experimentalNativeTerminal == true)
     }
 
     // MARK: - bodyPointSize (PLAN-CONDUIT-VISUAL-PARITY PR 1)
@@ -133,55 +111,6 @@ struct AppearanceStoreTests {
         defaults.set(99.0, forKey: "conduit.appearance.bodyPointSize")
         let store = AppearanceStore(defaults: defaults)
         #expect(store.bodyPointSize == AppearanceStore.bodyPointSizeRange.upperBound)
-    }
-
-    // MARK: - Ghostty native-terminal font size + theme
-
-    @Test func freshInstallGhosttyFontSizeIsDefault() {
-        let store = AppearanceStore(defaults: freshDefaults())
-        #expect(store.ghosttyFontSize == AppearanceStore.defaultGhosttyFontSize)
-    }
-
-    @Test func persistsGhosttyFontSize() {
-        let defaults = freshDefaults()
-        let first = AppearanceStore(defaults: defaults)
-        first.ghosttyFontSize = 16
-
-        let second = AppearanceStore(defaults: defaults)
-        #expect(second.ghosttyFontSize == 16)
-    }
-
-    @Test func ghosttyFontSizeClampsAboveRange() {
-        let store = AppearanceStore(defaults: freshDefaults())
-        store.ghosttyFontSize = 99
-        #expect(store.ghosttyFontSize == AppearanceStore.ghosttyFontSizeRange.upperBound)
-    }
-
-    @Test func ghosttyFontSizeClampsBelowRange() {
-        let store = AppearanceStore(defaults: freshDefaults())
-        store.ghosttyFontSize = 1
-        #expect(store.ghosttyFontSize == AppearanceStore.ghosttyFontSizeRange.lowerBound)
-    }
-
-    @Test func corruptedGhosttyFontSizeFallsBackToClamp() {
-        let defaults = freshDefaults()
-        defaults.set(999.0, forKey: "conduit.appearance.ghosttyFontSize")
-        let store = AppearanceStore(defaults: defaults)
-        #expect(store.ghosttyFontSize == AppearanceStore.ghosttyFontSizeRange.upperBound)
-    }
-
-    @Test func freshInstallGhosttyThemeIsGhosttyDark() {
-        let store = AppearanceStore(defaults: freshDefaults())
-        #expect(store.ghosttyTerminalTheme == .ghosttyDark)
-    }
-
-    @Test func persistsGhosttyTerminalTheme() {
-        let defaults = freshDefaults()
-        let first = AppearanceStore(defaults: defaults)
-        first.ghosttyTerminalTheme = .dracula
-
-        let second = AppearanceStore(defaults: defaults)
-        #expect(second.ghosttyTerminalTheme == .dracula)
     }
 
     // MARK: - Backwards-compat for existing installs

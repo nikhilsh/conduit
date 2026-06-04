@@ -49,7 +49,6 @@ extension ConduitUI {
                             fontSizeSection
                             conversationSection
                             serversSection
-                            experimentalSection
                             aboutSection
                         }
                         .padding(.horizontal, 16)
@@ -362,97 +361,6 @@ extension ConduitUI {
                         .padding(.vertical, 3)
                         .background(Capsule().fill(neon.accent.opacity(0.22)))
                         .overlay(Capsule().stroke(neon.accent.opacity(0.5), lineWidth: 1))
-                }
-            }
-        }
-
-        // Re-exposed in Stage 5: the native libghostty terminal now
-        // drives its own Metal renderer (uiview attach + set_size +
-        // ghostty_surface_draw loop), so the toggle is back for
-        // on-device verification. Default OFF — flip it to try the
-        // native terminal; if it misbehaves, flip back to xterm.js.
-        private var experimentalSection: some View {
-            @Bindable var appearance = appearance
-            return sectionCard(title: "Experimental") {
-                VStack(spacing: 0) {
-                    ConduitUI.toggleRow(
-                        icon: "apple.terminal",
-                        title: "Native Terminal (Ghostty)",
-                        subtitle: "On by default (libghostty). Turn off to use the legacy web terminal.",
-                        isOn: $appearance.experimentalNativeTerminal
-                    )
-                    // Font-size + color-theme controls only matter for the
-                    // native libghostty terminal, so they appear only when
-                    // that path is enabled. xterm.js ignores them.
-                    if appearance.experimentalNativeTerminal {
-                        Divider()
-                            .background(neon.border)
-                            .padding(.leading, 46)
-                        ghosttyFontSizeRow
-                        Divider()
-                            .background(neon.border)
-                            .padding(.leading, 46)
-                        ghosttyThemeRows
-                    }
-                }
-            }
-        }
-
-        /// Native-terminal font-size slider. Drives
-        /// `AppearanceStore.ghosttyFontSize` → libghostty's `font-size`
-        /// config key. Range / clamp live in `AppearanceStore`.
-        private var ghosttyFontSizeRow: some View {
-            @Bindable var appearance = appearance
-            return VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    Image(systemName: "textformat.size")
-                        .font(.body)
-                        .frame(width: 20)
-                        .foregroundStyle(neon.accent)
-                    Text("Terminal Font Size")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(neon.text)
-                    Spacer(minLength: 6)
-                    Text("\(Int(appearance.ghosttyFontSize))pt")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(neon.textFaint)
-                }
-                Slider(
-                    value: $appearance.ghosttyFontSize,
-                    in: AppearanceStore.ghosttyFontSizeRange,
-                    step: 1
-                )
-                .tint(neon.accent)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-        }
-
-        /// Native-terminal color-theme picker. Drives
-        /// `AppearanceStore.ghosttyTerminalTheme` → libghostty's
-        /// foreground/background/cursor/palette config keys.
-        private var ghosttyThemeRows: some View {
-            @Bindable var appearance = appearance
-            return VStack(spacing: 0) {
-                ForEach(AppearanceStore.GhosttyTerminalTheme.allCases) { theme in
-                    Button {
-                        appearance.ghosttyTerminalTheme = theme
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "paintpalette.fill",
-                            title: theme.label,
-                            subtitle: nil,
-                            iconTint: neon.accent
-                        ) {
-                            if appearance.ghosttyTerminalTheme == theme {
-                                Image(systemName: "checkmark")
-                                    .font(.footnote.weight(.bold))
-                                    .foregroundStyle(neon.accent)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    rowDivider(after: theme, in: AppearanceStore.GhosttyTerminalTheme.allCases)
                 }
             }
         }

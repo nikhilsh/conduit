@@ -44,7 +44,6 @@ extension ConduitUI {
 
     struct ProjectView: View {
         @Environment(SessionStore.self) private var store
-        @Environment(AppearanceStore.self) private var appearance
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
@@ -355,16 +354,11 @@ extension ConduitUI {
 
         @ViewBuilder
         private var terminalContent: some View {
-            // Default engine is the xterm.js terminal (shipping, proven).
-            // The native `GhosttyTerminalTab` drives libghostty's own Metal
-            // renderer and is gated behind `experimentalNativeTerminal`.
-            // `isActive` lets the native view pause its CADisplayLink draw
-            // pump + go occluded while the Terminal tab isn't visible.
-            if appearance.experimentalNativeTerminal {
-                GhosttyTerminalTab(session: session, isActive: tab == .terminal)
-            } else {
-                TerminalTabXterm(session: session)
-            }
+            // The terminal is the native `GhosttyTerminalTab`, which drives
+            // libghostty's own Metal renderer. `isActive` lets the view pause
+            // its CADisplayLink draw pump + go occluded while the Terminal tab
+            // isn't visible.
+            GhosttyTerminalTab(session: session, isActive: tab == .terminal)
         }
     }
 }

@@ -37,7 +37,6 @@ extension ConduitUI {
 
     struct TabletRightPane: View {
         let session: ProjectSession
-        @Environment(AppearanceStore.self) private var appearance
         @Environment(\.neonTheme) private var neon
         @State private var tab: RightPaneTab = .terminal
         // Lazy-mount gate for the native terminal (same fix as phone
@@ -107,11 +106,7 @@ extension ConduitUI {
         }
 
         @ViewBuilder private var terminalContent: some View {
-            if appearance.experimentalNativeTerminal {
-                GhosttyTerminalTab(session: session, isActive: tab == .terminal)
-            } else {
-                TerminalTabXterm(session: session)
-            }
+            GhosttyTerminalTab(session: session, isActive: tab == .terminal)
         }
     }
 }
