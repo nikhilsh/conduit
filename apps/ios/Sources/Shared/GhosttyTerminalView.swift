@@ -627,6 +627,19 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// keyboard events to fire and the soft keyboard to appear.
     override var canBecomeFirstResponder: Bool { true }
 
+    /// Disable horizontal finger-scroll: the scroll pan only begins for a
+    /// vertical-dominant drag. Horizontal / diagonal drags don't engage scroll
+    /// (they caused stray behavior and fight tab-swipe). Selection-extend pans
+    /// (when a selection is anchored) are unaffected — those need free motion.
+    /// This is `UIView`'s own gesture hook (not the delegate), so it must
+    /// `override` and live in the class body.
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard g === scrollPanGesture, selectionRange == nil,
+              let pan = g as? UIPanGestureRecognizer else { return true }
+        let v = pan.velocity(in: self)
+        return abs(v.y) >= abs(v.x)
+    }
+
     override var inputAccessoryView: UIView? { accessoryBar }
 
     /// Tell libghostty the surface gained key focus when we become first
@@ -1759,17 +1772,6 @@ extension GhosttyRenderView {
         shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
     ) -> Bool {
         true
-    }
-
-    /// Disable horizontal finger-scroll: the scroll pan only begins for a
-    /// vertical-dominant drag. Horizontal / diagonal drags don't engage scroll
-    /// (they caused stray behavior and fight tab-swipe). Selection-extend pans
-    /// (when a selection is anchored) are unaffected — those need free motion.
-    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        guard g === scrollPanGesture, selectionRange == nil,
-              let pan = g as? UIPanGestureRecognizer else { return true }
-        let v = pan.velocity(in: self)
-        return abs(v.y) >= abs(v.x)
     }
 }
 
