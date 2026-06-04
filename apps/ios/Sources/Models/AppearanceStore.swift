@@ -27,31 +27,6 @@ final class AppearanceStore {
         }
     }
 
-    /// Color theme for the experimental native (libghostty) terminal.
-    /// Self-contained mirror of `GhosttyVT.GhosttyTheme` — same rawValues
-    /// so `GhosttyTerminalView` can map across the module boundary with a
-    /// plain `init(rawValue:)`. Kept here (rather than re-exporting the
-    /// GhosttyVT enum) so the model layer + its tests don't have to link
-    /// libghostty. Only applies on the `experimentalNativeTerminal` path.
-    enum GhosttyTerminalTheme: String, CaseIterable, Identifiable {
-        case ghosttyDark
-        case solarizedDark
-        case nord
-        case dracula
-        case gruvboxDark
-
-        var id: String { rawValue }
-        var label: String {
-            switch self {
-            case .ghosttyDark:   return "Ghostty Dark"
-            case .solarizedDark: return "Solarized Dark"
-            case .nord:          return "Nord"
-            case .dracula:       return "Dracula"
-            case .gruvboxDark:   return "Gruvbox Dark"
-            }
-        }
-    }
-
     /// Palette choice for the "Neon Terminal" theme system. RawValues
     /// are the stable persistence ids and match `NeonPalette` /
     /// Android `NeonPalette.id` one-for-one. The resolved tokens live in
@@ -106,10 +81,6 @@ final class AppearanceStore {
         static let font = "conduit.appearance.font"
         static let theme = "conduit.appearance.theme"
         static let collapseTurns = "conduit.appearance.collapseTurns"
-        /// Stage 0 feature flag for the Ghostty-libghostty native
-        /// terminal path. See docs/PLAN-TERMINAL-REWRITE.md. Defaults
-        /// off; xterm.js stays the production renderer until Stage 2.
-        static let experimentalNativeTerminal = "conduit.experimental.nativeTerminal"
         /// Trash-rebuild feature flag for the parallel `ConduitUI/` view
         /// tree. When on, `ConduitApp` renders `ConduitUI.RootView`
         /// instead of the current `RootView`. Off by default for this
@@ -120,12 +91,6 @@ final class AppearanceStore {
         /// (`ConduitTypography`). User-tunable within
         /// [bodyPointSizeRange]; everything in the ramp scales off this.
         static let bodyPointSize = "conduit.appearance.bodyPointSize"
-        /// Font size (points) libghostty renders the native terminal grid
-        /// at. Only consumed on the `experimentalNativeTerminal` path.
-        static let ghosttyFontSize = "conduit.appearance.ghosttyFontSize"
-        /// Color theme rawValue for the native (libghostty) terminal.
-        /// Only consumed on the `experimentalNativeTerminal` path.
-        static let ghosttyTerminalTheme = "conduit.appearance.ghosttyTerminalTheme"
         /// Palette choice for the Neon Terminal theme system
         /// (`NeonPaletteChoice` rawValue). Resolved into tokens by
         /// `NeonTheme.resolve(...)` and injected via `\.neonTheme`.
@@ -133,16 +98,6 @@ final class AppearanceStore {
         /// Glow on/off toggle for the Neon Terminal theme system.
         static let neonGlow = "conduit.appearance.neonGlow"
     }
-
-    /// Clamp range for the native-terminal font size. Lower bound keeps a
-    /// dense grid legible on iPhone; upper bound stops the grid collapsing
-    /// to a few columns. Stepper steps by 1.
-    static let ghosttyFontSizeRange: ClosedRange<Double> = 8...24
-    /// Default native-terminal font size. The 13pt default tested too
-    /// large on device; 10pt gives a denser, real-terminal feel while
-    /// staying legible on iPhone. Users can still adjust via the 8–24
-    /// Settings slider.
-    static let defaultGhosttyFontSize: Double = 10
 
     /// Clamp range for [bodyPointSize]. Lower bound keeps captions
     /// readable; upper bound prevents headings from blowing out the
@@ -167,18 +122,6 @@ final class AppearanceStore {
         didSet { defaults.set(collapseTurns, forKey: Keys.collapseTurns) }
     }
 
-    /// Terminal renderer selector — when on (the default), the Terminal
-    /// tab renders via the native Ghostty-libghostty path
-    /// (`GhosttyTerminalView`); when off it falls back to the legacy
-    /// xterm.js path (`TerminalTabXterm`). See `docs/PLAN-TERMINAL-REWRITE.md`.
-    /// Flipped to default-on alongside Android; xterm.js is the retained
-    /// one-toggle fallback. NOTE: the native iOS renderer's blank-screen
-    /// fix (#205) is still pending on-device verification — the fallback
-    /// toggle is the safety net.
-    var experimentalNativeTerminal: Bool {
-        didSet { defaults.set(experimentalNativeTerminal, forKey: Keys.experimentalNativeTerminal) }
-    }
-
     /// Trash-rebuild flag — when true, the app boots into the parallel
     /// `ConduitUI` view tree rather than the legacy `RootView`. Default
     /// `false`; users opt in via Settings → Experimental → "Conduit UI
@@ -186,28 +129,6 @@ final class AppearanceStore {
     /// `docs/PLAN-CONDUIT-UI.md`.
     var experimentalConduitUI: Bool {
         didSet { defaults.set(experimentalConduitUI, forKey: Keys.experimentalConduitUI) }
-    }
-
-    /// Font size libghostty renders the native terminal at. Setter
-    /// clamps into [ghosttyFontSizeRange] and persists. A change here is
-    /// picked up live by `GhosttyTerminalView` (config update + PTY-grid
-    /// resync). Only applies on the `experimentalNativeTerminal` path.
-    var ghosttyFontSize: Double = AppearanceStore.defaultGhosttyFontSize {
-        didSet {
-            let clamped = ghosttyFontSize.clamped(to: Self.ghosttyFontSizeRange)
-            if clamped != ghosttyFontSize {
-                ghosttyFontSize = clamped
-                return
-            }
-            defaults.set(ghosttyFontSize, forKey: Keys.ghosttyFontSize)
-        }
-    }
-
-    /// Color theme for the native (libghostty) terminal. Persisted by
-    /// rawValue; applied live by `GhosttyTerminalView`. Only applies on
-    /// the `experimentalNativeTerminal` path.
-    var ghosttyTerminalTheme: GhosttyTerminalTheme {
-        didSet { defaults.set(ghosttyTerminalTheme.rawValue, forKey: Keys.ghosttyTerminalTheme) }
     }
 
     /// Neon Terminal palette choice. Persisted by rawValue; resolved
@@ -252,8 +173,6 @@ final class AppearanceStore {
         self.themeMode = (defaults.string(forKey: Keys.theme)
             .flatMap(ThemeMode.init(rawValue:))) ?? .system
         self.collapseTurns = defaults.object(forKey: Keys.collapseTurns) as? Bool ?? false
-        self.experimentalNativeTerminal =
-            defaults.object(forKey: Keys.experimentalNativeTerminal) as? Bool ?? true
         // Default flipped to `true` in the upstream-ui-cutover (this PR):
         // ConduitUI is now the production tree. The flag is kept around
         // (rather than being deleted entirely) so an emergency revert
@@ -267,11 +186,6 @@ final class AppearanceStore {
         let storedBody = defaults.object(forKey: Keys.bodyPointSize) as? Double
         self.bodyPointSize = CGFloat(storedBody ?? Double(Self.defaultBodyPointSize))
             .clamped(to: Self.bodyPointSizeRange)
-        let storedGhosttySize = defaults.object(forKey: Keys.ghosttyFontSize) as? Double
-        self.ghosttyFontSize = (storedGhosttySize ?? Self.defaultGhosttyFontSize)
-            .clamped(to: Self.ghosttyFontSizeRange)
-        self.ghosttyTerminalTheme = (defaults.string(forKey: Keys.ghosttyTerminalTheme)
-            .flatMap(GhosttyTerminalTheme.init(rawValue:))) ?? .ghosttyDark
         self.neonPalette = (defaults.string(forKey: Keys.neonPalette)
             .flatMap(NeonPaletteChoice.init(rawValue:))) ?? .ice
         self.neonGlow = defaults.object(forKey: Keys.neonGlow) as? Bool ?? true
