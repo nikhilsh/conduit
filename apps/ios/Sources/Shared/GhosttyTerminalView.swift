@@ -49,15 +49,6 @@ struct GhosttyTerminalTab: View {
     /// marks the surface occluded so a backgrounded tab costs nothing.
     var isActive: Bool = true
 
-    /// Manual keyboard lift. The parent ZStack ignores `.keyboard` (so the
-    /// Chat sibling's composer can negotiate avoidance alone — see
-    /// ConduitProjectView). That left the terminal full-screen *behind* the
-    /// keyboard, hiding the newest rows / prompt. We re-lift it ourselves by
-    /// padding the bottom by the keyboard's intrusion, which shrinks the
-    /// libghostty surface so the grid reflows above the keyboard and the prompt
-    /// stays visible. Mirrors `ConduitChatView`'s `keyboardInset` approach.
-    @State private var keyboardInset: CGFloat = 0
-
     var body: some View {
         GhosttyTerminalView(
             isActive: isActive,
@@ -75,34 +66,12 @@ struct GhosttyTerminalTab: View {
                 store.resize(sessionID: session.id, rows: UInt16(rows), cols: UInt16(cols))
             }
         )
-        // Lift the surface above the soft keyboard so the prompt stays visible.
-        // Only when this tab is active — a hidden terminal must not pad.
-        .padding(.bottom, isActive ? keyboardInset : 0)
-        // Match TerminalTabXterm's scope — extend under the home-indicator
-        // inset at rest.
+        // Keyboard avoidance is owned by `GhosttyTerminalHostController` (a
+        // keyboard-synced bottom constraint + pre-render, geistty's approach),
+        // NOT SwiftUI — so no `.padding`/keyboard observers here. The host view
+        // extends to the window bottom (the parent ZStack already ignores
+        // `.keyboard`); the controller lifts the surface above the keyboard.
         .ignoresSafeArea(.container, edges: .bottom)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-            applyKeyboardInset(note)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
-            applyKeyboardInset(note)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = 0 }
-        }
-    }
-
-    private func applyKeyboardInset(_ note: Notification) {
-        guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
-              let scene = UIApplication.shared.connectedScenes
-                  .first(where: { $0 is UIWindowScene }) as? UIWindowScene,
-              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
-        else { return }
-        // The terminal extends to the window bottom (ignoresSafeArea .container),
-        // so it must rise by the FULL overlap from the keyboard top down — no
-        // safe-area subtraction (unlike Chat, whose composer sits in the inset).
-        let inset = max(0, window.bounds.maxY - frame.minY)
-        withAnimation(.easeOut(duration: 0.2)) { keyboardInset = inset }
     }
 }
 
@@ -110,7 +79,7 @@ struct GhosttyTerminalTab: View {
 /// `WKTerminalView`'s contract (bufferProvider + revision counter
 /// drive the byte diff; onInput / onResize close the loop with
 /// SessionStore) so the swap is a one-line branch in ProjectView.
-struct GhosttyTerminalView: UIViewRepresentable {
+struct GhosttyTerminalView: UIViewControllerRepresentable {
     /// Drives the surface's occlusion + draw-pump gating. The view stays
     /// mounted across tab switches now (so libghostty's surface is never
     /// torn down + recreated mid-use), so `isActive` is how the host tells
@@ -141,13 +110,14 @@ struct GhosttyTerminalView: UIViewRepresentable {
     let onInput: (Data) -> Void
     let onResize: (Int, Int) -> Void
 
-    func makeUIView(context: Context) -> GhosttyRenderView {
-        // Breadcrumb the terminal mount: this representable does synchronous
-        // CALayer work on attach, and mounting it during a detail-pane
-        // teardown was the post-session-create EXC_BAD_ACCESS. If that crash
-        // recurs, this crumb pins the terminal mount as the trigger.
-        Telemetry.breadcrumb("terminal", "GhosttyTerminalView makeUIView")
-        let view = GhosttyRenderView(frame: .zero)
+    func makeUIViewController(context: Context) -> GhosttyTerminalHostController {
+        // Breadcrumb the terminal mount: this does synchronous CALayer work on
+        // attach, and mounting it during a detail-pane teardown was the
+        // post-session-create EXC_BAD_ACCESS. If that crash recurs, this crumb
+        // pins the terminal mount as the trigger.
+        Telemetry.breadcrumb("terminal", "GhosttyTerminalView makeUIViewController")
+        let controller = GhosttyTerminalHostController()
+        let view = controller.renderView
         view.onInput = onInput
         view.onResize = onResize
         // Seed the libghostty font size + theme BEFORE the surface is
@@ -157,10 +127,12 @@ struct GhosttyTerminalView: UIViewRepresentable {
         // First update: feed whatever the buffer already holds so a
         // tab-switch-back reattach doesn't show an empty grid.
         view.feed(bufferProvider())
-        return view
+        return controller
     }
 
-    func updateUIView(_ view: GhosttyRenderView, context: Context) {
+    func updateUIViewController(_ controller: GhosttyTerminalHostController, context: Context) {
+        let view = controller.renderView
+        controller.isActive = isActive
         view.onInput = onInput
         view.onResize = onResize
         // Tab visibility → renderer occlusion + draw-pump gating.
@@ -197,8 +169,89 @@ struct GhosttyTerminalView: UIViewRepresentable {
     /// stack (`CA::Context::commit_transaction` → `apprt.surface.Mailbox.push`)
     /// shows can fire mid-flush. Tearing the surface down here, before the
     /// view is released, closes the use-after-free window deterministically.
-    static func dismantleUIView(_ view: GhosttyRenderView, coordinator: ()) {
-        view.prepareForRemoval()
+    static func dismantleUIViewController(_ controller: GhosttyTerminalHostController, coordinator: ()) {
+        controller.renderView.prepareForRemoval()
+    }
+}
+
+/// Hosts the libghostty surface and owns soft-keyboard avoidance the way the
+/// reference ghostty-iOS terminals do (esp. geistty): a bottom constraint
+/// animated in sync with the keyboard, with a PRE-RENDER at the final size
+/// before the animation so libghostty + tmux reflow ONCE rather than on every
+/// animation frame (the resize flash). SwiftUI does NOT pad/avoid — the
+/// `GhosttyTerminalView` representable opts out — so the Chat sibling's own
+/// keyboard handling is untouched and this is the single source of truth.
+final class GhosttyTerminalHostController: UIViewController {
+    let renderView = GhosttyRenderView(frame: .zero)
+    /// Mirrors the SwiftUI tab's active state. When false (terminal hidden
+    /// behind Chat/Browser), we ignore keyboard notifications so Chat's
+    /// keyboard doesn't drive the hidden terminal's layout.
+    var isActive = true
+    private var bottomConstraint: NSLayoutConstraint!
+    private var currentOverlap: CGFloat = -1
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        renderView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(renderView)
+        bottomConstraint = renderView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        NSLayoutConstraint.activate([
+            renderView.topAnchor.constraint(equalTo: view.topAnchor),
+            renderView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            renderView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottomConstraint,
+        ])
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(keyboardChange(_:)),
+                       name: UIResponder.keyboardWillShowNotification, object: nil)
+        nc.addObserver(self, selector: #selector(keyboardChange(_:)),
+                       name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        nc.addObserver(self, selector: #selector(keyboardHide(_:)),
+                       name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    @objc private func keyboardChange(_ note: Notification) { applyKeyboard(note, hiding: false) }
+    @objc private func keyboardHide(_ note: Notification) { applyKeyboard(note, hiding: true) }
+
+    private func applyKeyboard(_ note: Notification, hiding: Bool) {
+        guard isActive, isViewLoaded, view.window != nil,
+              let info = note.userInfo,
+              let endFrame = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        else { return }
+        let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        let curveRaw = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 0
+
+        // Real overlap of the keyboard with OUR view — never `endFrame.height`
+        // (that ignores split keyboards, hardware-keyboard accessory-only bars,
+        // and our view not spanning the full screen). geistty's exact math.
+        let frameInView = view.convert(endFrame, from: nil)
+        let overlap = hiding ? 0 : max(0, view.bounds.maxY - frameInView.minY)
+        guard overlap != currentOverlap else { return }
+        currentOverlap = overlap
+
+        // PRE-RENDER at the final size BEFORE animating → libghostty + tmux
+        // reflow once, not per frame. `isKeyboardAnimating` then suppresses the
+        // per-frame grid resize that `layoutSubviews` would otherwise do as the
+        // constraint animates (sublayer still tracks for a smooth slide).
+        let finalHeight = max(0, view.bounds.height - overlap)
+        renderView.isKeyboardAnimating = true
+        renderView.preRender(toHeight: finalHeight)
+
+        let opts = UIView.AnimationOptions(rawValue: UInt(curveRaw << 16))
+        UIView.animate(withDuration: duration, delay: 0, options: opts, animations: {
+            self.bottomConstraint.constant = -overlap
+            self.view.layoutIfNeeded()
+        }, completion: { [weak self] _ in
+            guard let self else { return }
+            self.renderView.isKeyboardAnimating = false
+            // Final authoritative resize at the settled bounds + snap the
+            // viewport to the prompt (tmux reflow can leave a gap the
+            // direct-shell reference apps don't hit).
+            self.renderView.setNeedsLayout()
+            self.renderView.layoutIfNeeded()
+            self.renderView.snapToBottom()
+        })
     }
 }
 
@@ -879,28 +932,48 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             name: UIApplication.willEnterForegroundNotification,
             object: nil
         )
-        // When the soft keyboard appears, the SwiftUI host shrinks our bounds
-        // (manual keyboardInset) → the grid reflows smaller. The reference
-        // ghostty terminals (gterm/clauntty/geistty) rely on that reflow to keep
-        // the prompt flush above the keyboard — but they run a DIRECT shell. We
-        // run tmux, whose reflow-on-resize can leave the cursor off the bottom
-        // (content at top + a blank gap). Snap the viewport to the bottom once
-        // the resize settles so the prompt + recent rows fill the shrunk view.
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleKeyboardWillShow),
-            name: UIResponder.keyboardWillShowNotification,
-            object: nil
-        )
     }
 
-    @objc private func handleKeyboardWillShow() {
+    /// Set while the host controller animates the keyboard-avoidance bottom
+    /// constraint. During that window `sizeGhosttyLayer` keeps the IOSurface
+    /// sublayer tracking the animating bounds (smooth visual) but SKIPS the
+    /// libghostty grid resize + PTY reflow — the host already pre-rendered the
+    /// grid at the final size, and re-gridding/reflowing tmux every animation
+    /// frame is the resize flash. Cleared (with a final resize) on completion.
+    var isKeyboardAnimating = false
+
+    /// Pre-size the surface + grid to a target height BEFORE the host animates
+    /// the keyboard constraint, so libghostty (and tmux) reflow ONCE to the
+    /// final size instead of per animation frame (geistty's anti-flash trick).
+    func preRender(toHeight finalHeight: CGFloat) {
         #if canImport(GhosttyVT)
-        // Defer past the keyboard/inset animation + grid reflow, then pin bottom.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self, self.isFirstResponder else { return }
-            self.terminal?.scrollToBottom()
+        guard bounds.width > 0, finalHeight > 0 else { return }
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+        let finalRect = CGRect(x: 0, y: 0, width: bounds.width, height: finalHeight)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let sub = ghosttySublayer { sub.frame = finalRect; sub.contentsScale = scale }
+        if let subs = layer.sublayers {
+            for s in subs where s !== ghosttySublayer { s.frame = finalRect; s.contentsScale = scale }
         }
+        CATransaction.commit()
+        terminal?.setPixelSize(
+            width: UInt32(bounds.width * scale),
+            height: UInt32(finalHeight * scale),
+            scale: Double(scale)
+        )
+        syncPtyToGhosttyGrid()
+        terminal?.refresh()
+        #endif
+    }
+
+    /// Snap the viewport to the newest output. tmux's reflow-on-resize can
+    /// leave the cursor off the bottom (the direct-shell reference apps don't
+    /// hit this); the host calls this after a keyboard resize so the prompt +
+    /// recent rows fill the shrunk view instead of leaving a blank gap.
+    func snapToBottom() {
+        #if canImport(GhosttyVT)
+        terminal?.scrollToBottom()
         #endif
     }
 
@@ -1321,6 +1394,15 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         }
         CATransaction.commit()
         #if canImport(GhosttyVT)
+        // During the keyboard-avoidance animation the host already pre-rendered
+        // the grid at the final size; re-gridding + reflowing tmux on every
+        // animation frame is the resize flash. Keep the sublayer tracking
+        // (above) for a smooth slide, but defer the grid/PTY resize until the
+        // animation completes (the host clears the flag + does a final resize).
+        guard !isKeyboardAnimating else {
+            updateGeometryOverlay(scale: scale)
+            return
+        }
         terminal?.setPixelSize(
             width: UInt32(bounds.width * scale),
             height: UInt32(bounds.height * scale),
