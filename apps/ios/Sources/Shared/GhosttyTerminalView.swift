@@ -22,38 +22,76 @@ import GhosttyVT
 // resize is Stage 3; keyboard input is Stage 4; selection is Stage 5.
 
 struct GhosttyTerminalTab: View {
+    @Environment(SessionStore.self) private var store
     let session: ProjectSession
     let isActive: Bool
 
     var body: some View {
-        GhosttyTerminalView(session: session, isActive: isActive)
-            .background(Color.black)
-            .ignoresSafeArea(.container, edges: .bottom)
+        GhosttyTerminalView(
+            isActive: isActive,
+            // Reading the observable buffer here establishes the SwiftUI
+            // dependency: when the broker appends PTY bytes, the body
+            // re-evaluates and `updateUIView` feeds the new tail.
+            bufferProvider: { store.terminalBuffer[session.id] ?? Data() },
+            bufferRevision: store.terminalBuffer[session.id]?.count ?? 0,
+            // Resize authority: libghostty owns the grid; the host reads
+            // `ghostty_surface_size` after every resize and drives the remote
+            // PTY to the SAME cols/rows (else tmux misdraws). `resize` no-ops
+            // safely until the session has a connected client.
+            onResize: { rows, cols in
+                store.resize(sessionID: session.id, rows: UInt16(rows), cols: UInt16(cols))
+            }
+        )
+        .background(Color.black)
+        .ignoresSafeArea(.container, edges: .bottom)
     }
 }
 
+/// `UIViewRepresentable` host for `GhosttySurfaceView`. `bufferProvider` +
+/// `bufferRevision` drive the byte diff (mirrors the old xterm.js contract);
+/// `onResize` closes the grid loop back to `SessionStore`.
 struct GhosttyTerminalView: UIViewRepresentable {
-    let session: ProjectSession
     let isActive: Bool
+    let bufferProvider: () -> Data
+    let bufferRevision: Int
+    let onResize: (_ rows: Int, _ cols: Int) -> Void
 
     func makeUIView(context: Context) -> GhosttySurfaceView {
         Telemetry.breadcrumb("terminal", "GhosttyTerminalView makeUIView")
         let view = GhosttySurfaceView(frame: .zero)
+        view.onResize = onResize
         view.configure()
         view.setActive(isActive)
-        // Stage 2 proof-of-render. Stage 3 replaces this with the live broker
-        // terminal buffer for `session`.
-        view.feed("\u{1b}[1;32mConduit\u{1b}[0m — native Ghostty terminal online.\r\n")
+        // Feed whatever the buffer already holds so a tab-switch-back reattach
+        // doesn't show an empty grid.
+        view.syncBuffer(bufferProvider())
         return view
     }
 
     func updateUIView(_ view: GhosttySurfaceView, context: Context) {
+        view.onResize = onResize
         view.setActive(isActive)
+        view.syncBuffer(bufferProvider())
     }
 
     static func dismantleUIView(_ view: GhosttySurfaceView, coordinator: ()) {
         Telemetry.breadcrumb("terminal", "GhosttyTerminalView dismantle")
         view.prepareForRemoval()
+    }
+}
+
+/// Pure tail-diff logic for the terminal byte stream — extracted so it's
+/// unit-testable without a UIView. The broker buffer only ever grows (append)
+/// or is wholesale-replaced by a snapshot (shrink / reset).
+enum TerminalFeedDiff: Equatable {
+    case none
+    case feed(Range<Int>)
+    case reset
+
+    static func diff(lastFed: Int, bufferCount: Int) -> TerminalFeedDiff {
+        if bufferCount > lastFed { return .feed(lastFed..<bufferCount) }
+        if bufferCount < lastFed { return .reset }
+        return .none
     }
 }
 
@@ -68,6 +106,13 @@ final class GhosttySurfaceView: UIView {
     private var frameDisplayLinkProxy: FrameDisplayLinkProxy?
     private var isActive = false
     private var isAppBackgrounded = false
+
+    /// Tail-diff cursor: how many bytes of the broker buffer we've fed so far.
+    private var lastFedByteCount = 0
+    /// Last grid reported to the broker, so `onResize` only fires on a change.
+    private var lastGrid: (cols: UInt16, rows: UInt16)?
+    /// Drives the remote PTY to libghostty's own grid (set by the representable).
+    var onResize: ((_ rows: Int, _ cols: Int) -> Void)?
 
     /// Weak indirection so the `CADisplayLink` (retained by the main runloop)
     /// does not retain the view.
@@ -111,7 +156,40 @@ final class GhosttySurfaceView: UIView {
         Telemetry.breadcrumb("terminal", "GhosttySurface attached", data: ["px": "\(pw)x\(ph)"])
     }
 
-    func feed(_ string: String) { surface?.feed(string) }
+    /// Feed the broker buffer to libghostty by tail diff. The buffer grows on
+    /// streaming output (feed the new tail) or is wholesale-replaced by a
+    /// snapshot on reconnect (shrink → rebuild the surface and re-feed).
+    func syncBuffer(_ full: Data) {
+        switch TerminalFeedDiff.diff(lastFed: lastFedByteCount, bufferCount: full.count) {
+        case .none:
+            break
+        case .feed(let range):
+            surface?.feed(full.subdata(in: range))
+            lastFedByteCount = full.count
+        case .reset:
+            rebuildSurface()
+            surface?.feed(full)
+            lastFedByteCount = full.count
+        }
+    }
+
+    /// Snapshot replacement (buffer shrank): our ABI has no surface `reset`, so
+    /// tear the surface down and build a fresh one on the same host view. The
+    /// teardown defers the free a runloop turn (CA-commit safety); the new
+    /// surface's IOSurfaceLayer re-parents via `addSublayer` as usual.
+    private func rebuildSurface() {
+        if let s = surface {
+            surface = nil
+            ghosttySublayer = nil
+            layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+            DispatchQueue.main.async { s.teardown() }
+        }
+        let scale = Double(contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale)
+        let (pw, ph) = pixelSize(scale: scale)
+        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale)
+        lastFedByteCount = 0
+        lastGrid = nil
+    }
 
     private func pixelSize(scale: Double) -> (UInt32, UInt32) {
         // geistty seeds 800×600 to avoid a 0×0 surface before first layout.
@@ -169,6 +247,19 @@ final class GhosttySurfaceView: UIView {
             pixelWidth: UInt32(bounds.width * scale),
             pixelHeight: UInt32(bounds.height * scale),
             scale: Double(scale))
+        syncGridToBroker()
+    }
+
+    /// Read libghostty's own derived grid and drive the remote PTY to it, only
+    /// when it changed. libghostty owns the grid (it re-derives cols/rows from
+    /// the pixel size + its font metrics); pushing a client-side estimate would
+    /// fight it and make tmux misdraw.
+    private func syncGridToBroker() {
+        guard let grid = surface?.gridSize() else { return }
+        if lastGrid?.cols != grid.cols || lastGrid?.rows != grid.rows {
+            lastGrid = (grid.cols, grid.rows)
+            onResize?(Int(grid.rows), Int(grid.cols))
+        }
     }
 
     override func layoutSubviews() {
