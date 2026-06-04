@@ -116,8 +116,11 @@ async function build() {
 
     const releaseData = {
         version,
-        channel: "beta",
+        channel: "alpha",
         updated,
+        // Full ISO-8601 build timestamp (the release's publish time). The page
+        // renders it in the visitor's locale + timezone via `toLocaleString`.
+        builtAt: r.publishedAt || "",
         ios: {
             manifestUrl: r.ipa ? manifestUrl : "",
             minOS: "iOS 16+",

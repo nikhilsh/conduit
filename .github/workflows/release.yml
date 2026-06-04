@@ -71,6 +71,7 @@ jobs:
               --target "${GITHUB_SHA}" \
               --title "conduit ${RELEASE_TAG}" \
               --notes "Auto-generated release. See workflow logs for build provenance." \
+              --prerelease \
               || gh release view "${RELEASE_TAG}" -R "$GITHUB_REPOSITORY" >/dev/null
           else
             echo "release ${RELEASE_TAG} already exists - leaving as is"
