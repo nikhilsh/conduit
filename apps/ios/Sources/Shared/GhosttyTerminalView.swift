@@ -31,6 +31,7 @@ struct GhosttyTerminalTab: View {
         GhosttyTerminalView(
             isActive: isActive,
             theme: appearance.terminalTheme,
+            font: appearance.terminalFont,
             // Reading the observable buffer here establishes the SwiftUI
             // dependency: when the broker appends PTY bytes, the body
             // re-evaluates and `updateUIView` feeds the new tail.
@@ -60,6 +61,7 @@ struct GhosttyTerminalTab: View {
 struct GhosttyTerminalView: UIViewRepresentable {
     let isActive: Bool
     let theme: GhosttyTheme
+    let font: GhosttyFont
     let bufferProvider: () -> Data
     let bufferRevision: Int
     let onInput: (Data) -> Void
@@ -70,7 +72,7 @@ struct GhosttyTerminalView: UIViewRepresentable {
         let view = GhosttySurfaceView(frame: .zero)
         view.onInput = onInput
         view.onResize = onResize
-        view.configure(theme: theme)
+        view.configure(theme: theme, font: font)
         view.setActive(isActive)
         // Feed whatever the buffer already holds so a tab-switch-back reattach
         // doesn't show an empty grid.
@@ -82,6 +84,9 @@ struct GhosttyTerminalView: UIViewRepresentable {
         view.onInput = onInput
         view.onResize = onResize
         view.setTheme(theme)
+        // A font change rebuilds the surface (resets the feed cursor); sync the
+        // buffer AFTER so it re-feeds the full buffer into the new surface.
+        view.setFont(font)
         view.setActive(isActive)
         view.syncBuffer(bufferProvider())
     }
@@ -180,6 +185,7 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// background color (so the keyboard-revealed band + any sliver around the
     /// grid match the terminal rather than being pure black).
     private var currentTheme: GhosttyTheme = .ghosttyDark
+    private var currentFont: GhosttyFont = .system
 
     private func themeBackgroundColor() -> UIColor {
         let c = currentTheme.backgroundRGB
@@ -268,8 +274,9 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// Create the surface with this view pinned as libghostty's host. The
     /// representable hands us a `.zero` frame, so seed a non-zero pixel size;
     /// `layoutSubviews` pushes the real bounds once we're laid out.
-    func configure(theme: GhosttyTheme) {
+    func configure(theme: GhosttyTheme, font: GhosttyFont) {
         currentTheme = theme
+        currentFont = font
         applyThemeBackground()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -278,17 +285,27 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
 
         let scale = Double(contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale)
         let (pw, ph) = pixelSize(scale: scale)
-        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale, theme: theme)
+        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale,
+                                 theme: theme, font: font)
         surface?.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
         Telemetry.breadcrumb("terminal", "GhosttySurface attached", data: ["px": "\(pw)x\(ph)"])
     }
 
-    /// Live theme change from the representable (Settings picker).
+    /// Live theme change from the representable (Settings picker). Colors only, so
+    /// the live surface is updated in place.
     func setTheme(_ theme: GhosttyTheme) {
         guard theme != currentTheme else { return }
         currentTheme = theme
         surface?.setTheme(theme)
         applyThemeBackground()
+    }
+
+    /// Font change from the representable. A font swap re-rasterizes glyphs, which
+    /// the pinned ABI does via a surface rebuild (not a live config update).
+    func setFont(_ font: GhosttyFont) {
+        guard font != currentFont else { return }
+        currentFont = font
+        rebuildSurface()
     }
 
     /// Feed the broker buffer to libghostty by tail diff. The buffer grows on
@@ -321,7 +338,8 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
         }
         let scale = Double(contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale)
         let (pw, ph) = pixelSize(scale: scale)
-        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale, theme: currentTheme)
+        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale,
+                                 theme: currentTheme, font: currentFont)
         surface?.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
         lastFedByteCount = 0
         lastGrid = nil

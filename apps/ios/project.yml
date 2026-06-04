@@ -124,6 +124,17 @@ targets:
           NSAllowsArbitraryLoads: true
         NSCameraUsageDescription: "Scan Conduit pairing QR codes."
         NSPhotoLibraryUsageDescription: "Import a Conduit pairing QR code from your photo library."
+        # Bundled terminal fonts (Sources/Resources/Fonts/*.ttf) registered so
+        # libghostty can resolve them by CoreText family name via `font-family`.
+        UIAppFonts:
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Bold.ttf
+          - Hack-Regular.ttf
+          - Hack-Bold.ttf
+          - FiraCode-Regular.ttf
+          - FiraCode-Bold.ttf
+          - IBMPlexMono-Regular.ttf
+          - IBMPlexMono-Bold.ttf
         NSMicrophoneUsageDescription: "Dictate replies to the coding agent."
         NSSpeechRecognitionUsageDescription: "Transcribe your voice on-device into chat messages for the coding agent."
         NSLocalNetworkUsageDescription: "Discover Conduit harnesses advertising on your Wi-Fi."

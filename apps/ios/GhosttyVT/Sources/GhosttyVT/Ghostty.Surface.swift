@@ -40,6 +40,7 @@ public final class GhosttySurface {
 
     private let fontSize: Float
     private var theme: GhosttyTheme
+    private var font: GhosttyFont
 
     public var isAlive: Bool { surface != nil }
 
@@ -49,10 +50,12 @@ public final class GhosttySurface {
         pixelHeight: UInt32 = 0,
         scaleFactor: Double = 2.0,
         fontSize: Float = 10.0,
-        theme: GhosttyTheme = .ghosttyDark
+        theme: GhosttyTheme = .ghosttyDark,
+        font: GhosttyFont = .system
     ) {
         self.fontSize = fontSize
         self.theme = theme
+        self.font = font
         guard let appHandle = GhosttyApp.shared.appHandle else {
             Self.log.error("GhosttySurface init: app not ready")
             return
@@ -178,7 +181,7 @@ public final class GhosttySurface {
         defer { ghostty_config_free(cfg) }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduit-ghostty-\(UUID().uuidString).conf")
-        guard (try? theme.configBody(fontSize: fontSize).write(to: url, atomically: true, encoding: .utf8)) != nil
+        guard (try? theme.configBody(fontSize: fontSize, font: font).write(to: url, atomically: true, encoding: .utf8)) != nil
         else { return }
         defer { try? FileManager.default.removeItem(at: url) }
         url.path.withCString { ghostty_config_load_file(cfg, $0) }

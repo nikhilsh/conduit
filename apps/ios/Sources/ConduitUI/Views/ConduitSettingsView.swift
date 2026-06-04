@@ -51,6 +51,7 @@ extension ConduitUI {
                             conversationSection
                             serversSection
                             terminalThemeSection
+                            terminalFontSection
                             aboutSection
                         }
                         .padding(.horizontal, 16)
@@ -392,6 +393,35 @@ extension ConduitUI {
                         }
                         .buttonStyle(.plain)
                         rowDivider(after: theme, in: GhosttyTheme.allCases)
+                    }
+                }
+            }
+        }
+
+        /// Font for the native (libghostty) terminal.
+        private var terminalFontSection: some View {
+            @Bindable var appearance = appearance
+            return sectionCard(title: "Terminal Font") {
+                VStack(spacing: 0) {
+                    ForEach(GhosttyFont.allCases) { font in
+                        Button {
+                            appearance.terminalFont = font
+                        } label: {
+                            ConduitUI.ListRow(
+                                icon: "textformat",
+                                title: font.label,
+                                subtitle: nil,
+                                iconTint: neon.accent
+                            ) {
+                                if appearance.terminalFont == font {
+                                    Image(systemName: "checkmark")
+                                        .font(.footnote.weight(.bold))
+                                        .foregroundStyle(neon.accent)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        rowDivider(after: font, in: GhosttyFont.allCases)
                     }
                 }
             }
