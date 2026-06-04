@@ -169,6 +169,23 @@ public final class GhosttySurface {
         ghostty_surface_refresh(s)
     }
 
+    /// Pan libghostty's OWN scrollback viewport by a pixel-precise vertical
+    /// delta. Used for touch-drag scrolling. The broker runs tmux without the
+    /// alternate screen + mouse off, so libghostty keeps real scrollback and
+    /// `mouse_scroll` moves the local viewport (nothing is sent to the program).
+    /// A POSITIVE delta reveals OLDER content (ghostty maps y>0 to scroll-up), so
+    /// the caller passes a positive delta for a finger dragging DOWN. `deltaY` is
+    /// in PIXELS (libghostty accumulates a precision scroll against cell height).
+    public func scroll(deltaY: Double) {
+        guard let s = surface, deltaY != 0 else { return }
+        // bit 0 = precision (pixel) flag; momentum phase NONE (active finger drag,
+        // not post-release inertia). `ghostty_input_scroll_mods_t` is a packed int.
+        let mods: Int32 = 1
+        ghostty_surface_mouse_scroll(s, 0, deltaY, mods)
+        ghostty_surface_refresh(s)
+        GhosttyApp.shared.tick()
+    }
+
     public func setFocus(_ focused: Bool) {
         guard let s = surface else { return }
         ghostty_surface_set_focus(s, focused)
@@ -191,6 +208,20 @@ public final class GhosttySurface {
         guard let s = surface else { return }
         ghostty_surface_mouse_pos(s, x, y, GHOSTTY_MODS_NONE)
         _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+        ghostty_surface_refresh(s)
+    }
+
+    /// Select the WORD under a point — a double-click (two press/release pairs at
+    /// the same position; libghostty's click counter promotes the second to a
+    /// word select). This is the long-press-to-select-a-word entry point; a
+    /// subsequent drag extends it.
+    public func selectWord(x: Double, y: Double) {
+        guard let s = surface else { return }
+        ghostty_surface_mouse_pos(s, x, y, GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
         ghostty_surface_refresh(s)
     }
 

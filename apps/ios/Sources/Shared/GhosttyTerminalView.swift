@@ -148,6 +148,16 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     private var isActive = false
     private var isAppBackgrounded = false
 
+    /// How much of our bottom is covered by the soft keyboard (incl. its accessory
+    /// bar), in points. The libghostty grid is sized to `bounds.height - this` so
+    /// the prompt stays visible above the keyboard instead of hiding behind it.
+    private var keyboardOverlap: CGFloat = 0
+    /// Running translation for the scroll pan.
+    private var scrollPanLastY: CGFloat = 0
+    /// Downward finger travel (points) that dismisses the keyboard mid-pan — the
+    /// iOS scroll-to-dismiss idiom.
+    private static let dismissDragThreshold: CGFloat = 36
+
     /// Tail-diff cursor: how many bytes of the broker buffer we've fed so far.
     private var lastFedByteCount = 0
     /// Last grid reported to the broker, so `onResize` only fires on a change.
@@ -191,6 +201,13 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
         NotificationCenter.default.addObserver(
             self, selector: #selector(appWillForeground),
             name: UIApplication.willEnterForegroundNotification, object: nil)
+        // Lift the grid above the keyboard so the prompt stays visible.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(keyboardFrameWillChange(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(keyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification, object: nil)
         // Tap to focus → show the soft keyboard + give libghostty key focus.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
         addGestureRecognizer(tap)
@@ -198,6 +215,13 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
         // events); release presents the copy/paste menu.
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         addGestureRecognizer(longPress)
+        // One-finger pan → scroll libghostty's scrollback (or, while the keyboard
+        // is up, drag-down dismisses it). Waits for the long-press to fail so a
+        // press-and-hold selects instead of scrolling.
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.require(toFail: longPress)
+        addGestureRecognizer(pan)
         addInteraction(editMenuInteraction)
     }
 
@@ -294,24 +318,27 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     private func sizeLayer() {
         guard bounds.width > 0, bounds.height > 0 else { return }
         let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+        // Reserve the keyboard's overlap so the rendered grid sits ABOVE it.
+        let effectiveHeight = max(1, bounds.height - keyboardOverlap)
+        let rect = CGRect(x: 0, y: 0, width: bounds.width, height: effectiveHeight)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if let sub = ghosttySublayer {
-            sub.frame = bounds
+            sub.frame = rect
             sub.contentsScale = scale
         }
         // Belt-and-suspenders: size any layer libghostty parented directly on our
         // root layer (it can attach via `[[uiview layer] addSublayer:]`).
         if let subs = layer.sublayers {
             for s in subs where s !== ghosttySublayer {
-                s.frame = bounds
+                s.frame = rect
                 s.contentsScale = scale
             }
         }
         CATransaction.commit()
         surface?.resize(
             pixelWidth: UInt32(bounds.width * scale),
-            pixelHeight: UInt32(bounds.height * scale),
+            pixelHeight: UInt32(effectiveHeight * scale),
             scale: Double(scale))
         syncGridToBroker()
     }
@@ -469,18 +496,21 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
 
     // MARK: - Selection / copy / paste
 
-    /// Long-press drag → libghostty-native selection. Press begins, drag extends,
-    /// release finishes and presents the copy/paste menu.
+    /// Long-press selects the WORD under the finger (libghostty double-click);
+    /// dragging then extends the selection; release presents the copy/paste menu.
+    /// The menu is presented even with no selection so Paste stays reachable.
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         let p = gesture.location(in: self)
         switch gesture.state {
         case .began:
-            _ = becomeFirstResponder()
-            surface?.selectionBegin(x: Double(p.x), y: Double(p.y))
+            // Drop libghostty focus so the press isn't swallowed by IME, then
+            // word-select under the point.
+            surface?.selectWord(x: Double(p.x), y: Double(p.y))
         case .changed:
             surface?.selectionExtend(x: Double(p.x), y: Double(p.y))
         case .ended, .cancelled, .failed:
-            surface?.selectionEnd(x: Double(p.x), y: Double(p.y))
+            let selected = surface?.hasSelection ?? false
+            Telemetry.breadcrumb("terminal", "long-press selection", data: ["hasSelection": "\(selected)"])
             presentEditMenu(at: p)
         default:
             break
@@ -522,6 +552,55 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
         suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
         nil
+    }
+
+    // MARK: - Scroll + keyboard avoidance
+
+    /// One-finger pan → scroll libghostty's scrollback; while the keyboard is up,
+    /// a downward drag past the threshold dismisses it first.
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            scrollPanLastY = 0
+        case .changed:
+            let ty = gesture.translation(in: self).y
+            let delta = ty - scrollPanLastY
+            scrollPanLastY = ty
+            guard delta != 0 else { return }
+            if isFirstResponder, ty > Self.dismissDragThreshold {
+                _ = resignFirstResponder()
+                return
+            }
+            // Points → pixels via the backing scale; a finger dragging DOWN reveals
+            // older history (positive delta, no negation).
+            let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+            surface?.scroll(deltaY: Double(delta) * Double(scale))
+        default:
+            break
+        }
+    }
+
+    /// Keyboard shown / moved → lift the grid so the prompt clears it.
+    @objc private func keyboardFrameWillChange(_ note: Notification) {
+        // Only the visible terminal lifts — otherwise the Chat tab's keyboard
+        // would needlessly resize this (hidden) terminal's remote PTY.
+        guard isActive,
+              let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+              let window else { return }
+        // Keyboard frame is in screen coords; convert into our space and measure
+        // how much it covers our bottom (this includes the accessory bar).
+        let inWindow = window.convert(end, from: nil)
+        let inView = convert(inWindow, from: window)
+        let overlap = max(0, bounds.maxY - inView.minY)
+        guard abs(overlap - keyboardOverlap) > 0.5 else { return }
+        keyboardOverlap = overlap
+        sizeLayer()
+    }
+
+    @objc private func keyboardWillHide(_ note: Notification) {
+        guard keyboardOverlap != 0 else { return }
+        keyboardOverlap = 0
+        sizeLayer()
     }
 
     // MARK: - Teardown
