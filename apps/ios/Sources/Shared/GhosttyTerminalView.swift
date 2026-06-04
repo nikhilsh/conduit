@@ -44,7 +44,10 @@ struct GhosttyTerminalTab: View {
                 store.resize(sessionID: session.id, rows: UInt16(rows), cols: UInt16(cols))
             }
         )
-        .background(Color.black)
+        .background(Color(
+            red: GhosttySurface.backgroundRGB.red,
+            green: GhosttySurface.backgroundRGB.green,
+            blue: GhosttySurface.backgroundRGB.blue))
         .ignoresSafeArea(.container, edges: .bottom)
     }
 }
@@ -167,6 +170,15 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// black surface behind the lifted grid and reads as pure black).
     var keyboardAppearance: UIKeyboardAppearance = .dark
 
+    /// The terminal's own background color (matches libghostty's themed `background`)
+    /// so the area the keyboard reveals — and any sliver around the grid — matches
+    /// the terminal instead of being pure black.
+    static let terminalBackground = UIColor(
+        red: CGFloat(GhosttySurface.backgroundRGB.red),
+        green: CGFloat(GhosttySurface.backgroundRGB.green),
+        blue: CGFloat(GhosttySurface.backgroundRGB.blue),
+        alpha: 1)
+
     /// Tail-diff cursor: how many bytes of the broker buffer we've fed so far.
     private var lastFedByteCount = 0
     /// Last grid reported to the broker, so `onResize` only fires on a change.
@@ -202,7 +214,7 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .black
+        backgroundColor = Self.terminalBackground
         isOpaque = true
         NotificationCenter.default.addObserver(
             self, selector: #selector(appDidBackground),
@@ -243,7 +255,7 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     func configure() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        layer.backgroundColor = UIColor.black.cgColor
+        layer.backgroundColor = Self.terminalBackground.cgColor
         layer.contentsScale = traitCollection.displayScale
         CATransaction.commit()
 

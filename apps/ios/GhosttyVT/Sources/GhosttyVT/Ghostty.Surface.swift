@@ -97,6 +97,12 @@ public final class GhosttySurface {
         self.surface = created
         self.hostViewPtr = uiviewPtr
 
+        // Apply the default terminal theme (colors + 16-color palette + a real
+        // scrollback so touch-scroll has history) BEFORE the first size so the
+        // first frame paints with the right palette. Without this, libghostty
+        // renders its built-in defaults (which read as a different, flatter look).
+        applyDefaultTheme(fontSize: fontSize)
+
         // Size immediately so the renderer initializes against a non-zero target
         // (geistty + clauntty both size on creation). Content scale BEFORE size.
         if pixelWidth > 0, pixelHeight > 0 {
@@ -143,6 +149,55 @@ public final class GhosttySurface {
     }
 
     public func feed(_ string: String) { feed(Data(string.utf8)) }
+
+    // MARK: - Theme
+
+    /// The terminal background color (RGB 0…1), exposed so the host view can paint
+    /// the same color behind/around the grid (e.g. the area the keyboard reveals)
+    /// instead of pure black. Matches `background` in `themeConfig`.
+    public static let backgroundRGB: (red: Double, green: Double, blue: Double) =
+        (0x1d / 255.0, 0x1f / 255.0, 0x21 / 255.0)
+
+    /// libghostty config body for our single dark theme (the pre-rebuild look):
+    /// `ghosttyDark` palette + a 10 MB scrollback so touch-scroll reveals history.
+    /// Line-based `key = value` syntax (matches the reference repos' `ghostty.conf`).
+    private static func themeConfig(fontSize: Float) -> String {
+        let fs = Int(min(max(fontSize, 6), 32).rounded())
+        let palette = [
+            "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
+            "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
+            "#666666", "#d54e53", "#b9ca4a", "#e7c547",
+            "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
+        ]
+        var lines = [
+            "font-size = \(fs)",
+            "scrollback-limit = 10000000",
+            "background = #1d1f21",
+            "foreground = #c5c8c6",
+            "cursor-color = #c5c8c6",
+        ]
+        for (index, color) in palette.enumerated() {
+            lines.append("palette = \(index)=\(color)")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Push the default theme onto the live surface. Our ABI has no
+    /// `config_load_string`, so the body is written to a temp `.conf` and loaded
+    /// via `ghostty_config_load_file` — the same path the prior wrapper used.
+    private func applyDefaultTheme(fontSize: Float) {
+        guard let s = surface, let cfg = ghostty_config_new() else { return }
+        defer { ghostty_config_free(cfg) }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conduit-ghostty-\(UUID().uuidString).conf")
+        guard (try? Self.themeConfig(fontSize: fontSize).write(to: url, atomically: true, encoding: .utf8)) != nil
+        else { return }
+        defer { try? FileManager.default.removeItem(at: url) }
+        url.path.withCString { ghostty_config_load_file(cfg, $0) }
+        ghostty_config_finalize(cfg)
+        ghostty_surface_update_config(s, cfg)
+        ghostty_surface_refresh(s)
+    }
 
     /// Push the host view's pixel size + scale (content scale first, then size —
     /// clauntty's order). Cell grid + reflow happen inside libghostty; read the
