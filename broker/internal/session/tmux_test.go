@@ -67,10 +67,11 @@ func TestTerminalShellArgv(t *testing.T) {
 		}
 		script := got[2]
 		// Pin the exact command string. The `\;` are literal tmux command
-		// separators (escaped so bash passes them through to tmux), chaining
-		// the global `set -g` options onto the same tmux invocation; the
-		// final bare `;` is a real bash separator for `exec bash -l`.
-		want := `/usr/bin/tmux new-session -A -s kitty-abc \; set -g mouse on \; set -g history-limit 50000; exec bash -l`
+		// separators (escaped so bash passes them through to tmux). We
+		// `start-server` then set options BEFORE attaching via `new-session`,
+		// so the alt-screen suppression takes hold pre-attach; the final bare
+		// `;` is a real bash separator for `exec bash -l`.
+		want := `/usr/bin/tmux start-server \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s kitty-abc; exec bash -l`
 		if script != want {
 			t.Fatalf("script:\n want %q\n got  %q", want, script)
 		}
@@ -78,12 +79,21 @@ func TestTerminalShellArgv(t *testing.T) {
 		if !strings.Contains(script, "new-session -A") {
 			t.Fatalf("script missing attach-or-create form: %q", script)
 		}
-		// Mouse mode + deeper scrollback set globally, on create and attach.
-		if !strings.Contains(script, `\; set -g mouse on`) {
-			t.Fatalf("script missing mouse-on option: %q", script)
+		// Alt-screen suppression: smcup@/rmcup@ override keeps tmux on the main
+		// screen so the client keeps its own scrollback (view-move scrolling).
+		if !strings.Contains(script, `set -ga terminal-overrides ',*:smcup@:rmcup@'`) {
+			t.Fatalf("script missing alt-screen suppression: %q", script)
+		}
+		// Mouse OFF (native view scroll, not copy-mode forwarding) + deep scrollback.
+		if !strings.Contains(script, `\; set -g mouse off`) {
+			t.Fatalf("script missing mouse-off option: %q", script)
 		}
 		if !strings.Contains(script, `\; set -g history-limit 50000`) {
 			t.Fatalf("script missing history-limit option: %q", script)
+		}
+		// Options must precede attach so they apply pre-attach.
+		if strings.Index(script, "terminal-overrides") > strings.Index(script, "new-session") {
+			t.Fatalf("options must be set before new-session: %q", script)
 		}
 	})
 }

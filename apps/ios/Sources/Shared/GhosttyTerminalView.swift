@@ -49,6 +49,15 @@ struct GhosttyTerminalTab: View {
     /// marks the surface occluded so a backgrounded tab costs nothing.
     var isActive: Bool = true
 
+    /// Manual keyboard lift. The parent ZStack ignores `.keyboard` (so the
+    /// Chat sibling's composer can negotiate avoidance alone — see
+    /// ConduitProjectView). That left the terminal full-screen *behind* the
+    /// keyboard, hiding the newest rows / prompt. We re-lift it ourselves by
+    /// padding the bottom by the keyboard's intrusion, which shrinks the
+    /// libghostty surface so the grid reflows above the keyboard and the prompt
+    /// stays visible. Mirrors `ConduitChatView`'s `keyboardInset` approach.
+    @State private var keyboardInset: CGFloat = 0
+
     var body: some View {
         GhosttyTerminalView(
             isActive: isActive,
@@ -66,10 +75,34 @@ struct GhosttyTerminalTab: View {
                 store.resize(sessionID: session.id, rows: UInt16(rows), cols: UInt16(cols))
             }
         )
+        // Lift the surface above the soft keyboard so the prompt stays visible.
+        // Only when this tab is active — a hidden terminal must not pad.
+        .padding(.bottom, isActive ? keyboardInset : 0)
         // Match TerminalTabXterm's scope — extend under the home-indicator
-        // inset at rest but yield to the keyboard safe area so the cursor
-        // row stays visible while the soft keyboard is up.
+        // inset at rest.
         .ignoresSafeArea(.container, edges: .bottom)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            applyKeyboardInset(note)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            applyKeyboardInset(note)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = 0 }
+        }
+    }
+
+    private func applyKeyboardInset(_ note: Notification) {
+        guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+              let scene = UIApplication.shared.connectedScenes
+                  .first(where: { $0 is UIWindowScene }) as? UIWindowScene,
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+        else { return }
+        // The terminal extends to the window bottom (ignoresSafeArea .container),
+        // so it must rise by the FULL overlap from the keyboard top down — no
+        // safe-area subtraction (unlike Chat, whose composer sits in the inset).
+        let inset = max(0, window.bounds.maxY - frame.minY)
+        withAnimation(.easeOut(duration: 0.2)) { keyboardInset = inset }
     }
 }
 
@@ -296,38 +329,9 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// so each `.changed` callback feeds libghostty only the INCREMENTAL
     /// delta since the last callback.
     private var scrollPanLastY: CGFloat = 0
-
-    /// Points of vertical finger travel that equal one mouse-wheel "click"
-    /// forwarded to the broker PTY. ~24pt ≈ one line-height of drag at the
-    /// default font, so a slow drag scrolls roughly line-for-finger while a
-    /// fast drag emits several wheel ticks per `.changed`. Tunable if device
-    /// testing wants it faster/slower.
-    private static let scrollPointsPerWheel: CGFloat = 24
-
-    /// Sub-tick vertical travel not yet converted to a wheel event. Carried
-    /// across `.changed` callbacks so a slow drag still accumulates to a click
-    /// and a fast drag's leftover isn't dropped.
-    private var scrollWheelRemainder: CGFloat = 0
-
-    /// Monotonic timestamp of the last wheel-event burst we sent to the PTY.
-    /// Used to RATE-LIMIT wheel sends: each wheel event makes tmux redraw the
-    /// whole screen and stream it back, and every redraw schedules a
-    /// `ghostty_app_tick` on the main queue. A pan's `.changed` fires at the
-    /// display refresh (~120 Hz); emitting a wheel per callback floods the
-    /// render pump and stalls the main thread (App Hanging:
-    /// `Thread.Futex.Deadline.wait`) — the screen freezes blank mid-scroll.
-    /// Coalescing to ~22 Hz keeps the redraw rate near normal streaming output.
-    private var lastWheelSentAt: CFTimeInterval = 0
-    private static let minWheelInterval: CFTimeInterval = 0.045
-    /// Max wheel ticks emitted per burst, so a long pause + fast flick can't
-    /// dump a dozen full-screen redraws into one frame.
-    private static let maxWheelTicksPerBurst = 4
-    /// Last SGR wheel coordinate actually sent + the live grid rows it was
-    /// clamped to — surfaced in the scroll diag so a keyboard-up failure shows
-    /// whether the coord was in-bounds for tmux's pane.
-    private var lastWheelCol = 0
-    private var lastWheelRow = 0
-    private var lastWheelLiveRows = 0
+    /// The one-finger scroll pan, kept so the gesture delegate can gate it to
+    /// vertical-dominant drags (horizontal finger-scroll is disabled).
+    private weak var scrollPanGesture: UIPanGestureRecognizer?
 
 
     #if canImport(GhosttyVT)
@@ -623,6 +627,19 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// keyboard events to fire and the soft keyboard to appear.
     override var canBecomeFirstResponder: Bool { true }
 
+    /// Disable horizontal finger-scroll: the scroll pan only begins for a
+    /// vertical-dominant drag. Horizontal / diagonal drags don't engage scroll
+    /// (they caused stray behavior and fight tab-swipe). Selection-extend pans
+    /// (when a selection is anchored) are unaffected — those need free motion.
+    /// This is `UIView`'s own gesture hook (not the delegate), so it must
+    /// `override` and live in the class body.
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard g === scrollPanGesture, selectionRange == nil,
+              let pan = g as? UIPanGestureRecognizer else { return true }
+        let v = pan.velocity(in: self)
+        return abs(v.y) >= abs(v.x)
+    }
+
     override var inputAccessoryView: UIView? { accessoryBar }
 
     /// Tell libghostty the surface gained key focus when we become first
@@ -816,6 +833,7 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         // host the surface with no ancestor scroll view; geistty additionally
         // sets this delegate. We need it because we DO have competing ancestors.
         pan.delegate = self
+        scrollPanGesture = pan
         addGestureRecognizer(pan)
 
         // iOS 16+ edit-menu surface. UIMenuController was deprecated in
@@ -995,62 +1013,45 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             }
             panIsScrolling = false
             scrollPanLastY = 0
-            scrollWheelRemainder = 0
         default:
             break
         }
     }
 
-    /// Drive scrollback from a one-finger pan by hand-encoding SGR (1006)
-    /// mouse-wheel reports straight to the broker PTY.
-    ///
-    /// WHY NOT libghostty-local scroll: every broker session runs under
-    /// `tmux … set -g mouse on`. tmux owns the alternate screen, so libghostty's
-    /// OWN scrollback is always empty — `terminal.scroll()` /
-    /// `ghostty_surface_mouse_scroll` walk nothing. And ghostty's encoder DROPS
-    /// the wheel report unless the surface's mouse cursor is in-bounds (it sits
-    /// at the default `(-1,-1)` because a touchscreen never calls
-    /// `ghostty_surface_mouse_pos`), so libghostty emits ZERO bytes — confirmed
-    /// in Sentry (the "emitted wheel report" diag never fired across v0.0.92-95).
-    ///
-    /// The reliable path is what tmux actually consumes: write the SGR wheel
-    /// bytes (`ESC[<64;col;rowM` = up, `…65…` = down) to the PTY ourselves via
-    /// the SAME `onInput` channel keystrokes use (proven to work — typing
-    /// works). Verified end-to-end server-side: injecting these bytes into a
-    /// tmux client PTY with the broker's exact config enters copy-mode and
-    /// scrolls. `forwardWheel` does the points→clicks quantization + encoding.
+    /// Drive a VIEW-MOVE scroll of libghostty's own scrollback from a one-finger
+    /// pan. The broker runs tmux with the alt-screen suppressed + mouse off, so
+    /// libghostty keeps real scrollback and `mouse_scroll` pans the local
+    /// viewport — nothing is sent to the program. See the inline `.changed` note.
     private func handleScrollPan(_ recognizer: UIPanGestureRecognizer) {
         #if canImport(GhosttyVT)
         switch recognizer.state {
         case .began:
-            // Scrolling with the keyboard UP hangs the main thread: the
-            // keyboard-shrunk grid + keyboard-avoidance + copy-mode redraws
-            // drive a SwiftUI/Metal relayout storm (symbolicated App Hang =
-            // RenderBox/Metal/UIKit frames, no app frames). Keyboard-DOWN
-            // scroll is clean. So dismiss the keyboard the moment a scroll
-            // starts — standard "scroll dismisses keyboard" mobile behavior —
-            // which sidesteps the hang AND fixes "keyboard won't dismiss".
-            if isFirstResponder { _ = resignFirstResponder() }
             scrollPanLastY = 0
-            scrollWheelRemainder = 0
-            lastWheelSentAt = 0 // first .changed sends immediately, no throttle lag
         case .changed:
             let translationY = recognizer.translation(in: self).y
             let deltaPoints = translationY - scrollPanLastY
             scrollPanLastY = translationY
             guard deltaPoints != 0 else { return }
-            forwardWheel(deltaPoints: deltaPoints, at: recognizer.location(in: self))
+            // VIEW-MOVE: pan libghostty's OWN scrollback viewport — finger drag
+            // moves the rendered view, nothing is sent to the program. This
+            // works because the broker now runs tmux WITHOUT the alternate
+            // screen (smcup@/rmcup@ override) and with mouse OFF, so libghostty
+            // keeps real scrollback and `mouse_scroll` moves the local viewport
+            // instead of forwarding wheel reports. libghostty accumulates a
+            // PRECISION (pixel) delta against cell height, so convert
+            // points→pixels via the backing scale. Sign: ghostty maps a POSITIVE
+            // delta to scroll-up/older, and a finger dragging DOWN should reveal
+            // older history → positive delta (no negation).
+            let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+            terminal?.scroll(deltaY: Double(deltaPoints) * Double(scale))
             if !didLogScroll {
                 didLogScroll = true
                 let g = terminal?.gridSize()
-                Telemetry.debug("terminal_input", "scroll pan → SGR wheel to PTY", data: [
+                Telemetry.debug("terminal_input", "scroll pan → view move", data: [
                     "delta_points": "\(Int(deltaPoints))",
-                    "step_pts": "\(Int(Self.scrollPointsPerWheel))",
+                    "scale": "\(Double(scale))",
                     "terminal_live": "\(terminal != nil)",
                     "grid": g.map { "\($0.cols)x\($0.rows)" } ?? "nil",
-                    "cell_px": g.map { "\($0.cellWidthPx)x\($0.cellHeightPx)" } ?? "nil",
-                    "sent_col_row": "\(lastWheelCol),\(lastWheelRow)",
-                    "clamp_live_rows": "\(lastWheelLiveRows)",
                     "keyboard_up": "\(isFirstResponder)",
                 ])
             }
@@ -1060,68 +1061,6 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         #else
         _ = recognizer
         #endif
-    }
-
-    /// Accumulate incremental pan travel into whole mouse-wheel clicks and emit
-    /// one SGR (1006) wheel event per click to the broker PTY. `deltaPoints` is
-    /// the incremental finger movement since the last callback (positive = finger
-    /// moved DOWN). Finger DOWN reveals OLDER history → wheel UP (button 64);
-    /// finger UP → wheel DOWN (button 65). The remainder is carried across
-    /// callbacks so a slow drag still accumulates to a click and a fast drag's
-    /// leftover isn't dropped.
-    private func forwardWheel(deltaPoints: CGFloat, at point: CGPoint) {
-        let step = Self.scrollPointsPerWheel
-        guard step > 0 else { return }
-        scrollWheelRemainder += deltaPoints
-        // RATE-LIMIT: only emit a burst every `minWheelInterval`. The remainder
-        // keeps accumulating between bursts so no travel is lost; we just stop
-        // sending a wheel per `.changed`. Without this, a fast drag fires a
-        // wheel ~per-frame → tmux full-screen redraw per wheel → render-pump
-        // flood → main-thread hang + blank screen (the v0.0.96 regression).
-        let now = CACurrentMediaTime()
-        guard now - lastWheelSentAt >= Self.minWheelInterval else { return }
-        // Net whole ticks currently owed, capped so one burst can't dump a
-        // dozen redraws. Leftover stays in the remainder for the next burst.
-        let owed = Int(scrollWheelRemainder / step)
-        guard owed != 0 else { return }
-        lastWheelSentAt = now
-        let ticks = max(-Self.maxWheelTicksPerBurst, min(Self.maxWheelTicksPerBurst, owed))
-        scrollWheelRemainder -= CGFloat(ticks) * step
-        // SGR mouse coords are 1-based and tmux DROPS a wheel report whose
-        // row/col lands outside the pane. The keyboard resizes the grid
-        // (~32 rows up vs ~43 down), and `gridCell` clamps to possibly-stale
-        // instance metrics — so a touch-derived row could exceed tmux's
-        // current pane height and the wheel is silently ignored (the
-        // "keyboard-up won't scroll" bug). Clamp to the LIVE libghostty grid
-        // (which matches tmux's pane), so the coord is always in-bounds. For
-        // our single-pane sessions the exact cell doesn't matter for scroll
-        // direction — only that it lands in the pane.
-        #if canImport(GhosttyVT)
-        let live = terminal?.gridSize()
-        #else
-        let live: (cols: UInt16, rows: UInt16, cellWidthPx: UInt32, cellHeightPx: UInt32)? = nil
-        #endif
-        let liveCols = Int(live?.cols ?? UInt16(max(1, cols)))
-        let liveRows = Int(live?.rows ?? UInt16(max(1, rows)))
-        let cell = gridCell(at: point)
-        let cx = min(max(1, cell.col + 1), max(1, liveCols))
-        let cy = min(max(1, cell.row + 1), max(1, liveRows))
-        lastWheelCol = cx
-        lastWheelRow = cy
-        lastWheelLiveRows = liveRows
-        let code = ticks > 0 ? 64 : 65 // finger DOWN → wheel UP (64); UP → DOWN (65)
-        for _ in 0..<abs(ticks) {
-            sendWheel(buttonCode: code, col: cx, row: cy)
-        }
-    }
-
-    /// Encode and send a single xterm SGR (1006) mouse-wheel event:
-    /// `ESC [ < Cb ; Cx ; Cy M`. Wheel events use the press form `M`; there is
-    /// no release. `Cb` is 64 (wheel up) or 65 (wheel down); `Cx`/`Cy` are
-    /// 1-based cell column/row under the touch point.
-    private func sendWheel(buttonCode: Int, col: Int, row: Int) {
-        let seq = "\u{1B}[<\(buttonCode);\(col);\(row)M"
-        onInput(Data(seq.utf8))
     }
 
     private func handleSelectionPan(_ recognizer: UIPanGestureRecognizer) {
