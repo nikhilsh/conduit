@@ -75,13 +75,8 @@ final class TerminalAccessoryBar: UIInputView {
         Key(label: "↓", bytes: [0x1B, 0x5B, 0x42], repeats: true),
         Key(label: "←", bytes: [0x1B, 0x5B, 0x44], repeats: true),
         Key(label: "→", bytes: [0x1B, 0x5B, 0x43], repeats: true),
-        // Document navigation — standard xterm sequences: Home ESC[H,
-        // End ESC[F, PgUp ESC[5~, PgDn ESC[6~. Wide caps for the
-        // multi-glyph labels.
-        Key(label: "home", bytes: [0x1B, 0x5B, 0x48], wide: true),
-        Key(label: "end", bytes: [0x1B, 0x5B, 0x46], wide: true),
-        Key(label: "pgup", bytes: [0x1B, 0x5B, 0x35, 0x7E], wide: true),
-        Key(label: "pgdn", bytes: [0x1B, 0x5B, 0x36, 0x7E], wide: true),
+        // (Home/End/PgUp/PgDn removed — not useful on a touch terminal where
+        // scrolling is done by dragging; keeps the bar short.)
         Key(label: "^C", bytes: [0x03]),
         Key(label: "^D", bytes: [0x04]),
         Key(label: "^Z", bytes: [0x1A]),

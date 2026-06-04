@@ -158,6 +158,15 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// iOS scroll-to-dismiss idiom.
     private static let dismissDragThreshold: CGFloat = 36
 
+    /// Long-press selection: where it began, and whether it has turned into a
+    /// drag (which switches from word-select to a char-precise multi-line drag).
+    private var longPressStart: CGPoint = .zero
+    private var longPressDragging = false
+
+    /// A dark terminal keyboard (the translucent keyboard otherwise samples the
+    /// black surface behind the lifted grid and reads as pure black).
+    var keyboardAppearance: UIKeyboardAppearance = .dark
+
     /// Tail-diff cursor: how many bytes of the broker buffer we've fed so far.
     private var lastFedByteCount = 0
     /// Last grid reported to the broker, so `onResize` only fires on a change.
@@ -496,21 +505,36 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
 
     // MARK: - Selection / copy / paste
 
-    /// Long-press selects the WORD under the finger (libghostty double-click);
-    /// dragging then extends the selection; release presents the copy/paste menu.
-    /// The menu is presented even with no selection so Paste stays reachable.
+    /// Selection. A stationary long-press selects the WORD under the finger
+    /// (libghostty double-click). If the finger then drags, it becomes a
+    /// char-precise drag-selection from the press point to the finger — which
+    /// extends across lines (multi-line). Release presents the copy/paste menu
+    /// (also reachable for Paste with no selection).
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         let p = gesture.location(in: self)
         switch gesture.state {
         case .began:
-            // Drop libghostty focus so the press isn't swallowed by IME, then
-            // word-select under the point.
+            longPressStart = p
+            longPressDragging = false
             surface?.selectWord(x: Double(p.x), y: Double(p.y))
         case .changed:
+            let moved = hypot(p.x - longPressStart.x, p.y - longPressStart.y)
+            guard moved > 10 else { return }
+            if !longPressDragging {
+                // Switch to a held-button drag from the original press point so
+                // the selection grows char-by-char (and across lines) as the
+                // finger moves — `selectWord` left the button up.
+                longPressDragging = true
+                surface?.selectionBegin(x: Double(longPressStart.x), y: Double(longPressStart.y))
+            }
             surface?.selectionExtend(x: Double(p.x), y: Double(p.y))
         case .ended, .cancelled, .failed:
+            if longPressDragging {
+                surface?.selectionEnd(x: Double(p.x), y: Double(p.y))
+            }
             let selected = surface?.hasSelection ?? false
-            Telemetry.breadcrumb("terminal", "long-press selection", data: ["hasSelection": "\(selected)"])
+            Telemetry.breadcrumb("terminal", "long-press selection",
+                                 data: ["hasSelection": "\(selected)", "dragged": "\(longPressDragging)"])
             presentEditMenu(at: p)
         default:
             break
