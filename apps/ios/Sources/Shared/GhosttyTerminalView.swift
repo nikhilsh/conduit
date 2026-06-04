@@ -23,12 +23,14 @@ import GhosttyVT
 
 struct GhosttyTerminalTab: View {
     @Environment(SessionStore.self) private var store
+    @Environment(AppearanceStore.self) private var appearance
     let session: ProjectSession
     let isActive: Bool
 
     var body: some View {
         GhosttyTerminalView(
             isActive: isActive,
+            theme: appearance.terminalTheme,
             // Reading the observable buffer here establishes the SwiftUI
             // dependency: when the broker appends PTY bytes, the body
             // re-evaluates and `updateUIView` feeds the new tail.
@@ -45,9 +47,9 @@ struct GhosttyTerminalTab: View {
             }
         )
         .background(Color(
-            red: GhosttySurface.backgroundRGB.red,
-            green: GhosttySurface.backgroundRGB.green,
-            blue: GhosttySurface.backgroundRGB.blue))
+            red: appearance.terminalTheme.backgroundRGB.red,
+            green: appearance.terminalTheme.backgroundRGB.green,
+            blue: appearance.terminalTheme.backgroundRGB.blue))
         .ignoresSafeArea(.container, edges: .bottom)
     }
 }
@@ -57,6 +59,7 @@ struct GhosttyTerminalTab: View {
 /// `onResize` closes the grid loop back to `SessionStore`.
 struct GhosttyTerminalView: UIViewRepresentable {
     let isActive: Bool
+    let theme: GhosttyTheme
     let bufferProvider: () -> Data
     let bufferRevision: Int
     let onInput: (Data) -> Void
@@ -67,7 +70,7 @@ struct GhosttyTerminalView: UIViewRepresentable {
         let view = GhosttySurfaceView(frame: .zero)
         view.onInput = onInput
         view.onResize = onResize
-        view.configure()
+        view.configure(theme: theme)
         view.setActive(isActive)
         // Feed whatever the buffer already holds so a tab-switch-back reattach
         // doesn't show an empty grid.
@@ -78,6 +81,7 @@ struct GhosttyTerminalView: UIViewRepresentable {
     func updateUIView(_ view: GhosttySurfaceView, context: Context) {
         view.onInput = onInput
         view.onResize = onResize
+        view.setTheme(theme)
         view.setActive(isActive)
         view.syncBuffer(bufferProvider())
     }
@@ -160,6 +164,8 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// Downward finger travel (points) that dismisses the keyboard mid-pan — the
     /// iOS scroll-to-dismiss idiom.
     private static let dismissDragThreshold: CGFloat = 36
+    /// Extra breathing room below the last row, on top of the home-indicator inset.
+    private static let bottomPadding: CGFloat = 8
 
     /// Long-press selection: where it began, and whether it has turned into a
     /// drag (which switches from word-select to a char-precise multi-line drag).
@@ -170,14 +176,24 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// black surface behind the lifted grid and reads as pure black).
     var keyboardAppearance: UIKeyboardAppearance = .dark
 
-    /// The terminal's own background color (matches libghostty's themed `background`)
-    /// so the area the keyboard reveals — and any sliver around the grid — matches
-    /// the terminal instead of being pure black.
-    static let terminalBackground = UIColor(
-        red: CGFloat(GhosttySurface.backgroundRGB.red),
-        green: CGFloat(GhosttySurface.backgroundRGB.green),
-        blue: CGFloat(GhosttySurface.backgroundRGB.blue),
-        alpha: 1)
+    /// Current terminal theme — drives the surface palette and the host view's
+    /// background color (so the keyboard-revealed band + any sliver around the
+    /// grid match the terminal rather than being pure black).
+    private var currentTheme: GhosttyTheme = .ghosttyDark
+
+    private func themeBackgroundColor() -> UIColor {
+        let c = currentTheme.backgroundRGB
+        return UIColor(red: CGFloat(c.red), green: CGFloat(c.green), blue: CGFloat(c.blue), alpha: 1)
+    }
+
+    private func applyThemeBackground() {
+        let color = themeBackgroundColor()
+        backgroundColor = color
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.backgroundColor = color.cgColor
+        CATransaction.commit()
+    }
 
     /// Tail-diff cursor: how many bytes of the broker buffer we've fed so far.
     private var lastFedByteCount = 0
@@ -214,7 +230,7 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = Self.terminalBackground
+        backgroundColor = themeBackgroundColor()
         isOpaque = true
         NotificationCenter.default.addObserver(
             self, selector: #selector(appDidBackground),
@@ -252,18 +268,27 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// Create the surface with this view pinned as libghostty's host. The
     /// representable hands us a `.zero` frame, so seed a non-zero pixel size;
     /// `layoutSubviews` pushes the real bounds once we're laid out.
-    func configure() {
+    func configure(theme: GhosttyTheme) {
+        currentTheme = theme
+        applyThemeBackground()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        layer.backgroundColor = Self.terminalBackground.cgColor
         layer.contentsScale = traitCollection.displayScale
         CATransaction.commit()
 
         let scale = Double(contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale)
         let (pw, ph) = pixelSize(scale: scale)
-        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale)
+        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale, theme: theme)
         surface?.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
         Telemetry.breadcrumb("terminal", "GhosttySurface attached", data: ["px": "\(pw)x\(ph)"])
+    }
+
+    /// Live theme change from the representable (Settings picker).
+    func setTheme(_ theme: GhosttyTheme) {
+        guard theme != currentTheme else { return }
+        currentTheme = theme
+        surface?.setTheme(theme)
+        applyThemeBackground()
     }
 
     /// Feed the broker buffer to libghostty by tail diff. The buffer grows on
@@ -296,7 +321,7 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
         }
         let scale = Double(contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale)
         let (pw, ph) = pixelSize(scale: scale)
-        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale)
+        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale, theme: currentTheme)
         surface?.onReceiveInput = { [weak self] bytes in self?.onInput(bytes) }
         lastFedByteCount = 0
         lastGrid = nil
@@ -339,8 +364,13 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     private func sizeLayer() {
         guard bounds.width > 0, bounds.height > 0 else { return }
         let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
-        // Reserve the keyboard's overlap so the rendered grid sits ABOVE it.
-        let effectiveHeight = max(1, bounds.height - keyboardOverlap)
+        // Reserve the keyboard overlap (when up) or the bottom safe-area inset +
+        // a little breathing room (when down) so the last row clears the home
+        // indicator instead of sitting flush against the bottom edge. The
+        // reserved band shows the terminal background, so it reads as padding.
+        let safeBottom = max(safeAreaInsets.bottom, window?.safeAreaInsets.bottom ?? 0)
+        let bottomReserve = max(keyboardOverlap, safeBottom + Self.bottomPadding)
+        let effectiveHeight = max(1, bounds.height - bottomReserve)
         let rect = CGRect(x: 0, y: 0, width: bounds.width, height: effectiveHeight)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -378,6 +408,11 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        sizeLayer()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
         sizeLayer()
     }
 

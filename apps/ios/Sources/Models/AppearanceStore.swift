@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import SwiftUI
 import UIKit
+import GhosttyVT
 
 /// User-tunable appearance settings: chat body font, theme override,
 /// and turn-collapse preference. Persisted to `UserDefaults.standard`
@@ -97,6 +98,8 @@ final class AppearanceStore {
         static let neonPalette = "conduit.appearance.neonPalette"
         /// Glow on/off toggle for the Neon Terminal theme system.
         static let neonGlow = "conduit.appearance.neonGlow"
+        /// Color theme rawValue for the native (libghostty) terminal.
+        static let terminalTheme = "conduit.appearance.terminalTheme"
     }
 
     /// Clamp range for [bodyPointSize]. Lower bound keeps captions
@@ -146,6 +149,12 @@ final class AppearanceStore {
         didSet { defaults.set(neonGlow, forKey: Keys.neonGlow) }
     }
 
+    /// Color theme for the native (libghostty) terminal. Persisted by rawValue;
+    /// applied live by `GhosttyTerminalView` (colors-only config update).
+    var terminalTheme: GhosttyTheme {
+        didSet { defaults.set(terminalTheme.rawValue, forKey: Keys.terminalTheme) }
+    }
+
     /// Base point size the typography ramp (`ConduitTypography`)
     /// scales off. Setter clamps into [bodyPointSizeRange] so an
     /// out-of-range value (corrupted defaults, future migration) can't
@@ -189,6 +198,8 @@ final class AppearanceStore {
         self.neonPalette = (defaults.string(forKey: Keys.neonPalette)
             .flatMap(NeonPaletteChoice.init(rawValue:))) ?? .ice
         self.neonGlow = defaults.object(forKey: Keys.neonGlow) as? Bool ?? true
+        self.terminalTheme = (defaults.string(forKey: Keys.terminalTheme)
+            .flatMap(GhosttyTheme.init(rawValue:))) ?? .ghosttyDark
     }
 
     /// SwiftUI `.font` value to use for chat body text.
