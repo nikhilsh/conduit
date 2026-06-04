@@ -1023,6 +1023,14 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         #if canImport(GhosttyVT)
         switch recognizer.state {
         case .began:
+            // Scrolling with the keyboard UP hangs the main thread: the
+            // keyboard-shrunk grid + keyboard-avoidance + copy-mode redraws
+            // drive a SwiftUI/Metal relayout storm (symbolicated App Hang =
+            // RenderBox/Metal/UIKit frames, no app frames). Keyboard-DOWN
+            // scroll is clean. So dismiss the keyboard the moment a scroll
+            // starts — standard "scroll dismisses keyboard" mobile behavior —
+            // which sidesteps the hang AND fixes "keyboard won't dismiss".
+            if isFirstResponder { _ = resignFirstResponder() }
             scrollPanLastY = 0
             scrollWheelRemainder = 0
             lastWheelSentAt = 0 // first .changed sends immediately, no throttle lag
