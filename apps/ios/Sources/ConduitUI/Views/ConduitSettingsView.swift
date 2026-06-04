@@ -1,4 +1,5 @@
 import SwiftUI
+import GhosttyVT
 
 // MARK: - ConduitSettingsView
 //
@@ -49,6 +50,7 @@ extension ConduitUI {
                             fontSizeSection
                             conversationSection
                             serversSection
+                            terminalThemeSection
                             aboutSection
                         }
                         .padding(.horizontal, 16)
@@ -361,6 +363,36 @@ extension ConduitUI {
                         .padding(.vertical, 3)
                         .background(Capsule().fill(neon.accent.opacity(0.22)))
                         .overlay(Capsule().stroke(neon.accent.opacity(0.5), lineWidth: 1))
+                }
+            }
+        }
+
+        /// Color theme for the native (libghostty) terminal. Applies live to the
+        /// Terminal tab via `AppearanceStore.terminalTheme`.
+        private var terminalThemeSection: some View {
+            @Bindable var appearance = appearance
+            return sectionCard(title: "Terminal") {
+                VStack(spacing: 0) {
+                    ForEach(GhosttyTheme.allCases) { theme in
+                        Button {
+                            appearance.terminalTheme = theme
+                        } label: {
+                            ConduitUI.ListRow(
+                                icon: "paintpalette.fill",
+                                title: theme.label,
+                                subtitle: nil,
+                                iconTint: neon.accent
+                            ) {
+                                if appearance.terminalTheme == theme {
+                                    Image(systemName: "checkmark")
+                                        .font(.footnote.weight(.bold))
+                                        .foregroundStyle(neon.accent)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        rowDivider(after: theme, in: GhosttyTheme.allCases)
+                    }
                 }
             }
         }
