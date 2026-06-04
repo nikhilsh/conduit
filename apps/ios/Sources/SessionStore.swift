@@ -542,6 +542,11 @@ final class SessionStore {
                 try await newClient.connect(delegate: newDelegate)
                 self.harness = .linked
                 self.refreshSessions()
+                // Resume agents that kept running on the broker while we were
+                // gone (cold launch / app termination). The broker keeps
+                // sessions alive across a client disconnect; this reopens the
+                // WS to each so they come back live instead of looking quit.
+                self.reattachLiveSessions()
             } catch {
                 let detail = Self.describe(error)
                 self.harness = .failed(detail)
@@ -2368,6 +2373,35 @@ final class SessionStore {
     /// Idempotent: if the session is already live locally we just
     /// `switchTo` and return. Assumes the caller has already selected
     /// the right saved server.
+    /// Reattach every session that was still live on the CURRENT server, so the
+    /// agents the broker kept running resume after a cold launch / app
+    /// termination (option B: resume all, not just the last). `joinSession`
+    /// reopens the WS to the existing broker session; the broker keeps it alive
+    /// across our disconnect. Idempotent: skips sessions already live locally,
+    /// and `join_session` is a no-op broker-side for an already-open handle. Does
+    /// NOT navigate — the user stays wherever they are; the rows just go live.
+    func reattachLiveSessions() {
+        let serverID = savedHistoryServerID
+        let live = SavedSessionsStore.shared.sessions.filter {
+            $0.serverID == serverID && $0.status == .live
+        }
+        guard !live.isEmpty, client != nil else { return }
+        Task { @MainActor in
+            try? await waitUntilCommandReady()
+            guard let client else { return }
+            for saved in live where !sessions.contains(where: { $0.id == saved.id }) {
+                if sessionLifecycle[saved.id] == nil {
+                    sessionLifecycle[saved.id] = .creating
+                }
+                // Seed the terminal from persisted scrollback so the row paints
+                // instantly; the broker snapshot replaces it once the join lands.
+                hydrateTerminalBuffer(saved.id)
+                try? await client.joinSession(sessionId: saved.id, assistant: saved.agent)
+            }
+            refreshSessions()
+        }
+    }
+
     func attachLiveSession(sessionID: String, assistant: String) {
         if sessions.contains(where: { $0.id == sessionID }) {
             switchTo(sessionID: sessionID)
