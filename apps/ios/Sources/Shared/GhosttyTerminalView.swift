@@ -66,11 +66,11 @@ struct GhosttyTerminalTab: View {
                 store.resize(sessionID: session.id, rows: UInt16(rows), cols: UInt16(cols))
             }
         )
-        // Keyboard avoidance is owned by `GhosttyTerminalHostController` (a
-        // keyboard-synced bottom constraint + pre-render, geistty's approach),
-        // NOT SwiftUI — so no `.padding`/keyboard observers here. The host view
-        // extends to the window bottom (the parent ZStack already ignores
-        // `.keyboard`); the controller lifts the surface above the keyboard.
+        // Full-height terminal extending under the home indicator. The parent
+        // ZStack ignores `.keyboard`, so when the keyboard is up it overlays the
+        // bottom rows; dismiss it via the accessory-bar `⌄` cap or a drag-down
+        // (handleScrollPan). (The geistty UIViewController lift was reverted —
+        // it rendered half-height + crashed; a proper lift is future work.)
         .ignoresSafeArea(.container, edges: .bottom)
     }
 }
@@ -79,7 +79,7 @@ struct GhosttyTerminalTab: View {
 /// `WKTerminalView`'s contract (bufferProvider + revision counter
 /// drive the byte diff; onInput / onResize close the loop with
 /// SessionStore) so the swap is a one-line branch in ProjectView.
-struct GhosttyTerminalView: UIViewControllerRepresentable {
+struct GhosttyTerminalView: UIViewRepresentable {
     /// Drives the surface's occlusion + draw-pump gating. The view stays
     /// mounted across tab switches now (so libghostty's surface is never
     /// torn down + recreated mid-use), so `isActive` is how the host tells
@@ -110,14 +110,9 @@ struct GhosttyTerminalView: UIViewControllerRepresentable {
     let onInput: (Data) -> Void
     let onResize: (Int, Int) -> Void
 
-    func makeUIViewController(context: Context) -> GhosttyTerminalHostController {
-        // Breadcrumb the terminal mount: this does synchronous CALayer work on
-        // attach, and mounting it during a detail-pane teardown was the
-        // post-session-create EXC_BAD_ACCESS. If that crash recurs, this crumb
-        // pins the terminal mount as the trigger.
-        Telemetry.breadcrumb("terminal", "GhosttyTerminalView makeUIViewController")
-        let controller = GhosttyTerminalHostController()
-        let view = controller.renderView
+    func makeUIView(context: Context) -> GhosttyRenderView {
+        Telemetry.breadcrumb("terminal", "GhosttyTerminalView makeUIView")
+        let view = GhosttyRenderView(frame: .zero)
         view.onInput = onInput
         view.onResize = onResize
         // Seed the libghostty font size + theme BEFORE the surface is
@@ -127,12 +122,10 @@ struct GhosttyTerminalView: UIViewControllerRepresentable {
         // First update: feed whatever the buffer already holds so a
         // tab-switch-back reattach doesn't show an empty grid.
         view.feed(bufferProvider())
-        return controller
+        return view
     }
 
-    func updateUIViewController(_ controller: GhosttyTerminalHostController, context: Context) {
-        let view = controller.renderView
-        controller.isActive = isActive
+    func updateUIView(_ view: GhosttyRenderView, context: Context) {
         view.onInput = onInput
         view.onResize = onResize
         // Tab visibility → renderer occlusion + draw-pump gating.
@@ -169,92 +162,17 @@ struct GhosttyTerminalView: UIViewControllerRepresentable {
     /// stack (`CA::Context::commit_transaction` → `apprt.surface.Mailbox.push`)
     /// shows can fire mid-flush. Tearing the surface down here, before the
     /// view is released, closes the use-after-free window deterministically.
-    static func dismantleUIViewController(_ controller: GhosttyTerminalHostController, coordinator: ()) {
-        controller.renderView.prepareForRemoval()
+    static func dismantleUIView(_ view: GhosttyRenderView, coordinator: ()) {
+        view.prepareForRemoval()
     }
 }
 
-/// Hosts the libghostty surface and owns soft-keyboard avoidance the way the
-/// reference ghostty-iOS terminals do (esp. geistty): a bottom constraint
-/// animated in sync with the keyboard, with a PRE-RENDER at the final size
-/// before the animation so libghostty + tmux reflow ONCE rather than on every
-/// animation frame (the resize flash). SwiftUI does NOT pad/avoid — the
-/// `GhosttyTerminalView` representable opts out — so the Chat sibling's own
-/// keyboard handling is untouched and this is the single source of truth.
-final class GhosttyTerminalHostController: UIViewController {
-    let renderView = GhosttyRenderView(frame: .zero)
-    /// Mirrors the SwiftUI tab's active state. When false (terminal hidden
-    /// behind Chat/Browser), we ignore keyboard notifications so Chat's
-    /// keyboard doesn't drive the hidden terminal's layout.
-    var isActive = true
-    private var bottomConstraint: NSLayoutConstraint!
-    private var currentOverlap: CGFloat = -1
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .clear
-        renderView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(renderView)
-        bottomConstraint = renderView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        NSLayoutConstraint.activate([
-            renderView.topAnchor.constraint(equalTo: view.topAnchor),
-            renderView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            renderView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bottomConstraint,
-        ])
-        let nc = NotificationCenter.default
-        nc.addObserver(self, selector: #selector(keyboardChange(_:)),
-                       name: UIResponder.keyboardWillShowNotification, object: nil)
-        nc.addObserver(self, selector: #selector(keyboardChange(_:)),
-                       name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        nc.addObserver(self, selector: #selector(keyboardHide(_:)),
-                       name: UIResponder.keyboardWillHideNotification, object: nil)
-    }
-
-    @objc private func keyboardChange(_ note: Notification) { applyKeyboard(note, hiding: false) }
-    @objc private func keyboardHide(_ note: Notification) { applyKeyboard(note, hiding: true) }
-
-    private func applyKeyboard(_ note: Notification, hiding: Bool) {
-        guard isActive, isViewLoaded, view.window != nil,
-              let info = note.userInfo,
-              let endFrame = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-        else { return }
-        let duration = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
-        let curveRaw = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 0
-
-        // Real overlap of the keyboard with OUR view — never `endFrame.height`
-        // (that ignores split keyboards, hardware-keyboard accessory-only bars,
-        // and our view not spanning the full screen). geistty's exact math.
-        let frameInView = view.convert(endFrame, from: nil)
-        let overlap = hiding ? 0 : max(0, view.bounds.maxY - frameInView.minY)
-        guard overlap != currentOverlap else { return }
-        currentOverlap = overlap
-
-        // PRE-RENDER at the final size BEFORE animating → libghostty + tmux
-        // reflow once, not per frame. `isKeyboardAnimating` then suppresses the
-        // per-frame grid resize that `layoutSubviews` would otherwise do as the
-        // constraint animates (sublayer still tracks for a smooth slide).
-        let finalHeight = max(0, view.bounds.height - overlap)
-        renderView.isKeyboardAnimating = true
-        renderView.preRender(toHeight: finalHeight)
-
-        let opts = UIView.AnimationOptions(rawValue: UInt(curveRaw << 16))
-        UIView.animate(withDuration: duration, delay: 0, options: opts, animations: {
-            self.bottomConstraint.constant = -overlap
-            self.view.layoutIfNeeded()
-        }, completion: { [weak self] _ in
-            guard let self else { return }
-            self.renderView.isKeyboardAnimating = false
-            // Final authoritative resize at the settled bounds + snap the
-            // viewport to the prompt (tmux reflow can leave a gap the
-            // direct-shell reference apps don't hit).
-            self.renderView.setNeedsLayout()
-            self.renderView.layoutIfNeeded()
-            self.renderView.snapToBottom()
-        })
-    }
-}
-
+/// (Removed) `GhosttyTerminalHostController` — the geistty-style
+/// UIViewController + keyboard-synced bottom constraint introduced a
+/// half-height render + an EXC_BAD_ACCESS that couldn't be pinned without a
+/// device, so the host reverted to the stable `UIViewRepresentable` above.
+/// Soft-keyboard dismissal is handled by the accessory bar `⌄` cap and the
+/// drag-down-to-dismiss gesture in `handleScrollPan`.
 /// Native iOS UIView that renders the Ghostty terminal grid via
 /// CoreText, hosts the soft-keyboard accessory bar, and forwards
 /// keystrokes back to the harness. Lives at the file level (not nested
@@ -382,6 +300,10 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// so each `.changed` callback feeds libghostty only the INCREMENTAL
     /// delta since the last callback.
     private var scrollPanLastY: CGFloat = 0
+    /// Downward finger travel (points) that dismisses the soft keyboard mid-pan
+    /// when it's up — the iOS scroll-to-dismiss idiom. Small so a deliberate
+    /// drag-down dismisses promptly, large enough that scroll jitter doesn't.
+    private static let dismissDragThreshold: CGFloat = 36
     /// The one-finger scroll pan, kept so the gesture delegate can gate it to
     /// vertical-dominant drags (horizontal finger-scroll is disabled).
     private weak var scrollPanGesture: UIPanGestureRecognizer?
@@ -947,7 +869,10 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// final size instead of per animation frame (geistty's anti-flash trick).
     func preRender(toHeight finalHeight: CGFloat) {
         #if canImport(GhosttyVT)
-        guard bounds.width > 0, finalHeight > 0 else { return }
+        // Only poke libghostty when the surface is created AND not freed —
+        // resizing a mid-creation / torn-down surface is an EXC_BAD_ACCESS
+        // (the keyboard observer can fire in either window).
+        guard terminal?.isAlive == true, window != nil, bounds.width > 0, finalHeight > 0 else { return }
         let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
         let finalRect = CGRect(x: 0, y: 0, width: bounds.width, height: finalHeight)
         CATransaction.begin()
@@ -973,7 +898,19 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// recent rows fill the shrunk view instead of leaving a blank gap.
     func snapToBottom() {
         #if canImport(GhosttyVT)
+        guard terminal?.isAlive == true, window != nil else { return }
         terminal?.scrollToBottom()
+        #endif
+    }
+
+    /// Whether the libghostty surface is created and not yet freed. The host
+    /// controller gates keyboard-driven resizes on this to avoid poking a
+    /// mid-creation / torn-down surface.
+    var isSurfaceAlive: Bool {
+        #if canImport(GhosttyVT)
+        return terminal?.isAlive == true
+        #else
+        return false
         #endif
     }
 
@@ -1129,6 +1066,14 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             let deltaPoints = translationY - scrollPanLastY
             scrollPanLastY = translationY
             guard deltaPoints != 0 else { return }
+            // DRAG-DOWN-TO-DISMISS: with the keyboard up, a downward drag (finger
+            // toward the keyboard, past a small threshold) dismisses it — the
+            // standard iOS scroll-to-dismiss idiom. After it resigns, the same
+            // gesture falls through to normal view-move scrolling.
+            if isFirstResponder, translationY > Self.dismissDragThreshold {
+                _ = resignFirstResponder()
+                return
+            }
             // VIEW-MOVE: pan libghostty's OWN scrollback viewport — finger drag
             // moves the rendered view, nothing is sent to the program. This
             // works because the broker now runs tmux WITHOUT the alternate
