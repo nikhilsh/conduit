@@ -1287,6 +1287,14 @@ public final class Terminal {
         #endif
     }
 
+    /// Snap the viewport to the newest output (prompt). Used after a
+    /// keyboard-driven resize so the prompt fills the shrunk view.
+    public func scrollToBottom() {
+        #if canImport(libghostty)
+        surface?.scrollToBottom()
+        #endif
+    }
+
     /// The grid (cols/rows + cell px) libghostty derived from the current
     /// surface pixel size. The host reads this after pushing a new size so
     /// it can resize the remote PTY to libghostty's exact grid instead of
