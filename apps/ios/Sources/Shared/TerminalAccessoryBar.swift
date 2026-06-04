@@ -32,6 +32,12 @@ final class TerminalAccessoryBar: UIInputView {
     /// path identical for both sources.
     var onSend: ((Data) -> Void)?
 
+    /// Called when the user taps the dismiss-keyboard cap (the leading `⌄`).
+    /// Wired to `resignFirstResponder` on the terminal — the soft keyboard has
+    /// no built-in dismiss on a `UIKeyInput` view, so this cap is the only way
+    /// to put it away once scroll no longer dismisses it (view-move scrolling).
+    var onDismiss: (() -> Void)?
+
     private let barHeight: CGFloat = 48
 
     /// Press-and-hold key-repeat timing. Matches a hardware keyboard's
@@ -49,12 +55,17 @@ final class TerminalAccessoryBar: UIInputView {
         var wide: Bool = false
         /// Press-and-hold auto-repeats this key (backspace + arrows).
         var repeats: Bool = false
+        /// Dismiss-keyboard cap: calls `onDismiss` instead of sending bytes.
+        var isDismiss: Bool = false
     }
 
     // Ordered the way a thumb reaches for them: navigation/control
     // first, then the shell symbols. The row scrolls, so the list can
     // be generous without crowding.
     private static let keys: [Key] = [
+        // Leading dismiss-keyboard cap (chevron-down = "hide keyboard"). First
+        // so it's visible at rest before the row is scrolled.
+        Key(label: "⌄", bytes: [], isDismiss: true),
         Key(label: "esc", bytes: [0x1B], wide: true),
         Key(label: "tab", bytes: [0x09], wide: true),
         // Backspace: DEL (0x7F) — same byte `GhosttyRenderView.deleteBackward`
@@ -214,7 +225,13 @@ final class TerminalAccessoryBar: UIInputView {
         button.titleLabel?.lineBreakMode = .byClipping
         button.titleLabel?.adjustsFontSizeToFitWidth = false
 
-        if key.repeats {
+        if key.isDismiss {
+            // Dismiss the soft keyboard. No bytes, no haptic-as-keystroke.
+            button.addAction(UIAction { [weak self] _ in
+                self?.onDismiss?()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }, for: .touchUpInside)
+        } else if key.repeats {
             // Press-and-hold auto-repeat. `.touchDown` fires the first
             // byte immediately and arms the repeat timer; the lift /
             // drag-out / cancel events tear it down. We deliberately do

@@ -452,6 +452,7 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private lazy var accessoryBar: TerminalAccessoryBar = {
         let bar = TerminalAccessoryBar()
         bar.onSend = { [weak self] bytes in self?.onInput(bytes) }
+        bar.onDismiss = { [weak self] in _ = self?.resignFirstResponder() }
         return bar
     }()
 
@@ -878,6 +879,29 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             name: UIApplication.willEnterForegroundNotification,
             object: nil
         )
+        // When the soft keyboard appears, the SwiftUI host shrinks our bounds
+        // (manual keyboardInset) → the grid reflows smaller. The reference
+        // ghostty terminals (gterm/clauntty/geistty) rely on that reflow to keep
+        // the prompt flush above the keyboard — but they run a DIRECT shell. We
+        // run tmux, whose reflow-on-resize can leave the cursor off the bottom
+        // (content at top + a blank gap). Snap the viewport to the bottom once
+        // the resize settles so the prompt + recent rows fill the shrunk view.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillShow),
+            name: UIResponder.keyboardWillShowNotification,
+            object: nil
+        )
+    }
+
+    @objc private func handleKeyboardWillShow() {
+        #if canImport(GhosttyVT)
+        // Defer past the keyboard/inset animation + grid reflow, then pin bottom.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self, self.isFirstResponder else { return }
+            self.terminal?.scrollToBottom()
+        }
+        #endif
     }
 
     @objc private func handleAppDidEnterBackground() {

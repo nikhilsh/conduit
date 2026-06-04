@@ -978,6 +978,18 @@ public final class GhosttySurface {
         GhosttyApp.shared.tick()
     }
 
+    /// Snap the viewport to the very bottom (newest output / prompt). A huge
+    /// negative precision delta scrolls down and clamps at the buffer end.
+    /// Used after a keyboard-driven resize so the most recent rows fill the
+    /// shrunk view instead of leaving the prompt at the top with a blank gap.
+    public func scrollToBottom() {
+        guard let surface = _surface else { return }
+        let mods = GhosttySurface.scrollMods(precision: true, momentum: 0)
+        ghostty_surface_mouse_scroll(surface, 0, -1_000_000, mods)
+        ghostty_surface_refresh(surface)
+        GhosttyApp.shared.tick()
+    }
+
     /// Push the host view's pixel size + scale. Cell grid + reflow happen
     /// inside libghostty. Mirrors clauntty's `sizeDidChange`: set content
     /// scale first, then size.
