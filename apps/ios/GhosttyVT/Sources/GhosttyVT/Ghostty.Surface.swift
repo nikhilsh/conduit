@@ -179,6 +179,51 @@ public final class GhosttySurface {
         ghostty_surface_set_occlusion(s, visible)
     }
 
+    // MARK: - Selection (libghostty-native, driven by host gestures)
+    //
+    // We forward touch points to libghostty as left-mouse press/drag/release so
+    // its own renderer highlights the selection; `readSelection` then returns the
+    // selected text for the clipboard. Coordinates are the host view's points
+    // (libghostty applies the content scale it was given).
+
+    /// Begin a selection at a point (left-button press).
+    public func selectionBegin(x: Double, y: Double) {
+        guard let s = surface else { return }
+        ghostty_surface_mouse_pos(s, x, y, GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+        ghostty_surface_refresh(s)
+    }
+
+    /// Extend the selection to a point (drag).
+    public func selectionExtend(x: Double, y: Double) {
+        guard let s = surface else { return }
+        ghostty_surface_mouse_pos(s, x, y, GHOSTTY_MODS_NONE)
+        ghostty_surface_refresh(s)
+    }
+
+    /// Finish the selection (left-button release).
+    public func selectionEnd(x: Double, y: Double) {
+        guard let s = surface else { return }
+        ghostty_surface_mouse_pos(s, x, y, GHOSTTY_MODS_NONE)
+        _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+        ghostty_surface_refresh(s)
+    }
+
+    public var hasSelection: Bool {
+        guard let s = surface else { return false }
+        return ghostty_surface_has_selection(s)
+    }
+
+    /// The currently selected text, or nil if there's no selection.
+    public func readSelection() -> String? {
+        guard let s = surface else { return nil }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(s, &text) else { return nil }
+        defer { ghostty_surface_free_text(s, &text) }
+        guard let ptr = text.text, text.text_len > 0 else { return nil }
+        return String(cString: ptr)
+    }
+
     /// The grid libghostty derived from the current pixel size + its own font
     /// metrics (`ghostty_surface_size`) — the authoritative cols/rows the
     /// renderer paints at, which the host must drive the remote PTY to (Stage 3).

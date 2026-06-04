@@ -125,11 +125,20 @@ enum TerminalInputBytes {
     static let arrowDown = Data([0x1B, 0x5B, 0x42])  // ESC [ B
     static let arrowLeft = Data([0x1B, 0x5B, 0x44])  // ESC [ D
     static let arrowRight = Data([0x1B, 0x5B, 0x43]) // ESC [ C
+
+    /// Paste payload wrapped in bracketed-paste markers (ESC[200~ … ESC[201~) so
+    /// the receiving app treats it as literal input (no vim/emacs auto-indent).
+    static func bracketedPaste(_ s: String) -> Data {
+        var data = Data("\u{1B}[200~".utf8)
+        data.append(text(s))
+        data.append(contentsOf: "\u{1B}[201~".utf8)
+        return data
+    }
 }
 
 /// UIView host for one libghostty surface. Plain `CALayer` backing — libghostty
 /// attaches its IOSurfaceLayer as a sublayer.
-final class GhosttySurfaceView: UIView, UIKeyInput {
+final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegate {
     private var surface: GhosttySurface?
     /// The IOSurfaceLayer libghostty parented on us (held strongly via the
     /// superlayer relationship; this is a tracking reference).
@@ -159,6 +168,8 @@ final class GhosttySurfaceView: UIView, UIKeyInput {
         return bar
     }()
 
+    private lazy var editMenuInteraction = UIEditMenuInteraction(delegate: self)
+
     /// Weak indirection so the `CADisplayLink` (retained by the main runloop)
     /// does not retain the view.
     private final class FrameDisplayLinkProxy {
@@ -183,6 +194,11 @@ final class GhosttySurfaceView: UIView, UIKeyInput {
         // Tap to focus → show the soft keyboard + give libghostty key focus.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
         addGestureRecognizer(tap)
+        // Long-press → drag to select text (forwarded to libghostty as mouse
+        // events); release presents the copy/paste menu.
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        addGestureRecognizer(longPress)
+        addInteraction(editMenuInteraction)
     }
 
     @available(*, unavailable)
@@ -450,6 +466,63 @@ final class GhosttySurfaceView: UIView, UIKeyInput {
 
     @objc private func handleEsc() { onInput(TerminalInputBytes.escape) }
     @objc private func handleTab() { onInput(TerminalInputBytes.tab) }
+
+    // MARK: - Selection / copy / paste
+
+    /// Long-press drag → libghostty-native selection. Press begins, drag extends,
+    /// release finishes and presents the copy/paste menu.
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        let p = gesture.location(in: self)
+        switch gesture.state {
+        case .began:
+            _ = becomeFirstResponder()
+            surface?.selectionBegin(x: Double(p.x), y: Double(p.y))
+        case .changed:
+            surface?.selectionExtend(x: Double(p.x), y: Double(p.y))
+        case .ended, .cancelled, .failed:
+            surface?.selectionEnd(x: Double(p.x), y: Double(p.y))
+            presentEditMenu(at: p)
+        default:
+            break
+        }
+    }
+
+    private func presentEditMenu(at point: CGPoint) {
+        let config = UIEditMenuConfiguration(identifier: nil, sourcePoint: point)
+        editMenuInteraction.presentEditMenu(with: config)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        switch action {
+        case #selector(copy(_:)):
+            return surface?.hasSelection == true
+        case #selector(paste(_:)):
+            return UIPasteboard.general.hasStrings
+        default:
+            return super.canPerformAction(action, withSender: sender)
+        }
+    }
+
+    override func copy(_ sender: Any?) {
+        guard let text = surface?.readSelection(), !text.isEmpty else { return }
+        UIPasteboard.general.string = text
+    }
+
+    override func paste(_ sender: Any?) {
+        guard let text = UIPasteboard.general.string else { return }
+        onInput(TerminalInputBytes.bracketedPaste(text))
+    }
+
+    /// Return nil so UIKit builds the menu from the suggested system actions
+    /// (filtered by `canPerformAction`). Returning a custom menu here is what
+    /// triggered the old `-[__NSCFNumber bounds]` crash.
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction,
+        menuFor configuration: UIEditMenuConfiguration,
+        suggestedActions: [UIMenuElement]
+    ) -> UIMenu? {
+        nil
+    }
 
     // MARK: - Teardown
 
