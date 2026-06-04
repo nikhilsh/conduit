@@ -48,17 +48,27 @@ func terminalShellArgv(tmuxPath, sessionName string) []string {
 	// (matching the env we set: TERM, PS1) and so a clean tmux detach
 	// (prefix-d) drops the user back to a usable shell rather than EOF.
 	//
-	// We chain two global `set -g` options onto the same tmux invocation so
-	// they apply server-wide (all sessions) and run on BOTH the create and
-	// the `-A` attach path:
-	//   - `mouse on`           lets tmux turn mobile touch/wheel scroll into
-	//                          copy-mode scrolling of its own history.
-	//   - `history-limit 50000` gives a much deeper scrollback buffer.
+	// We `start-server` first, then set options, THEN attach via new-session —
+	// so the options are in effect BEFORE the client attaches (some, notably
+	// the alt-screen suppression below, only take hold if set pre-attach):
+	//   - `terminal-overrides ',*:smcup@:rmcup@'` strips the outer terminal's
+	//     smcup/rmcup so tmux does NOT switch the client to the *alternate*
+	//     screen (no `ESC[?1049h`). It then runs on the MAIN screen, so the
+	//     client terminal (libghostty / the Android emulator / xterm.js) keeps
+	//     its OWN scrollback and finger-scroll is a passive view-move instead
+	//     of being forwarded to tmux copy-mode.
+	//   - `mouse off`           we want native client-side view scrolling, not
+	//                          tmux copy-mode wheel forwarding (which also
+	//                          caused the Android SGR mouse-report garbage).
+	//   - `status off`          hides tmux's status bar so it can't land in the
+	//                          client's scrollback now that we're on the main
+	//                          screen.
+	//   - `history-limit 50000` deep scrollback buffer.
 	// The separator between tmux commands is tmux's own `;`, which must reach
 	// tmux *literally* — so we escape it as `\;` in the shell string (bash
 	// would otherwise eat a bare `;` as its own command separator). The final
 	// `; exec bash -l` is intentionally a REAL (unescaped) bash separator so
 	// bash exec's a login shell once tmux detaches/exits, exactly as before.
-	cmd := tmuxPath + " new-session -A -s " + sessionName + ` \; set -g mouse on \; set -g history-limit 50000; exec bash -l`
+	cmd := tmuxPath + ` start-server \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s ` + sessionName + `; exec bash -l`
 	return []string{"bash", "-lc", cmd}
 }
