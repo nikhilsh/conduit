@@ -393,6 +393,10 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// so each `.changed` callback feeds libghostty only the INCREMENTAL
     /// delta since the last callback.
     private var scrollPanLastY: CGFloat = 0
+    /// Downward finger travel (points) that dismisses the soft keyboard mid-pan
+    /// when it's up — the iOS scroll-to-dismiss idiom. Small so a deliberate
+    /// drag-down dismisses promptly, large enough that scroll jitter doesn't.
+    private static let dismissDragThreshold: CGFloat = 36
     /// The one-finger scroll pan, kept so the gesture delegate can gate it to
     /// vertical-dominant drags (horizontal finger-scroll is disabled).
     private weak var scrollPanGesture: UIPanGestureRecognizer?
@@ -1155,6 +1159,14 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             let deltaPoints = translationY - scrollPanLastY
             scrollPanLastY = translationY
             guard deltaPoints != 0 else { return }
+            // DRAG-DOWN-TO-DISMISS: with the keyboard up, a downward drag (finger
+            // toward the keyboard, past a small threshold) dismisses it — the
+            // standard iOS scroll-to-dismiss idiom. After it resigns, the same
+            // gesture falls through to normal view-move scrolling.
+            if isFirstResponder, translationY > Self.dismissDragThreshold {
+                _ = resignFirstResponder()
+                return
+            }
             // VIEW-MOVE: pan libghostty's OWN scrollback viewport — finger drag
             // moves the rendered view, nothing is sent to the program. This
             // works because the broker now runs tmux WITHOUT the alternate
