@@ -1295,6 +1295,17 @@ public final class Terminal {
         #endif
     }
 
+    /// True only when a libghostty surface exists (created and not yet freed).
+    /// Keyboard-path callers MUST gate on this — poking `set_size`/`refresh`/
+    /// `mouse_scroll` on a mid-creation or freed surface is an EXC_BAD_ACCESS.
+    public var isAlive: Bool {
+        #if canImport(libghostty)
+        return surface?.isAlive ?? false
+        #else
+        return false
+        #endif
+    }
+
     /// The grid (cols/rows + cell px) libghostty derived from the current
     /// surface pixel size. The host reads this after pushing a new size so
     /// it can resize the remote PTY to libghostty's exact grid instead of

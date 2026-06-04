@@ -170,6 +170,10 @@ struct GhosttyTerminalView: UIViewControllerRepresentable {
     /// shows can fire mid-flush. Tearing the surface down here, before the
     /// view is released, closes the use-after-free window deterministically.
     static func dismantleUIViewController(_ controller: GhosttyTerminalHostController, coordinator: ()) {
+        // Stop keyboard observers BEFORE freeing the surface — otherwise a
+        // keyboard notification in the teardown window pokes a freed surface
+        // (EXC_BAD_ACCESS in libghostty).
+        controller.tearDown()
         controller.renderView.prepareForRemoval()
     }
 }
@@ -214,8 +218,15 @@ final class GhosttyTerminalHostController: UIViewController {
     @objc private func keyboardChange(_ note: Notification) { applyKeyboard(note, hiding: false) }
     @objc private func keyboardHide(_ note: Notification) { applyKeyboard(note, hiding: true) }
 
+    /// Stop reacting to the keyboard (called before the surface is freed) so a
+    /// late keyboard notification can't poke a torn-down surface.
+    func tearDown() {
+        isActive = false
+        NotificationCenter.default.removeObserver(self)
+    }
+
     private func applyKeyboard(_ note: Notification, hiding: Bool) {
-        guard isActive, isViewLoaded, view.window != nil,
+        guard isActive, isViewLoaded, view.window != nil, renderView.isSurfaceAlive,
               let info = note.userInfo,
               let endFrame = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
         else { return }
@@ -947,7 +958,10 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// final size instead of per animation frame (geistty's anti-flash trick).
     func preRender(toHeight finalHeight: CGFloat) {
         #if canImport(GhosttyVT)
-        guard bounds.width > 0, finalHeight > 0 else { return }
+        // Only poke libghostty when the surface is created AND not freed —
+        // resizing a mid-creation / torn-down surface is an EXC_BAD_ACCESS
+        // (the keyboard observer can fire in either window).
+        guard terminal?.isAlive == true, window != nil, bounds.width > 0, finalHeight > 0 else { return }
         let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
         let finalRect = CGRect(x: 0, y: 0, width: bounds.width, height: finalHeight)
         CATransaction.begin()
@@ -973,7 +987,19 @@ final class GhosttyRenderView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// recent rows fill the shrunk view instead of leaving a blank gap.
     func snapToBottom() {
         #if canImport(GhosttyVT)
+        guard terminal?.isAlive == true, window != nil else { return }
         terminal?.scrollToBottom()
+        #endif
+    }
+
+    /// Whether the libghostty surface is created and not yet freed. The host
+    /// controller gates keyboard-driven resizes on this to avoid poking a
+    /// mid-creation / torn-down surface.
+    var isSurfaceAlive: Bool {
+        #if canImport(GhosttyVT)
+        return terminal?.isAlive == true
+        #else
+        return false
         #endif
     }
 
