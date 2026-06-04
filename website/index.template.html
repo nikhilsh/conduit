@@ -253,7 +253,7 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <span class="eyebrow"><span class="pip"></span>Open beta · <span data-version>v0.9</span></span>
+        <span class="eyebrow"><span class="pip"></span>Alpha · <span data-version>v0.9</span></span>
         <h1 class="display">Your agents,<br />in your pocket.<span class="cursor" aria-hidden="true">_</span></h1>
         <p class="lead">Conduit drives <b style="color:var(--text)">Claude</b> and <b style="color:var(--text)">Codex</b> on your dev box — from your phone or tablet. Start a session, watch it plan, run commands, edit files, and approve actions. Anywhere.</p>
         <div class="stores">
@@ -449,8 +449,9 @@
 <script type="application/json" id="release-data">
 {
   "version": "0.9.4",
-  "channel": "beta",
+  "channel": "alpha",
   "updated": "2026-05-30",
+  "builtAt": "",
   "ios": { "manifestUrl": "itms-services://?action=download-manifest&url=https://REPLACE-WITH-YOUR-DOMAIN/ios/manifest.plist", "minOS": "iOS 16+", "size": "24.8 MB" },
   "android": { "apkUrl": "downloads/conduit-latest.apk", "minOS": "Android 10+", "size": "31.2 MB" }
 }
@@ -472,6 +473,11 @@
       try{ var d=new Date(s+'T00:00:00'); return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
       catch(e){ return s; }
     }
+    // Full build timestamp rendered in the visitor's locale + local timezone.
+    function fmtDateTime(s){
+      try{ return new Date(s).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}); }
+      catch(e){ return ''; }
+    }
     function apply(d){
       var iosUrl = d.ios && d.ios.manifestUrl, apkUrl = d.android && d.android.apkUrl;
       document.querySelectorAll('[data-dl="ios"]').forEach(function(a){
@@ -482,8 +488,9 @@
       });
       var ver = d.version ? ('v'+d.version) : '';
       var ch = d.channel || '';
+      var built = d.builtAt ? fmtDateTime(d.builtAt) : '';
       var meta = '<b>'+ver+'</b> '+ch
-        + ' <span class="sep">·</span> updated '+fmtDate(d.updated)
+        + (built ? ' <span class="sep">·</span> built '+built : ' <span class="sep">·</span> updated '+fmtDate(d.updated))
         + ' <span class="sep">·</span> iOS '+((d.ios&&d.ios.size)||'')+' '+((d.ios&&d.ios.minOS)||'')
         + ' <span class="sep">·</span> APK '+((d.android&&d.android.size)||'')+' '+((d.android&&d.android.minOS)||'');
       document.querySelectorAll('[data-dl-meta]').forEach(function(el){ el.innerHTML = meta; });
