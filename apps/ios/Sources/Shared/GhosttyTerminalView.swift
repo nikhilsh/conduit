@@ -1,27 +1,270 @@
 import SwiftUI
+import UIKit
+import QuartzCore
+import GhosttyVT
 
-// Stage 0 placeholder for the native Ghostty (libghostty) terminal.
+// Native Ghostty (libghostty) terminal — Stage 2 of the clean-slate rebuild.
 //
-// The previous 1,836-line implementation was torn down in the clean-slate
-// rebuild (see `docs/GHOSTTY-REFERENCES.md` and the rebuild plan): it crashed
-// with a cascade of CoreAnimation-commit use-after-frees and carried a
-// double-emulator query-response echo. This stub keeps the app compiling and
-// the Terminal tab resolvable while the new App-singleton + surface lifecycle
-// are built up in Stages 1–5, faithfully ported from the geistty / clauntty
-// reference apps.
+// The previous 1,836-line host crashed with a cascade of CoreAnimation-commit
+// use-after-frees. This rewrite keeps ONLY the render lifecycle, faithfully
+// following the geistty / clauntty discipline (see `docs/GHOSTTY-REFERENCES.md`):
+//   * no `CAMetalLayer` layerClass override — libghostty parents its OWN
+//     IOSurfaceLayer via the `@objc(addSublayer:)` message on our plain layer;
+//   * that parenting + sizing is DEFERRED off the in-flight CoreAnimation commit
+//     (the `apprt.surface.Mailbox.push` UAF the old code chased);
+//   * the draw pump is a `CADisplayLink` held by a WEAK proxy (no link↔view
+//     retain cycle), driving `ghostty_surface_draw` each vsync;
+//   * teardown is EXPLICIT from `dismantleUIView` (a SwiftUI-safe point, not an
+//     ARC `deinit` that can fire mid-commit): stop the link, detach every
+//     sublayer, then free the surface one runloop turn later.
 //
-// `GhosttyTerminalTab` is the only symbol the rest of the app depends on
-// (mounted by `ConduitProjectView` / `ConduitTabletRightPane`). It is rewritten
-// into a real `UIViewRepresentable` + `GhosttySurfaceView` host in Stage 2.
+// Stage 2 renders a banner to prove the pipeline end-to-end. Real broker feed +
+// resize is Stage 3; keyboard input is Stage 4; selection is Stage 5.
+
 struct GhosttyTerminalTab: View {
     let session: ProjectSession
     let isActive: Bool
 
     var body: some View {
-        // Opaque black surface — the rebuilt libghostty renderer paints here
-        // starting in Stage 2.
-        Color.black
-            .ignoresSafeArea()
-            .accessibilityIdentifier("ghostty-terminal-placeholder")
+        GhosttyTerminalView(session: session, isActive: isActive)
+            .background(Color.black)
+            .ignoresSafeArea(.container, edges: .bottom)
+    }
+}
+
+struct GhosttyTerminalView: UIViewRepresentable {
+    let session: ProjectSession
+    let isActive: Bool
+
+    func makeUIView(context: Context) -> GhosttySurfaceView {
+        Telemetry.breadcrumb("terminal", "GhosttyTerminalView makeUIView")
+        let view = GhosttySurfaceView(frame: .zero)
+        view.configure()
+        view.setActive(isActive)
+        // Stage 2 proof-of-render. Stage 3 replaces this with the live broker
+        // terminal buffer for `session`.
+        view.feed("\u{1b}[1;32mConduit\u{1b}[0m — native Ghostty terminal online.\r\n")
+        return view
+    }
+
+    func updateUIView(_ view: GhosttySurfaceView, context: Context) {
+        view.setActive(isActive)
+    }
+
+    static func dismantleUIView(_ view: GhosttySurfaceView, coordinator: ()) {
+        Telemetry.breadcrumb("terminal", "GhosttyTerminalView dismantle")
+        view.prepareForRemoval()
+    }
+}
+
+/// UIView host for one libghostty surface. Plain `CALayer` backing — libghostty
+/// attaches its IOSurfaceLayer as a sublayer.
+final class GhosttySurfaceView: UIView {
+    private var surface: GhosttySurface?
+    /// The IOSurfaceLayer libghostty parented on us (held strongly via the
+    /// superlayer relationship; this is a tracking reference).
+    private var ghosttySublayer: CALayer?
+    private var frameDisplayLink: CADisplayLink?
+    private var frameDisplayLinkProxy: FrameDisplayLinkProxy?
+    private var isActive = false
+    private var isAppBackgrounded = false
+
+    /// Weak indirection so the `CADisplayLink` (retained by the main runloop)
+    /// does not retain the view.
+    private final class FrameDisplayLinkProxy {
+        weak var view: GhosttySurfaceView?
+        init(_ view: GhosttySurfaceView) { self.view = view }
+        @objc func tick(_ link: CADisplayLink) {
+            guard let view = view else { link.invalidate(); return }
+            view.surface?.draw()
+        }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        isOpaque = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appWillForeground),
+            name: UIApplication.willEnterForegroundNotification, object: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// Create the surface with this view pinned as libghostty's host. The
+    /// representable hands us a `.zero` frame, so seed a non-zero pixel size;
+    /// `layoutSubviews` pushes the real bounds once we're laid out.
+    func configure() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.backgroundColor = UIColor.black.cgColor
+        layer.contentsScale = traitCollection.displayScale
+        CATransaction.commit()
+
+        let scale = Double(contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale)
+        let (pw, ph) = pixelSize(scale: scale)
+        surface = GhosttySurface(hostView: self, pixelWidth: pw, pixelHeight: ph, scaleFactor: scale)
+        Telemetry.breadcrumb("terminal", "GhosttySurface attached", data: ["px": "\(pw)x\(ph)"])
+    }
+
+    func feed(_ string: String) { surface?.feed(string) }
+
+    private func pixelSize(scale: Double) -> (UInt32, UInt32) {
+        // geistty seeds 800×600 to avoid a 0×0 surface before first layout.
+        let w = bounds.width > 0 ? bounds.width : 800
+        let h = bounds.height > 0 ? bounds.height : 600
+        return (UInt32(w * CGFloat(scale)), UInt32(h * CGFloat(scale)))
+    }
+
+    // MARK: - Layer parenting
+
+    /// libghostty's iOS renderer builds its own IOSurfaceLayer and parents it by
+    /// sending `addSublayer:` to the `uiview` pointer. `UIView` doesn't implement
+    /// that selector, so without this hook the layer is never parented (the
+    /// failure clauntty + geistty both guard against).
+    @objc(addSublayer:)
+    func addSublayer(_ sublayer: CALayer) {
+        Telemetry.breadcrumb("terminal", "addSublayer (libghostty IOSurfaceLayer)")
+        if let old = ghosttySublayer, old !== sublayer { old.removeFromSuperlayer() }
+        ghosttySublayer = sublayer
+        // Defer BOTH parenting AND sizing off the in-flight CA commit:
+        // `addSublayer:` fires synchronously from inside `ghostty_surface_new`
+        // while the surface is still half-built. Putting the IOSurfaceLayer into
+        // the live tree mid-construction drives the mount commit into the
+        // surface's mailbox (`apprt.surface.Mailbox.push`) → EXC_BAD_ACCESS. One
+        // runloop turn lets `ghostty_surface_new` return first.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let sub = self.ghosttySublayer, sub === sublayer else { return }
+            self.layer.addSublayer(sub)
+            self.sizeLayer()
+        }
+    }
+
+    /// Keep libghostty's render target sized to our bounds at the backing scale,
+    /// and push the pixel size into the surface (libghostty attaches the layer at
+    /// a zero frame and paints nothing until sized).
+    private func sizeLayer() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : traitCollection.displayScale
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let sub = ghosttySublayer {
+            sub.frame = bounds
+            sub.contentsScale = scale
+        }
+        // Belt-and-suspenders: size any layer libghostty parented directly on our
+        // root layer (it can attach via `[[uiview layer] addSublayer:]`).
+        if let subs = layer.sublayers {
+            for s in subs where s !== ghosttySublayer {
+                s.frame = bounds
+                s.contentsScale = scale
+            }
+        }
+        CATransaction.commit()
+        surface?.resize(
+            pixelWidth: UInt32(bounds.width * scale),
+            pixelHeight: UInt32(bounds.height * scale),
+            scale: Double(scale))
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        sizeLayer()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            sizeLayer()
+            // Wake recipe (deferred off the mount commit): toggle focus + refresh
+            // so the surface repaints rather than showing stale/blank pixels.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.surface?.setFocus(false)
+                self.surface?.setFocus(true)
+                self.surface?.refresh()
+            }
+        }
+        updateDisplayLinkRunning()
+    }
+
+    // MARK: - Visibility / draw pump
+
+    /// Tab visibility, pushed from the representable. The view stays MOUNTED
+    /// across tab switches (so the surface is never torn down + recreated
+    /// mid-use); this stands the renderer down/up.
+    func setActive(_ active: Bool) {
+        isActive = active
+        let visible = isActive && window != nil && !isAppBackgrounded
+        surface?.setOcclusion(visible)
+        if visible {
+            surface?.setFocus(false)
+            surface?.setFocus(true)
+            surface?.refresh()
+        }
+        updateDisplayLinkRunning()
+    }
+
+    @objc private func appDidBackground() {
+        isAppBackgrounded = true
+        updateDisplayLinkRunning()
+    }
+
+    @objc private func appWillForeground() {
+        isAppBackgrounded = false
+        updateDisplayLinkRunning()
+    }
+
+    /// Run the draw pump only while the surface is actually visible.
+    private func updateDisplayLinkRunning() {
+        let shouldRun = window != nil && !isAppBackgrounded && isActive
+        if shouldRun { startDisplayLink() } else { stopDisplayLink() }
+    }
+
+    private func startDisplayLink() {
+        guard frameDisplayLink == nil else { return }
+        let proxy = FrameDisplayLinkProxy(self)
+        frameDisplayLinkProxy = proxy
+        let link = CADisplayLink(target: proxy, selector: #selector(FrameDisplayLinkProxy.tick(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        frameDisplayLink = link
+    }
+
+    private func stopDisplayLink() {
+        frameDisplayLink?.invalidate()
+        frameDisplayLink = nil
+        frameDisplayLinkProxy = nil
+    }
+
+    // MARK: - Teardown
+
+    /// Deterministic teardown from `dismantleUIView` (SwiftUI removal — a
+    /// known-safe point, not inside a CA commit). Order matters so we never rely
+    /// on ARC release ordering between the CADisplayLink, the IOSurfaceLayer(s),
+    /// and the surface (the `apprt.surface.Mailbox.push` UAF). Idempotent.
+    func prepareForRemoval() {
+        stopDisplayLink()
+        // Detach EVERY layer libghostty parented — any stray one left attached
+        // would be committed by the next CATransaction flush INTO the surface
+        // we're about to free.
+        ghosttySublayer = nil
+        layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        // Free the surface on the NEXT runloop turn, never synchronously: this
+        // can run inside a CoreAnimation commit, and freeing mid-commit is the
+        // exact UAF. Layers are already detached, so a turn later is safe.
+        if let s = surface {
+            surface = nil
+            DispatchQueue.main.async { s.teardown() }
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        prepareForRemoval()
     }
 }
