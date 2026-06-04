@@ -97,18 +97,23 @@ public enum GhosttyTheme: String, CaseIterable, Identifiable, Sendable {
                 Double(v & 0xff) / 255.0)
     }
 
-    /// libghostty config body for this theme + font size. Line-based
+    /// libghostty config body for this theme + font + size. Line-based
     /// `key = value` syntax (matches the reference repos' `ghostty.conf`). A 10 MB
-    /// scrollback is folded in so touch-scroll has history.
-    func configBody(fontSize: Float) -> String {
+    /// scrollback is folded in so touch-scroll has history; `font-thicken` makes
+    /// glyphs crisper on retina (geistty does the same).
+    func configBody(fontSize: Float, font: GhosttyFont) -> String {
         let fs = Int(min(max(fontSize, 6), 32).rounded())
         var lines = [
             "font-size = \(fs)",
+            "font-thicken = true",
             "scrollback-limit = 10000000",
             "background = \(background)",
             "foreground = \(foreground)",
             "cursor-color = \(cursor)",
         ]
+        if let family = font.familyName {
+            lines.append("font-family = \(family)")
+        }
         for (index, color) in palette.enumerated() {
             lines.append("palette = \(index)=\(color)")
         }

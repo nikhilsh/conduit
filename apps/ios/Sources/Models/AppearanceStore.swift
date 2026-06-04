@@ -100,6 +100,8 @@ final class AppearanceStore {
         static let neonGlow = "conduit.appearance.neonGlow"
         /// Color theme rawValue for the native (libghostty) terminal.
         static let terminalTheme = "conduit.appearance.terminalTheme"
+        /// Font rawValue for the native (libghostty) terminal.
+        static let terminalFont = "conduit.appearance.terminalFont"
     }
 
     /// Clamp range for [bodyPointSize]. Lower bound keeps captions
@@ -155,6 +157,12 @@ final class AppearanceStore {
         didSet { defaults.set(terminalTheme.rawValue, forKey: Keys.terminalTheme) }
     }
 
+    /// Font for the native (libghostty) terminal. Persisted by rawValue; a change
+    /// rebuilds the surface (re-rasterizes glyphs) via `GhosttyTerminalView`.
+    var terminalFont: GhosttyFont {
+        didSet { defaults.set(terminalFont.rawValue, forKey: Keys.terminalFont) }
+    }
+
     /// Base point size the typography ramp (`ConduitTypography`)
     /// scales off. Setter clamps into [bodyPointSizeRange] so an
     /// out-of-range value (corrupted defaults, future migration) can't
@@ -200,6 +208,8 @@ final class AppearanceStore {
         self.neonGlow = defaults.object(forKey: Keys.neonGlow) as? Bool ?? true
         self.terminalTheme = (defaults.string(forKey: Keys.terminalTheme)
             .flatMap(GhosttyTheme.init(rawValue:))) ?? .ghosttyDark
+        self.terminalFont = (defaults.string(forKey: Keys.terminalFont)
+            .flatMap(GhosttyFont.init(rawValue:))) ?? .jetBrainsMono
     }
 
     /// SwiftUI `.font` value to use for chat body text.

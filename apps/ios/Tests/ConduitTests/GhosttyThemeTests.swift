@@ -19,20 +19,32 @@ struct GhosttyThemeTests {
         }
     }
 
-    @Test func configBodyCarriesThemeKeysAndScrollback() {
-        let body = GhosttyTheme.dracula.configBody(fontSize: 12)
+    @Test func configBodyCarriesThemeFontAndScrollback() {
+        let body = GhosttyTheme.dracula.configBody(fontSize: 12, font: .jetBrainsMono)
         #expect(body.contains("font-size = 12"))
+        #expect(body.contains("font-thicken = true"))
         #expect(body.contains("scrollback-limit = 10000000"))
         #expect(body.contains("background = #282a36"))
+        #expect(body.contains("font-family = JetBrains Mono"))
         #expect(body.contains("palette = 0="))
     }
 
-    @Test func appearanceStoreDefaultsToGhosttyDarkAndPersists() {
+    @Test func systemFontOmitsFontFamily() {
+        let body = GhosttyTheme.ghosttyDark.configBody(fontSize: 10, font: .system)
+        #expect(!body.contains("font-family"))
+    }
+
+    @Test func appearanceStoreTerminalThemeAndFontPersist() {
         let defaults = UserDefaults(suiteName: "ghostty-theme-test-\(UUID().uuidString)")!
-        #expect(AppearanceStore(defaults: defaults).terminalTheme == .ghosttyDark)
+        let fresh = AppearanceStore(defaults: defaults)
+        #expect(fresh.terminalTheme == .ghosttyDark)
+        #expect(fresh.terminalFont == .jetBrainsMono)
 
         let first = AppearanceStore(defaults: defaults)
         first.terminalTheme = .nord
-        #expect(AppearanceStore(defaults: defaults).terminalTheme == .nord)
+        first.terminalFont = .hack
+        let second = AppearanceStore(defaults: defaults)
+        #expect(second.terminalTheme == .nord)
+        #expect(second.terminalFont == .hack)
     }
 }
