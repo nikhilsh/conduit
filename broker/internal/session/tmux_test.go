@@ -71,7 +71,7 @@ func TestTerminalShellArgv(t *testing.T) {
 		// `start-server` then set options BEFORE attaching via `new-session`,
 		// so the alt-screen suppression takes hold pre-attach; the final bare
 		// `;` is a real bash separator for `exec bash -l`.
-		want := `/usr/bin/tmux start-server \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s kitty-abc; exec bash -l`
+		want := `/usr/bin/tmux start-server \; set -g default-terminal 'tmux-256color' \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -ga terminal-overrides ',*:Tc' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s kitty-abc; exec bash -l`
 		if script != want {
 			t.Fatalf("script:\n want %q\n got  %q", want, script)
 		}
