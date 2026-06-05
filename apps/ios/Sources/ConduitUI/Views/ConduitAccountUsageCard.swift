@@ -17,6 +17,10 @@ extension ConduitUI {
 
     struct AccountUsageCard: View {
         let session: ProjectSession
+        /// Eyebrow shown on the header row. Session Info passes
+        /// "<agent> limits · 5h & weekly" so the card reads as the
+        /// session-agent's plan limits; defaults to the generic label.
+        var heading: String = "Account usage"
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @State private var now = Date()
@@ -45,7 +49,7 @@ extension ConduitUI {
 
         private var header: some View {
             HStack(spacing: 10) {
-                Text("Account usage")
+                Text(heading)
                     .font(neon.mono(11).weight(.bold))
                     .foregroundStyle(neon.textDim)
                     .textCase(.uppercase)

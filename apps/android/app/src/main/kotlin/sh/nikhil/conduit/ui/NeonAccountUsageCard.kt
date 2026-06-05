@@ -42,12 +42,15 @@ fun NeonAccountUsageCard(
     weekPct: Double?,
     weekResetsAt: String?,
     onRefresh: () -> Unit,
+    // Eyebrow shown on the header row. Session Info passes
+    // "<agent> limits · 5h & weekly"; defaults to the generic label.
+    heading: String = "Account usage",
 ) {
     val neon = LocalNeonTheme.current
     Column {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp, start = 4.dp)) {
             Text(
-                "ACCOUNT USAGE",
+                heading.uppercase(),
                 style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
                 fontFamily = neon.mono,
                 fontWeight = FontWeight.SemiBold,
