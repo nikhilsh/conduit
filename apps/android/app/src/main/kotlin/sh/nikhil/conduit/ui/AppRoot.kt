@@ -218,6 +218,7 @@ fun AppRoot(store: SessionStore) {
                 }
             },
             onDismiss = { showVoice = false },
+            agent = sessions.firstOrNull { it.id == selectedId }?.assistant ?: "claude",
         )
     }
 

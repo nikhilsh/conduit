@@ -266,6 +266,7 @@ fun ProjectScreen(
         VoiceDictationScreen(
             onTranscript = { transcript -> store.sendChat(session.id, transcript) },
             onDismiss = { showVoice = false },
+            agent = session.assistant,
         )
     }
 }
