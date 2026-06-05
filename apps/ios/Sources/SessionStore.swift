@@ -1839,7 +1839,9 @@ final class SessionStore {
     /// any past entry the live list already represents (same role+content), so
     /// a reattached session shows its full history without doubling messages.
     /// Pure + static so ConduitTests can pin the merge without a live client.
-    static func mergeConversation(
+    /// `nonisolated` because it touches no actor state — lets the synchronous
+    /// (non-MainActor) test call it directly.
+    nonisolated static func mergeConversation(
         past: [ConversationItem],
         live: [ConversationItem],
         pending: [ConversationItem]
