@@ -257,6 +257,60 @@ struct SessionStoreTests {
     }
 }
 
+/// `restore-chat-on-reattach` — pins the conversation merge that splices a
+/// reattached session's restored-from-disk past chat under the live items, so
+/// a relaunch shows the prior conversation without doubling messages.
+@Suite("SessionStore.mergeConversation — restore past chat on reattach")
+struct MergeConversationTests {
+
+    private func item(_ id: String, _ role: String, _ content: String, _ ts: String) -> ConversationItem {
+        ConversationItem(
+            id: id, role: role, kind: role == "tool" ? "tool" : "message",
+            status: "done", content: content, ts: ts, files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [], sourceAgent: nil,
+            targetAgent: nil, taskText: nil, resultSummary: nil, planSteps: []
+        )
+    }
+
+    @Test func pastAndLiveSpliceChronologically() {
+        let past = [
+            item("saved-0", "user", "hello", "2026-06-05T10:00:00Z"),
+            item("saved-1", "assistant", "hi there", "2026-06-05T10:00:05Z"),
+        ]
+        let live = [item("srv-9", "user", "what next", "2026-06-05T10:05:00Z")]
+        let merged = SessionStore.mergeConversation(past: past, live: live, pending: [])
+        // Past restored AND the new live turn present, in time order.
+        #expect(merged.map(\.content) == ["hello", "hi there", "what next"])
+    }
+
+    @Test func liveWinsOverDuplicatePast() {
+        // If the live list already represents a message (same role+content),
+        // the past copy is dropped — no doubled bubble.
+        let past = [item("saved-0", "user", "hello", "2026-06-05T10:00:00Z")]
+        let live = [item("srv-1", "user", "hello", "2026-06-05T10:00:01Z")]
+        let merged = SessionStore.mergeConversation(past: past, live: live, pending: [])
+        #expect(merged.count == 1)
+        #expect(merged.first?.id == "srv-1")
+    }
+
+    @Test func pendingLocalEchoIsKept() {
+        let past = [item("saved-0", "assistant", "done", "2026-06-05T09:00:00Z")]
+        let pending = [item("local-1", "user", "typing…", "2026-06-05T11:00:00Z")]
+        let merged = SessionStore.mergeConversation(past: past, live: [], pending: pending)
+        #expect(merged.map(\.content) == ["done", "typing…"])
+    }
+
+    @Test func emptyPastIsUnchangedLiveOrder() {
+        let live = [
+            item("a", "user", "one", "2026-06-05T10:00:00Z"),
+            item("b", "assistant", "two", "2026-06-05T10:00:01Z"),
+        ]
+        let merged = SessionStore.mergeConversation(past: [], live: live, pending: [])
+        #expect(merged.map(\.content) == ["one", "two"])
+    }
+}
+
 /// `session-reconcile-broker-truth` — pins the wire contract for the
 /// broker's authoritative live-session list (`GET /api/sessions`,
 /// `broker/internal/session.LiveSessionInfo`). A careless rename of a

@@ -381,6 +381,21 @@ final class SessionStore {
     /// Typed conversation timeline per session, oldest first.
     var conversationLog: [String: [ConversationItem]] = [:]
 
+    /// True while the initial session reconcile is in flight (connect →
+    /// `GET /api/sessions` → join). Lets the home list show a loading state
+    /// instead of flashing "No sessions yet" before the broker's live set
+    /// lands. Flipped false at every exit of `reconcileLiveSessions`.
+    var isLoadingSessions: Bool = false
+
+    /// Persisted past chat hydrated from the broker's `conversation.jsonl`
+    /// (`GET /api/session/conversation/<id>`) when a live session is
+    /// REATTACHED on launch — the broker replays only the terminal snapshot
+    /// over the WS, not the chat, so without this a reattached session's
+    /// prior conversation would be blank until the next turn. Kept as a
+    /// sticky base that `refreshConversation` always merges under the live
+    /// (Rust-core) items, so a new turn can't wipe the restored history.
+    private var hydratedChat: [String: [ConversationItem]] = [:]
+
     /// AI-generated quick replies per session (task #233). The broker
     /// emits a `view:"quick_replies"` view_event when an assistant turn
     /// completes; the chat composer renders these as tap-able chips,
@@ -1808,9 +1823,46 @@ final class SessionStore {
             let stillPending = existing.filter {
                 $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
             }
-            let merged = items + stillPending
-            conversationLog[sessionID] = merged.sortedByConversationTs { $0.ts }
+            // Merge under any restored-from-disk past chat (a reattached
+            // session — the broker doesn't replay chat over the WS, so the
+            // Rust core's live `items` only cover turns since reattach).
+            conversationLog[sessionID] = Self.mergeConversation(
+                past: hydratedChat[sessionID] ?? [],
+                live: items,
+                pending: stillPending
+            )
         }
+    }
+
+    /// Splice restored-from-disk past chat (`past`) under the live Rust-core
+    /// items (`live`) plus still-unmirrored local echoes (`pending`), dropping
+    /// any past entry the live list already represents (same role+content), so
+    /// a reattached session shows its full history without doubling messages.
+    /// Pure + static so ConduitTests can pin the merge without a live client.
+    static func mergeConversation(
+        past: [ConversationItem],
+        live: [ConversationItem],
+        pending: [ConversationItem]
+    ) -> [ConversationItem] {
+        let liveFingerprints = Set(live.map { "\($0.role)|\($0.content)" })
+        let pastNotInLive = past.filter {
+            !liveFingerprints.contains("\($0.role)|\($0.content)")
+        }
+        return (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
+    }
+
+    /// Restore a reattached live session's prior conversation from the
+    /// broker's persisted transcript (`GET /api/session/conversation/<id>`).
+    /// The broker replays only the terminal snapshot over the WS on reattach,
+    /// not the chat — so without this the chat stays blank until the next
+    /// turn. Idempotent: only fetches once per session per launch, and seeds
+    /// the sticky `hydratedChat` base so `refreshConversation` keeps it.
+    func hydrateChatConversation(_ sessionID: String) async {
+        guard hydratedChat[sessionID] == nil else { return }
+        guard let items = try? await fetchConversation(sessionID: sessionID),
+              !items.isEmpty else { return }
+        hydratedChat[sessionID] = items
+        refreshConversation(sessionID: sessionID)
     }
 
     // `internal` (not `fileprivate`) so ConduitTests can drive this
@@ -2446,10 +2498,17 @@ final class SessionStore {
     ///      user can reopen it read-only or resume on tap).
     /// Does NOT navigate — rows just go live (or fall to history) in place.
     func reconcileLiveSessions() {
-        guard client != nil else { return }
+        guard client != nil else { isLoadingSessions = false; return }
         let serverID = savedHistoryServerID
+        // Show a loading state in the home list (instead of flashing "No
+        // sessions yet") until the broker's live set lands and we've joined.
+        // Set synchronously here — before connect()'s flow yields to a render —
+        // so the `.linked` empty state never paints. Cleared at every Task exit.
+        isLoadingSessions = true
         Telemetry.breadcrumb("session", "reconcile_live_begin", data: ["server": serverID])
         Task { @MainActor in
+            // Always clear the loading flag, however this reconcile exits.
+            defer { isLoadingSessions = false }
             try? await waitUntilCommandReady()
             guard let client else { return }
 
@@ -2488,6 +2547,13 @@ final class SessionStore {
                 // join lands (`ingestSnapshot`).
                 hydrateTerminalBuffer(info.id)
                 try? await client.joinSession(sessionId: info.id, assistant: info.assistant)
+                // Restore the prior CHAT too — the broker replays only the
+                // terminal snapshot over the WS on reattach, so without this
+                // the conversation would be blank until the next turn. Fire it
+                // off the reconcile path so the spinner clears as soon as the
+                // rows are joined; the chat fills in a beat later.
+                let sid = info.id
+                Task { @MainActor in await self.hydrateChatConversation(sid) }
             }
 
             // 2. Demote saved `.live` rows the broker no longer has → History.
