@@ -3,7 +3,10 @@ package sh.nikhil.conduit.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -95,6 +97,54 @@ sealed class ResumeDecision {
     }
 }
 
+/**
+ * History filter chip (handoff §A.3): All / Running / claude / codex.
+ * Mirror of iOS `SessionsScreenModel.Filter`. `RUNNING` keys off the
+ * persisted lifecycle (`status == LIVE`); the agent chips match `agent`
+ * case-insensitively. Pure so JUnit ([HistoryFilterTest]) can pin each
+ * predicate without a live store.
+ */
+enum class HistoryFilter(val label: String) {
+    ALL("All"),
+    RUNNING("Running"),
+    CLAUDE("claude"),
+    CODEX("codex");
+
+    fun matches(row: SavedSession): Boolean = when (this) {
+        ALL -> true
+        RUNNING -> row.status == SavedSessionStatus.LIVE
+        CLAUDE -> row.agent.lowercase() == "claude"
+        CODEX -> row.agent.lowercase() == "codex"
+    }
+}
+
+/**
+ * A row's at-a-glance result (handoff §A.3). Mirror of iOS
+ * `SessionsScreenModel.Outcome`. The persisted index only carries a
+ * [SavedSessionStatus] (live / exited / unknown) — there is NO PR /
+ * merged / needs-you signal on [SavedSession], so we never fabricate
+ * those. A live row reads RUNNING; everything terminal or unknown reads
+ * the honest neutral ENDED. The richer cases stay in the enum so the
+ * chip vocabulary matches the design and a future data source can light
+ * them up without a re-skin.
+ */
+enum class SessionOutcome {
+    RUNNING,
+    PR,
+    MERGED,
+    NEEDS_YOU,
+    ENDED,
+    FAILED;
+
+    companion object {
+        fun from(row: SavedSession): SessionOutcome = when (row.status) {
+            SavedSessionStatus.LIVE -> RUNNING
+            SavedSessionStatus.EXITED -> ENDED
+            SavedSessionStatus.UNKNOWN -> ENDED
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -113,18 +163,26 @@ fun HistoryScreen(
     val brokerTitles by store.brokerTitles.collectAsState()
 
     var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf(HistoryFilter.ALL) }
     var pendingDelete by remember { mutableStateOf<SavedSession?>(null) }
 
     BackHandler { onDismiss() }
 
-    // Filter out tombstoned ids + apply the search query. Mirror of
+    // The de-tombstoned source set drives the empty-state branch: the
+    // "no sessions yet" splash shows only when this is empty (never just
+    // because a filter/search excluded everything).
+    val source = remember(savedSessions, deletedIds) {
+        val tomb = deletedIds.toSet()
+        savedSessions.filter { it.id !in tomb }
+    }
+
+    // Filter chip first, then the search query. Mirror of
     // SessionsScreenModel.from on iOS — case-insensitive substring match
     // against summary, id, agent, and cwd.
-    val visible = remember(savedSessions, deletedIds, query) {
-        val tomb = deletedIds.toSet()
-        val filtered = savedSessions.filter { it.id !in tomb }
+    val visible = remember(source, filter, query) {
+        val chipped = if (filter == HistoryFilter.ALL) source else source.filter { filter.matches(it) }
         val needle = query.trim().lowercase()
-        if (needle.isEmpty()) filtered else filtered.filter { row ->
+        if (needle.isEmpty()) chipped else chipped.filter { row ->
             row.summary.lowercase().contains(needle) ||
                 row.id.lowercase().contains(needle) ||
                 row.agent.lowercase().contains(needle) ||
@@ -201,8 +259,10 @@ fun HistoryScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             )
 
+            HistoryFilterBar(selected = filter, onSelect = { filter = it })
+
             when {
-                savedSessions.isEmpty() -> EmptyHistoryState()
+                source.isEmpty() -> EmptyHistoryState()
                 groups.isEmpty() -> NoMatchesState()
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -323,11 +383,7 @@ private fun HistoryRow(
     onLongPress: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
-    val statusColor = when (row.status) {
-        SavedSessionStatus.LIVE -> neon.green
-        SavedSessionStatus.EXITED -> neon.red.copy(alpha = 0.85f)
-        SavedSessionStatus.UNKNOWN -> neon.textFaint
-    }
+    val tint = neonAgentColor(row.agent, neon)
     val shape = RoundedCornerShape(14.dp)
     Box(
         modifier = Modifier
@@ -341,18 +397,23 @@ private fun HistoryRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 11.dp),
+                .padding(horizontal = 12.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(11.dp),
         ) {
+            // Agent-tinted avatar (Conduit mark), mirroring Session Info.
             Box(
                 modifier = Modifier
-                    .size(8.dp)
-                    .background(statusColor, CircleShape),
-            )
+                    .size(38.dp)
+                    .background(tint.copy(alpha = if (neon.dark) 0.14f else 0.10f), RoundedCornerShape(10.dp))
+                    .border(1.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                ConduitMark(size = 21.dp, color = tint)
+            }
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Text(
                     title,
@@ -368,19 +429,19 @@ private fun HistoryRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
-                        row.agent,
+                        row.agent.lowercase(),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = neon.mono,
                         fontWeight = FontWeight.SemiBold,
-                        color = neonAgentColor(row.agent, neon),
-                    )
-                    Text(
-                        "·",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = neon.textFaint,
+                        color = tint,
                     )
                     val relative = SessionNaming.relativeAgo(row.lastSeen)
                     if (relative.isNotEmpty()) {
+                        Text(
+                            "·",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = neon.textFaint,
+                        )
                         Text(
                             relative,
                             style = MaterialTheme.typography.labelSmall,
@@ -415,6 +476,88 @@ private fun HistoryRow(
                         }
                     }
                 }
+            }
+            OutcomeChip(SessionOutcome.from(row))
+        }
+    }
+}
+
+/**
+ * Outcome chip (handoff §A.3). Color + label come from the persisted
+ * status via [SessionOutcome]; the richer PR/merged/needs-you cases are
+ * honored in the `when` for when a data source lights them up, but
+ * [SessionOutcome.from] only emits RUNNING / ENDED today.
+ */
+@Composable
+private fun OutcomeChip(outcome: SessionOutcome) {
+    val neon = LocalNeonTheme.current
+    val (label, color) = when (outcome) {
+        SessionOutcome.RUNNING -> "running" to neon.green
+        SessionOutcome.PR -> "PR" to neon.blue
+        SessionOutcome.MERGED -> "merged" to neon.purple
+        SessionOutcome.NEEDS_YOU -> "needs you" to neon.yellow
+        SessionOutcome.ENDED -> "ended" to neon.textDim
+        SessionOutcome.FAILED -> "failed" to neon.red
+    }
+    Box(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(50))
+            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(50))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.SemiBold,
+            color = color,
+        )
+    }
+}
+
+/**
+ * Filter chips row (handoff §A.3): All / Running / claude / codex. The
+ * active chip fills with its tint (agent chips use the agent hue, the
+ * rest the palette accent); the rest are quiet hairline capsules.
+ * Horizontally scrollable so they never wrap on a narrow device.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HistoryFilterBar(selected: HistoryFilter, onSelect: (HistoryFilter) -> Unit) {
+    val neon = LocalNeonTheme.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HistoryFilter.entries.forEach { chip ->
+            val active = chip == selected
+            val tint = when (chip) {
+                HistoryFilter.CLAUDE -> neonAgentColor("claude", neon)
+                HistoryFilter.CODEX -> neonAgentColor("codex", neon)
+                else -> neon.accent
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (active) tint else neon.surface)
+                    .border(
+                        1.dp,
+                        if (active) Color.Transparent else neon.border,
+                        RoundedCornerShape(50),
+                    )
+                    .combinedClickable(onClick = { onSelect(chip) })
+                    .padding(horizontal = 13.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    chip.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (active) neon.accentText else neon.textDim,
+                )
             }
         }
     }
