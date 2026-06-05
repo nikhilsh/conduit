@@ -117,20 +117,31 @@ func (s *Session) AccountUsage() AccountUsage {
 // fetch error leaves the previous snapshot in place and broadcasts nothing.
 // Exported because the ws package calls it on connect + on the refresh message.
 func (s *Session) RefreshAccountUsage() {
-	// Account usage is fetched from the Claude OAuth usage endpoint; only
-	// claude sessions can ever populate it. Skip the doomed fetch for
-	// codex/other agents (the clients hide the card for non-claude too), so a
-	// codex session never blocks on a request that can't succeed.
-	if s.Assistant != "claude" {
-		return
-	}
+	// Account usage comes from an agent-specific endpoint: claude from the
+	// Anthropic OAuth usage endpoint, codex from the ChatGPT /wham/usage
+	// endpoint (see codexaccountusage.go). Both fold into the SAME AccountUsage
+	// (primary→5h, secondary→weekly), so the status frame + client card are
+	// agent-agnostic. Any other agent has no usage source — skip the doomed
+	// fetch so the session never blocks on a request that can't succeed.
 	do := s.accountUsageDo
 	if do == nil {
 		do = http.DefaultClient.Do
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), accountUsageTimeout)
 	defer cancel()
-	u, err := fetchAccountUsage(ctx, do, s.agentHomeDir)
+
+	var (
+		u   AccountUsage
+		err error
+	)
+	switch s.Assistant {
+	case "claude":
+		u, err = fetchAccountUsage(ctx, do, s.agentHomeDir)
+	case "codex":
+		u, err = fetchCodexAccountUsage(ctx, do, s.agentHomeDir)
+	default:
+		return
+	}
 	if err != nil {
 		return
 	}
