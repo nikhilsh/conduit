@@ -35,11 +35,15 @@ extension ConduitUI {
                             actionRow
                             statsGrid
                             ConduitUI.UsageCard(session: session)
-                            // Account usage (5-hour + weekly) comes from the
-                            // Claude OAuth usage endpoint; codex/other agents
-                            // have no equivalent, so the card would show
-                            // "tap refresh to update" forever. Gate to claude.
-                            if (store.statusBySession[session.id]?.assistant ?? session.assistant) == "claude" {
+                            // Account usage (5-hour + weekly). Claude fetches it
+                            // from the Anthropic OAuth usage endpoint; codex from
+                            // the ChatGPT /wham/usage endpoint (broker maps both
+                            // onto the same status-frame fields). Other agents
+                            // have no usage source, so the card would show "tap
+                            // refresh to update" forever — gate to the two that do.
+                            if ["claude", "codex"].contains(
+                                store.statusBySession[session.id]?.assistant ?? session.assistant
+                            ) {
                                 ConduitUI.AccountUsageCard(session: session)
                             }
                             detailsCard

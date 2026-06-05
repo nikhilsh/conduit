@@ -2,13 +2,15 @@ import SwiftUI
 
 // MARK: - Ambient account-usage surfaces (design handoff §3b)
 //
-// Account plan limits (the Claude 5-hour + weekly windows from
-// GET /api/oauth/usage) used to live only in the per-session Info sheet. These
-// two surfaces lift them into ambient places — a slim Home strip and a Settings
-// card — reading `store.accountUsage` (account-level, not per-session). Both are
-// Claude-only: Codex has no usage endpoint, so we show Claude and omit Codex
-// rather than fabricate a number. Shared formatting/tint helpers live in
-// `AccountUsageFormat`.
+// Account plan limits (the 5-hour + weekly windows) used to live only in the
+// per-session Info sheet. These two surfaces lift them into ambient places — a
+// slim Home strip and a Settings card — reading `store.accountUsage`
+// (account-level, not per-session). These ambient surfaces show the CLAUDE
+// account (Anthropic /api/oauth/usage) as the at-a-glance primary. Codex usage
+// (ChatGPT /wham/usage — see broker codexaccountusage.go) IS surfaced, but
+// per-session in the Info sheet's AccountUsageCard, since with mixed claude +
+// codex sessions an ambient account-level strip can only show one. Shared
+// formatting/tint helpers live in `AccountUsageFormat`.
 
 extension ConduitUI {
 

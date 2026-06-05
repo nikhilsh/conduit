@@ -47,6 +47,15 @@ func (s *Session) accumulateUsage(d usageDelta) {
 	// were watching, and only appeared after a reconnect). Broadcast OUTSIDE
 	// the lock: StatusPayload re-acquires s.mu via its accessors.
 	s.broadcastStatus()
+	// Codex account usage (the 5h/weekly windows) is freshest right after a
+	// turn: the `codex exec` that produced it just refreshed the short-lived
+	// OAuth token in auth.json, and the utilisation just changed. Kick a
+	// background refresh so the card stays live without waiting for a manual
+	// pull. Best-effort + off the hot path; claude pulls its usage on connect
+	// instead (its token is long-lived, so a per-turn refetch buys nothing).
+	if s.Assistant == "codex" {
+		go s.RefreshAccountUsage()
+	}
 }
 
 // Usage returns the cumulative usage snapshot for the status frame.
