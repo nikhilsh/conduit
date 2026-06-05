@@ -381,7 +381,7 @@ extension ConduitUI {
                 // menu). Never a fabricated "1 waiting"; hidden when none.
                 if let banner = needsYouBanner, banner.count > 0 {
                     Section {
-                        NeedsYouBanner(banner: banner) {
+                        NeedsYouBannerCard(banner: banner) {
                             if let id = banner.primaryID {
                                 store.selectedSessionID = id
                                 selectedSessionID = id
@@ -561,7 +561,7 @@ extension ConduitUI {
 /// `pending_input`). Title counts the waiting sessions; the sub names the
 /// agent/session; `Review` opens the first one. Hidden entirely when no
 /// session is waiting (gated by the caller), so it never shows a fake count.
-private struct NeedsYouBanner: View {
+private struct NeedsYouBannerCard: View {
     let banner: ConduitUI.NeedsYouBanner
     let onReview: () -> Void
     @Environment(\.neonTheme) private var neon
