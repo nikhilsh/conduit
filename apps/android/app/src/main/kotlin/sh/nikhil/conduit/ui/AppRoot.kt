@@ -37,6 +37,13 @@ fun AppRoot(store: SessionStore) {
     var showHistory by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
     var showBoxes by remember { mutableStateOf(false) }
+    // Redesign surfaces reachable from Home: command palette (⌘K, from the
+    // bottom search), fan-out (from the palette), approvals (from the
+    // needs-you banner), and per-box health (from a Boxes-list tap).
+    var showCommandPalette by remember { mutableStateOf(false) }
+    var showFanOut by remember { mutableStateOf(false) }
+    var showApprovals by remember { mutableStateOf(false) }
+    var boxHealthTarget by remember { mutableStateOf<sh.nikhil.conduit.SavedServer?>(null) }
     // Read-only transcript drilldown from History. The full saved row
     // travels (not just the id) so the transcript can render the title,
     // agent, and timestamps without a second fetch.
@@ -99,8 +106,11 @@ fun AppRoot(store: SessionStore) {
                                 onOpenHistory = { showHistory = true },
                                 onAddServer = { showAddServer = true },
                                 onNewSession = onNewSession,
-                                onSearch = { showSearch = true },
+                                // The bottom search now opens the ⌘K palette.
+                                onSearch = { showCommandPalette = true },
                                 onVoice = { showVoice = true },
+                                onOpenApprovals = { showApprovals = true },
+                                onOpenBoxHealth = { server -> boxHealthTarget = server },
                                 // The tablet rail header already shows a Settings
                                 // gear — don't render a second one in the center.
                                 showSettingsButton = false,
@@ -140,8 +150,11 @@ fun AppRoot(store: SessionStore) {
                             onOpenHistory = { showHistory = true },
                             onAddServer = { showAddServer = true },
                             onNewSession = onNewSession,
-                            onSearch = { showSearch = true },
+                            // The bottom search now opens the ⌘K palette.
+                            onSearch = { showCommandPalette = true },
                             onVoice = { showVoice = true },
+                            onOpenApprovals = { showApprovals = true },
+                            onOpenBoxHealth = { server -> boxHealthTarget = server },
                         )
                     }
                 }
@@ -184,6 +197,55 @@ fun AppRoot(store: SessionStore) {
 
     if (showSearch) {
         SessionSearchScreen(store = store, onDismiss = { showSearch = false })
+    }
+
+    if (showCommandPalette) {
+        // ⌘K quick switcher. Reuses the same new-session / add-server /
+        // select-session paths the rest of the app uses; "Fan out a task"
+        // chains into the Fan-out surface.
+        CommandPaletteScreen(
+            store = store,
+            onNewSession = { showCommandPalette = false; onNewSession() },
+            onPairBox = { showCommandPalette = false; showAddServer = true },
+            onOpenSession = { id -> showCommandPalette = false; store.select(id) },
+            onFanOut = { showCommandPalette = false; showFanOut = true },
+            onDismiss = { showCommandPalette = false },
+        )
+    }
+
+    if (showFanOut) {
+        // One task → N parallel sessions, one per branch. Launch is real:
+        // createSession per branch (no fan-out backend). Compare = no-op.
+        FanOutScreen(
+            store = store,
+            onLaunch = { task, branches ->
+                branches.forEach { branch ->
+                    store.createSession(assistant = "claude", branch = branch, initialPrompt = task)
+                }
+            },
+            onDismiss = { showFanOut = false },
+        )
+    }
+
+    if (showApprovals) {
+        // Approvals inbox — every action opens the session's chat (no
+        // programmatic approve endpoint), so onOpenSession selects + dismisses.
+        ApprovalsScreen(
+            store = store,
+            onOpenSession = { id -> showApprovals = false; store.select(id) },
+            onDismiss = { showApprovals = false },
+        )
+    }
+
+    boxHealthTarget?.let { server ->
+        // Per-box health detail. Reconnect reuses the same select-server path
+        // a Boxes-list tap used before.
+        BoxHealthScreen(
+            store = store,
+            server = server,
+            onReconnect = { store.selectSavedServer(server.id, autoConnect = true) },
+            onDismiss = { boxHealthTarget = null },
+        )
     }
 
     if (showHistory) {

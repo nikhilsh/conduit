@@ -30,6 +30,14 @@ extension ConduitUI {
         @State private var showSearch = false
         @State private var showAgentPicker = false
         @State private var showSessionsHistory = false
+        /// Command palette (⌘K) opened from the bottom action-bar search.
+        @State private var showCommandPalette = false
+        /// Fan-out surface, launched from the command palette.
+        @State private var showFanOut = false
+        /// Approvals inbox, opened from the needs-you banner's Review.
+        @State private var showApprovals = false
+        /// Box selected from the Boxes list → Box health detail sheet.
+        @State private var selectedBox: SavedServer?
         /// Voice dictation (bottom mic). On a transcript we stash it here
         /// and open the agent picker seeded with it as the first prompt.
         @State private var showVoiceDictation = false
@@ -99,6 +107,58 @@ extension ConduitUI {
                         store.selectedSessionID = id
                         selectedSessionID = id
                     })
+                    .environment(store)
+                }
+                .sheet(isPresented: $showCommandPalette) {
+                    // ⌘K quick switcher. Reuses the same new-session /
+                    // add-server / select-session paths the rest of Home uses.
+                    // "Fan out a task" chains into the Fan-out surface.
+                    ConduitUI.CommandPaletteSheet(
+                        onNewSession: {
+                            if store.harness.canIssueCommands { showAgentPicker = true } else { showAddServer = true }
+                        },
+                        onPairBox: { showAddServer = true },
+                        onOpenSession: { id in
+                            store.selectedSessionID = id
+                            selectedSessionID = id
+                        },
+                        onFanOut: { showFanOut = true }
+                    )
+                    .environment(store)
+                    .presentationDetents([.medium, .large])
+                }
+                .sheet(isPresented: $showFanOut) {
+                    // One task → N parallel sessions, one per branch. Launch is
+                    // real: createSession per branch (no fan-out backend).
+                    ConduitUI.FanOutView(
+                        onLaunch: { task, branches in
+                            for branch in branches {
+                                store.createSession(assistant: "claude", branch: branch, initialPrompt: task)
+                            }
+                        }
+                    )
+                    .environment(store)
+                }
+                .sheet(isPresented: $showApprovals) {
+                    // Approvals inbox — every action opens the session's chat
+                    // (no programmatic approve endpoint), so wire onOpenSession
+                    // to select + dismiss.
+                    ConduitUI.ApprovalsView(
+                        onOpenSession: { id in
+                            showApprovals = false
+                            store.selectedSessionID = id
+                            selectedSessionID = id
+                        }
+                    )
+                    .environment(store)
+                }
+                .sheet(item: $selectedBox) { server in
+                    // Per-box health detail. Reconnect reuses the same
+                    // select-server path a box-row tap used before.
+                    ConduitUI.BoxHealthView(
+                        server: server,
+                        onReconnect: { store.selectSavedServer(server.id, autoConnect: true) }
+                    )
                     .environment(store)
                 }
                 .alert(
@@ -382,10 +442,10 @@ extension ConduitUI {
                 if let banner = needsYouBanner, banner.count > 0 {
                     Section {
                         NeedsYouBannerCard(banner: banner) {
-                            if let id = banner.primaryID {
-                                store.selectedSessionID = id
-                                selectedSessionID = id
-                            }
+                            // Review opens the Approvals inbox (the queue of
+                            // blocked sessions) rather than jumping straight
+                            // into the first session.
+                            showApprovals = true
                         }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -466,7 +526,7 @@ extension ConduitUI {
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                                 .contentShape(Rectangle())
-                                .onTapGesture { store.selectSavedServer(server.id, autoConnect: true) }
+                                .onTapGesture { selectedBox = server }
                         }
                     } header: {
                         sectionHeader("Boxes", actionIcon: "wifi", actionLabel: "Pair box", actionTint: neon.textDim) {
@@ -545,7 +605,7 @@ extension ConduitUI {
                 Spacer()
                 ConduitUI.GlassMorphContainer(spacing: 14) {
                     ConduitUI.PillButton(systemImage: "magnifyingglass", size: 44, tint: neon.accent) {
-                        showSearch = true
+                        showCommandPalette = true
                     }
                 }
             }

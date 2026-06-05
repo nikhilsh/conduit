@@ -97,6 +97,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var showRename by remember { mutableStateOf(false) }
     var showFork by remember { mutableStateOf(false) }
     var showEndConfirm by remember { mutableStateOf(false) }
+    var showRecap by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf(name) }
 
     // Fork chooser state (unchanged from before the redesign).
@@ -331,23 +332,10 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             ) {
                 ActionPill(Icons.AutoMirrored.Filled.CallSplit, "Fork", neon.accent, Modifier.weight(1f)) { showFork = true }
                 ActionPill(Icons.Default.Share, "Export", neon.accent, Modifier.weight(1f)) {
-                    val md = exportMarkdown(
-                        name = name,
-                        agent = agent,
-                        branch = session.branch,
-                        used = used, window = window,
-                        input = input, output = output, cached = cached,
-                        activity = if (stats.turns > 0 || stats.filesChanged > 0 || stats.commands > 0)
-                            activityLine(stats, status?.startedAt ?: session.startedAt, status?.lastActivityAt ?: session.lastActivityAt)
-                        else "",
-                        cwd = session.cwd,
-                        started = startedTimeLabel(status?.startedAt ?: session.startedAt),
-                    )
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, md)
-                    }
-                    context.startActivity(Intent.createChooser(intent, "Export session"))
+                    // Export now previews the Session recap (which carries its
+                    // own Export-markdown / Share affordances) instead of a
+                    // bare share-intent, so the user previews before sharing.
+                    showRecap = true
                 }
                 ActionPill(Icons.Default.Stop, "End", neon.red, Modifier.weight(1f)) { showEndConfirm = true }
             }
@@ -367,6 +355,12 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
         ) {
             content()
         }
+    }
+
+    if (showRecap) {
+        // The recap surface carries its own Export-markdown / Share, so the
+        // user previews before sharing.
+        SessionRecapScreen(store = store, session = session, onDismiss = { showRecap = false })
     }
 
     if (showRename) {

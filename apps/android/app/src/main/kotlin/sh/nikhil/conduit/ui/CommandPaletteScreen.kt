@@ -99,6 +99,9 @@ fun CommandPaletteScreen(
     // No backing "run on box" / new-session-with-command path exists in the
     // store yet — defaults to a no-op TODO closure the caller wires later.
     onRunOnBox: (String) -> Unit = {},
+    // "Fan out a task" action — caller presents the Fan-out surface
+    // (`FanOutScreen`). Default no-op so the sheet compiles standalone.
+    onFanOut: () -> Unit = {},
     onDismiss: () -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -134,6 +137,7 @@ fun CommandPaletteScreen(
         listOf(
             PaletteActionSpec("new", "New session…", "⌘N"),
             PaletteActionSpec("pair", "Pair a box", null),
+            PaletteActionSpec("fanout", "Fan out a task", null),
         ).filter { q.isEmpty() || it.title.lowercase().contains(q) }
     }
 
@@ -142,6 +146,7 @@ fun CommandPaletteScreen(
         when (id) {
             "new" -> onNewSession()
             "pair" -> onPairBox()
+            "fanout" -> onFanOut()
         }
     }
 

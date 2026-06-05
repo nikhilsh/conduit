@@ -84,6 +84,11 @@ fun HomeScreen(
     onNewSession: () -> Unit,
     onSearch: () -> Unit,
     onVoice: () -> Unit,
+    // Redesign entry points (default no-ops so existing call sites that don't
+    // wire them still compile): the needs-you banner's Review opens the
+    // Approvals inbox; a Boxes-list tap opens that box's health detail.
+    onOpenApprovals: () -> Unit = {},
+    onOpenBoxHealth: (SavedServer) -> Unit = {},
     // On the 3-pane tablet the rail header already owns the Settings gear,
     // so the center home screen must not render a second one (two gears on
     // the tablet home — device feedback 2026-06-02). Phone keeps it: the
@@ -197,7 +202,9 @@ fun HomeScreen(
                 neon = neon,
                 banner = needsYou,
                 modifier = Modifier.padding(horizontal = 14.dp),
-                onReview = { needsYou.primaryId?.let { store.select(it) } },
+                // Review opens the Approvals inbox (the queue of blocked
+                // sessions) rather than jumping into the first session.
+                onReview = onOpenApprovals,
             )
         }
 
@@ -464,7 +471,9 @@ fun HomeScreen(
                         server = server,
                         isActive = server.endpoint == endpoint,
                         harness = harness,
-                        onClick = { store.selectSavedServer(server.id, autoConnect = true) },
+                        // Tap opens the box's health detail; reconnect now
+                        // lives inside Box health (its onReconnect action).
+                        onClick = { onOpenBoxHealth(server) },
                     )
                 }
             }

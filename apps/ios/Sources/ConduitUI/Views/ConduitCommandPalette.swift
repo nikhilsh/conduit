@@ -56,6 +56,10 @@ extension ConduitUI {
         /// caller wires it once a run-on-box / new-session-with-command
         /// entry point lands.
         var onRunOnBox: (String) -> Void = { _ in }
+        /// "Fan out a task" action — caller presents the Fan-out surface
+        /// (`ConduitUI.FanOutView`). Default no-op so the sheet compiles
+        /// standalone.
+        var onFanOut: () -> Void = {}
 
         @State private var query: String = ""
         @FocusState private var fieldFocused: Bool
@@ -158,6 +162,8 @@ extension ConduitUI {
                               shortcut: "⌘N", run: onNewSession),
                 PaletteAction(id: "pair", title: "Pair a box", systemImage: "antenna.radiowaves.left.and.right",
                               shortcut: nil, run: onPairBox),
+                PaletteAction(id: "fanout", title: "Fan out a task", systemImage: "square.grid.2x2",
+                              shortcut: nil, run: onFanOut),
             ]
         }
 

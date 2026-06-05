@@ -35,6 +35,9 @@ extension ConduitUI {
         @State private var showRename = false
         @State private var showFork = false
         @State private var showEndConfirm = false
+        /// Session recap sheet — the Export action now previews the recap
+        /// (which carries its own Export markdown / Share) before sharing.
+        @State private var showRecap = false
 
         var body: some View {
             if embedded {
@@ -92,6 +95,12 @@ extension ConduitUI {
                     session: session,
                     currentEffort: store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
                 )
+            }
+            .sheet(isPresented: $showRecap) {
+                // The recap surface carries its own Export-markdown / Share
+                // affordances, so the user previews before sharing.
+                ConduitUI.SessionRecapView(session: session)
+                    .environment(store)
             }
             .confirmationDialog(
                 "End this session?",
@@ -421,10 +430,9 @@ extension ConduitUI {
                 actionPill(systemImage: "arrow.triangle.branch", label: "Fork", tint: neon.accent) {
                     showFork = true
                 }
-                ShareLink(item: exportMarkdown) {
-                    actionPillBody(systemImage: "square.and.arrow.up", label: "Export", tint: neon.accent)
+                actionPill(systemImage: "square.and.arrow.up", label: "Export", tint: neon.accent) {
+                    showRecap = true
                 }
-                .buttonStyle(.plain)
                 actionPill(systemImage: "stop.circle", label: "End", tint: neon.red) {
                     showEndConfirm = true
                 }
