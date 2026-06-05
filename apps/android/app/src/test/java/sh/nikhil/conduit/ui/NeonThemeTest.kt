@@ -3,6 +3,7 @@ package sh.nikhil.conduit.ui
 import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -78,12 +79,27 @@ class NeonThemeTest {
     fun darkSemanticTokens() {
         val t = NeonTheme.resolve(NeonPalette.ICE, dark = true, glow = true)
         assertEquals(Color(0xFFFF9D4D), t.claude)
-        assertEquals(Color(0xFF22D3EE), t.codex)      // == bright accent
+        assertEquals(Color(0xFF22D3EE), t.codex)      // fixed brand cyan
         assertEquals(Color(0xFFB487FF), t.purple)
         assertEquals(Color(0xFF4F8CFF), t.blue)        // == accent2
         assertEquals(Color(0xFF3EF0A0), t.green)
         assertEquals(Color(0xFFFF5C72), t.red)
         assertEquals(Color(0xFFFFD24D), t.yellow)
+    }
+
+    /**
+     * Agent tints are palette-independent brand hues: in a NON-ice palette
+     * (synth, whose accent is magenta) codex must still read brand cyan and
+     * claude warm orange — not the palette accent. Locks the device-feedback
+     * fix where codex changed color with the theme.
+     */
+    @Test
+    fun agentTintsArePaletteIndependent() {
+        val synth = NeonTheme.resolve(NeonPalette.SYNTH, dark = true, glow = true)
+        assertEquals(Color(0xFF22D3EE), synth.codex)
+        assertEquals(Color(0xFFFF9D4D), synth.claude)
+        // sanity: synth's own accent is NOT cyan, so codex differs from accent
+        assertNotEquals(synth.accent, synth.codex)
     }
 
     // endregion
