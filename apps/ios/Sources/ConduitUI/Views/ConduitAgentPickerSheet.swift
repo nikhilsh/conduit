@@ -77,10 +77,11 @@ extension ConduitUI {
                     DirectoryPicker(
                         agentKind: kind,
                         initialPrompt: initialPrompt,
-                        onCreate: { cwd, model in
+                        onCreate: { cwd, model, effort in
                             store.createSession(
                                 assistant: kind,
                                 startupCwd: cwd,
+                                reasoningEffort: effort,
                                 model: model,
                                 initialPrompt: initialPrompt
                             )
@@ -217,9 +218,10 @@ extension ConduitUI {
         let agentKind: String
         var initialPrompt: String?
         /// Called with the absolute path to cd into (or nil to start with no
-        /// working directory) and the selected model alias (nil = inherit the
-        /// agent's default model).
-        let onCreate: (String?, String?) -> Void
+        /// working directory), the selected model alias (nil = inherit the
+        /// agent's default model), and the chosen reasoning effort (nil =
+        /// the agent's default effort).
+        let onCreate: (String?, String?, String?) -> Void
 
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
@@ -233,9 +235,33 @@ extension ConduitUI {
         /// means "no override — use the agent's default model", which is the
         /// default and keeps the start path identical to before.
         @State private var model: String = ConduitUI.ForkOptions.inheritModel
+        /// Selected reasoning effort. Defaults to the agent's sensible
+        /// default ("medium" when offered) via `defaultEffort`, mirroring the
+        /// Fork sheet — the new-session flow previously couldn't set effort.
+        @State private var effort: String
+
+        init(
+            agentKind: String,
+            initialPrompt: String? = nil,
+            onCreate: @escaping (String?, String?, String?) -> Void
+        ) {
+            self.agentKind = agentKind
+            self.initialPrompt = initialPrompt
+            self.onCreate = onCreate
+            self._effort = State(initialValue: Self.defaultEffort(forAssistant: agentKind))
+        }
+
+        private static func defaultEffort(forAssistant assistant: String) -> String {
+            let options = ConduitUI.ForkOptions.efforts(forAssistant: assistant)
+            return options.contains("medium") ? "medium" : (options.first ?? "medium")
+        }
 
         private var modelOptions: [String] {
             ConduitUI.ForkOptions.models(forAssistant: agentKind)
+        }
+
+        private var effortOptions: [String] {
+            ConduitUI.ForkOptions.efforts(forAssistant: agentKind)
         }
 
         /// The model to hand to onCreate: the sentinel maps to nil.
@@ -247,6 +273,7 @@ extension ConduitUI {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         modelSection
+                        effortSection
                         if !store.recentDirectories.isEmpty {
                             recentSection
                         }
@@ -293,13 +320,26 @@ extension ConduitUI {
             }
         }
 
+        private var effortSection: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel("Reasoning effort")
+                Picker("Reasoning effort", selection: $effort) {
+                    ForEach(effortOptions, id: \.self) { level in
+                        Text(level.capitalized).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .tint(neon.accent)
+            }
+        }
+
         private var recentSection: some View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Recent")
                 VStack(spacing: 6) {
                     ForEach(store.recentDirectories, id: \.self) { path in
                         Button {
-                            onCreate(path, selectedModel)
+                            onCreate(path, selectedModel, effort)
                         } label: {
                             ConduitUI.ListRow(
                                 icon: "clock.arrow.circlepath",
@@ -411,7 +451,7 @@ extension ConduitUI {
         private var bottomBar: some View {
             VStack(spacing: 10) {
                 Button {
-                    onCreate(listing?.path, selectedModel)
+                    onCreate(listing?.path, selectedModel, effort)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
@@ -432,7 +472,7 @@ extension ConduitUI {
                 .opacity(listing == nil ? 0.5 : 1.0)
 
                 Button {
-                    onCreate(nil, selectedModel)
+                    onCreate(nil, selectedModel, effort)
                 } label: {
                     Text("Start without a folder")
                         .font(neon.sans(13).weight(.medium))

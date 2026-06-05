@@ -1128,8 +1128,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun isConfirmedLive(sessionID: String): Boolean {
         return when (_sessionLifecycle.value[sessionID]) {
             is SessionLifecycle.Exited,
-            is SessionLifecycle.FailedToStart,
-            null -> false
+            is SessionLifecycle.FailedToStart -> false
+            null -> {
+                // No local lifecycle entry — e.g. a session restored from
+                // the saved list or re-listed after a reconnect, before any
+                // create round-trip recorded a lifecycle. Trust the broker:
+                // a current running phase means it's interactive. Without
+                // this a reconnected "running" session opened read-only
+                // (device bug: codex listed as running but the chat had no
+                // composer until re-created). Fails closed with no status.
+                val phase = _statusBySession.value[sessionID]?.phase
+                if (phase != null) isLivePhase(phase) else false
+            }
             is SessionLifecycle.Creating -> {
                 // Newly-created session mid-handshake: interactive, even
                 // before the first status frame. A confirmed-exited phase
@@ -1242,6 +1252,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         assistant: String,
         branch: String? = null,
         startupCwd: String? = null,
+        reasoningEffort: String? = null,
         model: String? = null,
         initialPrompt: String? = null,
     ) {
@@ -1255,7 +1266,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // Without the slug here that failure is undiagnosable from Sentry.
         // "inherit" = no override.
         val modelCrumb = model?.trim()?.takeIf { it.isNotEmpty() } ?: "inherit"
-        Telemetry.breadcrumb("session", "create start", mapOf("assistant" to assistant, "hasCwd" to (startupCwd?.isNotBlank() == true).toString(), "model" to modelCrumb))
+        val effortCrumb = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() } ?: "default"
+        Telemetry.breadcrumb("session", "create start", mapOf("assistant" to assistant, "hasCwd" to (startupCwd?.isNotBlank() == true).toString(), "model" to modelCrumb, "effort" to effortCrumb))
         viewModelScope.launch {
             try {
                 // Pass the selected folder as the agent's cwd so the broker
@@ -1265,7 +1277,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // .conduit work dir.)
                 val startup = startupCwd?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedModel = model?.trim()?.takeIf { it.isNotEmpty() }
-                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, null, pickedModel, startup) }
+                val pickedEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
+                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
                 startup?.let { rememberRecentDirectory(it) }
                 initialPrompt?.trim()?.takeIf { it.isNotEmpty() }?.let { prompt ->

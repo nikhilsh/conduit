@@ -109,9 +109,14 @@ extension ConduitUI {
         }
 
         /// One agent's collapsed glance: a tinted dot, the agent label, a mini
-        /// bar, and the headline 5-hour %.
+        /// bar, and the headline %. The headline is the MORE-CONSTRAINING of the
+        /// two windows — `max(5h%, weekly%)` — so it surfaces whichever limit is
+        /// closest to throttling (the expanded detail still breaks out both
+        /// windows + their resets). Falls back to whichever single window has
+        /// data; nil only when neither does (the agent is already filtered out
+        /// of the strip in that case via `hasData`).
         private func agentGlance(_ a: SessionStore.AgentUsageSnapshot) -> some View {
-            let pct = a.fivePct ?? a.weekPct
+            let pct: Double? = [a.fivePct, a.weekPct].compactMap { $0 }.max()
             let frac = CGFloat(max(0, min(1, (pct ?? 0) / 100)))
             return HStack(spacing: 6) {
                 Circle().fill(neon.agentTint(forAgent: a.agent)).frame(width: 6, height: 6)
