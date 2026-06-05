@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,6 +42,9 @@ fun NeonAccountUsageCard(
     fiveResetsAt: String?,
     weekPct: Double?,
     weekResetsAt: String?,
+    // Bar fill tint, by the session's agent (claude=orange, codex=cyan),
+    // per the design — not by green/yellow/red headroom.
+    agentTint: Color,
     onRefresh: () -> Unit,
     // Eyebrow shown on the header row. Session Info passes
     // "<agent> limits · 5h & weekly"; defaults to the generic label.
@@ -73,24 +77,19 @@ fun NeonAccountUsageCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            UsageWindowRow(neon, "5-hour", fivePct, fiveResetsAt)
-            UsageWindowRow(neon, "Weekly", weekPct, weekResetsAt)
+            UsageWindowRow(neon, "5h", fivePct, fiveResetsAt, agentTint)
+            UsageWindowRow(neon, "week", weekPct, weekResetsAt, agentTint)
         }
     }
 }
 
 @Composable
-private fun UsageWindowRow(neon: NeonTheme, label: String, pct: Double?, resetsAt: String?) {
+private fun UsageWindowRow(neon: NeonTheme, label: String, pct: Double?, resetsAt: String?, tint: Color) {
     val fraction = ((pct ?: 0.0) / 100.0).coerceIn(0.0, 1.0).toFloat()
-    val tint = when {
-        (pct ?: 0.0) < 70 -> neon.green
-        (pct ?: 0.0) < 90 -> neon.yellow
-        else -> neon.red
-    }
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                label.uppercase(),
+                label,
                 style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
                 fontFamily = neon.mono,
                 fontWeight = FontWeight.SemiBold,

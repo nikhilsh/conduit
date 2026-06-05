@@ -19,6 +19,11 @@ struct VoiceDictationSheet: View {
     /// its tint). Defaults to `claude` — the home voice flow seeds a new
     /// claude session, and the in-chat flow passes the session's agent.
     var agent: String = "claude"
+    /// Display name of the routed session (shown after the agent in the
+    /// target chip as `<agent> · <session>`). When dictation seeds a
+    /// brand-new session (the Home flow), there is no session yet, so we
+    /// fall back to `new session`.
+    var sessionName: String = "new session"
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -111,12 +116,14 @@ struct VoiceDictationSheet: View {
             Text(agent.lowercased())
                 .font(neon.mono(12).weight(.semibold))
                 .foregroundStyle(tint)
-            Image(systemName: "arrow.right")
-                .font(.system(size: 9, weight: .bold))
+            Text("·")
+                .font(neon.mono(11))
                 .foregroundStyle(neon.textFaint)
-            Text("dictation")
+            Text(sessionName)
                 .font(neon.mono(11))
                 .foregroundStyle(neon.textDim)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)

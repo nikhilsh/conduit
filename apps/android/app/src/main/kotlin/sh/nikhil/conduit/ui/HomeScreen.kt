@@ -471,6 +471,9 @@ fun HomeScreen(
                         server = server,
                         isActive = server.endpoint == endpoint,
                         harness = harness,
+                        // Sessions live on the connected endpoint, so the
+                        // connected box's count is the whole session list.
+                        sessionCount = sessions.size,
                         // Tap opens the box's health detail; reconnect now
                         // lives inside Box health (its onReconnect action).
                         onClick = { onOpenBoxHealth(server) },
@@ -552,12 +555,13 @@ private fun HomeBoxRow(
     server: SavedServer,
     isActive: Boolean,
     harness: HarnessState,
+    sessionCount: Int,
     onClick: () -> Unit,
 ) {
     val connected = isActive && (harness is HarnessState.Live || harness is HarnessState.Linked)
     val (statusText, statusColor) = when {
         !isActive -> "tap to connect" to neon.textFaint
-        connected -> "connected" to neon.green
+        connected -> "connected · $sessionCount ${if (sessionCount == 1) "session" else "sessions"}" to neon.green
         harness is HarnessState.Connecting -> "connecting…" to neon.yellow
         harness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
         else -> "offline" to neon.textFaint
@@ -592,7 +596,7 @@ private fun HomeBoxRow(
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
-                color = neon.text,
+                color = if (connected) neon.green else neon.text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -653,9 +657,9 @@ private fun NeedsYouBannerCard(
             .neonCardSurface(
                 neon = neon,
                 shape = RoundedCornerShape(12.dp),
-                fill = neon.yellow.copy(alpha = 0.07f),
-                borderColor = neon.yellow.copy(alpha = 0.27f),
-                glowTint = neon.yellow,
+                fill = neon.claude.copy(alpha = 0.07f),
+                borderColor = neon.claude.copy(alpha = 0.27f),
+                glowTint = neon.claude,
             )
             .clickable(onClick = onReview)
             .padding(horizontal = 13.dp, vertical = 9.dp),
@@ -663,10 +667,10 @@ private fun NeedsYouBannerCard(
         horizontalArrangement = Arrangement.spacedBy(11.dp),
     ) {
         Box(
-            modifier = Modifier.size(34.dp).background(neon.yellow.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
+            modifier = Modifier.size(34.dp).background(neon.claude.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Default.Warning, null, modifier = Modifier.size(18.dp), tint = neon.yellow)
+            Icon(Icons.Default.Warning, null, modifier = Modifier.size(18.dp), tint = neon.claude)
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -692,9 +696,9 @@ private fun NeedsYouBannerCard(
             style = MaterialTheme.typography.titleSmall,
             fontFamily = neon.sans,
             fontWeight = FontWeight.SemiBold,
-            color = neon.yellow,
+            color = neon.bg,
             modifier = Modifier
-                .background(neon.yellow.copy(alpha = 0.14f), CircleShape)
+                .background(neon.claude, CircleShape)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
         )
     }

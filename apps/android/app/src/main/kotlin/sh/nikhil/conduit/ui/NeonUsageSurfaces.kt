@@ -217,7 +217,7 @@ private fun AgentGlance(neon: NeonTheme, a: AgentUsageSnapshot) {
         Text(a.agent, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = neon.textDim)
         val frac = ((pct ?: 0.0) / 100.0).coerceIn(0.0, 1.0).toFloat()
         Box(modifier = Modifier.width(34.dp).height(5.dp).clip(CircleShape).background(neon.border)) {
-            Box(Modifier.fillMaxWidth(frac).height(5.dp).clip(CircleShape).background(AccountUsageFormat.tint(pct ?: 0.0, neon)))
+            Box(Modifier.fillMaxWidth(frac).height(5.dp).clip(CircleShape).background(neonAgentColor(a.agent, neon)))
         }
         Text(
             if (pct != null) "${pct.roundToInt()}%" else "—",

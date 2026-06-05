@@ -278,6 +278,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                     fiveResetsAt = status?.account5hResetsAt ?: session.account5hResetsAt,
                     weekPct = status?.account7dPct ?: session.account7dPct,
                     weekResetsAt = status?.account7dResetsAt ?: session.account7dResetsAt,
+                    agentTint = tint,
                     onRefresh = { store.refreshAccountUsage(session.id) },
                     heading = "${agent.lowercase()} limits · 5h & weekly",
                 )

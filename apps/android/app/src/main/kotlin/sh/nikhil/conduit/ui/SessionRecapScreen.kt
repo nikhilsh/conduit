@@ -22,8 +22,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -213,7 +216,7 @@ private fun HeaderCard(recap: RecapModel, neon: NeonTheme) {
             }
             Spacer(Modifier.width(8.dp))
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutcomeBadge(recap.outcome, neon)
+                OutcomeBadge(recap.outcome, recap.prNumber, neon)
                 if (recap.linesAdded > 0 || recap.linesRemoved > 0) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("+${recap.linesAdded}", fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, color = neon.green, style = MaterialTheme.typography.labelMedium)
@@ -226,7 +229,7 @@ private fun HeaderCard(recap: RecapModel, neon: NeonTheme) {
 }
 
 @Composable
-private fun OutcomeBadge(outcome: RecapOutcome, neon: NeonTheme) {
+private fun OutcomeBadge(outcome: RecapOutcome, prNumber: Int?, neon: NeonTheme) {
     val color = outcome.color(neon)
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -236,8 +239,11 @@ private fun OutcomeBadge(outcome: RecapOutcome, neon: NeonTheme) {
             .border(1.dp, color.copy(alpha = 0.30f), RoundedCornerShape(50))
             .padding(horizontal = 9.dp, vertical = 5.dp),
     ) {
+        outcome.icon?.let { ic ->
+            Icon(ic, contentDescription = null, tint = color, modifier = Modifier.size(11.dp))
+        }
         Text(
-            outcome.label,
+            outcome.label(prNumber),
             style = MaterialTheme.typography.labelSmall,
             fontFamily = neon.mono,
             fontWeight = FontWeight.SemiBold,
@@ -437,13 +443,31 @@ enum class RecapOutcome {
     NEUTRAL,
     ;
 
-    val label: String
+    /**
+     * Chip label. When a real PR number is known, the PR / merged outcomes
+     * name it (`PR #128` / `merged #128`) to match the design (`✓ PR #128`);
+     * the leading check/PR glyph comes from [icon]. Falls back to the bare
+     * label when no number. Mirror of iOS `RecapOutcome.label(prNumber:)`.
+     */
+    fun label(prNumber: Int? = null): String = when (this) {
+        MERGED -> prNumber?.let { "merged #$it" } ?: "merged"
+        PR -> prNumber?.let { "PR #$it" } ?: "PR open"
+        ENDED -> "ended"
+        FAILED -> "failed"
+        NEUTRAL -> "session"
+    }
+
+    /**
+     * Leading icon, mirroring the iOS `RecapOutcome.systemImage` (check/PR
+     * glyph for the PR & merged outcomes). `NEUTRAL` is icon-less.
+     */
+    val icon: ImageVector?
         get() = when (this) {
-            MERGED -> "merged"
-            PR -> "PR open"
-            ENDED -> "ended"
-            FAILED -> "failed"
-            NEUTRAL -> "session"
+            MERGED -> Icons.Default.CheckCircle
+            PR -> Icons.Default.Link
+            ENDED -> Icons.Default.Stop
+            FAILED -> Icons.Outlined.WarningAmber
+            NEUTRAL -> null
         }
 
     fun color(neon: NeonTheme): Color = when (this) {
@@ -486,7 +510,7 @@ data class RecapModel(
             lines += "# $displayName"
             lines += if (!branch.isNullOrBlank()) "${assistant.lowercase()} · $branch" else assistant.lowercase()
             lines += ""
-            lines += "**Outcome:** ${outcome.label}"
+            lines += "**Outcome:** ${outcome.label(prNumber)}"
             if (prNumber != null) lines += "**PR:** #$prNumber${prState?.let { " $it" } ?: ""}"
             lines += ""
 

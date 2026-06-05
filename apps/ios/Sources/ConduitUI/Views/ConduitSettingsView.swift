@@ -629,7 +629,9 @@ extension ConduitUI {
         @ViewBuilder
         private func window(label: String, pct: Double?, resetsAt: String?) -> some View {
             let frac = CGFloat(max(0, min(1, (pct ?? 0) / 100)))
-            let barTint = ConduitUI.AccountUsageFormat.tint(pct ?? 0, neon)
+            // Bar fill follows this agent's tint (claude=orange, codex=cyan),
+            // per the design — not green/yellow/red headroom.
+            let barTint = tint
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text(label.uppercased())

@@ -182,6 +182,14 @@ extension ConduitUI {
                         .navigationTitle("Approvals")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
+                            ToolbarItem(placement: .principal) {
+                                HStack(spacing: 8) {
+                                    Text("Approvals")
+                                        .font(neon.sans(16).weight(.semibold))
+                                        .foregroundStyle(neon.text)
+                                    countBadge
+                                }
+                            }
                             ToolbarItem(placement: .confirmationAction) {
                                 Button {
                                     dismiss()
@@ -221,6 +229,26 @@ extension ConduitUI {
                 )
             }
             return ConduitUI.ApprovalsViewModel.queue(candidates)
+        }
+
+        /// Header count badge — a small filled gold pill showing the queue
+        /// size, mirroring the Android header badge (`ApprovalsScreen.kt`).
+        /// Only shown when there is something waiting.
+        @ViewBuilder private var countBadge: some View {
+            let count = queue.count
+            if count > 0 {
+                Text("\(count)")
+                    .font(neon.mono(12).weight(.bold))
+                    .foregroundStyle(neon.yellow)
+                    .frame(minWidth: 22, minHeight: 22)
+                    .padding(.horizontal, 3)
+                    .background(
+                        Circle()
+                            .fill(neon.yellow.opacity(0.16))
+                            .overlay(Circle().strokeBorder(neon.yellow.opacity(0.4), lineWidth: 1))
+                    )
+                    .accessibilityLabel("\(count) waiting")
+            }
         }
 
         private var content: some View {
@@ -420,7 +448,7 @@ extension ConduitUI {
         private func riskColor(_ risk: ConduitUI.ApprovalRisk) -> Color {
             switch risk {
             case .destructive: return neon.red
-            case .writesFiles: return neon.yellow
+            case .writesFiles: return neon.blue
             case .safe:        return neon.green
             }
         }

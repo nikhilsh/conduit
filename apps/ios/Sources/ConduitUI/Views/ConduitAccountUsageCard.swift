@@ -32,12 +32,15 @@ extension ConduitUI {
             let weekPct = status?.account7dPct ?? session.account7dPct
             let fiveReset = status?.account5hResetsAt ?? session.account5hResetsAt
             let weekReset = status?.account7dResetsAt ?? session.account7dResetsAt
+            // Bars are tinted by the session's agent (claude=orange, codex=cyan),
+            // per the design — not by green/yellow/red headroom.
+            let barTint = neon.agentTint(forAgent: status?.assistant ?? session.assistant)
 
             VStack(alignment: .leading, spacing: 11) {
                 header
                 VStack(spacing: 12) {
-                    usageRow(label: "5-hour", pct: fivePct, resetsAt: fiveReset)
-                    usageRow(label: "Weekly", pct: weekPct, resetsAt: weekReset)
+                    usageRow(label: "5h", pct: fivePct, resetsAt: fiveReset, tint: barTint)
+                    usageRow(label: "week", pct: weekPct, resetsAt: weekReset, tint: barTint)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -72,12 +75,11 @@ extension ConduitUI {
         // MARK: Window row — labeled bar + percent + reset countdown
 
         @ViewBuilder
-        private func usageRow(label: String, pct: Double?, resetsAt: String?) -> some View {
+        private func usageRow(label: String, pct: Double?, resetsAt: String?, tint: Color) -> some View {
             let fraction = max(0, min(1, (pct ?? 0) / 100))
-            let tint = barTint(pct ?? 0)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(label.uppercased())
+                    Text(label)
                         .font(neon.mono(10).weight(.semibold))
                         .foregroundStyle(neon.textFaint)
                         .tracking(1.2)
@@ -109,15 +111,6 @@ extension ConduitUI {
         }
 
         // MARK: Helpers
-
-        /// Green under 70%, yellow 70–90%, red above — at-a-glance headroom.
-        private func barTint(_ pct: Double) -> Color {
-            switch pct {
-            case ..<70:  return neon.green
-            case ..<90:  return neon.yellow
-            default:     return neon.red
-            }
-        }
 
         private func resetCaption(_ iso: String?) -> String {
             guard let iso, let date = Self.parseISO(iso) else { return "tap refresh to update" }

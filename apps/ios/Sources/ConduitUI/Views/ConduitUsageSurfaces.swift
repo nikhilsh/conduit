@@ -120,7 +120,7 @@ extension ConduitUI {
                     .foregroundStyle(neon.textDim)
                 Capsule().fill(neon.border).frame(width: 34, height: 5)
                     .overlay(alignment: .leading) {
-                        Capsule().fill(AccountUsageFormat.tint(pct ?? 0, neon))
+                        Capsule().fill(neon.agentTint(forAgent: a.agent))
                             .frame(width: 34 * frac, height: 5)
                     }
                 Text(pct.map { "\(Int($0.rounded()))%" } ?? "—")

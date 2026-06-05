@@ -285,10 +285,19 @@ fun ProjectScreen(
     }
 
     if (showVoice) {
+        val voiceDisplayNames by store.displayNames.collectAsState()
+        val voiceSessionName = remember(session, voiceDisplayNames, conversationLog) {
+            sh.nikhil.conduit.SessionNaming.friendlyFor(
+                session = session,
+                custom = voiceDisplayNames[session.id],
+                firstUserMessage = sh.nikhil.conduit.firstUserMessageOf(conversationLog[session.id]),
+            )
+        }
         VoiceDictationScreen(
             onTranscript = { transcript -> store.sendChat(session.id, transcript) },
             onDismiss = { showVoice = false },
             agent = session.assistant,
+            sessionName = voiceSessionName,
         )
     }
 }

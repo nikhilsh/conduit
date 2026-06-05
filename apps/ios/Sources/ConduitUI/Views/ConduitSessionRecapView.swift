@@ -168,7 +168,7 @@ extension ConduitUI {
             return HStack(spacing: 5) {
                 Image(systemName: o.systemImage)
                     .font(.system(size: 9, weight: .bold))
-                Text(o.label)
+                Text(o.label(prNumber: recap.prNumber))
                     .font(neon.mono(10.5).weight(.semibold))
             }
             .foregroundStyle(o.color(neon))
@@ -393,10 +393,14 @@ extension ConduitUI {
         case failed
         case neutral
 
-        var label: String {
+        /// Chip label. When a real PR number is known, the PR / merged
+        /// outcomes name it (`PR #128` / `merged #128`) to match the design
+        /// (`✓ PR #128`); the leading check/PR glyph comes from
+        /// `systemImage`. Falls back to the bare label when no number.
+        func label(prNumber: Int? = nil) -> String {
             switch self {
-            case .merged:  return "merged"
-            case .pr:      return "PR open"
+            case .merged:  return prNumber.map { "merged #\($0)" } ?? "merged"
+            case .pr:      return prNumber.map { "PR #\($0)" } ?? "PR open"
             case .ended:   return "ended"
             case .failed:  return "failed"
             case .neutral: return "session"
@@ -547,7 +551,7 @@ extension ConduitUI {
             if let branch, !branch.isEmpty { ident += " · \(branch)" }
             lines.append(ident)
             lines.append("")
-            lines.append("**Outcome:** \(outcome.label)")
+            lines.append("**Outcome:** \(outcome.label(prNumber: prNumber))")
             if let prNumber {
                 lines.append("**PR:** #\(prNumber)\(prState.map { " \($0)" } ?? "")")
             }

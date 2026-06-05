@@ -274,10 +274,15 @@ extension ConduitUI {
         private func boxRow(_ server: SavedServer) -> some View {
             let isActive = store.endpoint == server.endpoint
             let connected = isActive && store.harness.canIssueCommands
+            // Sessions live on the currently-connected endpoint, so the
+            // connected box's count is simply the store's session list.
+            let sessionCount = connected ? store.sessions.count : 0
             let (statusText, statusColor): (String, Color) = {
                 guard isActive else { return ("tap to connect", neon.textFaint) }
                 switch store.harness {
-                case .live, .linked:   return ("connected", neon.green)
+                case .live, .linked:
+                    let plural = sessionCount == 1 ? "session" : "sessions"
+                    return ("connected · \(sessionCount) \(plural)", neon.green)
                 case .connecting:      return ("connecting…", neon.yellow)
                 case .reconnecting:    return ("reconnecting…", neon.yellow)
                 case .disconnected, .failed: return ("offline", neon.textFaint)
@@ -296,7 +301,7 @@ extension ConduitUI {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(server.name)
                         .font(neon.sans(13).weight(.semibold))
-                        .foregroundStyle(neon.text)
+                        .foregroundStyle(connected ? neon.green : neon.text)
                         .lineLimit(1)
                     Text(server.endpoint.displayHost)
                         .font(neon.mono(10.5))
@@ -641,12 +646,12 @@ private struct NeedsYouBannerCard: View {
         Button(action: onReview) {
             HStack(spacing: 11) {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(neon.yellow.opacity(0.14))
+                    .fill(neon.claude.opacity(0.14))
                     .frame(width: 34, height: 34)
                     .overlay(
                         Image(systemName: "exclamationmark.circle.fill")
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(neon.yellow)
+                            .foregroundStyle(neon.claude)
                     )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(titleText)
@@ -662,19 +667,19 @@ private struct NeedsYouBannerCard: View {
                 Spacer(minLength: 6)
                 Text("Review")
                     .font(neon.sans(12.5).weight(.semibold))
-                    .foregroundStyle(neon.yellow)
+                    .foregroundStyle(neon.bg)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Capsule().fill(neon.yellow.opacity(0.14)))
+                    .background(Capsule().fill(neon.claude))
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .neonCardSurface(
                 neon,
-                fill: neon.yellow.opacity(neon.dark ? 0.07 : 0.05),
+                fill: neon.claude.opacity(neon.dark ? 0.07 : 0.05),
                 cornerRadius: 12,
-                border: neon.yellow.opacity(0.27),
-                glowTint: neon.glow ? neon.yellow : nil
+                border: neon.claude.opacity(0.27),
+                glowTint: neon.glow ? neon.claude : nil
             )
         }
         .buttonStyle(.plain)
