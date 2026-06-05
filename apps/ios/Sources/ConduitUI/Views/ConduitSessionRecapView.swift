@@ -450,6 +450,7 @@ extension ConduitUI {
         let cwd: String?
         let startedLabel: String?
 
+        @MainActor
         init(session: ProjectSession, store: SessionStore) {
             let status = store.statusBySession[session.id]
             let log = store.conversationLog[session.id] ?? []
