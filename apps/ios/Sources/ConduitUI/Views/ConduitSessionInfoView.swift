@@ -35,9 +35,6 @@ extension ConduitUI {
         @State private var showRename = false
         @State private var showFork = false
         @State private var showEndConfirm = false
-        /// Session recap sheet — the Export action now previews the recap
-        /// (which carries its own Export markdown / Share) before sharing.
-        @State private var showRecap = false
 
         var body: some View {
             if embedded {
@@ -96,17 +93,12 @@ extension ConduitUI {
                     currentEffort: store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
                 )
             }
-            .sheet(isPresented: $showRecap) {
-                // The recap surface carries its own Export-markdown / Share
-                // affordances, so the user previews before sharing.
-                ConduitUI.SessionRecapView(session: session)
-                    .environment(store)
-            }
-            .confirmationDialog(
-                "End this session?",
-                isPresented: $showEndConfirm,
-                titleVisibility: .visible
-            ) {
+            // A centered `.alert` (not `.confirmationDialog`): inside a
+            // presentation-detent sheet the action sheet rendered as a
+            // popover anchored to the wrong corner (device bug — the
+            // "End" confirmation pointed at the top-right close button).
+            // An alert always centers as a modal on iPhone and iPad.
+            .alert("End this session?", isPresented: $showEndConfirm) {
                 Button("End session", role: .destructive) {
                     store.archive(sessionID: session.id)
                     if !embedded { dismiss() }
@@ -114,6 +106,21 @@ extension ConduitUI {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("The agent stops and the box is released. The transcript stays in History.")
+            }
+            // Refresh the 5h/weekly limits on appear so they don't read stale
+            // (they otherwise only refresh on connect + the card's manual
+            // button — feedback: "tap refresh to update"). Best-effort: the
+            // call is a no-op for agents without a usage source and when
+            // there's no connected client. Gated to claude/codex (the only
+            // agents with a usage endpoint) to match the limits card. `content`
+            // backs BOTH the phone sheet and the tablet Info pane, so this
+            // covers both. `.task(id:)` re-fires if the pane rebinds to a
+            // different session.
+            .task(id: session.id) {
+                let agent = liveAssistant.lowercased()
+                if ["claude", "codex"].contains(agent) {
+                    store.refreshAccountUsage(sessionID: session.id)
+                }
             }
         }
 
@@ -430,9 +437,10 @@ extension ConduitUI {
                 actionPill(systemImage: "arrow.triangle.branch", label: "Fork", tint: neon.accent) {
                     showFork = true
                 }
-                actionPill(systemImage: "square.and.arrow.up", label: "Export", tint: neon.accent) {
-                    showRecap = true
+                ShareLink(item: transcriptMarkdown) {
+                    actionPillBody(systemImage: "square.and.arrow.up", label: "Export", tint: neon.accent)
                 }
+                .buttonStyle(.plain)
                 actionPill(systemImage: "stop.circle", label: "End", tint: neon.red) {
                     showEndConfirm = true
                 }
@@ -465,29 +473,59 @@ extension ConduitUI {
             )
         }
 
-        private var exportMarkdown: String {
-            let s = snapshot
+        /// The actual conversation transcript as markdown — the human /
+        /// assistant message content, not session metadata. Tool and command
+        /// items are folded in compactly so the export reads as the chat the
+        /// user had. Empty log → header + "(no messages yet)".
+        private var transcriptMarkdown: String {
+            let log = store.conversationLog[session.id] ?? []
             var lines: [String] = []
-            lines.append("# \(s.displayName)")
-            var ident = s.assistant.lowercased()
-            if let branch = session.branch, !branch.isEmpty { ident += " · \(branch)" }
-            lines.append(ident)
+            lines.append("# \(store.displayName(for: session))")
+            var meta = liveAssistant.lowercased()
+            if let branch = session.branch, !branch.isEmpty { meta += " · \(branch)" }
+            let userMsgs = log.filter { $0.role.lowercased() == "user" }.count
+            let asstMsgs = log.filter { $0.role.lowercased() == "assistant" }.count
+            let msgCount = userMsgs + asstMsgs
+            meta += "   ·  \(msgCount) message\(msgCount == 1 ? "" : "s")"
+            lines.append(meta)
             lines.append("")
-            let used = store.statusBySession[session.id]?.contextUsedTokens ?? session.contextUsedTokens ?? 0
-            let window = store.statusBySession[session.id]?.contextWindowTokens ?? session.contextWindowTokens ?? 0
-            if window > 0 { lines.append("- Context: \(Self.fmtK(used)) / \(Self.fmtK(window))") }
-            let input = store.statusBySession[session.id]?.totalInputTokens ?? session.totalInputTokens ?? 0
-            let output = store.statusBySession[session.id]?.totalOutputTokens ?? session.totalOutputTokens ?? 0
-            let cached = store.statusBySession[session.id]?.totalCachedTokens ?? session.totalCachedTokens ?? 0
-            if input > 0 || output > 0 {
-                lines.append("- Tokens: ↓ \(Self.fmtK(input)) ↑ \(Self.fmtK(output)) ⛁ \(Self.fmtK(cached))")
+
+            if log.isEmpty {
+                lines.append("(no messages yet)")
+                return lines.joined(separator: "\n")
             }
-            if s.turnsCount > 0 || s.filesChangedCount > 0 || s.commandsCount > 0 {
-                lines.append("- Activity: \(activityText(s))")
+
+            for item in log {
+                let role = item.role.lowercased()
+                let content = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Command / tool items: render compactly so the transcript
+                // keeps its shape without dumping raw tool noise.
+                if let command = item.command, !command.isEmpty {
+                    lines.append("$ \(command)")
+                    if !content.isEmpty, content != command { lines.append(content) }
+                    lines.append("")
+                    continue
+                }
+                switch role {
+                case "user":
+                    lines.append("## You")
+                    lines.append(content.isEmpty ? "(empty)" : content)
+                case "assistant":
+                    lines.append("## Assistant")
+                    lines.append(content.isEmpty ? "(empty)" : content)
+                default:
+                    // System / other roles or tool items with no command —
+                    // include the content only if there's something to show.
+                    guard !content.isEmpty else { continue }
+                    if let tool = item.toolName, !tool.isEmpty {
+                        lines.append("`\(tool)` \(content)")
+                    } else {
+                        lines.append(content)
+                    }
+                }
+                lines.append("")
             }
-            if let cwd = session.cwd { lines.append("- Working dir: \(cwd)") }
-            lines.append("- Started: \(startedLabel)")
-            return lines.joined(separator: "\n")
+            return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         // MARK: Helpers

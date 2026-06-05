@@ -208,10 +208,18 @@ fun HomeUsageStrip(store: SessionStore, modifier: Modifier = Modifier) {
     }
 }
 
-/** One agent's collapsed glance: tinted dot, label, mini bar, headline 5h %. */
+/**
+ * One agent's collapsed glance: tinted dot, label, mini bar, headline %.
+ *
+ * The headline (and the mini-bar fill) is the MORE-CONSTRAINING of the two
+ * windows — `max(5h%, weekly%)` — so it surfaces whichever limit is closest to
+ * throttling; the expanded detail still breaks out both windows + their resets.
+ * Falls back to whichever single window has data; null only when neither does
+ * (those agents are already filtered out of the strip via `hasData`).
+ */
 @Composable
 private fun AgentGlance(neon: NeonTheme, a: AgentUsageSnapshot) {
-    val pct = a.fivePct ?: a.weekPct
+    val pct = listOfNotNull(a.fivePct, a.weekPct).maxOrNull()
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(Modifier.size(6.dp).background(neonAgentColor(a.agent, neon), CircleShape))
         Text(a.agent, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = neon.textDim)

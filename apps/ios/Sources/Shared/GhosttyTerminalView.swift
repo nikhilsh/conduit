@@ -456,10 +456,22 @@ final class GhosttySurfaceView: UIView, UIKeyInput, UIEditMenuInteractionDelegat
     /// across tab switches (so the surface is never torn down + recreated
     /// mid-use); this stands the renderer down/up.
     func setActive(_ active: Bool) {
+        let becameActive = active && !isActive
         isActive = active
         let visible = isActive && window != nil && !isAppBackgrounded
         surface?.setOcclusion(visible)
         if visible {
+            // A theme/font change applied via `setTheme`/`setFont` while this
+            // tab was hidden updated libghostty's config but never repainted —
+            // the draw pump was stopped + the surface occluded, so no
+            // `ghostty_surface_draw` ran. Re-assert the current theme on
+            // becoming visible so the live surface reflects a Settings change
+            // made while we were off-tab, THEN wake + refresh so the pump
+            // paints the new palette on return. `surface.setTheme` is a no-op
+            // when the palette already matches, so this is cheap on a plain
+            // tab-switch-back. (A font change rebuilds the surface up-front via
+            // `setFont`, so the rebuilt surface already carries the new font.)
+            if becameActive { surface?.setTheme(currentTheme) }
             surface?.setFocus(false)
             surface?.setFocus(true)
             surface?.refresh()

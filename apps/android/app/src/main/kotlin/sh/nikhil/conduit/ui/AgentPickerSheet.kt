@@ -21,6 +21,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -85,8 +86,8 @@ fun AgentPickerSheet(
             DirectoryStep(
                 store = store,
                 assistant = agent,
-                onCreate = { cwd, model ->
-                    store.createSession(assistant = agent, startupCwd = cwd, model = model)
+                onCreate = { cwd, model, effort ->
+                    store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model)
                     onDismiss()
                 },
             )
@@ -165,11 +166,12 @@ private fun AgentStep(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DirectoryStep(
     store: SessionStore,
     assistant: String,
-    onCreate: (String?, String?) -> Unit,
+    onCreate: (String?, String?, String?) -> Unit,
 ) {
     val recent by store.recentDirectories.collectAsState()
     var currentPath by remember { mutableStateOf<String?>(null) }
@@ -181,6 +183,13 @@ private fun DirectoryStep(
     var model by remember(assistant) { mutableStateOf(forkModelInherit) }
     // The model handed to onCreate: the sentinel maps to null.
     val selectedModel = model.trim().ifEmpty { null }
+    // Reasoning effort. Defaults to the agent's sensible default ("medium"
+    // when offered), mirroring the Fork chooser — the new-session flow
+    // previously couldn't set effort (passed null).
+    val effortOptions = remember(assistant) { forkEffortOptions(assistant) }
+    var effort by remember(assistant) {
+        mutableStateOf(if (effortOptions.contains("medium")) "medium" else effortOptions.first())
+    }
 
     LaunchedEffect(currentPath) {
         isLoading = true
@@ -223,11 +232,24 @@ private fun DirectoryStep(
                 onSelect = { model = it },
             )
 
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SectionLabel("Reasoning effort")
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    effortOptions.forEach { level ->
+                        FilterChip(
+                            selected = effort == level,
+                            onClick = { effort = level },
+                            label = { Text(level.replaceFirstChar { it.uppercase() }) },
+                        )
+                    }
+                }
+            }
+
             if (recent.isNotEmpty()) {
                 SectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recent.forEach { path ->
-                        RecentRow(path = path, onTap = { onCreate(path, selectedModel) })
+                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, effort) })
                     }
                 }
             }
@@ -277,7 +299,7 @@ private fun DirectoryStep(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Button(
-                onClick = { onCreate(listing?.path, selectedModel) },
+                onClick = { onCreate(listing?.path, selectedModel, effort) },
                 enabled = listing != null,
                 shape = RoundedCornerShape(14.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
@@ -290,7 +312,7 @@ private fun DirectoryStep(
                 Spacer(Modifier.width(8.dp))
                 Text("Use this folder", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
             }
-            TextButton(onClick = { onCreate(null, selectedModel) }) {
+            TextButton(onClick = { onCreate(null, selectedModel, effort) }) {
                 Text(
                     "Start without a folder",
                     fontFamily = neon.sans,

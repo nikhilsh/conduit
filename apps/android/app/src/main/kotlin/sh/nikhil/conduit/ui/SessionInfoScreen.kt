@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -97,7 +98,6 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var showRename by remember { mutableStateOf(false) }
     var showFork by remember { mutableStateOf(false) }
     var showEndConfirm by remember { mutableStateOf(false) }
-    var showRecap by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf(name) }
 
     // Fork chooser state (unchanged from before the redesign).
@@ -115,6 +115,19 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
 
     val agent = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant
     val tint = neonAgentColor(agent, neon)
+
+    // Refresh the 5h/weekly limits on appear so they don't read stale (they
+    // otherwise only refresh on connect + the card's manual button — feedback:
+    // "tap refresh to update"). Best-effort: the broker call is a no-op for
+    // agents without a usage source and when no client is connected. Gated to
+    // claude/codex (the only agents with a usage endpoint) to match the limits
+    // card. Keyed on session.id so it re-fires if the pane (phone sheet or
+    // tablet Info pane) rebinds to a different session.
+    LaunchedEffect(session.id) {
+        if (agent.lowercase() in listOf("claude", "codex")) {
+            store.refreshAccountUsage(session.id)
+        }
+    }
 
     val content: @Composable () -> Unit = {
         Column(
@@ -333,10 +346,14 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             ) {
                 ActionPill(Icons.AutoMirrored.Filled.CallSplit, "Fork", neon.accent, Modifier.weight(1f)) { showFork = true }
                 ActionPill(Icons.Default.Share, "Export", neon.accent, Modifier.weight(1f)) {
-                    // Export now previews the Session recap (which carries its
-                    // own Export-markdown / Share affordances) instead of a
-                    // bare share-intent, so the user previews before sharing.
-                    showRecap = true
+                    // Export shares the actual conversation transcript as
+                    // markdown — the chat itself, not session metadata.
+                    val transcript = buildTranscriptMarkdown(name, agent, session.branch, events)
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, transcript)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Export transcript"))
                 }
                 ActionPill(Icons.Default.Stop, "End", neon.red, Modifier.weight(1f)) { showEndConfirm = true }
             }
@@ -356,12 +373,6 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
         ) {
             content()
         }
-    }
-
-    if (showRecap) {
-        // The recap surface carries its own Export-markdown / Share, so the
-        // user previews before sharing.
-        SessionRecapScreen(store = store, session = session, onDismiss = { showRecap = false })
     }
 
     if (showRename) {
@@ -719,6 +730,63 @@ internal fun forkEffortOptions(assistant: String): List<String> = when (assistan
     "claude" -> listOf("low", "medium", "high", "xhigh", "max")
     "codex" -> listOf("low", "medium", "high")
     else -> listOf("low", "medium", "high")
+}
+
+/**
+ * The actual conversation transcript as markdown — the human / assistant
+ * message content, not session metadata. Tool / command items fold in
+ * compactly as a `$ <command>` line so the export reads as the real chat.
+ * An empty log yields a header + "(no messages yet)". Mirror of iOS
+ * `SessionInfoView.transcriptMarkdown`.
+ */
+internal fun buildTranscriptMarkdown(
+    displayName: String,
+    agent: String,
+    branch: String?,
+    events: List<ConversationItem>,
+): String {
+    val lines = mutableListOf<String>()
+    lines.add("# $displayName")
+    var meta = agent.lowercase()
+    branch?.takeIf { it.isNotBlank() }?.let { meta += " · $it" }
+    val msgCount = events.count { it.role.lowercase() == "user" || it.role.lowercase() == "assistant" }
+    meta += "   ·  $msgCount message" + if (msgCount == 1) "" else "s"
+    lines.add(meta)
+    lines.add("")
+
+    if (events.isEmpty()) {
+        lines.add("(no messages yet)")
+        return lines.joinToString("\n")
+    }
+
+    for (item in events) {
+        val role = item.role.lowercase()
+        val content = item.content.trim()
+        val command = item.command
+        if (!command.isNullOrEmpty()) {
+            lines.add("$ $command")
+            if (content.isNotEmpty() && content != command) lines.add(content)
+            lines.add("")
+            continue
+        }
+        when (role) {
+            "user" -> {
+                lines.add("## You")
+                lines.add(if (content.isEmpty()) "(empty)" else content)
+            }
+            "assistant" -> {
+                lines.add("## Assistant")
+                lines.add(if (content.isEmpty()) "(empty)" else content)
+            }
+            else -> {
+                if (content.isEmpty()) continue
+                val tool = item.toolName
+                if (!tool.isNullOrEmpty()) lines.add("`$tool` $content") else lines.add(content)
+            }
+        }
+        lines.add("")
+    }
+    return lines.joinToString("\n").trim()
 }
 
 /**

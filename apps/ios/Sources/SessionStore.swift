@@ -990,6 +990,7 @@ final class SessionStore {
         assistant: String,
         branch: String? = nil,
         startupCwd: String? = nil,
+        reasoningEffort: String? = nil,
         model: String? = nil,
         initialPrompt: String? = nil
     ) {
@@ -1003,7 +1004,8 @@ final class SessionStore {
         // turn. Without the slug here, that failure is undiagnosable from
         // Sentry. "inherit" = no override.
         let modelCrumb = (model?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "inherit"
-        Telemetry.breadcrumb("session", "create start", data: ["assistant": assistant, "hasCwd": "\(startupCwd?.isEmpty == false)", "model": modelCrumb])
+        let effortCrumb = (reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "default"
+        Telemetry.breadcrumb("session", "create start", data: ["assistant": assistant, "hasCwd": "\(startupCwd?.isEmpty == false)", "model": modelCrumb, "effort": effortCrumb])
         if useRustStore {
             rustStore.applyLifecycle(sessionId: pendingID, lifecycle: .creating)
         }
@@ -1018,7 +1020,9 @@ final class SessionStore {
                 let startup = (trimmedCwd?.isEmpty == false) ? trimmedCwd : nil
                 let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let pickedModel = (trimmedModel?.isEmpty == false) ? trimmedModel : nil
-                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: nil, model: pickedModel, cwd: startup)
+                let trimmedEffort = reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let pickedEffort = (trimmedEffort?.isEmpty == false) ? trimmedEffort : nil
+                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup)
                 Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
                 if let startup {
                     self.rememberRecentDirectory(startup)
@@ -1051,7 +1055,7 @@ final class SessionStore {
                             assistant: assistant,
                             branch: branch,
                             preview: nil,
-                            reasoningEffort: nil,
+                            reasoningEffort: pickedEffort,
                             cwd: startup,
                             startedAt: nil,
                             lastActivityAt: nil,
@@ -2448,7 +2452,20 @@ final class SessionStore {
     /// genuinely on its way live — the create round-trip owns that state.
     func isConfirmedLive(sessionID: String) -> Bool {
         switch sessionLifecycle[sessionID] {
-        case .exited, .failed, .none:
+        case .exited, .failed:
+            return false
+        case .none:
+            // No local lifecycle entry — e.g. a session restored from the
+            // saved list or re-listed after a reconnect, before any create
+            // round-trip recorded a lifecycle. Trust the broker: if it's
+            // reporting a current running phase, the session is interactive.
+            // Without this a reconnected `running` session opened read-only
+            // (device bug: codex listed as "running" but the chat had no
+            // composer until the session was re-created). Still fails closed
+            // when there's no status or a terminal phase.
+            if let phase = statusBySession[sessionID]?.phase {
+                return Self.isLivePhase(phase)
+            }
             return false
         case .creating:
             // Newly-created session mid-handshake: interactive, even
