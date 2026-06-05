@@ -356,10 +356,19 @@ extension ConduitUI {
 
                 Section {
                     if rows.isEmpty {
-                        emptySessionsView(snap)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
+                        // Distinguish "still loading the broker's live set" from
+                        // "genuinely no sessions" so we don't flash the empty
+                        // state on launch before reconcile lands.
+                        Group {
+                            if store.isLoadingSessions {
+                                loadingSessionsView()
+                            } else {
+                                emptySessionsView(snap)
+                            }
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
                     } else {
                         ForEach(rows) { row in
                             HomeRowView(row: row)
@@ -448,6 +457,22 @@ extension ConduitUI {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 20)
+        }
+
+        /// Shown in place of the empty state while the broker's live-session
+        /// set is being fetched + reattached on launch, so a session-having
+        /// user sees "Restoring sessions…" rather than a misleading "No
+        /// sessions yet" that then pops into a populated list.
+        private func loadingSessionsView() -> some View {
+            VStack(spacing: 12) {
+                ProgressView()
+                    .tint(neon.accent)
+                Text("Restoring sessions…")
+                    .font(neon.sans(13))
+                    .foregroundStyle(neon.textDim)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
         }
 
         private var bottomBar: some View {
