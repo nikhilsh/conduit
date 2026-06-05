@@ -51,6 +51,10 @@
 //   * DSR status report:     CSI    … n  AND   CSI ? … n
 //   * Cursor position (CPR): CSI    … R  AND   CSI ? … R  (DECXCPR)
 //   * XTGETTCAP / other DCS replies of the form DCS 0|1 + r/+q … ST
+//   * OSC colour-query reply: OSC 10|11|12 ; rgb:… ST  (fg / bg / cursor
+//     colour). When a program (or tmux at startup) emits `OSC 10/11/12 ; ?`,
+//     libghostty re-answers it with `OSC 10/11/12 ; rgb:RRRR/GGGG/BBBB ST`,
+//     which lands at the idle prompt and echoes as literal `]11;rgb:…` text.
 //
 // What it deliberately PRESERVES (these are real input and MUST pass):
 //
@@ -92,6 +96,12 @@ public final class QueryResponseFilter {
         /// Inside a DCS body, having just seen an ESC — waiting to see if
         /// it's the `\\` that completes the `ESC \\` String Terminator.
         case dcsEscape
+        /// Inside an OSC sequence (`ESC ]`). Buffered until the ST
+        /// terminator (`ESC \\` or BEL); same terminator handling as DCS.
+        case osc
+        /// Inside an OSC body, having just seen an ESC — waiting for the
+        /// `\\` that completes the `ESC \\` String Terminator.
+        case oscEscape
     }
 
     private var state: State = .ground
@@ -105,6 +115,7 @@ public final class QueryResponseFilter {
     private static let BEL: UInt8 = 0x07
     private static let CSI_INTRODUCER: UInt8 = 0x5B // '['
     private static let DCS_INTRODUCER: UInt8 = 0x50 // 'P'
+    private static let OSC_INTRODUCER: UInt8 = 0x5D // ']'
     private static let BACKSLASH: UInt8 = 0x5C // '\\'
 
     /// Filter one chunk of `receive_buffer` bytes, returning only the
@@ -132,6 +143,8 @@ public final class QueryResponseFilter {
                     state = .csi
                 case Self.DCS_INTRODUCER:
                     state = .dcs
+                case Self.OSC_INTRODUCER:
+                    state = .osc
                 default:
                     // `ESC` followed by anything else (e.g. `ESC O P` SS3
                     // function keys, or a bare `ESC` the user pressed) is
@@ -185,16 +198,48 @@ public final class QueryResponseFilter {
                     // ESC starting a new ST attempt, fold back.
                     state = (byte == Self.ESC) ? .dcsEscape : .dcs
                 }
+
+            case .osc:
+                if byte == Self.ESC {
+                    state = .oscEscape
+                    pending.append(byte)
+                } else if byte == Self.BEL {
+                    // BEL terminates an OSC string (xterm convention).
+                    pending.append(byte)
+                    if !isOSCQueryResponse(pending) {
+                        out.append(contentsOf: pending)
+                    }
+                    pending.removeAll(keepingCapacity: true)
+                    state = .ground
+                } else {
+                    pending.append(byte)
+                }
+
+            case .oscEscape:
+                pending.append(byte)
+                if byte == Self.BACKSLASH {
+                    // Completed `ESC \\` String Terminator.
+                    if !isOSCQueryResponse(pending) {
+                        out.append(contentsOf: pending)
+                    }
+                    pending.removeAll(keepingCapacity: true)
+                    state = .ground
+                } else {
+                    // Lone ESC inside the OSC body that wasn't ST — stay in
+                    // OSC, or fold back if it starts a fresh ST attempt.
+                    state = (byte == Self.ESC) ? .oscEscape : .osc
+                }
             }
         }
 
         // A lone trailing ESC (state `.escape`, nothing after it in this
         // chunk) is NOT the start of a query response we can recognise —
-        // every reply we strip continues with a `[` / `P` introducer in the
-        // SAME byte run. Flush it so a bare ESC keypress survives instead of
-        // being swallowed. Partial CSI/DCS sequences (`.csi`, `.dcs`,
-        // `.dcsEscape`) stay buffered so a reply split across chunks is
-        // still reassembled and dropped on the next `filter(_:)` call.
+        // every reply we strip continues with a `[` / `P` / `]` introducer in
+        // the SAME byte run. Flush it so a bare ESC keypress survives instead
+        // of being swallowed. Partial CSI/DCS/OSC sequences (`.csi`, `.dcs`,
+        // `.dcsEscape`, `.osc`, `.oscEscape`) stay buffered so a reply split
+        // across chunks is still reassembled and dropped on the next
+        // `filter(_:)` call.
         if state == .escape {
             out.append(contentsOf: pending)
             pending.removeAll(keepingCapacity: true)
@@ -280,5 +325,33 @@ public final class QueryResponseFilter {
             // input path) — keep to be safe.
             return false
         }
+    }
+
+    /// Classify a complete OSC sequence (leading `ESC ]` … ST/BEL) as a
+    /// colour-query *response* (true → drop) vs something to keep (false).
+    ///
+    /// `seq` includes the leading `ESC ]` and the terminating `ESC \\` (or
+    /// BEL). We drop ONLY the dynamic-colour replies `OSC 10|11|12 ; rgb:… ST`
+    /// (foreground / background / cursor colour) — the answers libghostty
+    /// re-emits to an `OSC 10/11/12 ; ?` query. A `?` in the value means it's
+    /// the QUERY form, not a reply; the broker PTY never sends OSC on the
+    /// input path, so we keep the query (and anything else, e.g. an OSC 52
+    /// clipboard write or an OSC 0 title) to avoid eating real output.
+    private func isOSCQueryResponse(_ seq: [UInt8]) -> Bool {
+        // ESC ] <Ps> ; <value> <ST>. Need at least `ESC ] 1 0 ; r BEL`.
+        guard seq.count >= 6 else { return false }
+        // Body = bytes after `ESC ]`, before the terminator. Drop the
+        // trailing BEL (1 byte) or `ESC \\` (2 bytes).
+        let terminatorLen = (seq.last == Self.BACKSLASH) ? 2 : 1
+        let body = Array(seq[2..<(seq.count - terminatorLen)])
+        guard let semi = body.firstIndex(of: UInt8(ascii: ";")) else { return false }
+        let ps = body[0..<semi]
+        let value = body[(semi + 1)...]
+        let isColorPs = ps.elementsEqual(Array("10".utf8))
+            || ps.elementsEqual(Array("11".utf8))
+            || ps.elementsEqual(Array("12".utf8))
+        guard isColorPs else { return false }
+        // Reply value is `rgb:…` (or `rgba:…`). A bare `?` is the query, keep.
+        return value.starts(with: Array("rgb".utf8))
     }
 }

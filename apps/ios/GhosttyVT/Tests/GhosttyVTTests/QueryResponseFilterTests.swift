@@ -68,6 +68,23 @@ final class QueryResponseFilterTests: XCTestCase {
         XCTAssertEqual(filtered(xtversion), [], "BEL-terminated XTVERSION must be stripped")
     }
 
+    func testDropsOSCBackgroundColorReplyST() {
+        // `OSC 11 ; rgb:RRRR/GGGG/BBBB ST` — bg colour reply.
+        let osc: [UInt8] = [ESC] + Array("]11;rgb:1c1c/1c1c/1c1c".utf8) + [ESC, UInt8(ascii: "\\")]
+        XCTAssertEqual(filtered(osc), [], "OSC 11 colour reply (ST) must be stripped")
+    }
+
+    func testDropsOSCForegroundColorReplyBEL() {
+        // `OSC 10 ; rgb:… BEL` — fg colour reply, BEL-terminated.
+        let osc: [UInt8] = [ESC] + Array("]10;rgb:c0c0/c0c0/c0c0".utf8) + [0x07]
+        XCTAssertEqual(filtered(osc), [], "OSC 10 colour reply (BEL) must be stripped")
+    }
+
+    func testDropsOSCCursorColorReply() {
+        let osc: [UInt8] = [ESC] + Array("]12;rgb:ffff/ffff/ffff".utf8) + [0x07]
+        XCTAssertEqual(filtered(osc), [], "OSC 12 cursor-colour reply must be stripped")
+    }
+
     // MARK: - Real input that must be PRESERVED
 
     func testKeepsArrowKeys() {
@@ -110,6 +127,18 @@ final class QueryResponseFilterTests: XCTestCase {
         XCTAssertEqual(filtered(text), text, "Plain text must pass through untouched")
     }
 
+    func testKeepsOSCWindowTitle() {
+        // `OSC 0 ; <title> BEL` is real program output — must pass through.
+        let title: [UInt8] = [ESC] + Array("]0;my title".utf8) + [0x07]
+        XCTAssertEqual(filtered(title), title, "OSC 0 title must pass through")
+    }
+
+    func testKeepsOSCColorQuery() {
+        // `OSC 11 ; ? ST` is the QUERY form (the `?`), not a reply — keep it.
+        let query: [UInt8] = [ESC] + Array("]11;?".utf8) + [ESC, UInt8(ascii: "\\")]
+        XCTAssertEqual(filtered(query), query, "OSC colour query (?) must pass through")
+    }
+
     func testKeepsBareEscAndSS3() {
         // A bare ESC, and SS3 function keys (ESC O P = F1).
         let bareEsc: [UInt8] = [ESC]
@@ -147,5 +176,14 @@ final class QueryResponseFilterTests: XCTestCase {
         let out1 = [UInt8](f.filter(chunk1))
         let out2 = [UInt8](f.filter(chunk2))
         XCTAssertEqual(out1 + out2, [], "XTVERSION split at ST must be fully stripped")
+    }
+
+    func testReassemblesOSCColorReplySplitAcrossChunks() {
+        let f = QueryResponseFilter()
+        let chunk1 = Data([ESC] + Array("]11;rgb:1c1c/".utf8))
+        let chunk2 = Data(Array("1c1c/1c1c".utf8) + [0x07])
+        let out1 = [UInt8](f.filter(chunk1))
+        let out2 = [UInt8](f.filter(chunk2))
+        XCTAssertEqual(out1 + out2, [], "Split OSC 11 colour reply must be fully stripped")
     }
 }
