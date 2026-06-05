@@ -193,6 +193,25 @@ final class SavedSessionsStore {
         }
     }
 
+    /// Demote a saved row to `.exited` by id — used on reconnect when the
+    /// broker's authoritative live-session list no longer contains a
+    /// session we had saved as `.live` (its agent died while the app was
+    /// gone, e.g. a broker restart). Marking it exited drops it out of the
+    /// ACTIVE list (which only reattaches `.live` rows the broker confirms)
+    /// and into History, where `recent()` still surfaces it read-only.
+    /// `.exited` is terminal via `mergeStatus`, so it won't resurrect.
+    /// No-op for unknown / tombstoned / already-exited ids.
+    func markExited(id: String, serverID: String) {
+        if deletedIDs.contains(id) { return }
+        guard let idx = sessions.firstIndex(where: {
+            $0.id == id && $0.serverID == serverID
+        }) else { return }
+        let next = mergeStatus(existing: sessions[idx].status, next: .exited)
+        if next == sessions[idx].status { return }
+        sessions[idx].status = next
+        persist()
+    }
+
     /// Drop every row + tombstone. Test-only convenience — the
     /// production app has no "clear history" affordance yet.
     func reset() {

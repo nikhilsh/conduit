@@ -249,6 +249,62 @@ struct SavedSessionsStoreTests {
         #expect(store.isTombstoned(id: "s-permadelete"))
     }
 
+    // MARK: - markExited (broker-truth reconcile on reconnect)
+
+    @Test func markExitedDemotesLiveRowToHistory() {
+        // On reconnect the broker's authoritative live list no longer
+        // contains a session we had saved `.live` (its agent died with a
+        // broker restart). `markExited` flips it to `.exited` so it drops
+        // out of ACTIVE and stays in History — the fix for "dead sessions
+        // shown as running".
+        let store = makeStore()
+        store.upsert(session: makeSession(id: "s-dead"), serverID: "srv-a",
+                     status: nil, firstUserMessage: "hi", messageCount: 1,
+                     isExited: false)
+        #expect(store.recent().first?.status == .live)
+
+        store.markExited(id: "s-dead", serverID: "srv-a")
+        let row = store.recent().first { $0.id == "s-dead" }
+        // Still in History (read-only), now exited — not gone, not live.
+        #expect(row?.status == .exited)
+    }
+
+    @Test func markExitedIsTerminalAndScopedByServer() {
+        let store = makeStore()
+        store.upsert(session: makeSession(id: "s-x"), serverID: "srv-a",
+                     status: nil, firstUserMessage: "hi", messageCount: 1,
+                     isExited: false)
+        store.upsert(session: makeSession(id: "s-x"), serverID: "srv-b",
+                     status: nil, firstUserMessage: "hi", messageCount: 1,
+                     isExited: false)
+
+        // Only the matching (id, server) row is demoted.
+        store.markExited(id: "s-x", serverID: "srv-a")
+        #expect(store.recent().first { $0.serverID == "srv-a" }?.status == .exited)
+        #expect(store.recent().first { $0.serverID == "srv-b" }?.status == .live)
+
+        // A later live upsert must NOT resurrect the exited row.
+        store.upsert(session: makeSession(id: "s-x"), serverID: "srv-a",
+                     status: nil, firstUserMessage: "hi", messageCount: 2,
+                     isExited: false)
+        #expect(store.recent().first { $0.serverID == "srv-a" }?.status == .exited)
+    }
+
+    @Test func markExitedIgnoresTombstonedAndUnknownIDs() {
+        let store = makeStore()
+        store.upsert(session: makeSession(id: "s-tomb"), serverID: "srv-a",
+                     status: nil, firstUserMessage: "hi", messageCount: 1,
+                     isExited: false)
+        store.remove(id: "s-tomb")               // tombstone + drop
+        store.markExited(id: "s-tomb", serverID: "srv-a")   // no-op
+        #expect(store.recent().isEmpty)
+        #expect(store.isTombstoned(id: "s-tomb"))
+
+        // Unknown id is a silent no-op (no crash, no phantom row).
+        store.markExited(id: "never-seen", serverID: "srv-a")
+        #expect(store.recent().isEmpty)
+    }
+
     @Test func resetClearsTombstones() {
         let store = makeStore()
         store.remove(id: "s-x")

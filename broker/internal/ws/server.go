@@ -122,6 +122,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.serveHealthz)
 	mux.HandleFunc("/api/capabilities", s.serveCapabilities)
 	mux.HandleFunc("/api/session/start", s.serveSessionStart)
+	// GET /api/sessions — authoritative "what's alive right now" list a
+	// reconnecting client reconciles against. Exact pattern (no trailing
+	// slash); does not collide with the `/api/session/` singular subtree.
+	mux.HandleFunc("/api/sessions", s.serveSessions)
 	mux.HandleFunc("/api/recent-projects", s.serveRecentProjects)
 	mux.HandleFunc("/api/fs/list", s.serveFSList)
 	// /preview/<session-id>/… reverse-proxies the session's dev server

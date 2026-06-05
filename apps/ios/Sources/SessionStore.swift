@@ -195,6 +195,38 @@ struct RemoteConversation: Codable, Equatable {
     var items: [RemoteConversationItem]
 }
 
+/// Wire shape of `GET /api/sessions` — the broker's authoritative
+/// in-memory live-session set. Mirrors `broker/internal/session.LiveSessionInfo`.
+/// A reconnecting client reconciles against this: only `running` rows
+/// belong in the ACTIVE list; saved sessions absent here have died and
+/// fall through to History. `started_at` / `last_activity_at` are the
+/// broker's REAL timestamps (preserved across recovery), so the home list
+/// shows true "created / last active" times rather than the reattach moment.
+struct LiveSessionInfo: Codable, Equatable {
+    var id: String
+    var assistant: String
+    var phase: String
+    var health: String
+    var running: Bool
+    var rows: UInt16
+    var cols: UInt16
+    var viewers: Int
+    var title: String?
+    var cwd: String?
+    var startedAt: String?
+    var lastActivityAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, assistant, phase, health, running, rows, cols, viewers, title, cwd
+        case startedAt = "started_at"
+        case lastActivityAt = "last_activity_at"
+    }
+}
+
+struct LiveSessionsResponse: Codable, Equatable {
+    var sessions: [LiveSessionInfo]
+}
+
 /// Raised by `fetchConversation` when the broker has no persisted
 /// transcript for the session — either the session predates the #196
 /// redeploy (the `conversation.jsonl` was never written) or the id is
@@ -542,11 +574,13 @@ final class SessionStore {
                 try await newClient.connect(delegate: newDelegate)
                 self.harness = .linked
                 self.refreshSessions()
-                // Resume agents that kept running on the broker while we were
-                // gone (cold launch / app termination). The broker keeps
-                // sessions alive across a client disconnect; this reopens the
-                // WS to each so they come back live instead of looking quit.
-                self.reattachLiveSessions()
+                // Reconcile against the broker's authoritative live set:
+                // reattach only genuinely-running agents (so they resume
+                // after a cold launch / app termination) and demote any
+                // saved `.live` row the broker no longer has to History.
+                // The broker — not our stale local flags — decides what's
+                // alive (the litter model). See `reconcileLiveSessions`.
+                self.reconcileLiveSessions()
             } catch {
                 let detail = Self.describe(error)
                 self.harness = .failed(detail)
@@ -693,6 +727,36 @@ final class SessionStore {
         // Session is gone server-side — drop its cached scrollback so a
         // recycled id can't resurrect a stale terminal on next launch.
         discardPersistedTerminal(sessionID)
+    }
+
+    /// Authoritative "what's alive on the broker RIGHT NOW" list
+    /// (`GET /api/sessions`). Mirrors `fetchConversation`'s direct-HTTP +
+    /// bearer-auth pattern. This is the litter model: the broker is the
+    /// source of truth for liveness, so a reconnecting client reconciles
+    /// against it instead of blindly trusting locally-saved `.live` flags
+    /// (which go stale the moment the broker restarts and the agents die).
+    ///
+    /// Returns only sessions the broker is keeping in memory — listing
+    /// never resurrects a dead/on-disk session. Throws on an older broker
+    /// that doesn't serve the endpoint (404) so the caller can fall back
+    /// to "show nothing as active" rather than reattaching dead rows.
+    func fetchLiveSessions() async throws -> [LiveSessionInfo] {
+        guard let base = endpoint.httpBaseURL else {
+            throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
+        }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/sessions"
+        guard let url = components?.url else {
+            throw NSError(domain: "SessionStore", code: 107, userInfo: [NSLocalizedDescriptionKey: "Failed to build sessions URL"])
+        }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            throw NSError(domain: "SessionStore", code: 108, userInfo: [NSLocalizedDescriptionKey: "Live sessions fetch failed (\(code))"])
+        }
+        return try JSONDecoder().decode(LiveSessionsResponse.self, from: data).sessions
     }
 
     /// Convenience flow: optionally switch endpoint, connect, then create a
@@ -2361,6 +2425,97 @@ final class SessionStore {
         selectedSessionID = sessionID
     }
 
+    /// Reconcile the local session list against the broker's AUTHORITATIVE
+    /// live set on (re)connect — the litter model: the server is the source
+    /// of truth for liveness, not our locally-saved `.live` flags.
+    ///
+    /// The previous implementation blindly `joinSession`'d every saved
+    /// `.live` row on connect. That was the bug behind the device-test
+    /// report: an agent's live process can't survive a broker restart (every
+    /// release redeploys the broker), so on relaunch most "live" rows were
+    /// actually dead — and `joinSession` silently *recovered* each from disk
+    /// as a fresh agent with reset timestamps and (often) a blank screen.
+    /// Result: exited sessions shown as "running", no history, wrong times.
+    ///
+    /// Now we ask the broker what's genuinely alive (`GET /api/sessions`,
+    /// which never resurrects) and:
+    ///   1. reattach ONLY the running ones → they enter the ACTIVE list with
+    ///      the broker's real scrollback + correct status/timestamps;
+    ///   2. demote every saved `.live` row the broker no longer has to
+    ///      `.exited`, so it drops out of ACTIVE and into History (where the
+    ///      user can reopen it read-only or resume on tap).
+    /// Does NOT navigate — rows just go live (or fall to history) in place.
+    func reconcileLiveSessions() {
+        guard client != nil else { return }
+        let serverID = savedHistoryServerID
+        Telemetry.breadcrumb("session", "reconcile_live_begin", data: ["server": serverID])
+        Task { @MainActor in
+            try? await waitUntilCommandReady()
+            guard let client else { return }
+
+            let aliveList: [LiveSessionInfo]
+            do {
+                aliveList = try await fetchLiveSessions()
+            } catch {
+                // Older broker without /api/sessions, or a transient fetch
+                // failure. Do NOT fall back to reattaching everything (that
+                // resurrects dead sessions — the exact bug we're fixing).
+                // Leave saved `.live` rows in History untouched; the user can
+                // resume any of them on tap.
+                Telemetry.breadcrumb("session", "reconcile_live_unavailable", data: [
+                    "error": Self.describe(error),
+                ])
+                return
+            }
+
+            let running = aliveList.filter { $0.running }
+            let aliveIDs = Set(running.map { $0.id })
+            Telemetry.breadcrumb("session", "reconcile_live_fetched", data: [
+                "alive": "\(running.count)",
+                "reported": "\(aliveList.count)",
+            ])
+
+            // 1. Reattach genuinely-alive sessions the broker is keeping
+            //    running. Skip tombstoned ids and ones already live locally.
+            for info in running
+            where !SavedSessionsStore.shared.isTombstoned(id: info.id)
+                && !sessions.contains(where: { $0.id == info.id }) {
+                if sessionLifecycle[info.id] == nil {
+                    sessionLifecycle[info.id] = .creating
+                }
+                // Seed the terminal from persisted scrollback so the row
+                // paints instantly; the broker snapshot replaces it once the
+                // join lands (`ingestSnapshot`).
+                hydrateTerminalBuffer(info.id)
+                try? await client.joinSession(sessionId: info.id, assistant: info.assistant)
+            }
+
+            // 2. Demote saved `.live` rows the broker no longer has → History.
+            //    Their agent died (broker restart / GC / exit) while we were
+            //    gone; showing them as ACTIVE was the lie the user called out.
+            let savedLive = SavedSessionsStore.shared.sessions.filter {
+                $0.serverID == serverID && $0.status == .live
+            }
+            var demoted = 0
+            for saved in savedLive where !aliveIDs.contains(saved.id) {
+                SavedSessionsStore.shared.markExited(id: saved.id, serverID: serverID)
+                // If a stale local row exists, reflect the death so it reads
+                // read-only rather than interactive.
+                if sessions.contains(where: { $0.id == saved.id }),
+                   sessionLifecycle[saved.id] == nil {
+                    sessionLifecycle[saved.id] = .exited(0)
+                }
+                demoted += 1
+            }
+            if demoted > 0 {
+                Telemetry.breadcrumb("session", "reconcile_live_demoted", data: [
+                    "count": "\(demoted)",
+                ])
+            }
+            refreshSessions()
+        }
+    }
+
     /// Attach to a session that's still LIVE on the broker but isn't in
     /// our local live set yet — the "open a historical row" path from
     /// `SessionsScreen`. The session list on a fresh client is empty
@@ -2373,35 +2528,6 @@ final class SessionStore {
     /// Idempotent: if the session is already live locally we just
     /// `switchTo` and return. Assumes the caller has already selected
     /// the right saved server.
-    /// Reattach every session that was still live on the CURRENT server, so the
-    /// agents the broker kept running resume after a cold launch / app
-    /// termination (option B: resume all, not just the last). `joinSession`
-    /// reopens the WS to the existing broker session; the broker keeps it alive
-    /// across our disconnect. Idempotent: skips sessions already live locally,
-    /// and `join_session` is a no-op broker-side for an already-open handle. Does
-    /// NOT navigate — the user stays wherever they are; the rows just go live.
-    func reattachLiveSessions() {
-        let serverID = savedHistoryServerID
-        let live = SavedSessionsStore.shared.sessions.filter {
-            $0.serverID == serverID && $0.status == .live
-        }
-        guard !live.isEmpty, client != nil else { return }
-        Task { @MainActor in
-            try? await waitUntilCommandReady()
-            guard let client else { return }
-            for saved in live where !sessions.contains(where: { $0.id == saved.id }) {
-                if sessionLifecycle[saved.id] == nil {
-                    sessionLifecycle[saved.id] = .creating
-                }
-                // Seed the terminal from persisted scrollback so the row paints
-                // instantly; the broker snapshot replaces it once the join lands.
-                hydrateTerminalBuffer(saved.id)
-                try? await client.joinSession(sessionId: saved.id, assistant: saved.agent)
-            }
-            refreshSessions()
-        }
-    }
-
     func attachLiveSession(sessionID: String, assistant: String) {
         if sessions.contains(where: { $0.id == sessionID }) {
             switchTo(sessionID: sessionID)

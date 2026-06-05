@@ -312,6 +312,50 @@ func TestRecoverRestoresWorkspaceDir(t *testing.T) {
 	}
 }
 
+// TestRecoverPreservesStartedAt proves a recovered session keeps its
+// ORIGINAL creation timestamp instead of resetting to the recovery moment.
+// Before the fix, startedAt was re-seeded to time.Now() on recovery, so
+// every reattached/historic session reported "just now" ("2m ago" in the
+// app) regardless of when it was really created.
+func TestRecoverPreservesStartedAt(t *testing.T) {
+	root := testRoot(t)
+	reg := testRegistry(t, root, map[string]string{
+		"claude": idleScript("ts-ready"),
+	})
+
+	m1 := NewManager(reg)
+	sess, _, err := m1.GetOrCreate("session-ts", "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	waitForOutput(t, sess, "ts-ready")
+
+	// Pin a known, clearly-in-the-past creation time, then persist it.
+	want := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+	sess.mu.Lock()
+	sess.startedAt = want
+	sess.mu.Unlock()
+	if err := sess.Checkpoint("ts"); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	m1.Close()
+
+	// Simulate broker restart and recover.
+	m2 := NewManager(reg)
+	t.Cleanup(m2.Close)
+	if _, err := m2.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	sess2, _, err := m2.GetOrCreate("session-ts", "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate (on-demand recover): %v", err)
+	}
+	got := sess2.Status().StartedAt.UTC().Truncate(time.Second)
+	if !got.Equal(want) {
+		t.Fatalf("recovered StartedAt = %v, want preserved %v (reset to ~now is the bug)", got, want)
+	}
+}
+
 func testRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
