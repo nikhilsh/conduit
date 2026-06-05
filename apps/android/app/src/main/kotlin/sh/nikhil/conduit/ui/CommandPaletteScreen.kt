@@ -109,6 +109,10 @@ fun CommandPaletteScreen(
     val sessions by store.sessions.collectAsState()
     val displayNames by store.displayNames.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
+    val endpoint by store.endpoint.collectAsState()
+    // Name the connected box in the "Run on box" header when we have one
+    // (`RUN ON <host>`); fall back to the generic label otherwise.
+    val runOnBoxHeader = if (endpoint.isComplete) "Run on ${endpoint.displayHost}" else "Run on box"
 
     var query by remember { mutableStateOf("") }
     val trimmed = query.trim()
@@ -266,7 +270,7 @@ fun CommandPaletteScreen(
 
                 // 3 · Run on box (only with a query; no backing path — onRunOnBox).
                 if (trimmed.isNotEmpty()) {
-                    PaletteSection("Run on box", neon) {
+                    PaletteSection(runOnBoxHeader, neon) {
                         PaletteRow(
                             neon = neon,
                             icon = Icons.Default.Terminal,

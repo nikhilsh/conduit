@@ -224,7 +224,12 @@ extension ConduitUI {
         private var runOnBoxSection: some View {
             let q = trimmedQuery
             if !q.isEmpty {
-                section("Run on box") {
+                // Name the connected box in the header when we have one
+                // (`Run on <host>`); fall back to the generic label otherwise.
+                let header = store.endpoint.isComplete
+                    ? "Run on \(store.endpoint.displayHost)"
+                    : "Run on box"
+                section(header) {
                     paletteRow(
                         systemImage: "terminal",
                         tint: neon.green,

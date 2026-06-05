@@ -23,11 +23,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -491,20 +496,31 @@ private fun HistoryRow(
 @Composable
 private fun OutcomeChip(outcome: SessionOutcome) {
     val neon = LocalNeonTheme.current
-    val (label, color) = when (outcome) {
-        SessionOutcome.RUNNING -> "running" to neon.green
-        SessionOutcome.PR -> "PR" to neon.blue
-        SessionOutcome.MERGED -> "merged" to neon.purple
-        SessionOutcome.NEEDS_YOU -> "needs you" to neon.yellow
-        SessionOutcome.ENDED -> "ended" to neon.textDim
-        SessionOutcome.FAILED -> "failed" to neon.red
+    // Label + color + leading icon, mirroring the iOS `outcomeChip`
+    // mapping (running / PR / merged / needs-you / ended / failed) so the
+    // chips read the same across platforms. `ended` is icon-less on both.
+    val label: String
+    val color: Color
+    val icon: ImageVector?
+    when (outcome) {
+        SessionOutcome.RUNNING -> { label = "running"; color = neon.green; icon = Icons.Default.Bolt }
+        SessionOutcome.PR -> { label = "PR"; color = neon.blue; icon = Icons.Default.Link }
+        SessionOutcome.MERGED -> { label = "merged"; color = neon.purple; icon = Icons.Default.CheckCircle }
+        SessionOutcome.NEEDS_YOU -> { label = "needs you"; color = neon.yellow; icon = Icons.Outlined.Warning }
+        SessionOutcome.ENDED -> { label = "ended"; color = neon.textDim; icon = null }
+        SessionOutcome.FAILED -> { label = "failed"; color = neon.red; icon = Icons.Default.Cancel }
     }
-    Box(
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
             .background(color.copy(alpha = 0.12f), RoundedCornerShape(50))
             .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(50))
             .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(11.dp))
+        }
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,

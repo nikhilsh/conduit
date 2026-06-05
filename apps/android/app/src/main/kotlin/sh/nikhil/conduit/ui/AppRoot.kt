@@ -268,6 +268,8 @@ fun AppRoot(store: SessionStore) {
     }
 
     if (showVoice) {
+        val voiceDisplayNames by store.displayNames.collectAsState()
+        val voiceConversationLog by store.conversationLog.collectAsState()
         VoiceDictationScreen(
             onTranscript = { transcript ->
                 // Push transcript into the active session if there is one;
@@ -281,6 +283,21 @@ fun AppRoot(store: SessionStore) {
             },
             onDismiss = { showVoice = false },
             agent = sessions.firstOrNull { it.id == selectedId }?.assistant ?: "claude",
+            // When dictation routes to the active session, name it; the
+            // "no active session" path seeds a brand-new session, so fall
+            // back to the default `new session`.
+            sessionName = run {
+                val active = sessions.firstOrNull { it.id == selectedId }
+                if (active != null) {
+                    sh.nikhil.conduit.SessionNaming.friendlyFor(
+                        session = active,
+                        custom = voiceDisplayNames[active.id],
+                        firstUserMessage = sh.nikhil.conduit.firstUserMessageOf(voiceConversationLog[active.id]),
+                    )
+                } else {
+                    "new session"
+                }
+            },
         )
     }
 

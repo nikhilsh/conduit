@@ -579,6 +579,7 @@ private fun AgentUsageRows(
                 fiveResetsAt = snap.fiveResetsAt,
                 weekPct = snap.weekPct,
                 weekResetsAt = snap.weekResetsAt,
+                agentTint = tint,
                 onRefresh = { store.refreshAccountUsage(sourceId) },
                 heading = "5h & weekly",
             )

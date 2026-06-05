@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -82,6 +81,10 @@ import kotlin.math.sin
  * @param agent the agent the dictation routes to (drives the target chip
  *   + its tint). Defaults to `claude` (home seeds a new claude session;
  *   the in-chat path passes the session's agent).
+ * @param sessionName display name of the routed session, shown after the
+ *   agent in the target chip as `<agent> · <session>`. When dictation seeds
+ *   a brand-new session (the Home flow) there is no session yet, so it
+ *   falls back to `new session`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,6 +92,7 @@ fun VoiceDictationScreen(
     onTranscript: (String) -> Unit,
     onDismiss: () -> Unit,
     agent: String = "claude",
+    sessionName: String = "new session",
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -174,9 +178,16 @@ fun VoiceDictationScreen(
                 Spacer(Modifier.width(8.dp))
                 Text(agent.lowercase(), fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = tint)
                 Spacer(Modifier.width(8.dp))
-                Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, tint = neon.textFaint, modifier = Modifier.size(11.dp))
+                Text("·", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
                 Spacer(Modifier.width(8.dp))
-                Text("dictation", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textDim)
+                Text(
+                    sessionName,
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    color = neon.textDim,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
             }
 
             if (permissionDenied) {

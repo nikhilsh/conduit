@@ -359,7 +359,7 @@ private fun ApprovalActionButton(
 private fun RiskChip(risk: ApprovalRisk, neon: NeonTheme) {
     val color = when (risk) {
         ApprovalRisk.DESTRUCTIVE -> neon.red
-        ApprovalRisk.WRITES_FILES -> neon.yellow
+        ApprovalRisk.WRITES_FILES -> neon.blue
         ApprovalRisk.SAFE -> neon.green
     }
     val icon = when (risk) {
