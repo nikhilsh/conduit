@@ -51,15 +51,22 @@ struct PKCETests {
 
     // MARK: - Verifier generation
 
-    /// `generateCodeVerifier` defaults to 64 bytes of entropy. After
-    /// base64url-no-padding that lands at exactly 86 chars — well
-    /// inside RFC 7636's `[43, 128]` bound on the encoded verifier.
-    @Test func generatedVerifierLengthInsideRFCBounds() {
+    /// `generateCodeVerifier` uses 32 bytes of entropy — after
+    /// base64url-no-padding that lands at EXACTLY 43 chars, matching
+    /// what the real `claude` CLI generates (`randomBytes(32)` in the
+    /// CLI bundle). Anthropic's endpoints are format-strict ("Invalid
+    /// request format" on deviation), so the length is pinned exactly,
+    /// not just bounded.
+    @Test func generatedVerifierLengthMatchesClaudeCLI() {
         let verifier = OAuthClient.generateCodeVerifier()
-        #expect(verifier.count >= 43)
-        #expect(verifier.count <= 128)
+        #expect(verifier.count == 43)
         // No padding leaked.
         #expect(!verifier.contains("="))
+    }
+
+    /// 32-byte state → 43 chars, the CLI's own length.
+    @Test func thirtyTwoByteRandomLandsAt43Chars() {
+        #expect(OAuthClient.generateRandomURLSafe(byteCount: 32).count == 43)
     }
 
     @Test func generatedVerifiersAreUnique() {

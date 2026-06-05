@@ -8,8 +8,10 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import sh.nikhil.conduit.Telemetry
 import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -307,23 +309,27 @@ class OAuthClient(
 
     /** Build the authorize URL with PKCE S256 + provider extras. */
     private fun buildAuthorizeUri(cfg: OAuthConfig, challenge: String, state: String): Uri {
-        // `appendQueryParameter` already fully percent-encodes values
-        // (`:` → %3A, `/` → %2F), so redirect_uri/scope arrive encoded —
-        // unlike iOS URLComponents, this side was never affected by the
-        // "Invalid request format" bug. Log the exact URL anyway so the
-        // request is verifiable from Sentry (CLAUDE.md "Standing order").
-        val uri = Uri.parse(cfg.authorizeUrl).buildUpon().apply {
-            appendQueryParameter("response_type", "code")
-            appendQueryParameter("client_id", cfg.clientId)
-            appendQueryParameter("redirect_uri", cfg.redirectUri)
-            appendQueryParameter("scope", cfg.scopeString)
-            appendQueryParameter("code_challenge", challenge)
-            appendQueryParameter("code_challenge_method", "S256")
-            appendQueryParameter("state", state)
+        // Mirror the real `claude` CLI's `buildAuthUrl` byte-for-byte:
+        // extras (Claude's `code=true`) FIRST, then client_id before
+        // response_type, and `URLSearchParams` form encoding (space → `+`,
+        // `:` → %3A). Anthropic's authorize page is format-strict
+        // ("Invalid request format" on deviation), so the query is built
+        // by hand instead of `appendQueryParameter` (which encodes space
+        // as %20 and can't control ordering around extras).
+        val pairs = buildList {
             for (key in cfg.extraAuthorizeParams.keys.sorted()) {
-                appendQueryParameter(key, cfg.extraAuthorizeParams[key])
+                add(key to (cfg.extraAuthorizeParams[key] ?: ""))
             }
-        }.build()
+            add("client_id" to cfg.clientId)
+            add("response_type" to "code")
+            add("redirect_uri" to cfg.redirectUri)
+            add("scope" to cfg.scopeString)
+            add("code_challenge" to challenge)
+            add("code_challenge_method" to "S256")
+            add("state" to state)
+        }
+        val query = pairs.joinToString("&") { (name, value) -> "$name=${formEncode(value)}" }
+        val uri = Uri.parse("${cfg.authorizeUrl}?$query")
         // Log the request as SEPARATE structural fields, NOT the full URL —
         // Sentry scrubbed the whole-URL value to `[Filtered]` (high-entropy
         // code_challenge/state). These short non-secret parts survive
@@ -357,7 +363,7 @@ class OAuthClient(
             ?: throw OAuthClientError.Underlying("startLoopbackLogin() is for loopback providers; use the code-paste API")
         val verifier = deterministicVerifier ?: generateCodeVerifier()
         val challenge = codeChallenge(verifier)
-        val state = generateRandomUrlSafe(16)
+        val state = generateRandomUrlSafe(32)
         val authorizeUri = buildAuthorizeUri(cfg, challenge, state)
 
         val server = AgentLoginLoopbackServer(mode.port, mode.path)
@@ -403,7 +409,11 @@ class OAuthClient(
         val cfg = provider.config
         val verifier = deterministicVerifier ?: generateCodeVerifier()
         val challenge = codeChallenge(verifier)
-        val state = generateRandomUrlSafe(16)
+        // 32-byte state → 43 chars, the CLI's own length. The previous
+        // 16-byte state (22 chars) was the one remaining structural diff
+        // vs the real CLI request — prime suspect for claude.ai's
+        // "Invalid request format" rejection.
+        val state = generateRandomUrlSafe(32)
         runCatching { launchTab(context, buildAuthorizeUri(cfg, challenge, state)) }
         return OAuthRequest(provider = provider, verifier = verifier, state = state)
     }
@@ -426,18 +436,34 @@ class OAuthClient(
      */
     suspend fun exchangeCode(code: String, verifier: String, state: String = ""): OAuthCredential {
         val cfg = provider.config
-        val bodyBuilder = FormBody.Builder()
-            .add("grant_type", "authorization_code")
-            .add("client_id", cfg.clientId)
-            .add("code", code)
-            .add("redirect_uri", cfg.redirectUri)
-            .add("code_verifier", verifier)
-        // Anthropic's code-paste token exchange echoes the `state` from
-        // the displayed `code#state`; OpenAI's loopback exchange omits it.
-        if (provider == OAuthProvider.ANTHROPIC && state.isNotEmpty()) {
-            bodyBuilder.add("state", state)
+        // Anthropic's token endpoint takes a JSON body — the real CLI's
+        // `exchangeCodeForTokens` POSTs `Content-Type: application/json`
+        // with exactly these keys (extracted from the CLI bundle
+        // v2.1.165); the earlier form-encoded body was a guess the
+        // endpoint would have rejected. OpenAI stays the standard
+        // RFC 6749 form body (verified working on-device).
+        val body = when (provider) {
+            OAuthProvider.ANTHROPIC -> {
+                val json = JSONObject()
+                    .put("grant_type", "authorization_code")
+                    .put("code", code)
+                    .put("redirect_uri", cfg.redirectUri)
+                    .put("client_id", cfg.clientId)
+                    .put("code_verifier", verifier)
+                // The CLI always sends `state` — the half after `#` in
+                // the displayed `code#state` string.
+                if (state.isNotEmpty()) json.put("state", state)
+                json.toString()
+                    .toRequestBody("application/json".toMediaType())
+            }
+            OAuthProvider.OPENAI -> FormBody.Builder()
+                .add("grant_type", "authorization_code")
+                .add("client_id", cfg.clientId)
+                .add("code", code)
+                .add("redirect_uri", cfg.redirectUri)
+                .add("code_verifier", verifier)
+                .build()
         }
-        val body = bodyBuilder.build()
         val req = Request.Builder()
             .url(cfg.tokenUrl)
             .post(body)
@@ -498,11 +524,14 @@ class OAuthClient(
         // MARK: PKCE math (unit-tested)
 
         /**
-         * RFC 7636 §4.1 — 64 random bytes → base64url(no-padding) lands
-         * at 86 chars, well inside the [43, 128] bound.
+         * RFC 7636 §4.1 — 32 random bytes → base64url(no-padding) lands
+         * at exactly 43 chars, the spec minimum and EXACTLY what both
+         * CLIs generate (`randomBytes(32)` in the claude bundle).
+         * Anthropic's endpoints are format-strict; matching the CLI's
+         * lengths keeps us inside whatever schema they validate.
          */
         @JvmStatic
-        fun generateCodeVerifier(): String = generateRandomUrlSafe(64)
+        fun generateCodeVerifier(): String = generateRandomUrlSafe(32)
 
         /** RFC 7636 §4.2 — code_challenge = BASE64URL(SHA256(verifier)). */
         @JvmStatic
@@ -530,6 +559,27 @@ class OAuthClient(
             val bytes = ByteArray(byteCount)
             SecureRandom().nextBytes(bytes)
             return base64UrlEncode(bytes)
+        }
+
+        /**
+         * `URLSearchParams`-style form encoding: RFC 3986 unreserved set
+         * stays raw, space becomes `+`, everything else percent-encodes.
+         * This is byte-for-byte how the `claude` CLI serializes its
+         * authorize query (`scope=org%3Acreate_api_key+user%3Aprofile+…`).
+         */
+        @JvmStatic
+        fun formEncode(value: String): String {
+            val sb = StringBuilder(value.length)
+            for (b in value.toByteArray(Charsets.UTF_8)) {
+                val c = b.toInt().toChar()
+                when {
+                    c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' ||
+                        c == '-' || c == '.' || c == '_' || c == '~' -> sb.append(c)
+                    c == ' ' -> sb.append('+')
+                    else -> sb.append('%').append(String.format("%02X", b.toInt() and 0xFF))
+                }
+            }
+            return sb.toString()
         }
 
         /** Extracts `?code=...`, throws on `?error=...` or missing code. */

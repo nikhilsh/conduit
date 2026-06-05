@@ -1,3 +1,4 @@
+import SafariServices
 import SwiftUI
 import UIKit
 
@@ -41,6 +42,16 @@ extension ConduitUI {
         @State private var awaitingPaste = false
         @State private var pastedCode: String = ""
 
+        /// Claude's authorize page, shown IN-APP (SFSafariViewController
+        /// sheet) instead of bouncing to external Safari — the user copies
+        /// the code, taps Done, and lands back on the paste card.
+        @State private var claudeAuthURL: URL?
+
+        /// Providers with a credential in the Keychain — drives the
+        /// persistent "Signed in" state on each row (the transient status
+        /// pill alone left the rows looking logged-out after success).
+        @State private var signedInProviders: Set<OAuthProvider> = []
+
         var body: some View {
             NavigationStack {
                 ZStack {
@@ -77,6 +88,22 @@ extension ConduitUI {
             }
             .neonAccentTint()
             .appearanceColorScheme()
+            .onAppear {
+                signedInProviders = Set(
+                    [OAuthProvider.openai, .anthropic].filter {
+                        OAuthCredentialStore.load(provider: $0) != nil
+                    }
+                )
+            }
+            .sheet(isPresented: Binding(
+                get: { claudeAuthURL != nil },
+                set: { if !$0 { claudeAuthURL = nil } }
+            )) {
+                if let claudeAuthURL {
+                    SafariSheet(url: claudeAuthURL)
+                        .ignoresSafeArea()
+                }
+            }
         }
 
         // MARK: Subviews
@@ -97,8 +124,11 @@ extension ConduitUI {
                     icon: "person.crop.circle.badge.checkmark",
                     tint: neon.agentTint(forAgent: "codex"),
                     title: "Login with ChatGPT",
-                    subtitle: "Codex / ChatGPT OAuth · auth.openai.com",
+                    subtitle: signedInProviders.contains(.openai)
+                        ? "Signed in · tap to sign in again"
+                        : "Codex / ChatGPT OAuth · auth.openai.com",
                     enabled: !isWorking,
+                    signedIn: signedInProviders.contains(.openai),
                     action: { Task { await loginChatGPT() } }
                 )
                 Divider()
@@ -108,8 +138,11 @@ extension ConduitUI {
                     icon: "ant.circle",
                     tint: neon.agentTint(forAgent: "claude"),
                     title: "Login with Claude",
-                    subtitle: "Claude OAuth · claude.ai (paste code)",
+                    subtitle: signedInProviders.contains(.anthropic)
+                        ? "Signed in · tap to sign in again"
+                        : "Claude OAuth · claude.ai (paste code)",
                     enabled: !isWorking,
+                    signedIn: signedInProviders.contains(.anthropic),
                     action: { Task { await beginClaude() } }
                 )
             }
@@ -155,6 +188,7 @@ extension ConduitUI {
             title: String,
             subtitle: String,
             enabled: Bool,
+            signedIn: Bool,
             action: @escaping () -> Void
         ) -> some View {
             Button(action: action) {
@@ -169,13 +203,17 @@ extension ConduitUI {
                             .foregroundStyle(enabled ? ConduitUI.Palette.textPrimary.color : ConduitUI.Palette.textMuted.color)
                         Text(subtitle)
                             .font(.caption2)
-                            .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                            .foregroundStyle(signedIn ? neon.green : ConduitUI.Palette.textMuted.color)
                     }
                     Spacer()
                     if isWorking, enabled {
                         ProgressView()
                             .controlSize(.small)
                             .tint(tint)
+                    } else if signedIn {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.body)
+                            .foregroundStyle(neon.green)
                     } else {
                         Image(systemName: "chevron.right")
                             .font(.caption.weight(.semibold))
@@ -232,21 +270,24 @@ extension ConduitUI {
             }
         }
 
-        /// Claude/Anthropic step 1 — open the browser; the user copies the
-        /// displayed code and pastes it into `pasteCard`.
+        /// Claude/Anthropic step 1 — open the authorize page IN-APP
+        /// (SFSafariViewController sheet, like Codex's in-app browser);
+        /// the user copies the displayed code, taps Done, and pastes it
+        /// into `pasteCard`. The old `UIApplication.shared.open` bounced
+        /// to external Safari and stranded the user outside the app.
         @MainActor
         private func beginClaude() async {
             isWorking = true
             errorMessage = nil
             defer { isWorking = false }
-            Telemetry.breadcrumb("agent_login", "anthropic: begin code-paste, opening browser")
+            Telemetry.breadcrumb("agent_login", "anthropic: begin code-paste, opening in-app browser")
             do {
                 let client = OAuthClient(provider: .anthropic)
                 let url = try client.beginCodePasteAuthorize()
                 pasteClient = client
-                _ = await UIApplication.shared.open(url)
                 awaitingPaste = true
-                statusMessage = "Sign in, copy the code Claude shows, then paste it below."
+                statusMessage = "Sign in, copy the code Claude shows, tap Done, then paste it below."
+                claudeAuthURL = url
             } catch {
                 statusMessage = nil
                 errorMessage = "Could not start Claude sign-in: \(error.localizedDescription)"
@@ -289,6 +330,7 @@ extension ConduitUI {
         @MainActor
         private func deliver(_ credential: OAuthCredential, provider: OAuthProvider) async throws {
             try? OAuthCredentialStore.save(credential)
+            signedInProviders.insert(provider)
             Telemetry.breadcrumb("agent_login", "shipping credential to broker", data: ["provider": provider.rawValue])
             do {
                 try await store.sendAgentCredentials(provider: provider, credential: credential)
@@ -321,4 +363,21 @@ extension ConduitUI {
             }
         }
     }
+}
+
+/// In-app browser sheet for the Claude code-paste flow. A plain
+/// `SFSafariViewController` (not `ASWebAuthenticationSession`) because
+/// there is no redirect to intercept — the user manually copies the
+/// displayed `code#state` and taps Done, so the natural Done-button
+/// chrome is exactly the affordance we want.
+private struct SafariSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let vc = SFSafariViewController(url: url)
+        vc.dismissButtonStyle = .done
+        return vc
+    }
+
+    func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
 }
