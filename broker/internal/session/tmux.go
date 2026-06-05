@@ -64,11 +64,23 @@ func terminalShellArgv(tmuxPath, sessionName string) []string {
 	//                          client's scrollback now that we're on the main
 	//                          screen.
 	//   - `history-limit 50000` deep scrollback buffer.
+	//   - `default-terminal 'tmux-256color'` tmux otherwise resets `TERM`
+	//                          inside its panes to its default (`screen`),
+	//                          which advertises only 8 colors — so `ls
+	//                          --color`, dircolors, and TUI agents rendered
+	//                          MONOCHROME and every client color-theme looked
+	//                          identical (device feedback). Advertising
+	//                          256-color inside the pane is what lets the
+	//                          shell emit real ANSI color. Set before
+	//                          `new-session` so the pane inherits it.
+	//   - `terminal-overrides ',*:Tc'` truecolor (24-bit) passthrough — the
+	//                          clients (libghostty / xterm.js) support it, so
+	//                          the per-theme 16-color palettes render fully.
 	// The separator between tmux commands is tmux's own `;`, which must reach
 	// tmux *literally* — so we escape it as `\;` in the shell string (bash
 	// would otherwise eat a bare `;` as its own command separator). The final
 	// `; exec bash -l` is intentionally a REAL (unescaped) bash separator so
 	// bash exec's a login shell once tmux detaches/exits, exactly as before.
-	cmd := tmuxPath + ` start-server \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s ` + sessionName + `; exec bash -l`
+	cmd := tmuxPath + ` start-server \; set -g default-terminal 'tmux-256color' \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -ga terminal-overrides ',*:Tc' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s ` + sessionName + `; exec bash -l`
 	return []string{"bash", "-lc", cmd}
 }

@@ -65,12 +65,24 @@ struct NeonThemeTests {
     @Test func darkSemanticTokens() {
         let t = NeonTheme.resolve(palette: .ice, dark: true, glow: true)
         #expect(t.claude == Color(hex: "#ff9d4d"))
-        #expect(t.codex == Color(hex: "#22d3ee"))      // == bright accent
+        #expect(t.codex == Color(hex: "#22d3ee"))      // fixed brand cyan
         #expect(t.purple == Color(hex: "#b487ff"))
         #expect(t.blue == Color(hex: "#4f8cff"))        // == accent2
         #expect(t.green == Color(hex: "#3ef0a0"))
         #expect(t.red == Color(hex: "#ff5c72"))
         #expect(t.yellow == Color(hex: "#ffd24d"))
+    }
+
+    /// Agent tints are palette-independent brand hues: in a NON-ice palette
+    /// (synth, whose accent is magenta) codex must still read brand cyan and
+    /// claude warm orange — not the palette accent. Locks the device-feedback
+    /// fix where codex changed color with the theme.
+    @Test func agentTintsArePaletteIndependent() {
+        let synth = NeonTheme.resolve(palette: .synth, dark: true, glow: true)
+        #expect(synth.codex == Color(hex: "#22d3ee"))
+        #expect(synth.claude == Color(hex: "#ff9d4d"))
+        // sanity: synth's own accent is NOT cyan, so codex differs from accent
+        #expect(synth.accent != synth.codex)
     }
 
     // MARK: - Light / Ice token values

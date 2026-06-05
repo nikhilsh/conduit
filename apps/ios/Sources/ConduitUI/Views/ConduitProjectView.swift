@@ -9,8 +9,11 @@ import UIKit
 // strip into a slim segmented control directly under the title so it
 // reads as sub-nav rather than chrome.
 //
-// Header layout (upstream-faithful):
-//   row 1: ← back · ● claude medium ▼ · ↻ refresh · ⓘ info
+// Header layout:
+//   row 1: ← back · [● name ▼ identity-dropdown] · ↻ refresh · ⓘ info
+//          (the dropdown holds agent · effort · model + Rename/Fork/Info;
+//           device feedback: the old inline agent/effort chips wrapped +
+//           crammed the header, so they moved into the dropdown)
 //   row 2: path subtitle (truncated middle, mono)
 //   row 3: Terminal | Chat | Browser segmented picker
 // Below: tab content (ConduitChatView for the chat tab, legacy
@@ -67,6 +70,11 @@ extension ConduitUI {
         /// Diff review sheet, opened from the header "Changes" button (shown
         /// only when the session has changes to review).
         @State private var showDiff = false
+        /// Rename / Fork sheets, reached from the header identity dropdown
+        /// (device feedback: the inline agent/effort chips wrapped + crammed
+        /// the header — they move into this dropdown alongside quick actions).
+        @State private var showRename = false
+        @State private var showFork = false
 
         /// A session whose agent has exited / been archived is read-only:
         /// there's no live WS to interact with, so we collapse the detail
@@ -94,6 +102,21 @@ extension ConduitUI {
                 Divider().background(neon.border)
                 content
             }
+            // Pin the top chrome (header + tab strip + divider) against the
+            // keyboard. Device feedback: when the composer/keyboard appeared
+            // "the whole app goes up" — the header was pushed off-screen.
+            // Root cause: the chat content opts out of keyboard avoidance and
+            // lifts ONLY its composer manually (see ConduitChatView's
+            // `keyboardInset`), but this PARENT VStack still participated in
+            // SwiftUI's implicit bottom-safe-area reduction when the IME
+            // showed, so the layout system shrank the available height and
+            // shifted the entire stack — header included — upward. Ignoring
+            // the `.keyboard` region here keeps the chrome fixed; the composer
+            // is the only thing that tracks the keyboard (via its own inset),
+            // exactly the intended behaviour. The chat tab can never leave
+            // `.chat` (read-only collapses to the log), so this doesn't strand
+            // a keyboard-tracking surface that needs the avoidance.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             // Full-bleed neon canvas for the notch / home-indicator, but
             // scope to `.container` so it does NOT ignore the `.keyboard`
             // region — a default `.ignoresSafeArea()` (regions: .all)
@@ -123,6 +146,18 @@ extension ConduitUI {
                 // no-ops — no backend action exists yet.
                 ConduitUI.DiffReviewView(session: session)
                     .environment(store)
+            }
+            .sheet(isPresented: $showRename) {
+                ConduitUI.RenameSessionSheet(
+                    session: session,
+                    initialDraft: store.displayName(for: session)
+                )
+            }
+            .sheet(isPresented: $showFork) {
+                ConduitUI.ForkSheet(
+                    session: session,
+                    currentEffort: store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
+                )
             }
         }
 
@@ -183,33 +218,45 @@ extension ConduitUI {
                     }
                 }
 
-                // Centered title card: status dot + name + chevron, then
-                // the agent + effort chips — neon card surface, glow on.
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 8, height: 8)
-                        .neonGlowBox(neon.glow ? neon.glowBox?.tinted(statusColor) : nil)
-                    Text(store.displayName(for: session))
-                        .font(neon.sans(15).weight(.semibold))
-                        .foregroundStyle(neon.text)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    NeonAgentChip(label: session.assistant, tint: agentTint)
-                    if let effort = session.reasoningEffort {
-                        NeonAgentChip(label: effort, tint: neon.textDim)
+                // Identity dropdown: a single tappable control showing
+                // status dot · session name · chevron on the neon card
+                // surface. Device feedback: the always-visible header crammed
+                // a truncated name + an agent chip that WRAPPED to two lines +
+                // an effort chip + 3 icons. The agent / effort / model metadata
+                // now lives in the `Menu` below (never visible inline, so it
+                // can't wrap), and the name is the only inline label — single
+                // line, middle-truncated, never wraps.
+                Menu {
+                    identityMenu
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 8, height: 8)
+                            .neonGlowBox(neon.glow ? neon.glowBox?.tinted(statusColor) : nil)
+                        Text(store.displayName(for: session))
+                            .font(neon.sans(15).weight(.semibold))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(agentTint)
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    // Hug the content (dot · name · chevron) instead of
+                    // stretching edge-to-edge — a full-width card left a large
+                    // dead gap before the refresh/info buttons (device
+                    // feedback: "empty space beside Claude at the top"). The
+                    // trailing Spacer below absorbs the slack and the name
+                    // still truncates via its own lineLimit when the row is
+                    // tight (no fixedSize, which would defeat that truncation).
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                // Hug the content (dot · name · agent chip) instead of
-                // stretching edge-to-edge — a full-width card left a large dead
-                // gap between the chips and the refresh/info buttons (device
-                // feedback: "empty space beside Claude at the top"). The trailing
-                // Spacer below absorbs the slack and the name still truncates via
-                // its own lineLimit when the row is tight (no fixedSize, which
-                // would defeat that truncation).
-                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Session details")
 
                 Spacer(minLength: 8)
 
@@ -253,6 +300,61 @@ extension ConduitUI {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(label)
+        }
+
+        /// Dropdown contents for the header identity control. The metadata
+        /// that used to crowd the header inline (agent · reasoning effort ·
+        /// model) lives here as a non-tappable info section, followed by the
+        /// quick actions already wired elsewhere (Rename · Fork · Session
+        /// info). `Menu` rows can't carry custom fonts, so we lean on
+        /// `Section` + `Label`/`Text` for the native dropdown look.
+        @ViewBuilder
+        private var identityMenu: some View {
+            // Metadata section — read-only "current settings" rows. The
+            // broker doesn't report a model string, so the model line mirrors
+            // SessionInfoView: agent (+ effort) is the honest stand-in.
+            Section {
+                Text("Agent: \(session.assistant)")
+                if let effort = liveEffort, !effort.isEmpty {
+                    Text("Effort: \(effort)")
+                }
+                Text("Model: \(modelLine)")
+            }
+            // Quick actions — reuse the exact store-driven flows the Session
+            // Info screen exposes, so data flow is unchanged.
+            Section {
+                Button {
+                    showRename = true
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                Button {
+                    showFork = true
+                } label: {
+                    Label("Fork", systemImage: "arrow.triangle.branch")
+                }
+                if !chatOnly {
+                    Button {
+                        showInfo = true
+                    } label: {
+                        Label("Session info", systemImage: "info.circle")
+                    }
+                }
+            }
+        }
+
+        /// Live reasoning effort (status overrides the session's seed value).
+        private var liveEffort: String? {
+            store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
+        }
+
+        /// Honest model line: the broker doesn't report a model string, so
+        /// show the agent (+ effort) — same stand-in SessionInfoView uses.
+        private var modelLine: String {
+            if let effort = liveEffort, !effort.isEmpty {
+                return "\(session.assistant.lowercased()) · \(effort)"
+            }
+            return session.assistant.lowercased()
         }
 
         private var row2: some View {

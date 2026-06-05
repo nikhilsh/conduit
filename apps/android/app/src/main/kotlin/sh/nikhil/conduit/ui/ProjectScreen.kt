@@ -353,6 +353,31 @@ private fun ControlsRow(
                 onTap = onAgentTap,
             )
             DropdownMenu(expanded = menuExpanded, onDismissRequest = onMenuDismiss) {
+                // Metadata that used to crowd the header inline (agent ·
+                // reasoning effort · model) now lives here as read-only info
+                // rows. Device feedback (iOS-parity): the always-visible
+                // header crammed agent + effort chips that could wrap; the
+                // pill stays a single-line tappable identity and the detail
+                // moves into this dropdown. Disabled `DropdownMenuItem`s read
+                // as static info lines (no tap target, muted).
+                DropdownMenuItem(
+                    text = { Text("Agent: ${model.agentPill.agentName}") },
+                    enabled = false,
+                    onClick = {},
+                )
+                DropdownMenuItem(
+                    text = { Text("Effort: ${model.agentPill.reasoningEffort}") },
+                    enabled = false,
+                    onClick = {},
+                )
+                // The broker reports no model string, so the model line
+                // mirrors iOS: agent · effort is the honest stand-in.
+                DropdownMenuItem(
+                    text = { Text("Model: ${model.agentPill.agentName} · ${model.agentPill.reasoningEffort}") },
+                    enabled = false,
+                    onClick = {},
+                )
+                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Switch to Claude") },
                     enabled = !disableSwitchClaude,
@@ -420,19 +445,18 @@ private fun AgentPill(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         HealthDot(pill.healthKey, size = 8.dp)
+        // Single-line identity label. The reasoning-effort badge that used
+        // to sit beside it inline moved into the dropdown (device feedback:
+        // the inline agent + effort chips crammed/wrapped the header). The
+        // label never wraps — maxLines = 1 + ellipsis.
         Text(
             pill.agentName,
             style = MaterialTheme.typography.titleSmall,
             fontFamily = neon.sans,
             fontWeight = FontWeight.SemiBold,
             color = neon.text,
-        )
-        Text(
-            pill.reasoningEffort,
-            style = MaterialTheme.typography.labelMedium,
-            fontFamily = neon.mono,
-            fontWeight = FontWeight.Medium,
-            color = neon.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         if (pill.showsChevron) {
             Icon(

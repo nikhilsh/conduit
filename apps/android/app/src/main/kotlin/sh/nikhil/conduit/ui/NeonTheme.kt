@@ -165,9 +165,14 @@ data class NeonTheme(
             val a2 = Color(palette.accent2)                // A2
             val accent = if (dark) aBright else Color(palette.accentDark)
 
-            // Common (mode-independent) brand/semantic tokens.
+            // Common (mode-independent) brand/semantic tokens. Agent tints
+            // are PALETTE-INDEPENDENT brand hues so an agent reads the same in
+            // every theme: claude warm orange, codex brand cyan. (codex was
+            // the palette accent `aBright`, which made codex change color with
+            // the theme — and blend into the accent in non-ice palettes;
+            // device feedback.)
             val claude = if (dark) Color(0xFFFF9D4D) else Color(0xFFD9731A)
-            val codex = aBright
+            val codex = if (dark) Color(0xFF22D3EE) else Color(0xFF0E90A8)
             val purple = if (dark) Color(0xFFB487FF) else Color(0xFF7A48D8)
             val blue = a2
             val green = if (dark) Color(0xFF3EF0A0) else Color(0xFF12A866)

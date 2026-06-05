@@ -204,9 +204,13 @@ struct NeonTheme {
         let a2 = Color(hex: palette.accent2Hex)              // A2
         let accent = dark ? aBright : Color(hex: palette.accentDarkHex)
 
-        // Common (mode-independent) brand/semantic tokens.
+        // Common (mode-independent) brand/semantic tokens. Agent tints are
+        // PALETTE-INDEPENDENT brand hues so an agent reads the same in every
+        // theme: claude warm orange, codex brand cyan. (codex was the palette
+        // accent `aBright`, which made codex change color with the theme —
+        // and blend into the accent in non-ice palettes; device feedback.)
         let claude = dark ? Color(hex: "#ff9d4d") : Color(hex: "#d9731a")
-        let codex = aBright
+        let codex = dark ? Color(hex: "#22d3ee") : Color(hex: "#0e90a8")
         let purple = dark ? Color(hex: "#b487ff") : Color(hex: "#7a48d8")
         let blue = a2
         let green = dark ? Color(hex: "#3ef0a0") : Color(hex: "#12a866")

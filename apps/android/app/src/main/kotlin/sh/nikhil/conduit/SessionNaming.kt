@@ -144,6 +144,13 @@ internal object SessionNaming {
         }
     }
 
+    /**
+     * Epoch millis for an RFC3339 timestamp, or null when blank /
+     * unparseable. Used as the Home-row sort key (newest-first) — see
+     * [sortSessionsByActivity].
+     */
+    fun epochMillisOrNull(raw: String?): Long? = parseInstant(raw)?.toEpochMilli()
+
     private fun looksLikeRawId(label: String, sessionId: String, rawName: String): Boolean {
         if (label == sessionId || label == rawName) return true
         // A bare UUID: 8-4-4-4-12 hex. Such a label is never something a
@@ -341,6 +348,44 @@ internal fun latestActivityPreviewOf(
         content = latest.content,
     )
 }
+
+/**
+ * Broker-stamped `ts` of the most recent item in a session's live
+ * conversation log — the real "last message" time, used for the Home row's
+ * relative stamp and sort. Null when the log is empty / not yet replayed
+ * (e.g. a freshly-reattached session), so the caller falls back to the
+ * session's own metadata rather than the reconnect-set status timestamp
+ * (which on a cold-boot reconnect is the CONNECTION time, not a message).
+ * Items are appended in broker-clock order, so `last` is the freshest.
+ * Mirror of iOS `ConduitHomeView.lastMessageTimestamp`.
+ */
+internal fun lastMessageTimestampOf(
+    conversation: List<ConversationItem>?,
+): String? = conversation?.lastOrNull()?.ts?.takeIf { it.isNotBlank() }
+
+/**
+ * Order active session rows most-recent-activity first for the Home list,
+ * STABLY: rows whose timestamp is missing or equal keep their original
+ * input order (the broker's list order). A dated row always sorts before an
+ * undated one; among dated rows the newer wins; ties (equal or both-null)
+ * fall back to the original index. Mirror of iOS
+ * `HomeViewModel.sortedSessions`. Generic over the row type so the Composable
+ * and tests can both drive it; [lastActivityAt] extracts the chosen
+ * timestamp (RFC3339) per row.
+ */
+internal fun <T> sortSessionsByActivity(
+    rows: List<T>,
+    lastActivityAt: (T) -> String?,
+): List<T> =
+    rows.withIndex()
+        .sortedWith(
+            compareByDescending<IndexedValue<T>> { iv ->
+                // Epoch millis; null (missing/unparseable) sorts last via the
+                // dated-before-undated split below.
+                SessionNaming.epochMillisOrNull(lastActivityAt(iv.value))
+            }.thenBy { it.index },
+        )
+        .map { it.value }
 
 /** One session blocked on the user, for the Home "needs you" banner. */
 internal data class NeedsYouItem(val id: String, val title: String, val agent: String)
