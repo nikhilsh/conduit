@@ -102,6 +102,24 @@ extension ConduitUI {
         }
     }
 
+    /// A real "needs you" signal: a session whose agent is blocked on the
+    /// user (the last transcript item is an unanswered `pending_input` —
+    /// an approval prompt or an options menu). Drives the Home banner
+    /// (handoff §B.5 / §B.10). Never fabricated: built only from sessions
+    /// that actually carry this state.
+    struct NeedsYouBanner: Equatable {
+        /// Sessions currently awaiting the user, in input order.
+        var sessions: [Item]
+        struct Item: Equatable {
+            var id: String
+            var title: String
+            var agent: String
+        }
+        var count: Int { sessions.count }
+        /// The session a tap should open (the first one awaiting input).
+        var primaryID: String? { sessions.first?.id }
+    }
+
     struct HomeSnapshotSession: Equatable {
         var id: String
         var displayName: String
@@ -184,6 +202,28 @@ extension ConduitUI {
                 ))
             }
             return rows
+        }
+
+        /// True when a session is blocked on the user: its LAST transcript
+        /// item is a non-user `pending_input` (an approval prompt / options
+        /// menu) with nothing from the user after it. Mirrors how the chat
+        /// view detects an outstanding pending-input (last event carries
+        /// `pendingOptions` / `kind == pending_input`). Pure string inputs
+        /// so the view-model stays free of the generated `ConversationItem`.
+        static func isAwaitingInput(lastItemRole: String?, lastItemKind: String?) -> Bool {
+            guard let role = lastItemRole, role.lowercased() != "user" else { return false }
+            return (lastItemKind ?? "").lowercased() == "pending_input"
+        }
+
+        /// Build the "needs you" banner from the per-session signal the view
+        /// layer resolves (last transcript item's role + kind). Only includes
+        /// sessions that are genuinely awaiting input — the banner is hidden
+        /// (`count == 0`) otherwise, never showing a fabricated count.
+        static func needsYouBanner(_ candidates: [(id: String, title: String, agent: String, lastItemRole: String?, lastItemKind: String?)]) -> NeedsYouBanner {
+            let items = candidates
+                .filter { isAwaitingInput(lastItemRole: $0.lastItemRole, lastItemKind: $0.lastItemKind) }
+                .map { NeedsYouBanner.Item(id: $0.id, title: $0.title, agent: $0.agent) }
+            return NeedsYouBanner(sessions: items)
         }
 
         /// Condense the latest transcript activity into a single short

@@ -313,6 +313,27 @@ extension ConduitUI {
             )
         }
 
+        /// The Home "needs you" banner state, or nil when no session is
+        /// awaiting the user. A session needs the user when the LAST item in
+        /// its transcript is a non-user `pending_input` (approval prompt /
+        /// options menu) — the same signal the chat view uses for its pending
+        /// card. The detection lives in the pure `HomeViewModel` so it's
+        /// unit-testable; here we just resolve each session's last item.
+        private var needsYouBanner: ConduitUI.NeedsYouBanner? {
+            let candidates = store.sessions.map { s -> (id: String, title: String, agent: String, lastItemRole: String?, lastItemKind: String?) in
+                let last = store.conversationLog[s.id]?.last
+                return (
+                    id: s.id,
+                    title: store.displayName(for: s),
+                    agent: s.assistant,
+                    lastItemRole: last?.role,
+                    lastItemKind: last?.kind
+                )
+            }
+            let banner = ConduitUI.HomeViewModel.needsYouBanner(candidates)
+            return banner.count > 0 ? banner : nil
+        }
+
         /// One-line preview of the latest activity in a session for the
         /// home card. Pulls the most recent NON-user transcript item from
         /// `store.conversationLog` (assistant reply or tool action) — the
@@ -342,15 +363,33 @@ extension ConduitUI {
             let snap = snapshot
             let rows = ConduitUI.HomeViewModel.rows(snap)
             List {
-                // Ambient account-usage strip (design handoff §3b) — Claude plan
-                // limits at a glance, above the session list. Self-hides when
-                // there's no usage data yet.
-                if store.accountUsage.hasData {
+                // Ambient account-usage strip (design handoff §B.10) — per-agent
+                // plan headroom (`claude 62% · codex 28%`) at a glance, above the
+                // session list. Self-hides when no agent carries usage data yet.
+                if store.accountUsageByAgent.contains(where: { $0.hasData }) {
                     Section {
                         ConduitUI.HomeUsageStrip()
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 2, trailing: 14))
+                    }
+                }
+
+                // "Needs you" banner (handoff §B.5 / §B.10) — surfaces ONLY when a
+                // real signal exists: a session whose last transcript item is an
+                // unanswered agent `pending_input` (approval prompt / options
+                // menu). Never a fabricated "1 waiting"; hidden when none.
+                if let banner = needsYouBanner, banner.count > 0 {
+                    Section {
+                        NeedsYouBanner(banner: banner) {
+                            if let id = banner.primaryID {
+                                store.selectedSessionID = id
+                                selectedSessionID = id
+                            }
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                     }
                 }
 
@@ -513,6 +552,75 @@ extension ConduitUI {
             .padding(.horizontal, 14)
             .padding(.bottom, 4)
         }
+    }
+}
+
+/// The Home "needs you" banner (design handoff §B.10, image 12): an
+/// amber-tinted card that appears ONLY when a real signal exists — one or
+/// more sessions whose agent is blocked on the user (an unanswered
+/// `pending_input`). Title counts the waiting sessions; the sub names the
+/// agent/session; `Review` opens the first one. Hidden entirely when no
+/// session is waiting (gated by the caller), so it never shows a fake count.
+private struct NeedsYouBanner: View {
+    let banner: ConduitUI.NeedsYouBanner
+    let onReview: () -> Void
+    @Environment(\.neonTheme) private var neon
+
+    private var titleText: String {
+        banner.count == 1 ? "1 session waiting on you" : "\(banner.count) sessions waiting on you"
+    }
+
+    private var subText: String {
+        if banner.count == 1, let first = banner.sessions.first {
+            return "\(first.agent) needs your input on \(first.title)"
+        }
+        return "agents are blocked on your input"
+    }
+
+    var body: some View {
+        Button(action: onReview) {
+            HStack(spacing: 11) {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(neon.yellow.opacity(0.14))
+                    .frame(width: 34, height: 34)
+                    .overlay(
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(neon.yellow)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(titleText)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text(subText)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 6)
+                Text("Review")
+                    .font(neon.sans(12.5).weight(.semibold))
+                    .foregroundStyle(neon.yellow)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(neon.yellow.opacity(0.14)))
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .neonCardSurface(
+                neon,
+                fill: neon.yellow.opacity(neon.dark ? 0.07 : 0.05),
+                cornerRadius: 12,
+                border: neon.yellow.opacity(0.27),
+                glowTint: neon.glow ? neon.yellow : nil
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(titleText)
+        .accessibilityHint("Opens the session waiting on you")
     }
 }
 
