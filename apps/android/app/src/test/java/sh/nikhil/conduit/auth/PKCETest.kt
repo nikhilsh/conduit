@@ -65,15 +65,44 @@ class PKCETest {
     // MARK: - Verifier generation
 
     /**
-     * `generateCodeVerifier` defaults to 64 bytes of entropy. After
-     * base64url-no-padding that lands at 86 chars — well inside
-     * RFC 7636's `[43, 128]` bound on the encoded verifier.
+     * `generateCodeVerifier` uses 32 bytes of entropy — after
+     * base64url-no-padding that lands at EXACTLY 43 chars, matching
+     * what the real `claude` CLI generates (`randomBytes(32)` in the
+     * CLI bundle). Anthropic's endpoints are format-strict ("Invalid
+     * request format" on deviation), so the length is pinned exactly,
+     * not just bounded.
      */
-    @Test fun generatedVerifierLengthInsideRFCBounds() {
+    @Test fun generatedVerifierLengthMatchesClaudeCLI() {
         val verifier = OAuthClient.generateCodeVerifier()
-        assertTrue("verifier too short: ${verifier.length}", verifier.length >= 43)
-        assertTrue("verifier too long: ${verifier.length}", verifier.length <= 128)
+        assertEquals("verifier must be 43 chars (32 bytes base64url)", 43, verifier.length)
         assertFalse(verifier.contains("="))
+    }
+
+    /** 32-byte state → 43 chars, the CLI's own length. */
+    @Test fun thirtyTwoByteRandomLandsAt43Chars() {
+        assertEquals(43, OAuthClient.generateRandomUrlSafe(32).length)
+    }
+
+    // MARK: - URLSearchParams-style form encoding
+
+    /**
+     * `formEncode` mirrors the CLI's `URLSearchParams` serialization:
+     * unreserved set raw, space → `+`, everything else percent-encoded
+     * uppercase. This is what makes our authorize query byte-for-byte
+     * identical to `claude auth login`'s
+     * (`scope=org%3Acreate_api_key+user%3Aprofile+…`).
+     */
+    @Test fun formEncodeMatchesURLSearchParams() {
+        assertEquals(
+            "org%3Acreate_api_key+user%3Aprofile",
+            OAuthClient.formEncode("org:create_api_key user:profile"),
+        )
+        assertEquals(
+            "https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback",
+            OAuthClient.formEncode("https://platform.claude.com/oauth/code/callback"),
+        )
+        // Unreserved set passes through untouched.
+        assertEquals("AZaz09-._~", OAuthClient.formEncode("AZaz09-._~"))
     }
 
     @Test fun generatedVerifiersAreUnique() {

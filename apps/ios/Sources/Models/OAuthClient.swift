@@ -59,12 +59,10 @@ enum OAuthProvider: String, Sendable {
                 tokenURL: URL(string: "https://auth.openai.com/oauth/token")!
             )
         case .anthropic:
-            // Claude Code CLI's OAuth params. The client_id + endpoints
-            // here were reverse-engineered from the `claude` CLI binary
-            // and confirmed against `claude auth login --claudeai`'s
-            // actual stdout (authorize host claude.ai, redirect
-            // platform.claude.com/oauth/code/callback, the `code=true`
-            // flag that selects the code-display page). Anthropic
+            // Claude Code CLI's OAuth params — extracted from the CLI
+            // binary itself (v2.1.165, `buildAuthUrl`/`exchangeCodeForTokens`
+            // in the bundle) and confirmed against `claude auth login
+            // --claudeai`'s actual stdout on the broker host. Anthropic
             // doesn't publish these. Risks:
             //
             //   1. Anthropic may rotate the client_id without notice; we
@@ -76,8 +74,10 @@ enum OAuthProvider: String, Sendable {
             //      it back into the app (captureMode `.codePaste`). The
             //      token exchange still happens on the phone.
             //
-            // NEEDS ON-DEVICE VERIFICATION: token endpoint shape + whether
-            // the exchange requires `state` are reverse-engineered.
+            // The endpoint is FORMAT-STRICT ("Invalid request format" on
+            // any deviation), so `buildAuthorizeURL` + the token exchange
+            // mirror the CLI byte-for-byte: param order, `+`-separated
+            // scopes, 32-byte state/verifier, JSON exchange body.
             return OAuthConfig(
                 issuer: URL(string: "https://claude.com")!,
                 clientID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
@@ -312,7 +312,7 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         }
         let verifier = deterministicVerifier ?? Self.generateCodeVerifier()
         let challenge = Self.codeChallenge(from: verifier)
-        let state = Self.generateRandomURLSafe(byteCount: 16)
+        let state = Self.generateRandomURLSafe(byteCount: 32)
         let authorizeURL = try buildAuthorizeURL(config: cfg, codeChallenge: challenge, state: state)
 
         let code = try await captureLoopbackCode(authorizeURL: authorizeURL, cfg: cfg, port: port, path: path)
@@ -325,9 +325,13 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// `code#state` string the user copies.
     func beginCodePasteAuthorize() throws -> URL {
         let cfg = provider.config
+        // 32-byte state → 43 chars, the CLI's own length. Anthropic's
+        // authorize page is format-strict; our previous 16-byte state
+        // (22 chars) is the one remaining structural diff vs the real
+        // CLI request and the prime suspect for "Invalid request format".
         let verifier = deterministicVerifier ?? Self.generateCodeVerifier()
         let challenge = Self.codeChallenge(from: verifier)
-        let state = Self.generateRandomURLSafe(byteCount: 16)
+        let state = Self.generateRandomURLSafe(byteCount: 32)
         pendingVerifier = verifier
         pendingState = state
         return try buildAuthorizeURL(config: cfg, codeChallenge: challenge, state: state)
@@ -423,10 +427,13 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     // MARK: - PKCE math (unit-tested)
 
     /// Generates a high-entropy PKCE code_verifier per RFC 7636 §4.1.
-    /// 64 random bytes → base64url(no-padding) ≈ 86 chars, well inside
-    /// the [43, 128] character bound the spec allows.
+    /// 32 random bytes → base64url(no-padding) = 43 chars — the spec's
+    /// minimum, and EXACTLY what both CLIs generate (`randomBytes(32)`
+    /// in the claude bundle). Anthropic's endpoints are format-strict;
+    /// matching the CLI's lengths keeps us inside whatever schema they
+    /// validate against.
     nonisolated static func generateCodeVerifier() -> String {
-        generateRandomURLSafe(byteCount: 64)
+        generateRandomURLSafe(byteCount: 32)
     }
 
     /// RFC 7636 §4.2 — code_challenge = BASE64URL-ENCODE(SHA256(ASCII(verifier))).
@@ -467,33 +474,40 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         codeChallenge: String,
         state: String
     ) throws -> URL {
-        var pairs: [(String, String)] = [
-            ("response_type", "code"),
-            ("client_id", config.clientID),
-            ("redirect_uri", config.redirectURI.absoluteString),
-            ("scope", config.scopeString),
-            ("code_challenge", codeChallenge),
-            ("code_challenge_method", "S256"),
-            ("state", state),
-        ]
+        // Param ORDER mirrors the CLI's `buildAuthUrl` exactly (extras —
+        // Claude's `code=true` — come FIRST, then client_id before
+        // response_type). Anthropic's authorize page rejects deviations
+        // as "Invalid request format", so we don't give it any.
+        var pairs: [(String, String)] = []
         // Provider-specific extras (e.g. Claude's `code=true`). Sorted so
         // the generated URL is deterministic for the test layer.
         for key in config.extraAuthorizeParams.keys.sorted() {
             pairs.append((key, config.extraAuthorizeParams[key] ?? ""))
         }
+        pairs.append(contentsOf: [
+            ("client_id", config.clientID),
+            ("response_type", "code"),
+            ("redirect_uri", config.redirectURI.absoluteString),
+            ("scope", config.scopeString),
+            ("code_challenge", codeChallenge),
+            ("code_challenge_method", "S256"),
+            ("state", state),
+        ])
         // FULLY percent-encode every value (RFC 3986 unreserved set only),
-        // exactly like the real `claude` CLI sends them. `URLComponents`
+        // then re-encode spaces as `+` — that's `URLSearchParams` form
+        // serialization, byte-for-byte what the real `claude` CLI sends
+        // (`scope=org%3Acreate_api_key+user%3Aprofile+…`). `URLComponents`
         // `.queryItems` leaves `:` and `/` RAW in query values, so we'd send
         // `redirect_uri=https://platform.claude.com/...` unencoded —
         // Anthropic's authorize endpoint rejects that as "Authorization
         // failed: Invalid request format" (OpenAI's looser endpoint
-        // tolerated it, which masked the bug). Build the query string by
-        // hand so `redirect_uri` / `scope` arrive encoded (`https%3A%2F%2F…`,
-        // `org%3Acreate_api_key%20…`).
+        // tolerated it, which masked the bug).
         let unreserved = CharacterSet(charactersIn:
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         let query = pairs.map { name, value in
-            "\(name)=\(value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "")"
+            let encoded = (value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "")
+                .replacingOccurrences(of: "%20", with: "+")
+            return "\(name)=\(encoded)"
         }.joined(separator: "&")
         guard var comps = URLComponents(url: config.authorizeURL, resolvingAgainstBaseURL: false) else {
             throw OAuthClientError.underlying("authorize URL build failed")
@@ -579,28 +593,44 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
     ) async throws -> OAuthCredential {
         var req = URLRequest(url: config.tokenURL)
         req.httpMethod = "POST"
-        req.setValue(
-            "application/x-www-form-urlencoded",
-            forHTTPHeaderField: "Content-Type"
-        )
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        var form = URLComponents()
-        var items = [
-            URLQueryItem(name: "grant_type", value: "authorization_code"),
-            URLQueryItem(name: "client_id", value: config.clientID),
-            URLQueryItem(name: "code", value: code),
-            URLQueryItem(name: "redirect_uri", value: config.redirectURI.absoluteString),
-            URLQueryItem(name: "code_verifier", value: verifier),
-        ]
-        // Anthropic's code-paste token exchange echoes the `state` from
-        // the displayed `code#state` string; OpenAI's loopback exchange
-        // does not need it (and we don't send it).
-        if provider == .anthropic, !state.isEmpty {
-            items.append(URLQueryItem(name: "state", value: state))
+        switch provider {
+        case .anthropic:
+            // The real `claude` CLI's `exchangeCodeForTokens` POSTs a
+            // JSON body (`Content-Type: application/json`) with exactly
+            // these keys — extracted from the CLI bundle (v2.1.165). Our
+            // earlier form-encoded body was a reverse-engineering guess
+            // the endpoint would have rejected.
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var body: [String: String] = [
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": config.redirectURI.absoluteString,
+                "client_id": config.clientID,
+                "code_verifier": verifier,
+            ]
+            // The CLI always sends `state` — on the code-paste path it's
+            // the half after `#` in the displayed `code#state` string.
+            if !state.isEmpty { body["state"] = state }
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        case .openai:
+            // OpenAI's `/oauth/token` takes the standard RFC 6749 form
+            // body (verified working on-device).
+            req.setValue(
+                "application/x-www-form-urlencoded",
+                forHTTPHeaderField: "Content-Type"
+            )
+            var form = URLComponents()
+            form.queryItems = [
+                URLQueryItem(name: "grant_type", value: "authorization_code"),
+                URLQueryItem(name: "client_id", value: config.clientID),
+                URLQueryItem(name: "code", value: code),
+                URLQueryItem(name: "redirect_uri", value: config.redirectURI.absoluteString),
+                URLQueryItem(name: "code_verifier", value: verifier),
+            ]
+            req.httpBody = form.percentEncodedQuery?.data(using: .utf8)
         }
-        form.queryItems = items
-        req.httpBody = form.percentEncodedQuery?.data(using: .utf8)
 
         let (data, response): (Data, URLResponse)
         do {
