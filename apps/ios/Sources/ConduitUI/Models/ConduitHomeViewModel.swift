@@ -48,6 +48,13 @@ extension ConduitUI {
         /// the dot used to track selection, so a second running session
         /// looked stopped. Selection is shown by the row background.
         var isRunning: Bool
+        /// Whether the session is connected + non-exited but NOT yet
+        /// confirmed-live by the broker (the ~30s cold-boot window where
+        /// the chat composer is still gated). Drives the amber "starting"
+        /// dot/label so Home stops lying with green "running" before the
+        /// session is actually interactive. Mutually exclusive with
+        /// `isRunning`.
+        var isStarting: Bool = false
 
         var id: String {
             switch kind {
@@ -139,6 +146,14 @@ extension ConduitUI {
         /// this from `store.conversationLog` via
         /// `HomeViewModel.activityPreview(from:)`.
         var lastActivityPreview: String?
+        /// Whether the broker has positively confirmed this session is
+        /// running/interactive RIGHT NOW (`store.isConfirmedLive`). On a
+        /// cold-boot reconnect a session is listed + connected but spends
+        /// ~30s before it's confirmed-live; during that window the chat
+        /// composer is gated, so the row must read "starting" (amber)
+        /// rather than "running" (green). Defaults to `true` so existing
+        /// tests / call sites that omit it keep the prior behavior.
+        var isConfirmedLive: Bool
 
         init(
             id: String,
@@ -147,7 +162,8 @@ extension ConduitUI {
             phase: String?,
             lastActivityAt: String? = nil,
             workingDir: String? = nil,
-            lastActivityPreview: String? = nil
+            lastActivityPreview: String? = nil,
+            isConfirmedLive: Bool = true
         ) {
             self.id = id
             self.displayName = displayName
@@ -156,6 +172,7 @@ extension ConduitUI {
             self.lastActivityAt = lastActivityAt
             self.workingDir = workingDir
             self.lastActivityPreview = lastActivityPreview
+            self.isConfirmedLive = isConfirmedLive
         }
     }
 
@@ -164,28 +181,39 @@ extension ConduitUI {
         var label: String
     }
 
-    /// Computes the visible row list. Real sessions sort first, then
-    /// placeholders, both in input order. `now` is injectable so the
-    /// relative-time stamps are deterministic in tests.
+    /// Computes the visible row list. Real sessions come first, ordered
+    /// most-recent-activity first (stable for equal/missing timestamps —
+    /// see `sortedSessions`), then placeholders in input order. `now` is
+    /// injectable so the relative-time stamps are deterministic in tests.
     enum HomeViewModel {
         static func rows(_ snap: HomeSnapshot, now: Date = Date()) -> [HomeRow] {
             var rows: [HomeRow] = []
-            for s in snap.sessions {
+            for s in sortedSessions(snap.sessions) {
                 let phase = s.phase ?? "ready"
-                let isRunning = snap.harness.isConnected && !phase.hasPrefix("exited")
+                let connected = snap.harness.isConnected
+                let exited = phase.hasPrefix("exited")
+                // Green only when actually connected, non-exited AND the
+                // broker has confirmed the session is live (device bug #30
+                // for the disconnect case; cold-boot "starting" lie for the
+                // confirmed-live case). Amber "starting" covers the window
+                // where it's connected + non-exited but not yet confirmed.
+                let isRunning = connected && !exited && s.isConfirmedLive
+                let isStarting = connected && !exited && !s.isConfirmedLive
                 rows.append(HomeRow(
                     kind: .session(id: s.id),
                     title: s.displayName,
                     agent: s.assistant,
-                    statusText: statusText(phase: phase, connected: snap.harness.isConnected),
+                    statusText: statusText(
+                        phase: phase,
+                        connected: connected,
+                        confirmedLive: s.isConfirmedLive
+                    ),
                     relativeTime: relativeTime(s.lastActivityAt, now: now),
                     workingDir: s.workingDir,
                     lastActivityPreview: s.lastActivityPreview ?? "",
                     isSelected: snap.selectedSessionID == s.id,
-                    // Green only when actually connected AND the agent
-                    // hasn't exited — otherwise the dot showed stale
-                    // "running" green while disconnected (device bug #30).
-                    isRunning: isRunning
+                    isRunning: isRunning,
+                    isStarting: isStarting
                 ))
             }
             for p in snap.placeholders {
@@ -202,6 +230,35 @@ extension ConduitUI {
                 ))
             }
             return rows
+        }
+
+        /// Order the active sessions most-recent-activity first. The sort
+        /// is STABLE: sessions whose `lastActivityAt` is missing or equal
+        /// keep their original input order (the broker's list order), so
+        /// callers that hand in untimestamped sessions get them back in the
+        /// same sequence. Parsing is done once per session up front; an
+        /// unparseable / nil timestamp sorts as "oldest" (after every dated
+        /// session) but ties among themselves preserve input order.
+        static func sortedSessions(
+            _ sessions: [HomeSnapshotSession]
+        ) -> [HomeSnapshotSession] {
+            let keyed = sessions.enumerated().map { (idx, s) -> (idx: Int, date: Date?, session: HomeSnapshotSession) in
+                (idx, s.lastActivityAt.flatMap { SessionNaming.parseTimestamp($0) }, s)
+            }
+            let sorted = keyed.sorted { a, b in
+                switch (a.date, b.date) {
+                case let (.some(da), .some(db)):
+                    if da != db { return da > db }      // newer first
+                    return a.idx < b.idx                // stable tiebreak
+                case (.some, .none):
+                    return true                         // dated before undated
+                case (.none, .some):
+                    return false
+                case (.none, .none):
+                    return a.idx < b.idx                // stable: input order
+                }
+            }
+            return sorted.map { $0.session }
         }
 
         /// True when a session is blocked on the user: its LAST transcript
@@ -284,13 +341,16 @@ extension ConduitUI {
             s.count <= budget ? s : String(s.prefix(budget - 1)) + "…"
         }
 
-        /// Human status word for the row's secondary line. Disconnected
-        /// sessions can't be trusted as running (device bug #30) so they
-        /// read "idle"; an `exited…` phase reads "exited"; otherwise
-        /// "running".
-        static func statusText(phase: String, connected: Bool) -> String {
+        /// Human status word for the row's secondary line. An `exited…`
+        /// phase reads "exited"; a disconnected session can't be trusted as
+        /// running (device bug #30) so it reads "idle"; a connected session
+        /// the broker hasn't confirmed-live yet reads "starting" (the
+        /// cold-boot window — Home used to lie with "running" while the chat
+        /// composer was still gated); otherwise "running".
+        static func statusText(phase: String, connected: Bool, confirmedLive: Bool = true) -> String {
             if phase.hasPrefix("exited") { return "exited" }
             if !connected { return "idle" }
+            if !confirmedLive { return "starting" }
             return "running"
         }
 

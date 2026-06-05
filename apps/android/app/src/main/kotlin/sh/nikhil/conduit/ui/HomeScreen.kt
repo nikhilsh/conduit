@@ -295,7 +295,19 @@ fun HomeScreen(
                     // as one packed slab.
                     verticalArrangement = Arrangement.spacedBy(ConduitHomeRowMetrics.rowGap.dp),
                 ) {
-                    sessions.forEach { session ->
+                    // Order rows most-recent-activity first. The timestamp
+                    // priority mirrors iOS: (1) the last live conversation-log
+                    // item's `ts` (the real last-message time), else (2) the
+                    // session's own metadata; the reconnect-set status
+                    // timestamp is deliberately NOT the primary source (on a
+                    // cold-boot reconnect it's the CONNECTION time, which made
+                    // every row read "just now" and broke the sort).
+                    val sortedSessions = sortSessionsByActivity(sessions) { s ->
+                        lastMessageTimestampOf(conversationLog[s.id])
+                            ?: s.lastActivityAt
+                            ?: s.startedAt
+                    }
+                    sortedSessions.forEach { session ->
                         val isSelected = selectedId == session.id
                         // device bug #9: dot tracks run state, not selection.
                         // device bug #30: and only green when actually
@@ -303,7 +315,14 @@ fun HomeScreen(
                         // green while the connection is down.
                         val connected = harness is HarnessState.Live || harness is HarnessState.Linked
                         val phase = statuses[session.id]?.phase
-                        val isRunning = connected && !(phase ?: "ready").startsWith("exited")
+                        val exited = (phase ?: "ready").startsWith("exited")
+                        // Amber "starting" until the broker confirms the
+                        // session is interactive (~30s cold-boot window where
+                        // the chat composer is gated). Green only when truly
+                        // confirmed-live.
+                        val confirmedLive = store.isConfirmedLive(session.id)
+                        val isRunning = connected && !exited && confirmedLive
+                        val isStarting = connected && !exited && !confirmedLive
                         // Friendly name (never the raw UUID): custom rename →
                         // first user message → broker label → "<agent> · time".
                         // Derived from the collected displayNames + conversation
@@ -378,7 +397,14 @@ fun HomeScreen(
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
                                             .size(8.dp)
-                                            .background(if (isRunning) neon.green else neon.textFaint, CircleShape)
+                                            .background(
+                                                when {
+                                                    isRunning -> neon.green
+                                                    isStarting -> neon.yellow
+                                                    else -> neon.textFaint
+                                                },
+                                                CircleShape,
+                                            )
                                             .border(1.5.dp, neon.surface, CircleShape),
                                     )
                                 }
@@ -399,10 +425,17 @@ fun HomeScreen(
                                     // Secondary line: agent chip + status + relative time.
                                     SessionMetaRow(
                                         agent = session.assistant,
-                                        statusLabel = sessionStatusLabel(connected, phase),
+                                        statusLabel = sessionStatusLabel(connected, phase, confirmedLive),
                                         running = isRunning,
+                                        starting = isStarting,
+                                        // Last-MESSAGE time when the live log
+                                        // carries one (the real activity), else
+                                        // the session's own metadata — never the
+                                        // reconnect-set status timestamp.
                                         relativeTime = SessionNaming.relativeAgo(
-                                            session.lastActivityAt ?: session.startedAt,
+                                            lastMessageTimestampOf(conversationLog[session.id])
+                                                ?: session.lastActivityAt
+                                                ?: session.startedAt,
                                         ),
                                     )
                                     // Tertiary line: latest-activity preview
@@ -748,15 +781,19 @@ private fun canIssueCommands(state: HarnessState): Boolean = when (state) {
 /**
  * Human-readable status word for a session row. When the connection is
  * down we say "idle" rather than echoing a stale "running" phase (device
- * bug #30 parity). Otherwise map the broker phase to a short word.
+ * bug #30 parity). A connected, non-exited session the broker hasn't
+ * confirmed-live yet reads "starting" — the ~30s cold-boot reconnect window
+ * where the chat composer is still gated; Home used to lie with the live
+ * phase word here. Otherwise map the broker phase to a short word.
  */
-private fun sessionStatusLabel(connected: Boolean, phase: String?): String {
+private fun sessionStatusLabel(connected: Boolean, phase: String?, confirmedLive: Boolean = true): String {
     if (!connected) return "idle"
     val p = (phase ?: "ready").trim().lowercase()
     return when {
         p.isEmpty() -> "idle"
         p.startsWith("exited") -> "exited"
         p.startsWith("failed") || p.startsWith("dead") -> "exited"
+        !confirmedLive -> "starting"
         p == "ready" || p == "idle" -> "idle"
         else -> p
     }
@@ -773,6 +810,7 @@ private fun SessionMetaRow(
     statusLabel: String,
     running: Boolean,
     relativeTime: String,
+    starting: Boolean = false,
 ) {
     val neon = LocalNeonTheme.current
     Row(
@@ -795,12 +833,17 @@ private fun SessionMetaRow(
                 maxLines = 1,
             )
         }
-        // Status word with a small dot.
+        // Status word with a small dot: green (live) / amber (starting) /
+        // dim (idle / exited).
         Box(
             modifier = Modifier
                 .size(6.dp)
                 .background(
-                    color = if (running) neon.green else neon.textFaint,
+                    color = when {
+                        running -> neon.green
+                        starting -> neon.yellow
+                        else -> neon.textFaint
+                    },
                     shape = CircleShape,
                 ),
         )

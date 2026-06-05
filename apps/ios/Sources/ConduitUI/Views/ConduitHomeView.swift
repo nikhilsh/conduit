@@ -350,12 +350,23 @@ extension ConduitUI {
             }()
             let sessions = store.sessions.map { s in
                 let status = store.statusBySession[s.id]
-                // Prefer the freshest activity timestamp the store carries
-                // for the relative "last active" stamp.
-                let lastActivity = status?.lastActivityAt
+                // Last-ACTIVITY timestamp for the relative stamp + row sort.
+                // Priority (most-trustworthy "last message" first):
+                //   1. the last live conversation-log item's `ts` (the real
+                //      last-message time);
+                //   2. the session's own `lastActivityAt` / `startedAt`
+                //      (broker-stamped session metadata that survives
+                //      reboot);
+                //   3. only as a LAST RESORT the status'
+                //      `lastActivityAt` / `startedAt` — on a cold-boot
+                //      reconnect this is the CONNECTION time, not a real
+                //      message, so it must not win (it made every row read
+                //      "just now" and broke the sort).
+                let lastActivity = lastMessageTimestamp(for: s.id)
                     ?? s.lastActivityAt
-                    ?? status?.startedAt
                     ?? s.startedAt
+                    ?? status?.lastActivityAt
+                    ?? status?.startedAt
                 let cwd = status?.cwd ?? s.cwd
                 return ConduitUI.HomeSnapshotSession(
                     id: s.id,
@@ -366,7 +377,10 @@ extension ConduitUI {
                     // Drop the ephemeral per-session work dir; only a real
                     // user-picked cwd surfaces in the row.
                     workingDir: SessionNaming.meaningfulWorkingDir(cwd),
-                    lastActivityPreview: latestActivityPreview(for: s.id)
+                    lastActivityPreview: latestActivityPreview(for: s.id),
+                    // Amber "starting" until the broker confirms the session
+                    // is interactive (~30s cold-boot window).
+                    isConfirmedLive: store.isConfirmedLive(sessionID: s.id)
                 )
             }
             return ConduitUI.HomeSnapshot(
@@ -417,6 +431,19 @@ extension ConduitUI {
                 command: latest.command,
                 content: latest.content
             )
+        }
+
+        /// The broker-stamped `ts` of the most recent item in this session's
+        /// live conversation log — the real "last message" time. nil when
+        /// the log is empty (e.g. a freshly-reattached session whose
+        /// transcript hasn't replayed yet), so the snapshot falls back to
+        /// the session's own metadata rather than the reconnect-set status
+        /// timestamp. Items are appended in broker-clock order, so `.last`
+        /// is the freshest; its `ts` is a non-optional broker timestamp.
+        private func lastMessageTimestamp(for sessionID: String) -> String? {
+            guard let last = store.conversationLog[sessionID]?.last else { return nil }
+            let ts = last.ts
+            return ts.isEmpty ? nil : ts
         }
 
         /// The design-reference home body as one sectioned, scrollable List:
@@ -837,8 +864,13 @@ private struct HomeRowView: View {
     }
 
     /// Run-state tint shared by the status word and its inline dot.
+    /// Green when confirmed-live, amber while the broker is still bringing
+    /// the session up ("starting" — the ~30s cold-boot window where the
+    /// chat composer is gated), muted otherwise (idle / exited).
     private var statusColor: Color {
-        row.isRunning ? neon.green : neon.textFaint
+        if row.isRunning { return neon.green }
+        if row.isStarting { return neon.yellow }
+        return neon.textFaint
     }
 
     private var statusDot: some View {
@@ -868,7 +900,7 @@ private struct HomeRowView: View {
             .overlay(alignment: .bottomTrailing) {
                 if case .session = row.kind {
                     Circle()
-                        .fill(row.isRunning ? neon.green : neon.textFaint.opacity(0.5))
+                        .fill(dotColor)
                         .frame(width: 8, height: 8)
                         .overlay(Circle().stroke(neon.surface, lineWidth: 1.5))
                         .offset(x: 3, y: 3)
@@ -887,13 +919,23 @@ private struct HomeRowView: View {
                 .tint(neon.accent)
         case .session:
             // 7pt filled circle per audit §A.1.7 — green when the agent
-            // is running (with a neon glow), muted once it has exited.
+            // is confirmed-live (with a neon glow), amber while it's still
+            // starting up (cold-boot window), muted once it has exited.
             // Driven by run state, not selection (device bug #9): every
             // running session shows green, not just the attached one.
-            // Selection is conveyed by the row's background fill.
+            // Selection is conveyed by the row's background fill. The glow
+            // is reserved for the confirmed-live (green) state only.
             Circle()
-                .fill(row.isRunning ? neon.green : neon.textFaint.opacity(0.5))
+                .fill(dotColor)
                 .neonGlowBox(row.isRunning && neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
         }
+    }
+
+    /// Status-dot fill shared by the avatar badge and the trailing
+    /// indicator: green (live) / amber (starting) / dim (idle / exited).
+    private var dotColor: Color {
+        if row.isRunning { return neon.green }
+        if row.isStarting { return neon.yellow }
+        return neon.textFaint.opacity(0.5)
     }
 }

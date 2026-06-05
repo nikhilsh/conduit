@@ -112,7 +112,7 @@ extension ConduitUI {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(row.isRunning ? neon.green : neon.textFaint)
+                            .fill(row.isRunning ? neon.green : (row.isStarting ? neon.yellow : neon.textFaint))
                             .frame(width: 8, height: 8)
                             .neonGlowBox(row.isRunning && neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
                         Text(row.title)
@@ -247,7 +247,15 @@ extension ConduitUI {
             }()
             let sessions = store.sessions.map { s -> ConduitUI.HomeSnapshotSession in
                 let status = store.statusBySession[s.id]
-                let lastActivity = status?.lastActivityAt ?? s.lastActivityAt ?? status?.startedAt ?? s.startedAt
+                // Last-MESSAGE time (real activity) first, then the session's
+                // own metadata; the reconnect-set status timestamp is only a
+                // last resort (on cold-boot it's the CONNECTION time). Mirrors
+                // the phone home (`ConduitHomeView.snapshot`).
+                let lastActivity = lastMessageTimestamp(for: s.id)
+                    ?? s.lastActivityAt
+                    ?? s.startedAt
+                    ?? status?.lastActivityAt
+                    ?? status?.startedAt
                 let cwd = status?.cwd ?? s.cwd
                 return ConduitUI.HomeSnapshotSession(
                     id: s.id,
@@ -256,7 +264,8 @@ extension ConduitUI {
                     phase: status?.phase,
                     lastActivityAt: lastActivity,
                     workingDir: SessionNaming.meaningfulWorkingDir(cwd),
-                    lastActivityPreview: activityPreview(for: s.id)
+                    lastActivityPreview: activityPreview(for: s.id),
+                    isConfirmedLive: store.isConfirmedLive(sessionID: s.id)
                 )
             }
             return ConduitUI.HomeSnapshot(
@@ -266,6 +275,13 @@ extension ConduitUI {
                 selectedSessionID: store.selectedSessionID,
                 endpointDisplayHost: endpointHost
             )
+        }
+
+        /// Broker `ts` of the freshest live conversation-log item — the real
+        /// last-message time — or nil when the log is empty.
+        private func lastMessageTimestamp(for sessionID: String) -> String? {
+            guard let last = store.conversationLog[sessionID]?.last else { return nil }
+            return last.ts.isEmpty ? nil : last.ts
         }
 
         private func activityPreview(for sessionID: String) -> String? {

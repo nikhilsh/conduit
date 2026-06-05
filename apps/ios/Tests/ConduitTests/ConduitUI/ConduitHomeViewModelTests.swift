@@ -320,6 +320,116 @@ struct ConduitHomeViewModelTests {
         #expect(banner.sessions.map(\.id) == ["a", "c"])
     }
 
+    // MARK: confirmed-live "starting" state (cold-boot reconnect window)
+
+    @Test func sessionRowReadsStartingUntilConfirmedLive() {
+        // On a cold-boot reconnect a session is connected + non-exited but
+        // not yet confirmed-live by the broker (~30s window where the chat
+        // composer is gated). Home must read amber "starting", NOT green
+        // "running" — it used to lie.
+        let snap = ConduitUI.HomeSnapshot(
+            harness: .live,
+            sessions: [
+                ConduitUI.HomeSnapshotSession(
+                    id: "s1",
+                    displayName: "feature-branch",
+                    assistant: "claude",
+                    phase: "working",
+                    isConfirmedLive: false
+                )
+            ],
+            placeholders: [],
+            selectedSessionID: nil,
+            endpointDisplayHost: nil
+        )
+        let rows = ConduitUI.HomeViewModel.rows(snap)
+        #expect(rows[0].statusText == "starting")
+        #expect(rows[0].isStarting == true)
+        #expect(rows[0].isRunning == false)
+    }
+
+    @Test func confirmedLiveSessionReadsRunning() {
+        // The mirror: once confirmed-live (the default), it's green
+        // "running" with no "starting" flag.
+        let snap = ConduitUI.HomeSnapshot(
+            harness: .live,
+            sessions: [
+                ConduitUI.HomeSnapshotSession(
+                    id: "s1",
+                    displayName: "x",
+                    assistant: "claude",
+                    phase: "working",
+                    isConfirmedLive: true
+                )
+            ],
+            placeholders: [],
+            selectedSessionID: nil,
+            endpointDisplayHost: nil
+        )
+        let rows = ConduitUI.HomeViewModel.rows(snap)
+        #expect(rows[0].statusText == "running")
+        #expect(rows[0].isRunning == true)
+        #expect(rows[0].isStarting == false)
+    }
+
+    // MARK: row sort by last-activity (most recent first, stable)
+
+    @Test func sessionRowsSortMostRecentActivityFirst() {
+        // Two dated sessions sort newest-first regardless of input order.
+        let snap = ConduitUI.HomeSnapshot(
+            harness: .live,
+            sessions: [
+                ConduitUI.HomeSnapshotSession(
+                    id: "older",
+                    displayName: "older",
+                    assistant: "claude",
+                    phase: "working",
+                    lastActivityAt: "2026-05-25T11:00:00Z"
+                ),
+                ConduitUI.HomeSnapshotSession(
+                    id: "newer",
+                    displayName: "newer",
+                    assistant: "claude",
+                    phase: "working",
+                    lastActivityAt: "2026-05-25T11:58:00Z"
+                ),
+            ],
+            placeholders: [],
+            selectedSessionID: nil,
+            endpointDisplayHost: nil
+        )
+        let rows = ConduitUI.HomeViewModel.rows(snap)
+        #expect(rows.map(\.title) == ["newer", "older"])
+    }
+
+    @Test func sessionSortIsStableForEqualOrMissingTimestamps() {
+        // Equal timestamps and nil timestamps must preserve input order
+        // (stable sort, original-index tiebreak) — existing tests rely on
+        // nil-timestamp sessions coming back in input order.
+        let snap = ConduitUI.HomeSnapshot(
+            harness: .live,
+            sessions: [
+                ConduitUI.HomeSnapshotSession(id: "a", displayName: "A", assistant: "claude", phase: "working"),
+                ConduitUI.HomeSnapshotSession(id: "b", displayName: "B", assistant: "claude", phase: "working"),
+                ConduitUI.HomeSnapshotSession(
+                    id: "c", displayName: "C", assistant: "claude", phase: "working",
+                    lastActivityAt: "2026-05-25T11:00:00Z"
+                ),
+                ConduitUI.HomeSnapshotSession(
+                    id: "d", displayName: "D", assistant: "claude", phase: "working",
+                    lastActivityAt: "2026-05-25T11:00:00Z"
+                ),
+            ],
+            placeholders: [],
+            selectedSessionID: nil,
+            endpointDisplayHost: nil
+        )
+        let rows = ConduitUI.HomeViewModel.rows(snap)
+        // Dated (c, d, equal → input order) come before undated (a, b →
+        // input order).
+        #expect(rows.map(\.title) == ["C", "D", "A", "B"])
+    }
+
     @Test func placeholdersAppearAfterRealSessions() {
         // Placeholder = an in-flight session-creation, must render
         // *under* real sessions so a long-running placeholder doesn't
