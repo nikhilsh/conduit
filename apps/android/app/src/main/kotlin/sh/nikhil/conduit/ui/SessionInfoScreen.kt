@@ -1,18 +1,25 @@
 package sh.nikhil.conduit.ui
 
+import android.content.Intent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -20,7 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -30,7 +38,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -42,20 +49,35 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import sh.nikhil.conduit.LocalAppearanceStore
+import kotlin.math.roundToInt
 import sh.nikhil.conduit.SessionStore
 import uniffi.conduit_core.ConversationItem
-import uniffi.conduit_core.PreviewInfo
 import uniffi.conduit_core.ProjectSession
+import uniffi.conduit_core.SessionStatus
 
 /**
- * Session "Info" screen — opened from the ⓘ button in the chat header.
- * Hero + action row (Appearance / Fork / Rename) + stats grid.
- * Mirrors `apps/ios/Sources/Views/SessionInfoView.swift`.
+ * Session "Info" sheet — opened from the ⓘ button in the chat header.
+ * Conduit redesign IA (handoff §A.1, images 01/02), mirror of iOS
+ * `ConduitUI.SessionInfoView`:
+ *
+ *   1. Identity — agent avatar, real name (inline rename), agent · branch,
+ *      live/idle badge.
+ *   2. Usage    — context ring + `used / window` + agent line + a single
+ *      mono token line (↓ in ↑ out ⛁ cache).
+ *   3. Limits   — this session's agent only, 5h + weekly windows.
+ *   4. Activity — one compact line; degrades to "Just started …" on a
+ *      fresh session (no grid of zeros).
+ *   5. Details  — working dir / box / started.
+ *   6. Actions  — Fork · Export · End (End destructive/red).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,21 +86,21 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     val statuses by store.statusBySession.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
     val displayNames by store.displayNames.collectAsState()
+    val endpoint by store.endpoint.collectAsState()
     val status = statuses[session.id]
     val events = conversationLog[session.id].orEmpty()
     val stats = remember(events) { SessionStats.compute(events) }
     val name = displayNames[session.id] ?: session.name
+    val context = LocalContext.current
+    val neon = LocalNeonTheme.current
 
     var showRename by remember { mutableStateOf(false) }
     var showFork by remember { mutableStateOf(false) }
-    var showAppearance by remember { mutableStateOf(false) }
+    var showEndConfirm by remember { mutableStateOf(false) }
+    var showRecap by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf(name) }
-    val appearance = LocalAppearanceStore.current
 
-    // Fork chooser state: default the effort to the session's current
-    // effort (status delta wins over the snapshot), falling back to a
-    // sensible default for the agent. The model field stays blank = keep
-    // the current model.
+    // Fork chooser state (unchanged from before the redesign).
     val effortOptions = remember(session.assistant) { forkEffortOptions(session.assistant) }
     val currentEffort = status?.reasoningEffort ?: session.reasoningEffort
     var forkEffort by remember(showFork) {
@@ -87,207 +109,235 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 ?: if (effortOptions.contains("medium")) "medium" else effortOptions.first(),
         )
     }
-    // forkModel is a model alias or "" (inherit = no override). The
-    // dropdown is filtered by assistant; the leading "" entry keeps the
-    // current model, byte-for-byte identical to the pre-picker fork.
     val modelOptions = remember(session.assistant) { forkModelOptions(session.assistant) }
     var forkModel by remember(showFork) { mutableStateOf(forkModelInherit) }
     var modelMenuExpanded by remember(showFork) { mutableStateOf(false) }
 
-    val neon = LocalNeonTheme.current
+    val agent = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant
+    val tint = neonAgentColor(agent, neon)
+
     val content: @Composable () -> Unit = {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // Sheet path only: honor the real bottom safe-area inset so the
+                // Fork/Export/End action row clears the gesture pill / 3-button
+                // nav bar instead of hardcoding a bottom pad (handoff §C.1).
+                // ModalBottomSheet already anchors below the status bar, so the
+                // top needs no extra inset here. The embedded (tablet right-pane)
+                // path skips this — its host already applies window insets.
+                .then(if (embedded) Modifier else Modifier.windowInsetsPadding(WindowInsets.navigationBars))
                 .padding(horizontal = 16.dp, vertical = 12.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            // Hero
+            // 1 · Identity
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                Row(
+                    modifier = Modifier.padding(14.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        AgentAvatar(assistant = session.assistant, size = 32.dp)
-                        Spacer(Modifier.width(10.dp))
-                        HealthDot(status?.health ?: "unknown")
-                        Spacer(Modifier.width(10.dp))
-                        Column {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .background(
+                                tint.copy(alpha = if (neon.dark) 0.14f else 0.10f),
+                                RoundedCornerShape(12.dp),
+                            )
+                            .border(1.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) { ConduitMark(size = 26.dp, color = tint) }
+                    Spacer(Modifier.width(12.dp))
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { renameDraft = name; showRename = true },
+                        ) {
                             Text(
                                 name,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontFamily = neon.sans,
                                 fontWeight = FontWeight.Bold,
                                 color = neon.text,
+                                maxLines = 1,
                             )
-                            status?.phase?.takeIf { it.isNotBlank() }?.let { phase ->
+                            Spacer(Modifier.width(6.dp))
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "Rename",
+                                tint = neon.textFaint,
+                                modifier = Modifier.size(13.dp),
+                            )
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Text(
+                                agent.lowercase(),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontFamily = neon.mono,
+                                fontWeight = FontWeight.SemiBold,
+                                color = tint,
+                            )
+                            session.branch?.takeIf { it.isNotBlank() }?.let { b ->
+                                Text("·", fontFamily = neon.mono, color = neon.textFaint)
                                 Text(
-                                    phase,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    b,
+                                    style = MaterialTheme.typography.labelMedium,
                                     fontFamily = neon.mono,
                                     color = neon.textDim,
+                                    maxLines = 1,
                                 )
                             }
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        AgentPill(session.assistant, tint = neonAgentColor(session.assistant, neon))
-                        session.branch?.takeIf { it.isNotBlank() }?.let { AgentPill(it, tint = neon.accent2) }
-                    }
-                    Text(
-                        session.id,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        color = neon.textFaint,
-                    )
+                    Spacer(Modifier.width(8.dp))
+                    StatusBadge(status, neon)
                 }
             }
 
-            // Action row
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                ActionTile(Icons.Default.Palette, "Appearance", Modifier.weight(1f)) { showAppearance = true }
-                ActionTile(Icons.AutoMirrored.Filled.CallSplit, "Fork", Modifier.weight(1f)) { showFork = true }
-                ActionTile(Icons.Default.Edit, "Rename", Modifier.weight(1f)) {
-                    renameDraft = name
-                    showRename = true
-                }
-            }
-
-            // Stats grid
-            Column {
-                Text(
-                    "STATS",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.SemiBold,
-                    color = neon.textDim,
-                    modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                            StatTile(value = "${stats.messages}", label = "MESSAGES")
-                            StatTile(value = "${stats.turns}", label = "TURNS")
-                            StatTile(value = "${stats.commands}", label = "COMMANDS")
-                        }
-                        Spacer(Modifier.height(14.dp))
-                        Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                            StatTile(value = "${stats.filesChanged}", label = "FILES")
-                            StatTile(value = "${stats.mcpCalls}", label = "MCP")
-                            StatTile(value = stats.execTimeLabel, label = "EXEC TIME")
-                        }
-                    }
-                }
-            }
-
-            // Details card (iOS #239 parity): model (+effort) / started /
-            // last activity / uptime, built from live status (preferred)
-            // falling back to the session snapshot — mirroring how the
-            // store materializes a session. Sits between the stats grid
-            // and the server-usage card.
-            val details = remember(status, session) {
-                SessionDetails.rows(
-                    assistant = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant,
-                    reasoningEffort = status?.reasoningEffort ?: session.reasoningEffort,
-                    startedAt = status?.startedAt ?: session.startedAt,
-                    lastActivityAt = status?.lastActivityAt ?: session.lastActivityAt,
-                )
-            }
-            if (details.isNotEmpty()) {
+            // 2 · Usage
+            val input = status?.totalInputTokens?.toLong() ?: 0L
+            val output = status?.totalOutputTokens?.toLong() ?: 0L
+            val cached = status?.totalCachedTokens?.toLong() ?: 0L
+            val used = status?.contextUsedTokens?.toLong() ?: 0L
+            val window = status?.contextWindowTokens?.toLong() ?: 0L
+            val cost = status?.totalCostUsd
+            if (window > 0L || input > 0L || output > 0L) {
                 Column {
-                    Text(
-                        "DETAILS",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        fontWeight = FontWeight.SemiBold,
-                        color = neon.textDim,
-                        modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
-                    )
+                    Eyebrow("USAGE", neon)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
                     ) {
                         Column(
-                            modifier = Modifier.padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            details.forEach { detail -> DetailRow(detail) }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            ) {
+                                ContextRing(used, window, neon)
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(
+                                        "CONTEXT",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = neon.mono,
+                                        color = neon.textFaint,
+                                    )
+                                    Text(
+                                        if (window > 0L) "${fmtK(used)} / ${fmtK(window)}" else fmtK(used),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontFamily = neon.mono,
+                                        fontWeight = FontWeight.Bold,
+                                        color = neon.text,
+                                    )
+                                    Text(
+                                        modelLine(agent, status?.reasoningEffort ?: session.reasoningEffort),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = neon.mono,
+                                        color = neon.textDim,
+                                    )
+                                }
+                            }
+                            Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("↓ ${fmtK(input)}", fontFamily = neon.mono, fontWeight = FontWeight.Medium, color = neon.blue, style = MaterialTheme.typography.bodyMedium)
+                                Text("↑ ${fmtK(output)}", fontFamily = neon.mono, fontWeight = FontWeight.Medium, color = neon.green, style = MaterialTheme.typography.bodyMedium)
+                                Text("⛁ ${fmtK(cached)}", fontFamily = neon.mono, fontWeight = FontWeight.Medium, color = neon.purple, style = MaterialTheme.typography.bodyMedium)
+                                Spacer(Modifier.weight(1f))
+                                if (cost != null && cost > 0) {
+                                    Text("$%.2f".format(cost), fontFamily = neon.mono, color = neon.textDim, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Per-session usage card (context ring + in/out/cache tiles, or
-            // the terminal readout) — design bundle parity. Data is the live
-            // broker-accumulated status (PR #274); cost + context are
-            // claude-only; the card hides until usage lands. Plan limits are
-            // omitted (no data source). See NeonUsageCard.
-            NeonUsageCard(
-                input = status?.totalInputTokens?.toLong() ?: 0L,
-                output = status?.totalOutputTokens?.toLong() ?: 0L,
-                cached = status?.totalCachedTokens?.toLong() ?: 0L,
-                costUsd = status?.totalCostUsd,
-                contextUsed = status?.contextUsedTokens?.toLong() ?: 0L,
-                contextWindow = status?.contextWindowTokens?.toLong() ?: 0L,
-                assistant = status?.assistant ?: session.assistant,
-                turns = stats.turns,
-                execLabel = stats.execTimeLabel,
-            )
-
-            // Account-level subscription usage (on-demand /usage): the 5-hour
-            // + weekly Claude limits, fetched from the OAuth endpoint on
-            // connect + the refresh button. Account-global (unlike the
-            // per-session card above), but the data source is the Claude OAuth
-            // usage endpoint — codex/other agents have no equivalent, so the
-            // card would sit on "tap refresh to update" forever. Gate it to
-            // claude. Status delta wins over the session snapshot.
-            if ((status?.assistant ?: session.assistant) == "claude") {
+            // 3 · Limits (this session's agent only). Claude maps from the
+            // Anthropic OAuth usage endpoint, codex from ChatGPT /wham/usage;
+            // other agents have no source, so gate to the two.
+            if (agent.lowercase() in setOf("claude", "codex")) {
                 NeonAccountUsageCard(
                     fivePct = status?.account5hPct ?: session.account5hPct,
                     fiveResetsAt = status?.account5hResetsAt ?: session.account5hResetsAt,
                     weekPct = status?.account7dPct ?: session.account7dPct,
                     weekResetsAt = status?.account7dResetsAt ?: session.account7dResetsAt,
                     onRefresh = { store.refreshAccountUsage(session.id) },
+                    heading = "${agent.lowercase()} limits · 5h & weekly",
                 )
             }
 
-            session.preview?.let { preview ->
-                Column {
+            // 4 · Activity
+            Column {
+                Eyebrow("ACTIVITY", neon)
+                val hasActivity = stats.turns > 0 || stats.filesChanged > 0 || stats.commands > 0
+                val line = activityLine(stats, status?.startedAt ?: session.startedAt, status?.lastActivityAt ?: session.lastActivityAt)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
+                ) {
                     Text(
-                        "SERVER USAGE",
-                        style = MaterialTheme.typography.labelSmall,
+                        if (hasActivity) line else "Just started · no activity yet",
+                        modifier = Modifier.padding(14.dp),
                         fontFamily = neon.mono,
-                        fontWeight = FontWeight.SemiBold,
-                        color = neon.textDim,
-                        modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (hasActivity) neon.text else neon.textFaint,
                     )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Text("Preview · port ${preview.port}", style = MaterialTheme.typography.bodyMedium, fontFamily = neon.sans, color = neon.text)
-                            Text(
-                                preview.url,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = neon.mono,
-                                color = neon.textDim,
-                            )
-                        }
+                }
+            }
+
+            // 5 · Details
+            Column {
+                Eyebrow("DETAILS", neon)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        InfoDetailRow("Working dir", session.cwd ?: status?.cwd ?: "—", neon)
+                        Hairline(neon)
+                        InfoDetailRow(
+                            "Box",
+                            endpoint.displayHost.takeIf { it.isNotBlank() }?.let { "$it · broker" } ?: "—",
+                            neon,
+                        )
+                        Hairline(neon)
+                        InfoDetailRow("Started", startedTimeLabel(status?.startedAt ?: session.startedAt), neon)
                     }
                 }
+            }
+
+            // 6 · Actions
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                ActionPill(Icons.AutoMirrored.Filled.CallSplit, "Fork", neon.accent, Modifier.weight(1f)) { showFork = true }
+                ActionPill(Icons.Default.Share, "Export", neon.accent, Modifier.weight(1f)) {
+                    // Export now previews the Session recap (which carries its
+                    // own Export-markdown / Share affordances) instead of a
+                    // bare share-intent, so the user previews before sharing.
+                    showRecap = true
+                }
+                ActionPill(Icons.Default.Stop, "End", neon.red, Modifier.weight(1f)) { showEndConfirm = true }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -305,6 +355,12 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
         ) {
             content()
         }
+    }
+
+    if (showRecap) {
+        // The recap surface carries its own Export-markdown / Share, so the
+        // user previews before sharing.
+        SessionRecapScreen(store = store, session = session, onDismiss = { showRecap = false })
     }
 
     if (showRename) {
@@ -438,102 +494,218 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
         )
     }
 
-    if (showAppearance) {
-        AppearanceSheet(appearance = appearance, onDismiss = { showAppearance = false })
-    }
-}
-
-@Composable
-private fun AgentPill(label: String, tint: androidx.compose.ui.graphics.Color) {
-    val neon = LocalNeonTheme.current
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = tint.copy(alpha = 0.30f),
-    ) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            // Explicit neon text colour: don't lean on Material `onSurface`,
-            // which flips to near-black under a light palette and renders the
-            // pill label as black-on-dark on the neon Info card.
-            color = neon.text,
+    if (showEndConfirm) {
+        AlertDialog(
+            onDismissRequest = { showEndConfirm = false },
+            title = { Text("End this session?") },
+            text = { Text("The agent stops and the box is released. The transcript stays in History.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.archive(session.id)
+                    showEndConfirm = false
+                    onDismiss()
+                }) { Text("End session") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndConfirm = false }) { Text("Cancel") }
+            },
         )
     }
 }
 
 @Composable
-private fun ActionTile(icon: ImageVector, title: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val neon = LocalNeonTheme.current
-    Surface(
-        shape = RoundedCornerShape(ConduitTheme.cardCornerRadiusDp.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        modifier = modifier.clickable(onClick = onClick),
+private fun Eyebrow(text: String, neon: NeonTheme) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        fontFamily = neon.mono,
+        fontWeight = FontWeight.SemiBold,
+        color = neon.textDim,
+        modifier = Modifier.padding(bottom = 6.dp, start = 4.dp),
+    )
+}
+
+@Composable
+private fun StatusBadge(status: SessionStatus?, neon: NeonTheme) {
+    val phase = (status?.phase ?: "").lowercase()
+    val (label, color) = when {
+        phase in setOf("running", "working", "streaming", "thinking") -> "Live" to neon.green
+        else -> "Idle" to neon.textDim
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = Modifier
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(50))
+            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(50))
+            .padding(horizontal = 9.dp, vertical = 5.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(vertical = 16.dp).fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(icon, contentDescription = null, tint = neon.accent)
-            // Explicit neon text colour (see AgentPill) so the tile label
-            // never collapses to Material near-black on the neon surface.
-            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = neon.text)
+        Box(Modifier.size(6.dp).background(color, CircleShape))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.SemiBold,
+            color = color,
+        )
+    }
+}
+
+@Composable
+private fun ContextRing(used: Long, window: Long, neon: NeonTheme) {
+    val pct = if (window > 0L) (used.toDouble() / window).coerceIn(0.0, 1.0) else 0.0
+    Box(modifier = Modifier.size(84.dp), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.size(84.dp)) {
+            val strokePx = 9.dp.toPx()
+            val inset = strokePx / 2f
+            val arc = Size(size.width - strokePx, size.height - strokePx)
+            drawArc(
+                color = neon.border,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = arc,
+                style = Stroke(width = strokePx),
+            )
+            drawArc(
+                color = neon.accentBright,
+                startAngle = -90f,
+                sweepAngle = (pct * 360.0).toFloat(),
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = arc,
+                style = Stroke(width = strokePx, cap = StrokeCap.Round),
+            )
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "${(pct * 100).roundToInt()}",
+                style = MaterialTheme.typography.titleLarge,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                color = neon.text,
+            )
+            Text("%", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono, color = neon.textFaint)
         }
     }
 }
 
 @Composable
-private fun DetailRow(detail: SessionDetails.Detail) {
+private fun InfoDetailRow(label: String, value: String, neon: NeonTheme) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, fontFamily = neon.sans, color = neon.textDim)
+        Spacer(Modifier.width(12.dp))
         Text(
-            detail.label,
+            value,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = neon.mono,
+            color = neon.text,
+            modifier = Modifier.weight(1f, fill = false),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
         )
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                detail.value,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            detail.caption?.let { caption ->
-                Text(
-                    caption,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+    }
+}
+
+@Composable
+private fun Hairline(neon: NeonTheme) {
+    Spacer(Modifier.height(9.dp))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
+    Spacer(Modifier.height(9.dp))
+}
+
+@Composable
+private fun ActionPill(icon: ImageVector, label: String, tint: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val neon = LocalNeonTheme.current
+    Box(
+        modifier = modifier
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(13.dp), fill = neon.surface, borderColor = tint.copy(alpha = 0.4f), glowTint = tint)
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(7.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, color = tint)
         }
     }
 }
 
+private fun modelLine(agent: String, effort: String?): String =
+    if (!effort.isNullOrBlank()) "${agent.lowercase()} · $effort" else agent.lowercase()
 
-@Composable
-private fun StatTile(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            value,
-            style = MaterialTheme.typography.titleLarge.copy(
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                color = LocalNeonTheme.current.accent,
-            ),
-        )
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+private fun fmtK(n: Long): String = when {
+    n >= 1_000_000L -> "%.1fM".format(n / 1_000_000.0)
+    n >= 1_000L -> "${(n / 1000.0).roundToInt()}k"
+    else -> "$n"
+}
+
+private fun activityLine(stats: SessionStats, startedAt: String?, lastActivityAt: String?): String {
+    val parts = mutableListOf<String>()
+    if (stats.turns > 0) parts += "${stats.turns} turns"
+    if (stats.filesChanged > 0) parts += "${stats.filesChanged} files"
+    if (stats.commands > 0) parts += "${stats.commands} cmds"
+    val dur = durationLabel(startedAt, lastActivityAt)
+    if (dur != null) parts += dur else if (stats.execTimeLabel != "—") parts += stats.execTimeLabel
+    return parts.joinToString(" · ")
+}
+
+private fun durationLabel(startedAt: String?, lastActivityAt: String?): String? {
+    val start = parseInstantMs(startedAt) ?: return null
+    val end = parseInstantMs(lastActivityAt) ?: start
+    val secs = ((end - start) / 1000L).coerceAtLeast(0L)
+    return when {
+        secs >= 60L -> "${secs / 60L}m"
+        secs > 0L -> "${secs}s"
+        else -> null
     }
+}
+
+private fun parseInstantMs(raw: String?): Long? {
+    val t = raw?.trim().orEmpty()
+    if (t.isEmpty()) return null
+    return runCatching { java.time.Instant.parse(t).toEpochMilli() }.getOrNull()
+        ?: runCatching { java.time.OffsetDateTime.parse(t).toInstant().toEpochMilli() }.getOrNull()
+}
+
+private fun startedTimeLabel(iso: String?): String {
+    val ms = parseInstantMs(iso) ?: return "—"
+    val dt = java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault())
+    val today = java.time.LocalDate.now(java.time.ZoneId.systemDefault())
+    val pattern = if (dt.toLocalDate() == today) "h:mm a" else "MMM d · h:mm a"
+    return dt.format(java.time.format.DateTimeFormatter.ofPattern(pattern, java.util.Locale.getDefault()))
+}
+
+private fun exportMarkdown(
+    name: String,
+    agent: String,
+    branch: String?,
+    used: Long,
+    window: Long,
+    input: Long,
+    output: Long,
+    cached: Long,
+    activity: String,
+    cwd: String?,
+    started: String,
+): String {
+    val lines = mutableListOf<String>()
+    lines += "# $name"
+    lines += if (!branch.isNullOrBlank()) "${agent.lowercase()} · $branch" else agent.lowercase()
+    lines += ""
+    if (window > 0L) lines += "- Context: ${fmtK(used)} / ${fmtK(window)}"
+    if (input > 0L || output > 0L) lines += "- Tokens: ↓ ${fmtK(input)} ↑ ${fmtK(output)} ⛁ ${fmtK(cached)}"
+    if (activity.isNotBlank()) lines += "- Activity: $activity"
+    if (!cwd.isNullOrBlank()) lines += "- Working dir: $cwd"
+    lines += "- Started: $started"
+    return lines.joinToString("\n")
 }
 
 /**
@@ -557,12 +729,7 @@ internal const val forkModelInherit = ""
 
 /**
  * Curated per-assistant model aliases offered in the fork chooser's
- * model dropdown. The broker passes the chosen value straight to the
- * agent's --model flag (`broker/internal/session/override.go`), so these
- * are the CLI's accepted aliases. The leading inherit entry maps to "no
- * override". Aliases (opus/sonnet/haiku, gpt-5-codex) avoid pinning a
- * dated full model name in the client. Mirror of iOS
- * `ConduitUI.ForkOptions.models(forAssistant:)`.
+ * model dropdown. Mirror of iOS `ConduitUI.ForkOptions.models(forAssistant:)`.
  */
 internal fun forkModelOptions(assistant: String): List<String> = when (assistant) {
     "claude" -> listOf(forkModelInherit, "opus", "sonnet", "haiku")
@@ -626,11 +793,9 @@ data class SessionStats(
 }
 
 /**
- * Session "Details" rows — model (+effort) / started / last activity /
- * uptime — built from live status/session fields. Pure (string in,
- * string out, fixed clock injectable) so JUnit can pin the formatting
- * and uptime math. Mirror of iOS
- * `SessionInfoViewModel.details(_:)` / `relative(_:)`.
+ * Session "Details" rows helper — retained for unit tests
+ * (`SessionDetailsTest`) and any other callers. Pure (string in, string
+ * out, fixed clock injectable). Mirror of iOS `SessionInfoViewModel`.
  */
 object SessionDetails {
     data class Detail(val label: String, val value: String, val caption: String? = null)
@@ -643,9 +808,6 @@ object SessionDetails {
         nowMs: Long = System.currentTimeMillis(),
     ): List<Detail> {
         val rows = mutableListOf<Detail>()
-
-        // Model — the broker exposes only the assistant identifier (no
-        // separate model-version field), optionally qualified by effort.
         val model = assistant.ifBlank { "—" }
         val modelValue = reasoningEffort?.takeIf { it.isNotBlank() }?.let { "$model · $it" } ?: model
         rows += Detail("Model", modelValue)
@@ -654,12 +816,10 @@ object SessionDetails {
         if (startedMs != null) {
             rows += Detail("Started", absolute(startedMs), relative(startedMs, nowMs))
         }
-
         val lastMs = parseMs(lastActivityAt) ?: startedMs
         if (lastMs != null) {
             rows += Detail("Last Activity", relative(lastMs, nowMs))
         }
-
         if (startedMs != null) {
             val end = parseMs(lastActivityAt) ?: nowMs
             val elapsed = (end - startedMs).coerceAtLeast(0L)
@@ -684,10 +844,6 @@ object SessionDetails {
         )
     }
 
-    /**
-     * Compact relative-time string ("just now", "5m ago", "3h ago",
-     * "2d ago"); older than two weeks falls back to a short date.
-     */
     fun relative(ms: Long, nowMs: Long = System.currentTimeMillis()): String {
         val delta = (nowMs - ms).coerceAtLeast(0L)
         val secs = delta / 1000L
@@ -706,7 +862,6 @@ object SessionDetails {
         )
     }
 
-    /** "<n>s" / "<m>m <s>s" / "<h>h <m>m" elapsed-time formatting. */
     fun formatDuration(ms: Long): String {
         if (ms <= 0L) return "—"
         val s = ms / 1000L

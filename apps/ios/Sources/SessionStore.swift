@@ -1252,6 +1252,53 @@ final class SessionStore {
         var hasData: Bool { fivePct != nil || weekPct != nil }
     }
 
+    /// Per-agent account usage for one agent ("claude" / "codex"), pulled
+    /// off the freshest session bound to that agent. The broker now folds
+    /// BOTH Anthropic (`/api/oauth/usage`) and ChatGPT (`/wham/usage`,
+    /// codexaccountusage.go) limits into the same per-session status-frame
+    /// fields, so the ambient Home strip can show `claude · codex` side by
+    /// side (handoff §B.10) instead of Claude-only — but only for agents
+    /// that actually carry data, never a fabricated number.
+    struct AgentUsageSnapshot: Identifiable {
+        var agent: String
+        var fivePct: Double?
+        var fiveResetsAt: String?
+        var weekPct: Double?
+        var weekResetsAt: String?
+        var id: String { agent }
+        var hasData: Bool { fivePct != nil || weekPct != nil }
+    }
+
+    /// Freshest account usage for each agent that has any, in a stable
+    /// display order (claude first, then codex, then any others). Drives
+    /// the ambient Home usage strip. Empty when no session carries usage.
+    var accountUsageByAgent: [AgentUsageSnapshot] {
+        // Group the freshest values per agent (live status preferred over the
+        // session snapshot fallback). One snapshot per agent that has data.
+        var byAgent: [String: AgentUsageSnapshot] = [:]
+        for s in sessions {
+            let agent = s.assistant
+            if byAgent[agent]?.hasData == true { continue }
+            let st = statusBySession[s.id]
+            let five = st?.account5hPct ?? s.account5hPct
+            let week = st?.account7dPct ?? s.account7dPct
+            guard five != nil || week != nil else { continue }
+            byAgent[agent] = AgentUsageSnapshot(
+                agent: agent,
+                fivePct: five,
+                fiveResetsAt: st?.account5hResetsAt ?? s.account5hResetsAt,
+                weekPct: week,
+                weekResetsAt: st?.account7dResetsAt ?? s.account7dResetsAt
+            )
+        }
+        let order = ["claude", "codex"]
+        return byAgent.values.sorted { a, b in
+            let ia = order.firstIndex(of: a.agent) ?? order.count
+            let ib = order.firstIndex(of: b.agent) ?? order.count
+            return ia == ib ? a.agent < b.agent : ia < ib
+        }
+    }
+
     /// The freshest account-usage values across Claude sessions (live status
     /// frame preferred, session snapshot as fallback).
     var accountUsage: AccountUsageSnapshot {

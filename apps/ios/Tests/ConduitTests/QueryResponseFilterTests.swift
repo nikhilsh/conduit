@@ -73,6 +73,21 @@ struct QueryResponseFilterSuite {
         #expect(filtered(xtversion) == [])
     }
 
+    @Test func dropsOSCBackgroundColorReplyST() {
+        let osc: [UInt8] = [ESC] + Array("]11;rgb:1c1c/1c1c/1c1c".utf8) + [ESC, UInt8(ascii: "\\")]
+        #expect(filtered(osc) == [])
+    }
+
+    @Test func dropsOSCForegroundColorReplyBEL() {
+        let osc: [UInt8] = [ESC] + Array("]10;rgb:c0c0/c0c0/c0c0".utf8) + [0x07]
+        #expect(filtered(osc) == [])
+    }
+
+    @Test func dropsOSCCursorColorReply() {
+        let osc: [UInt8] = [ESC] + Array("]12;rgb:ffff/ffff/ffff".utf8) + [0x07]
+        #expect(filtered(osc) == [])
+    }
+
     // MARK: - Real input that must be PRESERVED
 
     @Test func keepsArrowKeys() {
@@ -113,6 +128,16 @@ struct QueryResponseFilterSuite {
         #expect(filtered(text) == text)
     }
 
+    @Test func keepsOSCWindowTitle() {
+        let title: [UInt8] = [ESC] + Array("]0;my title".utf8) + [0x07]
+        #expect(filtered(title) == title)
+    }
+
+    @Test func keepsOSCColorQuery() {
+        let query: [UInt8] = [ESC] + Array("]11;?".utf8) + [ESC, UInt8(ascii: "\\")]
+        #expect(filtered(query) == query)
+    }
+
     @Test func keepsBareEscAndSS3() {
         let bareEsc: [UInt8] = [ESC]
         #expect(filtered(bareEsc) == bareEsc)
@@ -140,6 +165,13 @@ struct QueryResponseFilterSuite {
         let f = QueryResponseFilter()
         let out1 = [UInt8](f.filter(Data([ESC] + Array("P>|ghostty 1.3.1".utf8) + [ESC])))
         let out2 = [UInt8](f.filter(Data([UInt8(ascii: "\\")])))
+        #expect(out1 + out2 == [])
+    }
+
+    @Test func reassemblesOSCColorReplySplitAcrossChunks() {
+        let f = QueryResponseFilter()
+        let out1 = [UInt8](f.filter(Data([ESC] + Array("]11;rgb:1c1c/".utf8))))
+        let out2 = [UInt8](f.filter(Data(Array("1c1c/1c1c".utf8) + [0x07])))
         #expect(out1 + out2 == [])
     }
 }

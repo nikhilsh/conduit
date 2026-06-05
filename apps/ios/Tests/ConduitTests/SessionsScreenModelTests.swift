@@ -102,6 +102,72 @@ struct SessionsScreenModelTests {
         #expect(model.sections.map(\.title) == ["Earlier"])
     }
 
+    // MARK: - Filter chips (All / Running / claude / codex)
+
+    @Test func runningFilterKeepsOnlyLiveRows() {
+        let rows = [
+            row(id: "live",   server: "srv", last: "2026-05-25T09:00:00Z", agent: "claude", status: .live),
+            row(id: "exited", server: "srv", last: "2026-05-25T08:00:00Z", agent: "claude", status: .exited),
+        ]
+        let model = SessionsScreenModel.from(
+            sessions: rows, savedServers: [], query: "", filter: .running
+        )
+        #expect(model.sections.flatMap(\.sessions).map(\.id) == ["live"])
+    }
+
+    @Test func agentFiltersKeepOnlyThatAgent() {
+        let rows = [
+            row(id: "c", server: "srv", last: "2026-05-25T09:00:00Z", agent: "claude"),
+            row(id: "x", server: "srv", last: "2026-05-25T08:00:00Z", agent: "codex"),
+        ]
+        let claudeOnly = SessionsScreenModel.from(
+            sessions: rows, savedServers: [], query: "", filter: .claude
+        )
+        #expect(claudeOnly.sections.flatMap(\.sessions).map(\.id) == ["c"])
+        let codexOnly = SessionsScreenModel.from(
+            sessions: rows, savedServers: [], query: "", filter: .codex
+        )
+        #expect(codexOnly.sections.flatMap(\.sessions).map(\.id) == ["x"])
+    }
+
+    @Test func allFilterIsCombinedWithSearch() {
+        // The chip filter composes with the search predicate: codex chip +
+        // a summary needle narrows to a single row.
+        let rows = [
+            row(id: "x1", server: "srv", last: "2026-05-25T09:00:00Z", summary: "Fix flaky test", agent: "codex"),
+            row(id: "x2", server: "srv", last: "2026-05-25T08:00:00Z", summary: "Bump deps", agent: "codex"),
+            row(id: "c1", server: "srv", last: "2026-05-25T07:00:00Z", summary: "Fix flaky test", agent: "claude"),
+        ]
+        let model = SessionsScreenModel.from(
+            sessions: rows, savedServers: [], query: "flaky", filter: .codex
+        )
+        #expect(model.sections.flatMap(\.sessions).map(\.id) == ["x1"])
+    }
+
+    @Test func filterExcludingEverythingKeepsSourceNonEmpty() {
+        // Running chip with no live rows → no sections, but the source set
+        // is non-empty so the screen shows the "no matches" state, not the
+        // "no sessions yet" splash.
+        let rows = [row(id: "e", server: "srv", last: "2026-05-25T09:00:00Z", status: .exited)]
+        let model = SessionsScreenModel.from(
+            sessions: rows, savedServers: [], query: "", filter: .running
+        )
+        #expect(!model.isEmpty)
+        #expect(model.sections.isEmpty)
+    }
+
+    // MARK: - Outcome derivation
+
+    @Test func outcomeFromPersistedStatus() {
+        #expect(SessionsScreenModel.Outcome.from(
+            row(id: "a", server: "s", last: "ts", status: .live)) == .running)
+        #expect(SessionsScreenModel.Outcome.from(
+            row(id: "b", server: "s", last: "ts", status: .exited)) == .ended)
+        // Unknown degrades to the honest neutral, never a fabricated merged.
+        #expect(SessionsScreenModel.Outcome.from(
+            row(id: "c", server: "s", last: "ts", status: .unknown)) == .ended)
+    }
+
     // MARK: - Search
 
     @Test func searchFiltersBySummarySubstring() {
@@ -297,7 +363,8 @@ struct SessionsScreenModelTests {
         last: String,
         summary: String = "",
         agent: String = "claude",
-        cwd: String? = nil
+        cwd: String? = nil,
+        status: SavedSessionStatus = .unknown
     ) -> SavedSession {
         SavedSession(
             id: id,
@@ -308,7 +375,7 @@ struct SessionsScreenModelTests {
             lastSeen: last,
             messageCount: 0,
             summary: summary,
-            status: .unknown
+            status: status
         )
     }
 

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +64,8 @@ import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionNaming
+import sh.nikhil.conduit.NeedsYouItem
+import sh.nikhil.conduit.needsYouBanner
 
 /**
  * Conduit-style home screen — shown when no session is selected, in
@@ -81,6 +84,11 @@ fun HomeScreen(
     onNewSession: () -> Unit,
     onSearch: () -> Unit,
     onVoice: () -> Unit,
+    // Redesign entry points (default no-ops so existing call sites that don't
+    // wire them still compile): the needs-you banner's Review opens the
+    // Approvals inbox; a Boxes-list tap opens that box's health detail.
+    onOpenApprovals: () -> Unit = {},
+    onOpenBoxHealth: (SavedServer) -> Unit = {},
     // On the 3-pane tablet the rail header already owns the Settings gear,
     // so the center home screen must not render a second one (two gears on
     // the tablet home — device feedback 2026-06-02). Phone keeps it: the
@@ -160,12 +168,44 @@ fun HomeScreen(
             CircleIconButton(Icons.AutoMirrored.Filled.List, "Sessions", onClick = onOpenDrawer)
         }
 
-        // Ambient account-usage strip (design handoff §3b) — Claude plan limits
-        // at a glance, above the session list. Self-hides until usage data
-        // exists so it never dominates the list; gate the spacer too.
-        if (accountUsageSnapshot(sessions, statuses).hasData) {
+        // Ambient account-usage strip (design handoff §B.10) — per-agent plan
+        // headroom (`claude 62% · codex 28%`) at a glance, above the session
+        // list. Self-hides until some agent carries usage data so it never
+        // dominates the list; gate the spacer too.
+        if (accountUsageByAgent(sessions, statuses).any { it.hasData }) {
             Spacer(Modifier.height(12.dp))
             HomeUsageStrip(store, modifier = Modifier.padding(horizontal = 14.dp))
+        }
+
+        // "Needs you" banner (handoff §B.5 / §B.10) — appears ONLY when a real
+        // signal exists: a session whose last transcript item is an unanswered
+        // agent `pending_input` (approval prompt / options menu). Never a
+        // fabricated count; hidden when none. Tapping it opens the first one.
+        val needsYou = remember(sessions, conversationLog, displayNames) {
+            needsYouBanner(
+                sessions.map { s ->
+                    NeedsYouItem(
+                        id = s.id,
+                        title = SessionNaming.friendlyFor(
+                            session = s,
+                            custom = displayNames[s.id],
+                            firstUserMessage = sh.nikhil.conduit.firstUserMessageOf(conversationLog[s.id]),
+                        ),
+                        agent = s.assistant,
+                    ) to conversationLog[s.id]
+                },
+            )
+        }
+        if (!needsYou.isEmpty) {
+            Spacer(Modifier.height(12.dp))
+            NeedsYouBannerCard(
+                neon = neon,
+                banner = needsYou,
+                modifier = Modifier.padding(horizontal = 14.dp),
+                // Review opens the Approvals inbox (the queue of blocked
+                // sessions) rather than jumping into the first session.
+                onReview = onOpenApprovals,
+            )
         }
 
         Spacer(Modifier.height(14.dp))
@@ -431,7 +471,9 @@ fun HomeScreen(
                         server = server,
                         isActive = server.endpoint == endpoint,
                         harness = harness,
-                        onClick = { store.selectSavedServer(server.id, autoConnect = true) },
+                        // Tap opens the box's health detail; reconnect now
+                        // lives inside Box health (its onReconnect action).
+                        onClick = { onOpenBoxHealth(server) },
                     )
                 }
             }
@@ -582,6 +624,78 @@ private fun HomeBoxRow(
             style = MaterialTheme.typography.labelSmall,
             fontFamily = neon.mono,
             color = statusColor,
+        )
+    }
+}
+
+/**
+ * The Home "needs you" banner (design handoff §B.10, image 12): an
+ * amber-tinted card shown ONLY when a real signal exists — one or more
+ * sessions whose agent is blocked on the user (an unanswered `pending_input`).
+ * Title counts the waiting sessions; the sub names the agent/session;
+ * `Review` opens the first one. The caller gates it on a non-empty banner, so
+ * it never shows a fabricated count. Mirror of iOS `NeedsYouBanner`.
+ */
+@Composable
+private fun NeedsYouBannerCard(
+    neon: NeonTheme,
+    banner: sh.nikhil.conduit.NeedsYouBanner,
+    modifier: Modifier = Modifier,
+    onReview: () -> Unit,
+) {
+    val title = if (banner.count == 1) "1 session waiting on you" else "${banner.count} sessions waiting on you"
+    val sub = banner.sessions.firstOrNull()?.let { first ->
+        if (banner.count == 1) "${first.agent} needs your input on ${first.title}" else "agents are blocked on your input"
+    } ?: "agents are blocked on your input"
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = RoundedCornerShape(12.dp),
+                fill = neon.yellow.copy(alpha = 0.07f),
+                borderColor = neon.yellow.copy(alpha = 0.27f),
+                glowTint = neon.yellow,
+            )
+            .clickable(onClick = onReview)
+            .padding(horizontal = 13.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        Box(
+            modifier = Modifier.size(34.dp).background(neon.yellow.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Default.Warning, null, modifier = Modifier.size(18.dp), tint = neon.yellow)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                sub,
+                fontFamily = neon.mono,
+                fontSize = 10.5.sp,
+                color = neon.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            "Review",
+            style = MaterialTheme.typography.titleSmall,
+            fontFamily = neon.sans,
+            fontWeight = FontWeight.SemiBold,
+            color = neon.yellow,
+            modifier = Modifier
+                .background(neon.yellow.copy(alpha = 0.14f), CircleShape)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
         )
     }
 }

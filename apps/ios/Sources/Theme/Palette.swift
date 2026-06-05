@@ -17,20 +17,20 @@ enum ConduitPalette {
     // user bubble, status, stat numbers). Per-agent tints below
     // (`codexAccent`, `hermesAccent`, …) live alongside.
     static let accentStrong    = Pair(light: "#CC785C", dark: "#E89677")
-    /// Anthropic copper. Used when the active agent is Claude.
-    static let claudeAccent    = Pair(light: "#CC785C", dark: "#E89677")
-    /// Anthropic copper — strong variant for high-emphasis surfaces.
-    static let claudeAccentStrong = Pair(light: "#A85A3F", dark: "#CC785C")
-    /// OpenAI Codex brand is monochrome (white on dark, dark on light)
-    /// — the green earlier here didn't match marketing. Light theme gets
-    /// a near-black so it stays legible against the light surface; dark
-    /// theme gets an off-white so it doesn't blow out highlights but
-    /// still reads as the white wordmark.
-    static let codexAccent     = Pair(light: "#262626", dark: "#F5F5F5")
-    /// Monochrome Codex — strong variant for high-emphasis surfaces.
-    /// Pushes a touch farther toward pure black / pure white than the
-    /// regular accent so filled avatars + selected states still pop.
-    static let codexAccentStrong  = Pair(light: "#0A0A0A", dark: "#FAFAFA")
+    /// Conduit redesign agent tint — Claude reads as a warm orange
+    /// (`--claude #FF9D4D`, BRAND.md §3, confirmed against the target
+    /// art). Dark ships first, so the dark value is the canonical hex;
+    /// the light value is deepened for legibility on a light surface.
+    static let claudeAccent    = Pair(light: "#E07A1E", dark: "#FF9D4D")
+    /// Claude tint — strong variant for high-emphasis surfaces.
+    static let claudeAccentStrong = Pair(light: "#C2630F", dark: "#FFB264")
+    /// Conduit redesign agent tint — Codex reads as the brand cyan
+    /// (`#22D3EE`, build-prompt theme line + target art). Yes, this
+    /// matches the primary accent: that's intentional in the ice
+    /// palette. Light value deepened for legibility.
+    static let codexAccent     = Pair(light: "#0E90A8", dark: "#22D3EE")
+    /// Cyan Codex — strong variant for high-emphasis surfaces.
+    static let codexAccentStrong  = Pair(light: "#0A7E95", dark: "#5BDFF2")
     /// Hermes purple. Mythological messenger — a Tailwind purple-500.
     /// No public Hermes adapter brand to anchor to, so this is a
     /// defensible choice that contrasts cleanly with claude/codex.

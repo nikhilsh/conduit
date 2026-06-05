@@ -13,18 +13,19 @@ struct AgentAccentTests {
 
     // MARK: - Light-mode RGB pins
 
-    @Test func claudeIsAnthropicCopper() {
-        expectRGB(ConduitTheme.accent(forAgent: "claude"), hex: "#CC785C")
+    @Test func claudeIsWarmOrange() {
+        // Conduit redesign tint: Claude reads as a warm orange
+        // (--claude #FF9D4D, BRAND.md §3). Dark ships first, so the dark
+        // value is the canonical hex; this pins the light variant, which
+        // is deepened (#E07A1E) for legibility on a light surface.
+        expectRGB(ConduitTheme.accent(forAgent: "claude"), hex: "#E07A1E")
     }
 
-    @Test func codexIsMonochrome() {
-        // Codex's brand wordmark is monochrome (white on dark, dark on
-        // light) — the previous emerald-500 (#10B981) didn't match
-        // marketing. Light theme gets a near-black so the accent stays
-        // legible against the light surface; the dark counterpart lives
-        // in `codexAccent.dark` (#F5F5F5) and isn't checked here because
-        // expectRGB pins the light variant only.
-        expectRGB(ConduitTheme.accent(forAgent: "codex"), hex: "#262626")
+    @Test func codexIsBrandCyan() {
+        // Conduit redesign tint: Codex reads as the brand cyan
+        // (#22D3EE) — matching the primary accent on purpose in the ice
+        // palette. Light variant deepened (#0E90A8) for legibility.
+        expectRGB(ConduitTheme.accent(forAgent: "codex"), hex: "#0E90A8")
     }
 
     @Test func hermesIsPurple() {
@@ -47,20 +48,20 @@ struct AgentAccentTests {
     }
 
     @Test func matchIsCaseInsensitive() {
-        expectRGB(ConduitTheme.accent(forAgent: "CLAUDE"), hex: "#CC785C")
-        expectRGB(ConduitTheme.accent(forAgent: "Codex"), hex: "#262626")
+        expectRGB(ConduitTheme.accent(forAgent: "CLAUDE"), hex: "#E07A1E")
+        expectRGB(ConduitTheme.accent(forAgent: "Codex"), hex: "#0E90A8")
     }
 
     // MARK: - Strong variant
 
     @Test func claudeStrongIsDarker() {
-        expectRGB(ConduitTheme.accentStrong(forAgent: "claude"), hex: "#A85A3F")
+        expectRGB(ConduitTheme.accentStrong(forAgent: "claude"), hex: "#C2630F")
     }
 
     @Test func codexStrongIsDarker() {
-        // Strong variant pushes the monochrome accent further toward
-        // pure black on light so filled avatars + selected states pop.
-        expectRGB(ConduitTheme.accentStrong(forAgent: "codex"), hex: "#0A0A0A")
+        // Strong variant deepens the cyan on light so filled avatars +
+        // selected states pop.
+        expectRGB(ConduitTheme.accentStrong(forAgent: "codex"), hex: "#0A7E95")
     }
 
     @Test func unknownStrongFallsBackToNeutral() {

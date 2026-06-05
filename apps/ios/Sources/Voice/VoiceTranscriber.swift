@@ -37,6 +37,10 @@ final class VoiceTranscriber: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var partialTranscript: String = ""
+    /// Smoothed input level (0…1), derived from the RMS of the same audio
+    /// buffer that feeds the recognizer. Drives the voice-sheet waveform so
+    /// the bars track the user's actual voice. Resets to 0 on teardown.
+    @Published private(set) var level: Float = 0
 
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -133,6 +137,7 @@ final class VoiceTranscriber: ObservableObject {
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.request?.append(buffer)
+            self?.updateLevel(from: buffer)
         }
         audioEngine.prepare()
         try audioEngine.start()
@@ -180,7 +185,31 @@ final class VoiceTranscriber: ObservableObject {
         audioEngine.inputNode.removeTap(onBus: 0)
         request = nil
         task = nil
+        level = 0
         state = .idle
+    }
+
+    /// Compute the RMS of the (mono / first-channel) PCM buffer, map it to
+    /// a perceptual 0…1 range, and publish a smoothed value on the main
+    /// actor. Called from the audio tap thread; the `nonisolated` shim lets
+    /// it run off-actor and hop back to publish.
+    nonisolated private func updateLevel(from buffer: AVAudioPCMBuffer) {
+        guard let channel = buffer.floatChannelData?[0] else { return }
+        let frames = Int(buffer.frameLength)
+        guard frames > 0 else { return }
+        var sumSquares: Float = 0
+        for i in 0..<frames {
+            let s = channel[i]
+            sumSquares += s * s
+        }
+        let rms = (sumSquares / Float(frames)).squareRoot()
+        // Map RMS (~0…0.3 for speech) to 0…1 with a gentle gain + clamp.
+        let scaled = min(1.0, max(0.0, rms * 6.0))
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Light exponential smoothing so the bars don't strobe.
+            self.level = self.level * 0.6 + scaled * 0.4
+        }
     }
 }
 

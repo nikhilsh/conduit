@@ -1,10 +1,13 @@
 package sh.nikhil.conduit.ui
 
 import sh.nikhil.conduit.BuildConfig
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -12,18 +15,14 @@ import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TextFields
-import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.UnfoldLess
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,6 +33,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -57,24 +59,41 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
 import sh.nikhil.conduit.AppearanceStore
+import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
+import uniffi.conduit_core.ProjectSession
+import uniffi.conduit_core.SessionStatus
 
 /**
- * Settings — sectioned IA matching the upstream reference: Support /
- * Appearance / Font / Conversation / Servers / Harness / About /
- * Experimental. Adding a server lives in [AddServerSheet], opened via
- * the "Add server" CTA inside the Servers section.
+ * Settings — Conduit redesign IA (handoff §A.2, image 03), mirror of iOS
+ * `ConduitUI.SettingsView`. The shipped build had ~11 stacked sections with
+ * appearance shattered across six of them; this collapses to exactly eight:
  *
- * Styling follows native Material 3 idioms: each section is a tonal
- * [Card], rows are Material [ListItem]s, single-select choices use
- * [RadioButton]s, and toggles use [Switch]. Color comes from
- * [MaterialTheme.colorScheme]; the Conduit copper brand accent
- * ([ConduitTheme.accentStrong]) is applied the Material way as the
- * control/selection tint.
+ *   identity · Account · Usage & limits · Appearance · Terminal ·
+ *   Conversation · Servers · About
+ *
+ *   • identity      — `>conduit` wordmark card (mono, the `>` cyan-tinted) +
+ *                     version/build line + a live/offline badge.
+ *   • Account       — pairing row + "Sign in to agent" (sheets unchanged).
+ *   • Usage & limits— account-wide, BOTH agents (claude + codex), each with a
+ *                     5-hour AND a weekly window (bar / % / reset).
+ *   • Appearance    — ONE grouped card: Theme segmented, accent-palette
+ *                     swatches, App font drill-in, Text size slider, Glow &
+ *                     scanlines toggle, + the `conduit --theme ice` chip.
+ *   • Terminal      — Color theme drill-in row, font-size slider, native
+ *                     terminal toggle.
+ *   • Conversation  — collapse-turns toggle.
+ *   • Servers       — saved servers + Add server.
+ *   • About         — version + licenses.
+ *
+ * Presentation + IA only: every store/AppearanceStore binding and sheet is
+ * preserved. Styling follows the neon theme tokens via [LocalNeonTheme] and
+ * the [neonCardSurface] section card, matching the iOS rewrite.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,6 +110,8 @@ fun SettingsScreen(
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
+    val sessions by store.sessions.collectAsState()
+    val statuses by store.statusBySession.collectAsState()
     val fontFamily by appearance.fontFamily.collectAsState()
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
@@ -98,9 +119,11 @@ fun SettingsScreen(
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val terminalFontSize by appearance.terminalFontSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
+    val neonGlow by appearance.neonGlow.collectAsState()
 
     var showAddServer by remember { mutableStateOf(false) }
-    var showAppearance by remember { mutableStateOf(false) }
+    var showAppFont by remember { mutableStateOf(false) }
+    var showTerminalTheme by remember { mutableStateOf(false) }
     var showAgentLogin by remember { mutableStateOf(false) }
     // Saved-server pending deletion. Mirror of iOS PR #128's
     // `pendingServerDelete`: gating the destructive sweep behind an
@@ -111,164 +134,197 @@ fun SettingsScreen(
     var pendingForget by remember { mutableStateOf<SavedServer?>(null) }
 
     val neon = LocalNeonTheme.current
+    val versionLabel = if (BuildConfig.RELEASE_TAG != "dev") {
+        "${BuildConfig.RELEASE_TAG} (${BuildConfig.GIT_SHA})"
+    } else {
+        "${BuildConfig.VERSION_NAME} (dev)"
+    }
+
     val content: @Composable () -> Unit = {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            Text(
-                "Settings",
-                style = MaterialTheme.typography.headlineSmall,
-                fontFamily = neon.sans,
-                fontWeight = FontWeight.SemiBold,
-                color = neon.text,
-            )
+            // identity — `>conduit` wordmark + version + live/offline badge.
+            IdentityCard(neon = neon, version = versionLabel, harness = harness)
 
-            // Theme — matches iOS ConduitSettings section name (the
-            // wrapper used to be "Appearance" with a single Theme row,
-            // which read as a redundant label). Support / Sponsor on
-            // GitHub moves to the very bottom so the settings sheet
-            // leads with content, not solicitation.
-            SettingsSection("Theme") {
-                SettingsRow(
-                    icon = Icons.Filled.Palette,
-                    title = "Theme",
-                    subtitle = themeMode.label,
-                    onClick = { showAppearance = true },
-                )
-            }
-
-            // Agent accounts — promoted to the top of the IA (iOS has
-            // this in its Account section, prominent above Theme). Per-
-            // user OAuth for Claude / ChatGPT, Stage 0/1 spike per
-            // `docs/PLAN-AGENT-OAUTH.md` §F.
-            SettingsSection("Agent accounts") {
+            // Account — pairing row + sign-in to agent.
+            SettingsSection("Account") {
                 SettingsRow(
                     icon = Icons.Filled.Person,
-                    title = "Manage logins",
-                    subtitle = "Sign in to ChatGPT / Claude",
+                    title = if (endpoint.isComplete) endpoint.displayHost else "Not paired",
+                    subtitle = harness.badgeLabel,
+                    onClick = { showAgentLogin = true },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    icon = Icons.Filled.Person,
+                    title = "Sign in to agent",
+                    subtitle = "OAuth for Claude / ChatGPT",
                     onClick = { showAgentLogin = true },
                 )
             }
 
-            // Usage & limits — ambient account-level Claude plan limits (design
-            // handoff §3b). Collapsed shows sparks; tap to expand to full bars +
-            // reset countdowns. Account-wide, not per-box. Expanded by default in
-            // the tablet Settings pane.
+            // Usage & limits — account-wide, BOTH agents (claude + codex),
+            // each with a 5-hour AND a weekly window. Numbers are per-account,
+            // not per-session; read off any session of that agent. Honest
+            // empty state when an agent has no data yet.
             SettingsSection("Usage & limits") {
-                UsageLimitsCard(store, startExpanded = embedded)
-            }
-
-            // Font (inline)
-            SettingsSection("Font") {
-                AppearanceStore.FontFamily.values().forEachIndexed { idx, choice ->
-                    PickerRow(
-                        icon = if (choice == AppearanceStore.FontFamily.Monospaced) Icons.Filled.Code else Icons.Filled.TextFields,
-                        title = choice.label,
-                        isSelected = fontFamily == choice,
-                        onClick = { appearance.setFontFamily(choice) },
-                    )
-                    if (idx < AppearanceStore.FontFamily.values().lastIndex) SettingsDivider()
-                }
-            }
-
-            // Font Size — Android mirror of iOS ConduitSettingsView's
-            // Font Size slider (PLAN-CONDUIT-VISUAL-PARITY PR 2). Range
-            // and default live in [AppearanceStore]; the setter
-            // clamps so out-of-range writes can't blow out layout.
-            SettingsSection("Font Size") {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Filled.FormatSize,
-                            contentDescription = null,
-                            tint = neon.accent,
-                            modifier = Modifier.size(24.dp),
-                        )
-                        Spacer(Modifier.width(16.dp))
-                        Text(
-                            "Body",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "${bodyPointSize.toInt()}pt",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontFamily = FontFamily.Monospace,
-                        )
-                    }
-                    Slider(
-                        value = bodyPointSize,
-                        onValueChange = { appearance.setBodyPointSize(it) },
-                        valueRange = AppearanceStore.BODY_POINT_SIZE_RANGE,
-                        steps = (AppearanceStore.BODY_POINT_SIZE_RANGE.endInclusive
-                            - AppearanceStore.BODY_POINT_SIZE_RANGE.start).toInt() - 1,
-                        colors = SliderDefaults.colors(
-                            thumbColor = neon.accent,
-                            activeTrackColor = neon.accent,
-                        ),
-                    )
-                    Text(
-                        "The quick brown fox jumps over the lazy dog.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = androidx.compose.ui.unit.TextUnit(
-                            bodyPointSize,
-                            androidx.compose.ui.unit.TextUnitType.Sp,
-                        ),
-                    )
-                }
-            }
-
-            // Conversation
-            SettingsSection("Conversation") {
-                ToggleRow(
-                    icon = Icons.Filled.UnfoldLess,
-                    title = "Collapse Turns",
-                    subtitle = "Show only summaries; tap to expand",
-                    isOn = collapseTurns,
-                    onChange = { appearance.setCollapseTurns(it) },
+                AgentUsageRows(
+                    store = store,
+                    agent = "claude",
+                    tint = neon.claude,
+                    sessions = sessions,
+                    statuses = statuses,
+                )
+                SettingsDivider()
+                AgentUsageRows(
+                    store = store,
+                    agent = "codex",
+                    tint = neon.codex,
+                    sessions = sessions,
+                    statuses = statuses,
                 )
             }
 
-            // Terminal — font size slider + color theme picker. Android
-            // mirror of the iOS native-terminal controls: the size +
-            // five themes (Ghostty Dark / Solarized Dark / Nord /
-            // Dracula / Gruvbox Dark) match iOS exactly. Applies to the
-            // production xterm.js terminal and the experimental Termux
-            // path alike; both live-update.
-            SettingsSection("Terminal") {
+            // Appearance — ONE grouped card: Theme segmented, accent palette,
+            // App font drill-in, Text size slider, Glow & scanlines.
+            Column(modifier = Modifier.fillMaxWidth()) {
+                SectionEyebrow("Appearance")
                 Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
+                ) {
+                    // Theme — segmented System / Light / Dark.
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "Theme",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontFamily = neon.sans,
+                            fontWeight = FontWeight.SemiBold,
+                            color = neon.text,
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            val modes = AppearanceStore.ThemeMode.values()
+                            modes.forEachIndexed { idx, mode ->
+                                SegmentedButton(
+                                    selected = themeMode == mode,
+                                    onClick = { appearance.setThemeMode(mode) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = idx, count = modes.size),
+                                    colors = SegmentedButtonDefaults.colors(
+                                        activeContainerColor = neon.accent.copy(alpha = 0.18f),
+                                        activeContentColor = neon.text,
+                                        activeBorderColor = neon.accent,
+                                        inactiveContainerColor = Color.Transparent,
+                                        inactiveContentColor = neon.textDim,
+                                        inactiveBorderColor = neon.border,
+                                    ),
+                                    label = { Text(mode.label, fontFamily = neon.sans) },
+                                )
+                            }
+                        }
+                    }
+
+                    SettingsDivider()
+
+                    // Accent palette — Ice / Synth / Matrix / Amber swatches.
+                    NeonAccentPalettePicker(appearance)
+
+                    SettingsDivider()
+
+                    // App font — drill-in row.
+                    ListItem(
+                        modifier = Modifier.clickable { showAppFont = true },
+                        leadingContent = { Icon(Icons.Filled.TextFields, contentDescription = null, tint = neon.accent) },
+                        headlineContent = { Text("App font", color = neon.text, fontFamily = neon.sans) },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(fontFamily.label, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
+                                Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint)
+                            }
+                        },
+                        colors = transparentListItemColors(),
+                    )
+
+                    SettingsDivider()
+
+                    // Text size slider.
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.FormatSize, contentDescription = null, tint = neon.accent, modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.width(16.dp))
+                            Text("Text size", style = MaterialTheme.typography.bodyLarge, fontFamily = neon.sans, color = neon.text)
+                            Spacer(Modifier.weight(1f))
+                            Text("${bodyPointSize.toInt()}pt", fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
+                        }
+                        Slider(
+                            value = bodyPointSize,
+                            onValueChange = { appearance.setBodyPointSize(it) },
+                            valueRange = AppearanceStore.BODY_POINT_SIZE_RANGE,
+                            steps = (AppearanceStore.BODY_POINT_SIZE_RANGE.endInclusive
+                                - AppearanceStore.BODY_POINT_SIZE_RANGE.start).toInt() - 1,
+                            colors = SliderDefaults.colors(
+                                thumbColor = neon.accent,
+                                activeTrackColor = neon.accent,
+                            ),
+                        )
+                    }
+
+                    SettingsDivider()
+
+                    // Glow & scanlines.
+                    ToggleRow(
+                        icon = Icons.Filled.Star,
+                        title = "Glow & scanlines",
+                        subtitle = if (neon.dark) "neon halos · on dark" else "neon halos · dimmed in light",
+                        isOn = neonGlow,
+                        onChange = { appearance.setNeonGlow(it) },
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+                // Live `$ conduit --theme <id>` preview chip.
+                NeonThemePreviewChip(appearance)
+            }
+
+            // Terminal — color theme drill-in row + font-size slider + the
+            // native-terminal toggle. (Android's terminal font is fixed —
+            // there's no per-font setting like iOS's libghostty path — so the
+            // section surfaces the real terminal knobs rather than a dead row.)
+            SettingsSection("Terminal") {
+                ListItem(
+                    modifier = Modifier.clickable { showTerminalTheme = true },
+                    leadingContent = { Icon(Icons.Filled.Palette, contentDescription = null, tint = neon.accent) },
+                    headlineContent = { Text("Color theme", color = neon.text, fontFamily = neon.sans) },
+                    trailingContent = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(terminalTheme.label, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
+                            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint)
+                        }
+                    },
+                    colors = transparentListItemColors(),
+                )
+                SettingsDivider()
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Filled.FormatSize,
-                            contentDescription = null,
-                            tint = neon.accent,
-                            modifier = Modifier.size(24.dp),
-                        )
+                        Icon(Icons.Filled.FormatSize, contentDescription = null, tint = neon.accent, modifier = Modifier.size(24.dp))
                         Spacer(Modifier.width(16.dp))
-                        Text(
-                            "Font Size",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
+                        Text("Font size", style = MaterialTheme.typography.bodyLarge, fontFamily = neon.sans, color = neon.text)
                         Spacer(Modifier.weight(1f))
-                        Text(
-                            "${terminalFontSize.toInt()}pt",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontFamily = FontFamily.Monospace,
-                        )
+                        Text("${terminalFontSize.toInt()}pt", fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
                     }
                     Slider(
                         value = terminalFontSize,
@@ -283,18 +339,27 @@ fun SettingsScreen(
                     )
                 }
                 SettingsDivider()
-                AppearanceStore.TerminalTheme.values().forEachIndexed { idx, choice ->
-                    PickerRow(
-                        icon = Icons.Filled.Palette,
-                        title = choice.label,
-                        isSelected = terminalTheme == choice,
-                        onClick = { appearance.setTerminalTheme(choice) },
-                    )
-                    if (idx < AppearanceStore.TerminalTheme.values().lastIndex) SettingsDivider()
-                }
+                ToggleRow(
+                    icon = Icons.Filled.Science,
+                    title = "Native terminal",
+                    subtitle = "On by default. Turn off to use the legacy web terminal.",
+                    isOn = experimentalNativeTerminal,
+                    onChange = { appearance.setExperimentalNativeTerminal(it) },
+                )
             }
 
-            // Servers
+            // Conversation.
+            SettingsSection("Conversation") {
+                ToggleRow(
+                    icon = Icons.Filled.UnfoldLess,
+                    title = "Collapse Turns",
+                    subtitle = "Show only summaries; tap to expand",
+                    isOn = collapseTurns,
+                    onChange = { appearance.setCollapseTurns(it) },
+                )
+            }
+
+            // Servers.
             SettingsSection("Servers") {
                 savedServers.forEachIndexed { idx, server ->
                     ListItem(
@@ -305,10 +370,12 @@ fun SettingsScreen(
                                 tint = neon.accent,
                             )
                         },
-                        headlineContent = { Text(server.name) },
+                        headlineContent = { Text(server.name, color = neon.text, fontFamily = neon.sans) },
                         supportingContent = {
                             Text(
                                 server.endpoint.displayHost,
+                                fontFamily = neon.sans,
+                                color = neon.textDim,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -318,21 +385,23 @@ fun SettingsScreen(
                                 if (server.isDefault) {
                                     Surface(
                                         shape = RoundedCornerShape(50),
-                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        color = neon.accent.copy(alpha = 0.22f),
                                     ) {
                                         Text(
                                             "Default",
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            fontFamily = neon.mono,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = neon.accent,
                                         )
                                     }
                                 }
                                 TextButton(onClick = { store.selectSavedServer(server.id, autoConnect = true) }) {
-                                    Text("Use")
+                                    Text("Use", color = neon.accent)
                                 }
                                 IconButton(onClick = { pendingForget = server }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = "Forget")
+                                    Icon(Icons.Filled.Delete, contentDescription = "Forget", tint = neon.textDim)
                                 }
                             }
                         },
@@ -348,81 +417,10 @@ fun SettingsScreen(
                 )
             }
 
-            // Harness (only when paired)
-            if (endpoint.isComplete) {
-                SettingsSection("Server") {
-                    ListItem(
-                        leadingContent = {
-                            Icon(
-                                Icons.Filled.Link,
-                                contentDescription = null,
-                                tint = neon.accent,
-                            )
-                        },
-                        headlineContent = { Text("Link") },
-                        trailingContent = { HarnessBadge(state = harness) },
-                        colors = transparentListItemColors(),
-                    )
-                    harness.failureReason?.let { reason ->
-                        SettingsDivider()
-                        Text(
-                            reason,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        )
-                    }
-                    val needsReconnect = endpoint.isComplete &&
-                        (harness is sh.nikhil.conduit.HarnessState.Disconnected ||
-                            harness is sh.nikhil.conduit.HarnessState.Failed)
-                    if (needsReconnect) {
-                        SettingsDivider()
-                        SettingsRow(
-                            icon = Icons.Filled.Refresh,
-                            title = "Reconnect",
-                            subtitle = null,
-                            onClick = { store.reconnect() },
-                        )
-                    }
-                    SettingsDivider()
-                    SettingsRow(
-                        icon = Icons.Filled.Delete,
-                        title = "Forget server",
-                        subtitle = endpoint.displayHost,
-                        iconTint = MaterialTheme.colorScheme.error,
-                        titleColor = MaterialTheme.colorScheme.error,
-                        onClick = {
-                            store.setEndpoint("", "")
-                            store.disconnect()
-                        },
-                    )
-                }
-            }
-
-            // Experimental — kept above About so users see the live
-            // toggles before the static identity card (iOS order).
-            SettingsSection("Experimental") {
-                ToggleRow(
-                    icon = Icons.Filled.Science,
-                    title = "Native Terminal (Termux)",
-                    subtitle = "On by default. Turn off to use the legacy web terminal.",
-                    isOn = experimentalNativeTerminal,
-                    onChange = { appearance.setExperimentalNativeTerminal(it) },
-                )
-            }
-
             // About — static identity card + a tap-through to the
             // third-party licenses + trademark attribution screen.
             SettingsSection("About") {
-                KeyValueRow(label = "App", value = "Conduit")
-                KeyValueRow(
-                    label = "Version",
-                    value = if (BuildConfig.RELEASE_TAG != "dev") {
-                        "${BuildConfig.RELEASE_TAG} (${BuildConfig.GIT_SHA})"
-                    } else {
-                        "${BuildConfig.VERSION_NAME} (dev)"
-                    },
-                )
+                KeyValueRow(label = "Conduit", value = versionLabel)
                 SettingsDivider()
                 SettingsRow(
                     icon = Icons.Filled.Article,
@@ -454,8 +452,11 @@ fun SettingsScreen(
     if (showAddServer) {
         AddServerSheet(store = store, onDismiss = { showAddServer = false })
     }
-    if (showAppearance) {
-        AppearanceSheet(appearance = appearance, onDismiss = { showAppearance = false })
+    if (showAppFont) {
+        AppFontPickerSheet(appearance = appearance, current = fontFamily, onDismiss = { showAppFont = false })
+    }
+    if (showTerminalTheme) {
+        TerminalThemePickerSheet(appearance = appearance, current = terminalTheme, onDismiss = { showTerminalTheme = false })
     }
     if (showAgentLogin) {
         AgentLoginSheet(store = store, onDismiss = { showAgentLogin = false })
@@ -485,31 +486,229 @@ fun SettingsScreen(
 }
 
 /**
- * A grouped settings section. Mirrors iOS
- * `ConduitSettingsView.sectionCard` — a small ALL-CAPS monospaced muted
- * label (11sp bold, `onSurfaceVariant`) above a flatter glass card
- * (~0.32α surfaceVariant, 14dp radius, no elevation). The earlier
- * primary-tinted bold header + opaque tonal card looked dated next
- * to iOS; this keeps the native M3 [Card] for ListItem-style rows
- * but reads as a quieter grouping.
+ * identity card — the `>conduit` wordmark (BRAND.md §1: lowercase JetBrains
+ * Mono, the `>` cyan-tinted) beside the daemon mark, the version/build line,
+ * and a live/offline status badge.
+ */
+@Composable
+private fun IdentityCard(neon: NeonTheme, version: String, harness: HarnessState) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .background(neon.surface, RoundedCornerShape(12.dp))
+                .border(1.dp, neon.border, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) { ConduitMark(size = 30.dp) }
+        Spacer(Modifier.width(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row {
+                Text(">", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = neon.accent)
+                Text("conduit", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = neon.text)
+            }
+            Text(
+                version,
+                fontFamily = neon.mono,
+                fontSize = 11.sp,
+                color = neon.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        val reachable = harness.isReachable
+        val color = if (reachable) neon.green else neon.textDim
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier
+                .background(color.copy(alpha = 0.12f), RoundedCornerShape(50))
+                .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(50))
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+        ) {
+            Box(Modifier.size(6.dp).background(color, CircleShape))
+            Text(harness.badgeLabel, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp, color = color)
+        }
+    }
+}
+
+/**
+ * Account-wide plan limits for one agent (claude or codex): the 5-hour and
+ * weekly windows with a refresh affordance, reusing [NeonAccountUsageCard].
+ * Reads the freshest account-usage values off any session of [agent] (the
+ * numbers are per-account, not per-session). Shows an honest empty state when
+ * no session of that agent exists rather than fabricating a percentage.
+ */
+@Composable
+private fun AgentUsageRows(
+    store: SessionStore,
+    agent: String,
+    tint: Color,
+    sessions: List<ProjectSession>,
+    statuses: Map<String, SessionStatus>,
+) {
+    val neon = LocalNeonTheme.current
+    val snap = remember(sessions, statuses, agent) { agentAccountUsage(sessions, statuses, agent) }
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.size(6.dp).background(tint, CircleShape))
+            Text(agent, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 11.5.sp, color = tint)
+        }
+        val sourceId = snap.sourceSessionId
+        if (sourceId == null) {
+            Text(
+                "no $agent session — start one to see limits",
+                fontFamily = neon.mono,
+                fontSize = 10.5.sp,
+                color = neon.textFaint,
+            )
+        } else {
+            // NeonAccountUsageCard renders both 5h + weekly window rows + a
+            // refresh button; the agent dot above already labels the block.
+            NeonAccountUsageCard(
+                fivePct = snap.fivePct,
+                fiveResetsAt = snap.fiveResetsAt,
+                weekPct = snap.weekPct,
+                weekResetsAt = snap.weekResetsAt,
+                onRefresh = { store.refreshAccountUsage(sourceId) },
+                heading = "5h & weekly",
+            )
+        }
+    }
+}
+
+/**
+ * Freshest account usage across one agent's sessions (live status preferred,
+ * session snapshot as fallback). Parameterised mirror of
+ * [accountUsageSnapshot], so the Settings card can show both claude and codex
+ * rather than the Claude-only ambient strip.
+ */
+private fun agentAccountUsage(
+    sessions: List<ProjectSession>,
+    statuses: Map<String, SessionStatus>,
+    agent: String,
+): AccountUsageSnapshot {
+    for (s in sessions) {
+        if (s.assistant != agent) continue
+        val st = statuses[s.id]
+        val five = st?.account5hPct ?: s.account5hPct
+        val week = st?.account7dPct ?: s.account7dPct
+        if (five != null || week != null) {
+            return AccountUsageSnapshot(
+                fivePct = five,
+                fiveResetsAt = st?.account5hResetsAt ?: s.account5hResetsAt,
+                weekPct = week,
+                weekResetsAt = st?.account7dResetsAt ?: s.account7dResetsAt,
+                sourceSessionId = s.id,
+            )
+        }
+    }
+    return AccountUsageSnapshot(sourceSessionId = sessions.firstOrNull { it.assistant == agent }?.id)
+}
+
+/** App font drill-in target. Single-select over the chat/UI body font. */
+@Composable
+private fun AppFontPickerSheet(
+    appearance: AppearanceStore,
+    current: AppearanceStore.FontFamily,
+    onDismiss: () -> Unit,
+) {
+    PickerSheet(title = "App font", onDismiss = onDismiss) {
+        AppearanceStore.FontFamily.values().forEachIndexed { idx, choice ->
+            PickerRow(
+                icon = Icons.Filled.TextFields,
+                title = choice.label,
+                isSelected = current == choice,
+                onClick = { appearance.setFontFamily(choice); onDismiss() },
+            )
+            if (idx < AppearanceStore.FontFamily.values().lastIndex) SettingsDivider()
+        }
+    }
+}
+
+/** Terminal color-theme drill-in target. Single-select over [AppearanceStore.TerminalTheme]. */
+@Composable
+private fun TerminalThemePickerSheet(
+    appearance: AppearanceStore,
+    current: AppearanceStore.TerminalTheme,
+    onDismiss: () -> Unit,
+) {
+    PickerSheet(title = "Color theme", onDismiss = onDismiss) {
+        AppearanceStore.TerminalTheme.values().forEachIndexed { idx, choice ->
+            PickerRow(
+                icon = Icons.Filled.Palette,
+                title = choice.label,
+                isSelected = current == choice,
+                onClick = { appearance.setTerminalTheme(choice); onDismiss() },
+            )
+            if (idx < AppearanceStore.TerminalTheme.values().lastIndex) SettingsDivider()
+        }
+    }
+}
+
+/** Bottom-sheet shell for the Settings drill-in pickers. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PickerSheet(title: String, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val neon = LocalNeonTheme.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SectionEyebrow(title)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
+                content = content,
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** All-caps mono section eyebrow above a neon card. */
+@Composable
+private fun SectionEyebrow(title: String) {
+    val neon = LocalNeonTheme.current
+    Text(
+        title.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        fontFamily = neon.mono,
+        fontWeight = FontWeight.Bold,
+        color = neon.textDim,
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
+    )
+}
+
+/**
+ * A grouped settings section. A small ALL-CAPS monospaced muted label above
+ * a neon-surface card (hairline border + theme glow). Rows inside keep their
+ * transparent ListItem backgrounds so they sit on this surface.
  */
 @Composable
 internal fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     val neon = LocalNeonTheme.current
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            title.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = neon.mono,
-            fontWeight = FontWeight.Bold,
-            color = neon.textDim,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
-        )
-        // Neon section card — a neon surface fill + hairline border + the
-        // theme glow, replacing the M3 tonal Card. Rows inside keep their
-        // transparent ListItem backgrounds so they sit on this surface.
+        SectionEyebrow(title)
         val shape = RoundedCornerShape(14.dp)
         Column(
             modifier = Modifier
@@ -532,8 +731,8 @@ private fun SettingsDivider() {
 }
 
 /**
- * Transparent [ListItem] colors so rows sit on the section [Card]'s
- * tonal surface rather than painting their own opaque background.
+ * Transparent [ListItem] colors so rows sit on the section card's neon
+ * surface rather than painting their own opaque background.
  */
 @Composable
 private fun transparentListItemColors() = ListItemDefaults.colors(

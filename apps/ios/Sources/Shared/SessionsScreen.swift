@@ -11,6 +11,55 @@ import SwiftUI
 /// latest-first. The server identity moves to a per-row chip (so a
 /// multi-server history is still readable) rather than being the section.
 struct SessionsScreenModel: Equatable {
+    /// History filter chip (handoff §A.3): All / Running / claude / codex.
+    /// `Running` keys off the persisted lifecycle (`status == .live`); the
+    /// two agent chips match `agent` case-insensitively. Pure so
+    /// `SessionsScreenModelTests` can pin each predicate.
+    enum Filter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case running = "Running"
+        case claude = "claude"
+        case codex = "codex"
+
+        var id: String { rawValue }
+
+        /// Does a row pass this filter? `all` admits everything.
+        func matches(_ row: SavedSession) -> Bool {
+            switch self {
+            case .all:     return true
+            case .running: return row.status == .live
+            case .claude:  return row.agent.lowercased() == "claude"
+            case .codex:   return row.agent.lowercased() == "codex"
+            }
+        }
+    }
+
+    /// A row's at-a-glance result (handoff §A.3). The persisted index only
+    /// carries a `SavedSessionStatus` (live / exited / unknown) — there is
+    /// NO PR / merged / needs-you signal in `SavedSession`, so we never
+    /// fabricate those. A live row reads `running`; everything terminal or
+    /// unknown reads the honest neutral `ended`. The richer cases stay in
+    /// the enum so the chip vocabulary matches the design and a future
+    /// data source (PR state, exit code) can light them up without a
+    /// re-skin.
+    enum Outcome: Equatable {
+        case running
+        case pr(Int)
+        case merged
+        case needsYou
+        case ended
+        case failed
+
+        /// Derive from the only persisted outcome signal we have today.
+        static func from(_ row: SavedSession) -> Outcome {
+            switch row.status {
+            case .live:    return .running
+            case .exited:  return .ended
+            case .unknown: return .ended
+            }
+        }
+    }
+
     /// Recency bucket a row falls into, by `lastSeen` relative to now.
     /// `rawValue` is the section title; `order` fixes the render sequence.
     enum Bucket: String, CaseIterable {
@@ -61,16 +110,19 @@ struct SessionsScreenModel: Equatable {
         sessions: [SavedSession],
         savedServers: [SavedServer],
         query: String,
+        filter: Filter = .all,
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> SessionsScreenModel {
+        // Filter chip first (cheap), then the search predicate.
+        let chipped = filter == .all ? sessions : sessions.filter { filter.matches($0) }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered: [SavedSession]
         if trimmed.isEmpty {
-            filtered = sessions
+            filtered = chipped
         } else {
             let needle = trimmed.lowercased()
-            filtered = sessions.filter { row in
+            filtered = chipped.filter { row in
                 row.summary.lowercased().contains(needle)
                     || row.id.lowercased().contains(needle)
                     || row.agent.lowercased().contains(needle)
@@ -171,9 +223,12 @@ extension ResumeDecision {
 struct SessionsScreen: View {
     @Environment(SessionStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.neonTheme) private var neon
     @Environment(\.dismiss) private var dismiss
 
     @State private var query: String = ""
+    /// Active history filter chip (All / Running / claude / codex).
+    @State private var filter: SessionsScreenModel.Filter = .all
     /// Saved-session row pending deletion (drives the confirmation
     /// alert for the swipe-to-delete affordance). Identifiable so the
     /// alert can key its presentation off the pending row.
@@ -189,16 +244,17 @@ struct SessionsScreen: View {
 
     var body: some View {
         ZStack {
-            ConduitTheme.backgroundGradient(for: colorScheme)
-                .ignoresSafeArea()
+            GlassAppBackground()
 
-            VStack(spacing: 14) {
+            VStack(spacing: 12) {
                 searchField
+                filterBar
 
                 let model = SessionsScreenModel.from(
                     sessions: savedStore.recent(limit: 500),
                     savedServers: store.savedServers,
-                    query: query
+                    query: query,
+                    filter: filter
                 )
 
                 if model.isEmpty {
@@ -246,9 +302,11 @@ struct SessionsScreen: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(ConduitTheme.textMuted)
+                .foregroundStyle(neon.textFaint)
             TextField("Search by name or summary…", text: $query)
                 .textFieldStyle(.plain)
+                .font(neon.sans(15))
+                .foregroundStyle(neon.text)
                 .submitLabel(.search)
                 .accessibilityIdentifier("SessionsScreen.search")
             if !query.isEmpty {
@@ -256,15 +314,62 @@ struct SessionsScreen: View {
                     query = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(ConduitTheme.textMuted)
+                        .foregroundStyle(neon.textFaint)
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .glassRoundedRect(cornerRadius: 18)
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: 18)
         .padding(.horizontal, 14)
+    }
+
+    /// Filter chips (handoff §A.3): All / Running / claude / codex. The
+    /// active chip fills with the neon accent; the rest are quiet hairline
+    /// capsules. A horizontal scroll keeps them on one line on narrow
+    /// devices without wrapping.
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SessionsScreenModel.Filter.allCases) { chip in
+                    filterChip(chip)
+                }
+            }
+            .padding(.horizontal, 14)
+        }
+    }
+
+    private func filterChip(_ chip: SessionsScreenModel.Filter) -> some View {
+        let isActive = filter == chip
+        // The agent chips read in their own tint when active, the rest in
+        // the palette accent.
+        let tint: Color = {
+            switch chip {
+            case .claude: return neon.agentTint(forAgent: "claude")
+            case .codex:  return neon.agentTint(forAgent: "codex")
+            default:      return neon.accent
+            }
+        }()
+        return Button {
+            withAnimation(.easeOut(duration: 0.16)) { filter = chip }
+        } label: {
+            Text(chip.rawValue)
+                .font(neon.mono(12).weight(.semibold))
+                .foregroundStyle(isActive ? neon.accentText : neon.textDim)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(isActive ? tint : neon.surface)
+                )
+                .overlay(
+                    Capsule().stroke(isActive ? Color.clear : neon.border, lineWidth: 1)
+                )
+                .neonGlowBox(isActive && neon.glow ? neon.glowBox?.tinted(tint) : nil)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -309,66 +414,112 @@ struct SessionsScreen: View {
     private func sectionHeader(_ section: SessionsScreenModel.Section) -> some View {
         HStack(spacing: 6) {
             Text(section.title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(ConduitTheme.textPrimary)
-            Text("·")
-                .foregroundStyle(ConduitTheme.textMuted)
-            Text("\(section.sessions.count) session\(section.sessions.count == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundStyle(ConduitTheme.textMuted)
+                .font(neon.mono(11).weight(.bold))
+                .foregroundStyle(neon.accent)
+                .textCase(.uppercase)
+                .tracking(0.8)
             Spacer()
+            Text("\(section.sessions.count) session\(section.sessions.count == 1 ? "" : "s")")
+                .font(neon.mono(10.5))
+                .foregroundStyle(neon.textDim)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 6)
         .padding(.vertical, 6)
     }
 
     private func sessionRow(_ row: SavedSession, serverName: String?) -> some View {
-        Button {
+        let tint = neon.agentTint(forAgent: row.agent)
+        return Button {
             resume(row)
         } label: {
             HStack(spacing: 12) {
-                HealthDot(health: healthLabel(for: row.status), size: 10)
-                VStack(alignment: .leading, spacing: 2) {
+                rowAvatar(tint)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(rowTitle(row))
-                        .font(.system(.body, design: .monospaced).weight(.semibold))
-                        .foregroundStyle(ConduitTheme.textPrimary)
+                        .font(neon.sans(15).weight(.semibold))
+                        .foregroundStyle(neon.text)
                         .lineLimit(1)
                     HStack(spacing: 6) {
-                        Text(row.agent)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(ConduitTheme.textSecondary)
+                        Text(row.agent.lowercased())
+                            .font(neon.mono(11).weight(.semibold))
+                            .foregroundStyle(tint)
                         Text("·")
-                            .font(.caption)
-                            .foregroundStyle(ConduitTheme.textMuted)
+                            .font(neon.mono(11))
+                            .foregroundStyle(neon.textFaint)
                         Text(relativeTime(row.lastSeen))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(ConduitTheme.textMuted)
+                            .font(neon.mono(11))
+                            .foregroundStyle(neon.textFaint)
                             .lineLimit(1)
                         if let serverName {
                             Text("·")
-                                .font(.caption)
-                                .foregroundStyle(ConduitTheme.textMuted)
+                                .font(neon.mono(11))
+                                .foregroundStyle(neon.textFaint)
                             HStack(spacing: 3) {
                                 Image(systemName: "server.rack")
                                     .font(.system(size: 9, weight: .semibold))
                                 Text(serverName)
-                                    .font(.caption.weight(.medium))
+                                    .font(neon.mono(11))
                                     .lineLimit(1)
+                                    .truncationMode(.middle)
                             }
-                            .foregroundStyle(ConduitTheme.textMuted)
+                            .foregroundStyle(neon.textFaint)
                         }
                     }
                 }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(ConduitTheme.textMuted)
+                Spacer(minLength: 8)
+                outcomeChip(SessionsScreenModel.Outcome.from(row))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .glassRect(cornerRadius: ConduitTheme.smallCornerRadius)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Agent-tinted rounded avatar with the Conduit mark, mirroring the
+    /// Session Info identity tile.
+    private func rowAvatar(_ tint: Color) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(tint.opacity(neon.dark ? 0.14 : 0.10))
+            .frame(width: 38, height: 38)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(tint.opacity(0.35), lineWidth: 1)
+            )
+            .overlay(ConduitUI.ConduitMark(size: 21, color: tint, glow: neon.glow))
+    }
+
+    /// Outcome chip (handoff §A.3). Color + label come from the persisted
+    /// status via `Outcome`; the richer PR/merged cases are honored in the
+    /// switch for when a data source lights them up, but `Outcome.from`
+    /// only emits `running` / `ended` today.
+    @ViewBuilder
+    private func outcomeChip(_ outcome: SessionsScreenModel.Outcome) -> some View {
+        let (label, color, icon): (String, Color, String?) = {
+            switch outcome {
+            case .running:    return ("running", neon.green, "dot.radiowaves.left.and.right")
+            case .pr(let n):  return ("PR #\(n)", neon.blue, "arrow.triangle.pull")
+            case .merged:     return ("merged", neon.purple, "arrow.triangle.merge")
+            case .needsYou:   return ("needs you", neon.yellow, "exclamationmark.circle")
+            case .ended:      return ("ended", neon.textDim, nil)
+            case .failed:     return ("failed", neon.red, "xmark.octagon")
+            }
+        }()
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            Text(label)
+                .font(neon.mono(10).weight(.semibold))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(color.opacity(0.12)))
+        .overlay(Capsule().stroke(color.opacity(0.3), lineWidth: 1))
+        .neonGlowBox(outcome == .running && neon.glow ? neon.glowBox?.tinted(color) : nil)
     }
 
     private var emptyState: some View {
@@ -376,13 +527,13 @@ struct SessionsScreen: View {
             Spacer(minLength: 24)
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 40, weight: .light))
-                .foregroundStyle(ConduitTheme.textSecondary)
+                .foregroundStyle(neon.accent)
             Text("No sessions yet")
-                .font(.headline)
-                .foregroundStyle(ConduitTheme.textPrimary)
+                .font(neon.sans(17).weight(.semibold))
+                .foregroundStyle(neon.text)
             Text("Start one from the Home screen — it'll show up here so you can pick up later.")
-                .font(.footnote)
-                .foregroundStyle(ConduitTheme.textMuted)
+                .font(neon.sans(13))
+                .foregroundStyle(neon.textDim)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 36)
             Spacer()
@@ -395,13 +546,13 @@ struct SessionsScreen: View {
             Spacer(minLength: 24)
             Image(systemName: "questionmark.circle")
                 .font(.system(size: 36, weight: .light))
-                .foregroundStyle(ConduitTheme.textSecondary)
+                .foregroundStyle(neon.accent)
             Text("No matches")
-                .font(.headline)
-                .foregroundStyle(ConduitTheme.textPrimary)
-            Text("Try a shorter query — we match against the session summary, id, agent, and cwd.")
-                .font(.footnote)
-                .foregroundStyle(ConduitTheme.textMuted)
+                .font(neon.sans(17).weight(.semibold))
+                .foregroundStyle(neon.text)
+            Text("Try a shorter query or a different filter — we match against the session summary, id, agent, and cwd.")
+                .font(neon.sans(13))
+                .foregroundStyle(neon.textDim)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 36)
             Spacer()
@@ -480,14 +631,6 @@ struct SessionsScreen: View {
             return title
         }
         return SessionNaming.fallbackName(agent: row.agent, startedAt: row.firstSeen)
-    }
-
-    private func healthLabel(for status: SavedSessionStatus) -> String {
-        switch status {
-        case .live:    return "green"
-        case .exited:  return "red"
-        case .unknown: return "unknown"
-        }
     }
 
     /// Best-effort relative time. The saved store keeps RFC3339 strings;

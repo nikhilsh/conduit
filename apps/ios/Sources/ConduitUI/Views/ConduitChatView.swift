@@ -116,7 +116,7 @@ extension ConduitUI {
                         }
                         showVoiceDictation = false
                         composerFocused = true
-                    })
+                    }, agent: session.assistant)
                 }
         }
 

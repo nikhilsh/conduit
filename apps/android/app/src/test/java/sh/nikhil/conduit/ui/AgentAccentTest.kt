@@ -21,17 +21,18 @@ class AgentAccentTest {
     // byte is alpha, which we always set to 0xFF. The `L` suffix is
     // required — these literals overflow Int.
 
-    @Test fun claude_isAnthropicCopper() {
-        assertEquals(0xFFCC785CL, ConduitTheme.accentForAgentLightRgb("claude"))
+    @Test fun claude_isWarmOrange() {
+        // Conduit redesign tint: Claude reads as a warm orange
+        // (--claude #FF9D4D, BRAND.md §3). Dark ships first (canonical
+        // hex); this pins the light variant, deepened for legibility.
+        assertEquals(0xFFE07A1EL, ConduitTheme.accentForAgentLightRgb("claude"))
     }
 
-    @Test fun codex_isMonochrome() {
-        // Codex brand wordmark is monochrome (white on dark, dark on
-        // light) — switched off the emerald-500 (#10B981) which didn't
-        // match marketing. Light theme gets a near-black accent so it
-        // reads clearly against the light surface; dark counterpart is
-        // #F5F5F5 (asserted by the dark-variant tests, not here).
-        assertEquals(0xFF262626L, ConduitTheme.accentForAgentLightRgb("codex"))
+    @Test fun codex_isBrandCyan() {
+        // Conduit redesign tint: Codex reads as the brand cyan (#22D3EE)
+        // — matching the primary accent on purpose in the ice palette.
+        // Light variant deepened (#0E90A8) for legibility.
+        assertEquals(0xFF0E90A8L, ConduitTheme.accentForAgentLightRgb("codex"))
     }
 
     @Test fun hermes_isPurple() {
@@ -54,20 +55,20 @@ class AgentAccentTest {
     }
 
     @Test fun match_isCaseInsensitive() {
-        assertEquals(0xFFCC785CL, ConduitTheme.accentForAgentLightRgb("CLAUDE"))
-        assertEquals(0xFF262626L, ConduitTheme.accentForAgentLightRgb("Codex"))
+        assertEquals(0xFFE07A1EL, ConduitTheme.accentForAgentLightRgb("CLAUDE"))
+        assertEquals(0xFF0E90A8L, ConduitTheme.accentForAgentLightRgb("Codex"))
     }
 
     // --- Strong variant ---
 
     @Test fun claudeStrong_isDarker() {
-        assertEquals(0xFFA85A3FL, ConduitTheme.accentStrongForAgentLightRgb("claude"))
+        assertEquals(0xFFC2630FL, ConduitTheme.accentStrongForAgentLightRgb("claude"))
     }
 
     @Test fun codexStrong_isDarker() {
-        // Strong variant pushes the monochrome accent further toward
-        // pure black on light so filled avatars + selected states pop.
-        assertEquals(0xFF0A0A0AL, ConduitTheme.accentStrongForAgentLightRgb("codex"))
+        // Strong variant deepens the cyan on light so filled avatars +
+        // selected states pop.
+        assertEquals(0xFF0A7E95L, ConduitTheme.accentStrongForAgentLightRgb("codex"))
     }
 
     @Test fun unknownStrong_fallsBackToNeutral() {

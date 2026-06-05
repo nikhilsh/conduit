@@ -80,6 +80,51 @@ fun accountUsageSnapshot(
     return AccountUsageSnapshot(sourceSessionId = sessions.firstOrNull { it.assistant == "claude" }?.id)
 }
 
+/** Per-agent account usage for one agent ("claude" / "codex"). */
+data class AgentUsageSnapshot(
+    val agent: String,
+    val fivePct: Double? = null,
+    val fiveResetsAt: String? = null,
+    val weekPct: Double? = null,
+    val weekResetsAt: String? = null,
+) {
+    val hasData: Boolean get() = fivePct != null || weekPct != null
+}
+
+/**
+ * Freshest account usage for each agent that carries any, in a stable
+ * display order (claude first, then codex, then others). The broker now
+ * folds BOTH Anthropic (/api/oauth/usage) and ChatGPT (/wham/usage —
+ * codexaccountusage.go) limits into the same per-session status-frame
+ * fields, so the ambient Home strip can show `claude · codex` side by side
+ * (handoff §B.10) — but only for agents that actually have data, never a
+ * fabricated number. Mirror of iOS `SessionStore.accountUsageByAgent`.
+ */
+fun accountUsageByAgent(
+    sessions: List<ProjectSession>,
+    statuses: Map<String, SessionStatus>,
+): List<AgentUsageSnapshot> {
+    val byAgent = LinkedHashMap<String, AgentUsageSnapshot>()
+    for (s in sessions) {
+        if (byAgent[s.assistant]?.hasData == true) continue
+        val st = statuses[s.id]
+        val five = st?.account5hPct ?: s.account5hPct
+        val week = st?.account7dPct ?: s.account7dPct
+        if (five == null && week == null) continue
+        byAgent[s.assistant] = AgentUsageSnapshot(
+            agent = s.assistant,
+            fivePct = five,
+            fiveResetsAt = st?.account5hResetsAt ?: s.account5hResetsAt,
+            weekPct = week,
+            weekResetsAt = st?.account7dResetsAt ?: s.account7dResetsAt,
+        )
+    }
+    val order = listOf("claude", "codex")
+    return byAgent.values.sortedWith(
+        compareBy({ order.indexOf(it.agent).let { i -> if (i < 0) order.size else i } }, { it.agent }),
+    )
+}
+
 internal object AccountUsageFormat {
     fun tint(pct: Double, neon: NeonTheme): Color = when {
         pct < 70 -> neon.green
@@ -117,8 +162,8 @@ internal object AccountUsageFormat {
 fun HomeUsageStrip(store: SessionStore, modifier: Modifier = Modifier) {
     val sessions by store.sessions.collectAsState()
     val statuses by store.statusBySession.collectAsState()
-    val u = remember(sessions, statuses) { accountUsageSnapshot(sessions, statuses) }
-    if (!u.hasData) return
+    val agents = remember(sessions, statuses) { accountUsageByAgent(sessions, statuses).filter { it.hasData } }
+    if (agents.isEmpty()) return
     val neon = LocalNeonTheme.current
     var expanded by remember { mutableStateOf(false) }
     Column(
@@ -129,14 +174,18 @@ fun HomeUsageStrip(store: SessionStore, modifier: Modifier = Modifier) {
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // `claude 62% · codex 28%` — one dot + mini-bar + headline 5-hour %
+        // per agent that carries usage (handoff §B.10).
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Box(Modifier.size(6.dp).background(neon.claude, CircleShape))
-            Text("claude", fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = neon.textDim)
-            MiniBar(neon, "weekly", u.weekPct)
-            MiniBar(neon, "5h", u.fivePct)
+            agents.forEachIndexed { idx, a ->
+                if (idx > 0) {
+                    Text("·", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
+                }
+                AgentGlance(neon, a)
+            }
             Spacer(Modifier.weight(1f))
             Icon(
                 if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
@@ -146,11 +195,37 @@ fun HomeUsageStrip(store: SessionStore, modifier: Modifier = Modifier) {
             )
         }
         if (expanded) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("weekly · ${AccountUsageFormat.resetCaption(u.weekResetsAt)}", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textDim)
-                Text("5h window · ${AccountUsageFormat.resetCaption(u.fiveResetsAt)}", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textDim)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                agents.forEach { a ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(a.agent, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = neonAgentColor(a.agent, neon))
+                        Text("5h window · ${AccountUsageFormat.resetCaption(a.fiveResetsAt)}", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textDim)
+                        Text("weekly · ${AccountUsageFormat.resetCaption(a.weekResetsAt)}", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textDim)
+                    }
+                }
             }
         }
+    }
+}
+
+/** One agent's collapsed glance: tinted dot, label, mini bar, headline 5h %. */
+@Composable
+private fun AgentGlance(neon: NeonTheme, a: AgentUsageSnapshot) {
+    val pct = a.fivePct ?: a.weekPct
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(6.dp).background(neonAgentColor(a.agent, neon), CircleShape))
+        Text(a.agent, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = neon.textDim)
+        val frac = ((pct ?: 0.0) / 100.0).coerceIn(0.0, 1.0).toFloat()
+        Box(modifier = Modifier.width(34.dp).height(5.dp).clip(CircleShape).background(neon.border)) {
+            Box(Modifier.fillMaxWidth(frac).height(5.dp).clip(CircleShape).background(AccountUsageFormat.tint(pct ?: 0.0, neon)))
+        }
+        Text(
+            if (pct != null) "${pct.roundToInt()}%" else "—",
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.Bold,
+            fontSize = 11.sp,
+            color = neon.text,
+        )
     }
 }
 

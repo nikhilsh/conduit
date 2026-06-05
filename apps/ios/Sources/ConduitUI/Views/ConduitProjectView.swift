@@ -64,6 +64,9 @@ extension ConduitUI {
         // terminal stays mounted (opacity) so #294's no-rebuild warmth holds.
         @State private var terminalActivated = false
         @State private var showInfo = false
+        /// Diff review sheet, opened from the header "Changes" button (shown
+        /// only when the session has changes to review).
+        @State private var showDiff = false
 
         /// A session whose agent has exited / been archived is read-only:
         /// there's no live WS to interact with, so we collapse the detail
@@ -72,6 +75,15 @@ extension ConduitUI {
         /// "clicking on archived session should just show me the chat log").
         /// Live sessions keep the full tab strip + interactive surfaces.
         private var isReadOnly: Bool { store.isReadOnly(sessionID: session.id) }
+
+        /// Whether the session has changes worth reviewing — gates the header
+        /// "Changes" affordance. Reuses the exact signal the Diff surface
+        /// itself uses: a session-level `linesAdded`/`linesRemoved` rollup, or
+        /// a parseable `kind == "diff"` item in the conversation log.
+        private var hasChanges: Bool {
+            if (session.linesAdded ?? 0) > 0 || (session.linesRemoved ?? 0) > 0 { return true }
+            return ConduitUI.DiffReviewModel.hasInlineDiff(in: store.conversationLog[session.id] ?? [])
+        }
 
         var body: some View {
             VStack(spacing: 0) {
@@ -105,6 +117,12 @@ extension ConduitUI {
             }
             .sheet(isPresented: $showInfo) {
                 ConduitUI.SessionInfoView(session: session)
+            }
+            .sheet(isPresented: $showDiff) {
+                // Diff review for this session. Commit/PR CTAs stay default
+                // no-ops — no backend action exists yet.
+                ConduitUI.DiffReviewView(session: session)
+                    .environment(store)
             }
         }
 
@@ -194,6 +212,16 @@ extension ConduitUI {
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
 
                 Spacer(minLength: 8)
+
+                // "Changes" affordance → Diff review. Shown only when there's
+                // something to review (linesAdded/Removed > 0 or a parseable
+                // diff item exists). Hidden in the tablet chat-only pane (the
+                // right pane owns diff/info there).
+                if !chatOnly && hasChanges {
+                    headerIcon("arrow.triangle.branch", tint: neon.textDim, label: "Changes") {
+                        showDiff = true
+                    }
+                }
 
                 headerIcon("arrow.clockwise", tint: neon.textDim, label: "Refresh") {
                     store.reconnect()

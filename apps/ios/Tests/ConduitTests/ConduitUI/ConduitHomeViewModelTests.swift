@@ -286,6 +286,40 @@ struct ConduitHomeViewModelTests {
         #expect(preview == nil)
     }
 
+    // MARK: "Needs you" banner (handoff §B.10)
+
+    @Test func awaitingInputOnlyForUnansweredPendingInput() {
+        // The real signal: the LAST transcript item is a non-user
+        // `pending_input` (approval prompt / options menu).
+        #expect(ConduitUI.HomeViewModel.isAwaitingInput(lastItemRole: "assistant", lastItemKind: "pending_input") == true)
+        // A user reply after the prompt clears it (last item is the user's).
+        #expect(ConduitUI.HomeViewModel.isAwaitingInput(lastItemRole: "user", lastItemKind: "pending_input") == false)
+        // A normal assistant message is not a block.
+        #expect(ConduitUI.HomeViewModel.isAwaitingInput(lastItemRole: "assistant", lastItemKind: "message") == false)
+        // No transcript at all → not waiting.
+        #expect(ConduitUI.HomeViewModel.isAwaitingInput(lastItemRole: nil, lastItemKind: nil) == false)
+    }
+
+    @Test func needsYouBannerHiddenWhenNoSessionWaiting() {
+        // No fabricated count: a session mid-reply yields an empty banner.
+        let banner = ConduitUI.HomeViewModel.needsYouBanner([
+            (id: "a", title: "Fix auth", agent: "claude", lastItemRole: "assistant", lastItemKind: "message")
+        ])
+        #expect(banner.count == 0)
+        #expect(banner.primaryID == nil)
+    }
+
+    @Test func needsYouBannerCollectsWaitingSessionsInOrder() {
+        let banner = ConduitUI.HomeViewModel.needsYouBanner([
+            (id: "a", title: "Fix auth", agent: "claude", lastItemRole: "assistant", lastItemKind: "pending_input"),
+            (id: "b", title: "Idle one", agent: "codex", lastItemRole: "assistant", lastItemKind: "message"),
+            (id: "c", title: "Approve push", agent: "codex", lastItemRole: "assistant", lastItemKind: "pending_input")
+        ])
+        #expect(banner.count == 2)
+        #expect(banner.primaryID == "a")
+        #expect(banner.sessions.map(\.id) == ["a", "c"])
+    }
+
     @Test func placeholdersAppearAfterRealSessions() {
         // Placeholder = an in-flight session-creation, must render
         // *under* real sessions so a long-running placeholder doesn't

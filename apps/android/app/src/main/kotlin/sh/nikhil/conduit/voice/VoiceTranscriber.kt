@@ -40,6 +40,15 @@ class VoiceTranscriber(private val context: Context) {
     private val _partial = MutableStateFlow("")
     val partial: StateFlow<String> = _partial.asStateFlow()
 
+    /**
+     * Smoothed input level (0..1), derived from the recognizer's
+     * `onRmsChanged` callback (RMS in dB). Drives the voice-sheet
+     * waveform so the bars track the user's actual voice. Resets to 0 on
+     * teardown.
+     */
+    private val _level = MutableStateFlow(0f)
+    val level: StateFlow<Float> = _level.asStateFlow()
+
     private var recognizer: SpeechRecognizer? = null
     private var onFinal: ((String) -> Unit)? = null
 
@@ -90,12 +99,21 @@ class VoiceTranscriber(private val context: Context) {
     private fun tearDown() {
         recognizer?.destroy()
         recognizer = null
+        _level.value = 0f
     }
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
         override fun onBeginningOfSpeech() {}
-        override fun onRmsChanged(rmsdB: Float) {}
+
+        override fun onRmsChanged(rmsdB: Float) {
+            // SpeechRecognizer reports RMS roughly in -2..10 dB; map that
+            // range to 0..1 and lightly smooth so the waveform tracks the
+            // voice without strobing.
+            val norm = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+            _level.value = _level.value * 0.6f + norm * 0.4f
+        }
+
         override fun onBufferReceived(buffer: ByteArray?) {}
 
         override fun onPartialResults(partialResults: Bundle?) {

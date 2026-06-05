@@ -30,6 +30,14 @@ extension ConduitUI {
         @State private var showSearch = false
         @State private var showAgentPicker = false
         @State private var showSessionsHistory = false
+        /// Command palette (⌘K) opened from the bottom action-bar search.
+        @State private var showCommandPalette = false
+        /// Fan-out surface, launched from the command palette.
+        @State private var showFanOut = false
+        /// Approvals inbox, opened from the needs-you banner's Review.
+        @State private var showApprovals = false
+        /// Box selected from the Boxes list → Box health detail sheet.
+        @State private var selectedBox: SavedServer?
         /// Voice dictation (bottom mic). On a transcript we stash it here
         /// and open the agent picker seeded with it as the first prompt.
         @State private var showVoiceDictation = false
@@ -99,6 +107,58 @@ extension ConduitUI {
                         store.selectedSessionID = id
                         selectedSessionID = id
                     })
+                    .environment(store)
+                }
+                .sheet(isPresented: $showCommandPalette) {
+                    // ⌘K quick switcher. Reuses the same new-session /
+                    // add-server / select-session paths the rest of Home uses.
+                    // "Fan out a task" chains into the Fan-out surface.
+                    ConduitUI.CommandPaletteSheet(
+                        onNewSession: {
+                            if store.harness.canIssueCommands { showAgentPicker = true } else { showAddServer = true }
+                        },
+                        onPairBox: { showAddServer = true },
+                        onOpenSession: { id in
+                            store.selectedSessionID = id
+                            selectedSessionID = id
+                        },
+                        onFanOut: { showFanOut = true }
+                    )
+                    .environment(store)
+                    .presentationDetents([.medium, .large])
+                }
+                .sheet(isPresented: $showFanOut) {
+                    // One task → N parallel sessions, one per branch. Launch is
+                    // real: createSession per branch (no fan-out backend).
+                    ConduitUI.FanOutView(
+                        onLaunch: { task, branches in
+                            for branch in branches {
+                                store.createSession(assistant: "claude", branch: branch, initialPrompt: task)
+                            }
+                        }
+                    )
+                    .environment(store)
+                }
+                .sheet(isPresented: $showApprovals) {
+                    // Approvals inbox — every action opens the session's chat
+                    // (no programmatic approve endpoint), so wire onOpenSession
+                    // to select + dismiss.
+                    ConduitUI.ApprovalsView(
+                        onOpenSession: { id in
+                            showApprovals = false
+                            store.selectedSessionID = id
+                            selectedSessionID = id
+                        }
+                    )
+                    .environment(store)
+                }
+                .sheet(item: $selectedBox) { server in
+                    // Per-box health detail. Reconnect reuses the same
+                    // select-server path a box-row tap used before.
+                    ConduitUI.BoxHealthView(
+                        server: server,
+                        onReconnect: { store.selectSavedServer(server.id, autoConnect: true) }
+                    )
                     .environment(store)
                 }
                 .alert(
@@ -313,6 +373,27 @@ extension ConduitUI {
             )
         }
 
+        /// The Home "needs you" banner state, or nil when no session is
+        /// awaiting the user. A session needs the user when the LAST item in
+        /// its transcript is a non-user `pending_input` (approval prompt /
+        /// options menu) — the same signal the chat view uses for its pending
+        /// card. The detection lives in the pure `HomeViewModel` so it's
+        /// unit-testable; here we just resolve each session's last item.
+        private var needsYouBanner: ConduitUI.NeedsYouBanner? {
+            let candidates = store.sessions.map { s -> (id: String, title: String, agent: String, lastItemRole: String?, lastItemKind: String?) in
+                let last = store.conversationLog[s.id]?.last
+                return (
+                    id: s.id,
+                    title: store.displayName(for: s),
+                    agent: s.assistant,
+                    lastItemRole: last?.role,
+                    lastItemKind: last?.kind
+                )
+            }
+            let banner = ConduitUI.HomeViewModel.needsYouBanner(candidates)
+            return banner.count > 0 ? banner : nil
+        }
+
         /// One-line preview of the latest activity in a session for the
         /// home card. Pulls the most recent NON-user transcript item from
         /// `store.conversationLog` (assistant reply or tool action) — the
@@ -342,15 +423,33 @@ extension ConduitUI {
             let snap = snapshot
             let rows = ConduitUI.HomeViewModel.rows(snap)
             List {
-                // Ambient account-usage strip (design handoff §3b) — Claude plan
-                // limits at a glance, above the session list. Self-hides when
-                // there's no usage data yet.
-                if store.accountUsage.hasData {
+                // Ambient account-usage strip (design handoff §B.10) — per-agent
+                // plan headroom (`claude 62% · codex 28%`) at a glance, above the
+                // session list. Self-hides when no agent carries usage data yet.
+                if store.accountUsageByAgent.contains(where: { $0.hasData }) {
                     Section {
                         ConduitUI.HomeUsageStrip()
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 6, leading: 14, bottom: 2, trailing: 14))
+                    }
+                }
+
+                // "Needs you" banner (handoff §B.5 / §B.10) — surfaces ONLY when a
+                // real signal exists: a session whose last transcript item is an
+                // unanswered agent `pending_input` (approval prompt / options
+                // menu). Never a fabricated "1 waiting"; hidden when none.
+                if let banner = needsYouBanner, banner.count > 0 {
+                    Section {
+                        NeedsYouBannerCard(banner: banner) {
+                            // Review opens the Approvals inbox (the queue of
+                            // blocked sessions) rather than jumping straight
+                            // into the first session.
+                            showApprovals = true
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                     }
                 }
 
@@ -427,7 +526,7 @@ extension ConduitUI {
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                                 .contentShape(Rectangle())
-                                .onTapGesture { store.selectSavedServer(server.id, autoConnect: true) }
+                                .onTapGesture { selectedBox = server }
                         }
                     } header: {
                         sectionHeader("Boxes", actionIcon: "wifi", actionLabel: "Pair box", actionTint: neon.textDim) {
@@ -506,13 +605,82 @@ extension ConduitUI {
                 Spacer()
                 ConduitUI.GlassMorphContainer(spacing: 14) {
                     ConduitUI.PillButton(systemImage: "magnifyingglass", size: 44, tint: neon.accent) {
-                        showSearch = true
+                        showCommandPalette = true
                     }
                 }
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 4)
         }
+    }
+}
+
+/// The Home "needs you" banner (design handoff §B.10, image 12): an
+/// amber-tinted card that appears ONLY when a real signal exists — one or
+/// more sessions whose agent is blocked on the user (an unanswered
+/// `pending_input`). Title counts the waiting sessions; the sub names the
+/// agent/session; `Review` opens the first one. Hidden entirely when no
+/// session is waiting (gated by the caller), so it never shows a fake count.
+private struct NeedsYouBannerCard: View {
+    let banner: ConduitUI.NeedsYouBanner
+    let onReview: () -> Void
+    @Environment(\.neonTheme) private var neon
+
+    private var titleText: String {
+        banner.count == 1 ? "1 session waiting on you" : "\(banner.count) sessions waiting on you"
+    }
+
+    private var subText: String {
+        if banner.count == 1, let first = banner.sessions.first {
+            return "\(first.agent) needs your input on \(first.title)"
+        }
+        return "agents are blocked on your input"
+    }
+
+    var body: some View {
+        Button(action: onReview) {
+            HStack(spacing: 11) {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(neon.yellow.opacity(0.14))
+                    .frame(width: 34, height: 34)
+                    .overlay(
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(neon.yellow)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(titleText)
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text(subText)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 6)
+                Text("Review")
+                    .font(neon.sans(12.5).weight(.semibold))
+                    .foregroundStyle(neon.yellow)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(neon.yellow.opacity(0.14)))
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .neonCardSurface(
+                neon,
+                fill: neon.yellow.opacity(neon.dark ? 0.07 : 0.05),
+                cornerRadius: 12,
+                border: neon.yellow.opacity(0.27),
+                glowTint: neon.glow ? neon.yellow : nil
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(titleText)
+        .accessibilityHint("Opens the session waiting on you")
     }
 }
 

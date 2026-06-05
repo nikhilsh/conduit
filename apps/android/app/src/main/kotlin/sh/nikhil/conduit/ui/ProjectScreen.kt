@@ -7,6 +7,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
@@ -90,6 +91,7 @@ fun ProjectScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     var browserMode by remember { mutableStateOf(BrowserMode.Preview) }
     var showInfo by remember { mutableStateOf(false) }
+    var showDiff by remember { mutableStateOf(false) }
     var showThreadSwitcher by remember { mutableStateOf(false) }
     var showAgentPicker by remember { mutableStateOf(false) }
     var showVoice by remember { mutableStateOf(false) }
@@ -97,6 +99,16 @@ fun ProjectScreen(
 
     val headerModel = remember(session, status, lifecycle) {
         ProjectHeaderModel.from(session, status, ProjectHeaderModel.lifecycleLabel(lifecycle))
+    }
+    // Whether the session has changes worth reviewing — gates the header
+    // "Changes" affordance. Reuses the exact signal the Diff surface itself
+    // uses: a session-level linesAdded/Removed rollup, or a parseable
+    // kind == "diff" item in the conversation log.
+    val conversationLog by store.conversationLog.collectAsState()
+    val hasChanges = remember(session, conversationLog) {
+        (session.linesAdded?.toInt() ?: 0) > 0 ||
+            (session.linesRemoved?.toInt() ?: 0) > 0 ||
+            DiffReviewStats.hasInlineDiff(conversationLog[session.id].orEmpty())
     }
     val agentAccent = neonAgentColor(session.assistant, LocalNeonTheme.current)
     val appearance = LocalAppearanceStore.current
@@ -144,6 +156,10 @@ fun ProjectScreen(
                 onOpenDrawer = onOpenDrawer,
                 onReconnect = { store.reconnect() },
                 onShowInfo = { showInfo = true },
+                // "Changes" affordance → Diff review, shown only when there's
+                // something to review.
+                showChanges = hasChanges,
+                onShowChanges = { showDiff = true },
                 disableSwitchClaude = session.assistant == "claude",
                 disableSwitchCodex = session.assistant == "codex",
                 viewerCount = status?.viewers?.toInt(),
@@ -245,6 +261,12 @@ fun ProjectScreen(
         SessionInfoScreen(store = store, session = session, onDismiss = { showInfo = false })
     }
 
+    if (showDiff) {
+        // Diff review for this session. Commit/PR CTAs stay default no-ops —
+        // no backend action exists yet.
+        DiffReviewScreen(store = store, session = session, onDismiss = { showDiff = false })
+    }
+
     if (showThreadSwitcher) {
         ThreadSwitcherSheet(
             store = store,
@@ -266,6 +288,7 @@ fun ProjectScreen(
         VoiceDictationScreen(
             onTranscript = { transcript -> store.sendChat(session.id, transcript) },
             onDismiss = { showVoice = false },
+            agent = session.assistant,
         )
     }
 }
@@ -294,6 +317,10 @@ private fun ControlsRow(
     onOpenDrawer: () -> Unit,
     onReconnect: () -> Unit,
     onShowInfo: () -> Unit,
+    // "Changes" → Diff review. Shown only when the session has changes
+    // (gated by the caller); chat-only (tablet) hides it like Info.
+    showChanges: Boolean = false,
+    onShowChanges: () -> Unit = {},
     disableSwitchClaude: Boolean,
     disableSwitchCodex: Boolean,
     viewerCount: Int?,
@@ -352,6 +379,9 @@ private fun ControlsRow(
                 onToggle = onBrowserModeChange,
                 onJumpToBrowser = onJumpToBrowser,
             )
+        }
+        if (!chatOnly && showChanges) {
+            HeaderCircleButton(icon = Icons.AutoMirrored.Filled.CallSplit, contentDescription = "Changes", onClick = onShowChanges)
         }
         HeaderCircleButton(icon = Icons.Default.Refresh, contentDescription = "Reconnect", onClick = onReconnect)
         if (!chatOnly) {

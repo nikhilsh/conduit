@@ -53,10 +53,13 @@ extension ConduitUI {
         }
     }
 
-    /// A slim, tappable Home strip showing the account's Claude plan limits
-    /// (weekly + 5-hour) with mini bars. Tap expands one `scope · resets` line
-    /// per window. Hidden until data exists so it never dominates the session
-    /// list (ambient glance, per §3b).
+    /// A slim, tappable Home strip showing each agent's plan headroom at a
+    /// glance — `claude 62% · codex 28%` (handoff §B.10), one dot + mini-bar
+    /// + % per agent that carries usage. The headline % is the 5-hour window
+    /// (the one that bites soonest). Tap expands per-agent 5h + weekly reset
+    /// countdowns. Hidden until data exists so it never dominates the session
+    /// list (ambient glance, §3b). Only agents with real data appear — a
+    /// codex-less account simply shows claude, never a fabricated number.
     struct HomeUsageStrip: View {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
@@ -64,19 +67,19 @@ extension ConduitUI {
         private let now = Date()
 
         var body: some View {
-            let u = store.accountUsage
-            if u.hasData {
+            let agents = store.accountUsageByAgent.filter { $0.hasData }
+            if !agents.isEmpty {
                 VStack(spacing: 8) {
                     Button {
                         withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
                     } label: {
                         HStack(spacing: 10) {
-                            Circle().fill(neon.claude).frame(width: 6, height: 6)
-                            Text("claude")
-                                .font(neon.mono(11).weight(.semibold))
-                                .foregroundStyle(neon.textDim)
-                            miniBar(label: "weekly", pct: u.weekPct)
-                            miniBar(label: "5h", pct: u.fivePct)
+                            ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
+                                if idx > 0 {
+                                    Text("·").font(neon.mono(11)).foregroundStyle(neon.textFaint)
+                                }
+                                agentGlance(a)
+                            }
                             Spacer(minLength: 4)
                             Image(systemName: expanded ? "chevron.up" : "chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
@@ -85,9 +88,16 @@ extension ConduitUI {
                     }
                     .buttonStyle(.plain)
                     if expanded {
-                        VStack(alignment: .leading, spacing: 4) {
-                            resetLine("weekly", u.weekResetsAt)
-                            resetLine("5h window", u.fiveResetsAt)
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(agents) { a in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(a.agent)
+                                        .font(neon.mono(10).weight(.semibold))
+                                        .foregroundStyle(neon.agentTint(forAgent: a.agent))
+                                    resetLine("5h window", a.fiveResetsAt)
+                                    resetLine("weekly", a.weekResetsAt)
+                                }
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -98,10 +108,16 @@ extension ConduitUI {
             }
         }
 
-        private func miniBar(label: String, pct: Double?) -> some View {
+        /// One agent's collapsed glance: a tinted dot, the agent label, a mini
+        /// bar, and the headline 5-hour %.
+        private func agentGlance(_ a: SessionStore.AgentUsageSnapshot) -> some View {
+            let pct = a.fivePct ?? a.weekPct
             let frac = CGFloat(max(0, min(1, (pct ?? 0) / 100)))
-            return HStack(spacing: 5) {
-                Text(label).font(neon.mono(10)).foregroundStyle(neon.textFaint)
+            return HStack(spacing: 6) {
+                Circle().fill(neon.agentTint(forAgent: a.agent)).frame(width: 6, height: 6)
+                Text(a.agent)
+                    .font(neon.mono(11).weight(.semibold))
+                    .foregroundStyle(neon.textDim)
                 Capsule().fill(neon.border).frame(width: 34, height: 5)
                     .overlay(alignment: .leading) {
                         Capsule().fill(AccountUsageFormat.tint(pct ?? 0, neon))

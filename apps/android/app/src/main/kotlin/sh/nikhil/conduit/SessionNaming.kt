@@ -341,3 +341,38 @@ internal fun latestActivityPreviewOf(
         content = latest.content,
     )
 }
+
+/** One session blocked on the user, for the Home "needs you" banner. */
+internal data class NeedsYouItem(val id: String, val title: String, val agent: String)
+
+/**
+ * The Home "needs you" banner state (design handoff §B.10): the sessions
+ * whose agent is currently blocked on the user. A session is awaiting input
+ * when the LAST item in its transcript is a non-user `pending_input` (an
+ * approval prompt / options menu) with nothing from the user after it —
+ * the same signal the chat view uses for its pending-input card. The banner
+ * is hidden (`isEmpty`) when none are waiting, so it never shows a
+ * fabricated count. Mirror of iOS `HomeViewModel.needsYouBanner`.
+ */
+internal data class NeedsYouBanner(val sessions: List<NeedsYouItem>) {
+    val count: Int get() = sessions.size
+    val isEmpty: Boolean get() = sessions.isEmpty()
+    /** The session a tap should open (the first one awaiting input). */
+    val primaryId: String? get() = sessions.firstOrNull()?.id
+}
+
+/** True when [conversation]'s last item is an unanswered non-user `pending_input`. */
+internal fun isAwaitingInput(conversation: List<ConversationItem>?): Boolean {
+    val last = conversation?.lastOrNull() ?: return false
+    return last.role.lowercase() != "user" && last.kind.lowercase() == "pending_input"
+}
+
+/**
+ * Build the needs-you banner from a list of candidate sessions, each paired
+ * with its conversation log. Only sessions actually [isAwaitingInput] are
+ * included, in input order.
+ */
+internal fun needsYouBanner(
+    candidates: List<Pair<NeedsYouItem, List<ConversationItem>?>>,
+): NeedsYouBanner =
+    NeedsYouBanner(candidates.filter { isAwaitingInput(it.second) }.map { it.first })
