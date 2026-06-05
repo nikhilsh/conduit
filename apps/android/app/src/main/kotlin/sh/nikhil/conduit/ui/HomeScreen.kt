@@ -302,8 +302,8 @@ fun HomeScreen(
                     // timestamp is deliberately NOT the primary source (on a
                     // cold-boot reconnect it's the CONNECTION time, which made
                     // every row read "just now" and broke the sort).
-                    val sortedSessions = sortSessionsByActivity(sessions) { s ->
-                        lastMessageTimestampOf(conversationLog[s.id])
+                    val sortedSessions = sh.nikhil.conduit.sortSessionsByActivity(sessions) { s ->
+                        sh.nikhil.conduit.lastMessageTimestampOf(conversationLog[s.id])
                             ?: s.lastActivityAt
                             ?: s.startedAt
                     }
@@ -433,7 +433,7 @@ fun HomeScreen(
                                         // the session's own metadata — never the
                                         // reconnect-set status timestamp.
                                         relativeTime = SessionNaming.relativeAgo(
-                                            lastMessageTimestampOf(conversationLog[session.id])
+                                            sh.nikhil.conduit.lastMessageTimestampOf(conversationLog[session.id])
                                                 ?: session.lastActivityAt
                                                 ?: session.startedAt,
                                         ),
