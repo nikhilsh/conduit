@@ -798,7 +798,7 @@ extension ConduitUI {
 /// use, hosted full-screen with a nav title. Kept as a free helper so the
 /// three picker `struct`s above stay tiny.
 @ViewBuilder
-private func pickerList<C: View>(title: String, @ViewBuilder content: () -> C) -> some View {
+private func pickerList<C: View>(title: String, @ViewBuilder content: @escaping () -> C) -> some View {
     PickerListShell(title: title, content: content)
 }
 
