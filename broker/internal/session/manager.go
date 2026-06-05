@@ -1148,6 +1148,67 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return s, ok
 }
 
+// LiveSessionInfo is the authoritative per-session liveness snapshot the
+// broker reports over GET /api/sessions. It is the source of truth a
+// reconnecting client uses to decide which sessions are still ACTIVE
+// (process genuinely running) vs which have died and belong in History.
+type LiveSessionInfo struct {
+	ID             string `json:"id"`
+	Assistant      string `json:"assistant"`
+	Phase          string `json:"phase"`
+	Health         string `json:"health"`
+	Running        bool   `json:"running"`
+	Rows           uint16 `json:"rows"`
+	Cols           uint16 `json:"cols"`
+	Viewers        int    `json:"viewers"`
+	Title          string `json:"title,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	StartedAt      string `json:"started_at,omitempty"`
+	LastActivityAt string `json:"last_activity_at,omitempty"`
+}
+
+// LiveSessions returns a snapshot of the sessions CURRENTLY HELD IN MEMORY —
+// the litter-model "what is genuinely alive right now" set. It deliberately
+// does NOT touch disk or trigger recovery: a session that exited (or whose
+// agent died with a broker restart) and is only recoverable-from-disk is NOT
+// alive and must not be resurrected merely by listing. `Running` reflects
+// whether the OS process is still answering, so a client can drop a session
+// whose process died but hasn't yet been reaped from the map.
+func (m *Manager) LiveSessions() []LiveSessionInfo {
+	m.mu.RLock()
+	live := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		live = append(live, s)
+	}
+	m.mu.RUnlock()
+
+	out := make([]LiveSessionInfo, 0, len(live))
+	for _, s := range live {
+		st := s.Status()
+		rows, cols := s.Dimensions()
+		info := LiveSessionInfo{
+			ID:        s.ID,
+			Assistant: s.Assistant,
+			Phase:     st.Phase,
+			Health:    st.Health,
+			Running:   s.processAlive(),
+			Rows:      rows,
+			Cols:      cols,
+			Viewers:   s.SubscriberCount(),
+			Title:     s.DisplayName(),
+			CWD:       s.WorkspaceDir(),
+		}
+		if !st.StartedAt.IsZero() {
+			info.StartedAt = st.StartedAt.UTC().Format(time.RFC3339Nano)
+		}
+		if !st.LastOutput.IsZero() {
+			info.LastActivityAt = st.LastOutput.UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
 func (m *Manager) AssistantNames() []string {
 	return m.registry.Names()
 }
@@ -1387,6 +1448,15 @@ type sessionMetadata struct {
 	// this field recover with the legacy adapter-workdir / worktreeDir
 	// fallback behaviour.
 	WorkspaceDir string `json:"workspace_dir,omitempty"`
+	// StartedAt / LastActivityAt are the session's real wall-clock
+	// timestamps (RFC3339Nano), persisted so a recovered session keeps
+	// its ORIGINAL creation + last-activity time instead of resetting to
+	// "now" on recovery — otherwise every reattached/historic session
+	// shows the recovery moment ("2m ago") rather than when it was really
+	// created/last active. omitempty: pre-feature sessions fall back to
+	// the recovery-time defaults newSession assigns.
+	StartedAt      string `json:"started_at,omitempty"`
+	LastActivityAt string `json:"last_activity_at,omitempty"`
 }
 
 func (s *Session) applyPaths() {
@@ -1416,6 +1486,12 @@ func (s *Session) persistMetadata() error {
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)
+	}
+	if !s.startedAt.IsZero() {
+		meta.StartedAt = s.startedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !s.lastOutput.IsZero() {
+		meta.LastActivityAt = s.lastOutput.UTC().Format(time.RFC3339Nano)
 	}
 	s.mu.Unlock()
 	return atomicWriteJSON(s.metaPath, meta)

@@ -236,3 +236,82 @@ func TestRecentProjectsEndpoint(t *testing.T) {
 		t.Fatalf("unexpected recent projects: %+v", out.Projects)
 	}
 }
+
+// TestSessionsEndpointListsLiveOnly verifies GET /api/sessions reports the
+// broker's in-memory live set — the authoritative "what's running now" list
+// a reconnecting client reconciles against. A freshly-started session shows
+// up (running, with its assistant); a bogus id never does. Crucially the
+// endpoint must NOT resurrect anything from disk just by listing.
+func TestSessionsEndpointListsLiveOnly(t *testing.T) {
+	srv, tok := newTestServer(t)
+
+	// Start a session so there's a live one to report.
+	startBody := `{"assistant":"claude"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/session/start?token="+url.QueryEscape(tok), strings.NewReader(startBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("session start: %v", err)
+	}
+	var start struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	_ = resp.Body.Close()
+	if start.SessionID == "" {
+		t.Fatal("no session id")
+	}
+
+	lsResp, err := http.Get(srv.URL + "/api/sessions?token=" + url.QueryEscape(tok))
+	if err != nil {
+		t.Fatalf("GET sessions: %v", err)
+	}
+	defer lsResp.Body.Close()
+	if lsResp.StatusCode != http.StatusOK {
+		t.Fatalf("sessions status=%d", lsResp.StatusCode)
+	}
+	var out struct {
+		Sessions []struct {
+			ID        string `json:"id"`
+			Assistant string `json:"assistant"`
+			Running   bool   `json:"running"`
+		} `json:"sessions"`
+	}
+	if err := json.NewDecoder(lsResp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var found bool
+	for _, s := range out.Sessions {
+		if s.ID == start.SessionID {
+			found = true
+			if s.Assistant != "claude" {
+				t.Fatalf("listed assistant=%q, want claude", s.Assistant)
+			}
+			if !s.Running {
+				t.Fatalf("freshly-started session reported running=false")
+			}
+		}
+		if s.ID == "no-such-session" {
+			t.Fatal("endpoint reported a session that was never created")
+		}
+	}
+	if !found {
+		t.Fatalf("live session %s missing from /api/sessions: %+v", start.SessionID, out.Sessions)
+	}
+}
+
+// TestSessionsEndpointRequiresAuth ensures the live-session list is not
+// served without a valid token (it leaks session ids / cwds).
+func TestSessionsEndpointRequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/api/sessions")
+	if err != nil {
+		t.Fatalf("GET sessions: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("unauthenticated /api/sessions returned 200")
+	}
+}

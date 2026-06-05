@@ -75,6 +75,21 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// Restore the AI title (task: ai-session-titles) so a recovered
 	// session keeps its name without re-generating.
 	s.aiTitle = meta.AITitle
+	// Restore the ORIGINAL wall-clock timestamps so a recovered session
+	// reports when it was really created / last active, not the recovery
+	// moment. newSession() seeds these to time.Now(); override with the
+	// persisted values when present (pre-feature sessions have none and
+	// keep the recovery-time fallback).
+	if meta.StartedAt != "" {
+		if t, err := time.Parse(time.RFC3339Nano, meta.StartedAt); err == nil {
+			s.startedAt = t
+		}
+	}
+	if meta.LastActivityAt != "" {
+		if t, err := time.Parse(time.RFC3339Nano, meta.LastActivityAt); err == nil {
+			s.lastOutput = t
+		}
+	}
 	s.mu.Unlock()
 	s.switchFn = func(next string) error {
 		nextAdapter, err := m.registry.Get(next)

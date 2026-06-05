@@ -257,6 +257,68 @@ struct SessionStoreTests {
     }
 }
 
+/// `session-reconcile-broker-truth` — pins the wire contract for the
+/// broker's authoritative live-session list (`GET /api/sessions`,
+/// `broker/internal/session.LiveSessionInfo`). A careless rename of a
+/// Swift property or a broker JSON tag would silently break reconcile
+/// (sessions would never decode → the ACTIVE list would stay empty),
+/// so lock the snake_case mapping here.
+@Suite("LiveSessionInfo — /api/sessions wire shape")
+struct LiveSessionInfoWireTests {
+
+    @Test func decodesBrokerSnakeCaseJSON() throws {
+        let json = """
+        {
+          "sessions": [
+            {
+              "id": "s-1",
+              "assistant": "claude",
+              "phase": "running",
+              "health": "healthy",
+              "running": true,
+              "rows": 40,
+              "cols": 120,
+              "viewers": 1,
+              "title": "Greeting And Initial",
+              "cwd": "/root",
+              "started_at": "2026-06-01T08:57:00Z",
+              "last_activity_at": "2026-06-05T02:50:00Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let resp = try JSONDecoder().decode(LiveSessionsResponse.self, from: json)
+        #expect(resp.sessions.count == 1)
+        let s = resp.sessions[0]
+        #expect(s.id == "s-1")
+        #expect(s.running == true)
+        #expect(s.rows == 40)
+        #expect(s.title == "Greeting And Initial")
+        // The snake_case timestamps must map onto the camelCase fields —
+        // this is the data that fixes the "wrong time" bug.
+        #expect(s.startedAt == "2026-06-01T08:57:00Z")
+        #expect(s.lastActivityAt == "2026-06-05T02:50:00Z")
+    }
+
+    @Test func decodesWithOptionalFieldsAbsent() throws {
+        // Pre-feature / minimal rows omit title/cwd/timestamps — must
+        // still decode (optionals → nil) rather than throwing.
+        let json = """
+        { "sessions": [
+          { "id": "s-2", "assistant": "codex", "phase": "stalled",
+            "health": "dead", "running": false, "rows": 24, "cols": 80,
+            "viewers": 0 }
+        ] }
+        """.data(using: .utf8)!
+        let resp = try JSONDecoder().decode(LiveSessionsResponse.self, from: json)
+        let s = try #require(resp.sessions.first)
+        #expect(s.running == false)
+        #expect(s.title == nil)
+        #expect(s.startedAt == nil)
+    }
+}
+
 /// `fix-history-readonly-default-live` — read-only is the DEFAULT for
 /// any session not positively confirmed live on the broker. These pin
 /// the inversion so a regression that re-introduces a default-`.live`

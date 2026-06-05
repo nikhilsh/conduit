@@ -189,6 +189,28 @@ func (s *Server) serveRecentProjects(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// sessionsResponse is the body of GET /api/sessions — the authoritative
+// list of sessions the broker is keeping alive RIGHT NOW (the litter
+// "what's running" set). A reconnecting client reconciles against this:
+// only sessions present here (and `running`) belong in its ACTIVE list;
+// everything else it had saved as live has died and drops to History.
+type sessionsResponse struct {
+	Sessions []session.LiveSessionInfo `json:"sessions"`
+}
+
+// serveSessions returns the broker's in-memory live-session set. It never
+// triggers recovery, so listing can't resurrect a dead/on-disk session
+// into the ACTIVE list — that was the bug behind dead sessions showing as
+// "running" after a relaunch.
+func (s *Server) serveSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, sessionsResponse{
+		Sessions: s.Sessions.LiveSessions(),
+	})
+}
+
 // sessionConversationResponse is the body of GET
 // /api/session/conversation/<id>. `items` is the persisted transcript in
 // chronological order — the same `{role, content, ts, files}` shape the
