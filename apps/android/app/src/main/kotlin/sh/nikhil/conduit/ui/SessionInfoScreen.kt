@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -116,6 +119,13 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // Sheet path only: honor the real bottom safe-area inset so the
+                // Fork/Export/End action row clears the gesture pill / 3-button
+                // nav bar instead of hardcoding a bottom pad (handoff §C.1).
+                // ModalBottomSheet already anchors below the status bar, so the
+                // top needs no extra inset here. The embedded (tablet right-pane)
+                // path skips this — its host already applies window insets.
+                .then(if (embedded) Modifier else Modifier.windowInsetsPadding(WindowInsets.navigationBars))
                 .padding(horizontal = 16.dp, vertical = 12.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(18.dp),
