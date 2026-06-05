@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,7 +40,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.auth.OAuthClient
@@ -80,6 +84,17 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     // opening the browser and the user pasting the code.
     var pasteClient by remember { mutableStateOf<OAuthClient?>(null) }
     var pasteRequest by remember { mutableStateOf<OAuthRequest?>(null) }
+    // Providers with a stored credential — drives the persistent
+    // "Signed in" state on each row (the transient status pill alone
+    // left the rows looking logged-out after a successful login).
+    var signedInProviders by remember { mutableStateOf<Set<OAuthProvider>>(emptySet()) }
+    LaunchedEffect(Unit) {
+        signedInProviders = withContext(Dispatchers.IO) {
+            OAuthProvider.values()
+                .filter { runCatching { OAuthStore.load(ctx, it) }.getOrNull() != null }
+                .toSet()
+        }
+    }
 
     fun describe(e: OAuthClientError): String = when (e) {
         is OAuthClientError.UserCancelled -> "Sign-in cancelled."
@@ -92,6 +107,7 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
 
     suspend fun deliver(cred: OAuthCredential) {
         runCatching { OAuthStore.save(ctx, cred) }
+        signedInProviders = signedInProviders + cred.provider
         Telemetry.breadcrumb("agent_login", "shipping credential to broker", mapOf("provider" to cred.provider.raw))
         try {
             store.sendAgentCredentials(cred)
@@ -217,15 +233,23 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
                     ProviderRow(
                         title = "Login with ChatGPT",
-                        subtitle = "Codex / ChatGPT OAuth · auth.openai.com",
+                        subtitle = if (OAuthProvider.OPENAI in signedInProviders)
+                            "Signed in · tap to sign in again"
+                        else
+                            "Codex / ChatGPT OAuth · auth.openai.com",
                         enabled = !isWorking,
+                        signedIn = OAuthProvider.OPENAI in signedInProviders,
                         onClick = { loginChatGPT() },
                     )
                     HorizontalDivider()
                     ProviderRow(
                         title = "Login with Claude",
-                        subtitle = "Claude OAuth · claude.ai (paste code)",
+                        subtitle = if (OAuthProvider.ANTHROPIC in signedInProviders)
+                            "Signed in · tap to sign in again"
+                        else
+                            "Claude OAuth · claude.ai (paste code)",
                         enabled = !isWorking,
+                        signedIn = OAuthProvider.ANTHROPIC in signedInProviders,
                         onClick = { beginClaude() },
                     )
                 }
@@ -278,8 +302,10 @@ private fun ProviderRow(
     title: String,
     subtitle: String,
     enabled: Boolean,
+    signedIn: Boolean,
     onClick: () -> Unit,
 ) {
+    val neon = LocalNeonTheme.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -290,16 +316,27 @@ private fun ProviderRow(
         Icon(
             Icons.Filled.AccountCircle,
             contentDescription = null,
-            tint = if (enabled) LocalNeonTheme.current.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (enabled) neon.accent else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(22.dp),
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (signedIn) neon.green else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         if (!enabled) {
             CircularProgressIndicator(modifier = Modifier.size(18.dp))
+        } else if (signedIn) {
+            Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = "Signed in",
+                tint = neon.green,
+                modifier = Modifier.size(20.dp),
+            )
         } else {
             Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
