@@ -67,17 +67,17 @@ extension ConduitUI {
         static let accent = AdaptiveColor(
             lightHex: 0x4A4A4A, darkHex: 0xB0B0B0
         )
-        /// Conduit's brand "strong" accent (00995D / 00FF9C). Kept for
-        /// surfaces where we want to read as upstream (e.g. status
-        /// dots, success states). For the *Conduit* brand color
-        /// (the "+" FAB, header active state) use `.brand`.
+        /// Secondary accent — green (`--green #3EF0A0`, BRAND.md §3).
+        /// Used for "connected" / success states and status dots.
         static let accentStrong = AdaptiveColor(
-            lightHex: 0x00995D, darkHex: 0x00FF9C
+            lightHex: 0x1FAE6E, darkHex: 0x3EF0A0
         )
-        /// Conduit brand accent — copper. Set in PR b22bd63 and kept
-        /// as the dominant global accent.
+        /// Conduit brand accent — the redesign's primary cyan
+        /// (`--cyan #22D3EE`, BRAND.md §3). Drives the "+" FAB, focus
+        /// and header active states. Was copper pre-redesign; the ice
+        /// palette makes cyan the dominant global accent.
         static let brand = AdaptiveColor(
-            lightHex: 0xCC785C, darkHex: 0xCC785C
+            lightHex: 0x0FB5D6, darkHex: 0x22D3EE
         )
 
         // MARK: Text

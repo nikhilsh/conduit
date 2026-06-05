@@ -31,17 +31,19 @@ internal data class AdaptiveColor(val light: Long, val dark: Long) {
 
 internal object ConduitPalette {
     val accent          = AdaptiveColor(0xFF4A4A4A, 0xFFB0B0B0)
-    // Brand accent moved from green to Anthropic copper to match
-    // upstream's visual reference (see iOS Palette.swift comment).
-    val accentStrong    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
-    val claudeAccent    = AdaptiveColor(0xFFCC785C, 0xFFE89677)
-    val claudeAccentStrong = AdaptiveColor(0xFFA85A3F, 0xFFCC785C)
-    // Codex brand is monochrome (white wordmark on dark, dark on light)
-    // — the green here didn't match marketing. Light theme gets near-black
-    // for legibility on light surfaces; dark theme gets off-white so it
-    // doesn't blow out highlights but still reads as the white wordmark.
-    val codexAccent     = AdaptiveColor(0xFF262626, 0xFFF5F5F5)
-    val codexAccentStrong  = AdaptiveColor(0xFF0A0A0A, 0xFFFAFAFA)
+    // Conduit redesign: primary brand accent is the ice cyan
+    // (--cyan #22D3EE, BRAND.md §3). Dark ships first, so the dark value
+    // is canonical; light is deepened for legibility. (See iOS
+    // ConduitUI.Palette.brand.)
+    val accentStrong    = AdaptiveColor(0xFF0FB5D6, 0xFF22D3EE)
+    // Claude agent tint — warm orange (--claude #FF9D4D), confirmed
+    // against the target art.
+    val claudeAccent    = AdaptiveColor(0xFFE07A1E, 0xFFFF9D4D)
+    val claudeAccentStrong = AdaptiveColor(0xFFC2630F, 0xFFFFB264)
+    // Codex agent tint — brand cyan (#22D3EE). Matches the primary
+    // accent on purpose in the ice palette.
+    val codexAccent     = AdaptiveColor(0xFF0E90A8, 0xFF22D3EE)
+    val codexAccentStrong  = AdaptiveColor(0xFF0A7E95, 0xFF5BDFF2)
     // Hermes purple — Tailwind purple-500. No public Hermes adapter
     // brand to anchor to, so this is a defensible choice that contrasts
     // cleanly with claude/codex.
