@@ -113,6 +113,14 @@ fun HomeScreen(
     // session being ended without re-resolving displayNames.
     var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
 
+    // Round-2 fix 5: once the user is signed in to an agent, their own
+    // device is a box too and is pinned first under BOXES. One credential-
+    // store read per composition entry (not per recomposition).
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val localDeviceListed = remember {
+        sh.nikhil.conduit.auth.AgentAccountStatus.current(context).any { it.signedIn }
+    }
+
     val neon = LocalNeonTheme.current
 
     // Read real insets top AND bottom (design handoff §4.1): statusBarsPadding
@@ -470,7 +478,7 @@ fun HomeScreen(
         // one machine = one row). Sits below the sessions, above the action bar
         // (canonical order: usage strip → active sessions → boxes). No quota
         // here — plan limits are per-account (§3b), not per box.
-        if (savedServers.isNotEmpty()) {
+        if (savedServers.isNotEmpty() || localDeviceListed) {
             val boxes = savedServers.filter { it.endpoint == endpoint } +
                 savedServers.filter { it.endpoint != endpoint }
             Column(
@@ -504,6 +512,11 @@ fun HomeScreen(
                         )
                     }
                 }
+                // Round-2 fix 5 (handoff images 09→10): "This device" pinned
+                // first — the signed-in local device is itself a box.
+                if (localDeviceListed) {
+                    HomeLocalDeviceRow(neon)
+                }
                 boxes.forEach { server ->
                     HomeBoxRow(
                         neon = neon,
@@ -516,6 +529,15 @@ fun HomeScreen(
                         // Tap opens the box's health detail; reconnect now
                         // lives inside Box health (its onReconnect action).
                         onClick = { onOpenBoxHealth(server) },
+                    )
+                }
+                if (localDeviceListed) {
+                    Text(
+                        "your local box is auto-listed once you're signed in.",
+                        fontFamily = neon.mono,
+                        fontSize = 10.sp,
+                        color = neon.textFaint,
+                        modifier = Modifier.padding(start = 2.dp),
                     )
                 }
             }
@@ -667,6 +689,70 @@ private fun HomeBoxRow(
             style = MaterialTheme.typography.labelSmall,
             fontFamily = neon.mono,
             color = statusColor,
+        )
+    }
+}
+
+/**
+ * Pinned "This device" row (Round-2 fix 5, handoff images 09→10): Conduit
+ * mark, `localhost:1977 · on-device`, a LOCAL badge (accent), and a
+ * `● ready` status. Not tappable — there is no remote connection to manage
+ * for the phone itself. Mirror of iOS `ConduitHomeView.localDeviceRow`.
+ */
+@Composable
+private fun HomeLocalDeviceRow(neon: NeonTheme) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface)
+            .padding(horizontal = 13.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .background(neon.accent.copy(alpha = 0.12f), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            ConduitMark(size = 18.dp, color = neon.accent)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "This device",
+                style = MaterialTheme.typography.titleSmall,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "localhost:1977 · on-device",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            "LOCAL",
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.Bold,
+            fontSize = 9.sp,
+            letterSpacing = 0.8.sp,
+            color = neon.accent,
+            modifier = Modifier
+                .background(neon.accent.copy(alpha = 0.14f), CircleShape)
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+        Box(modifier = Modifier.size(6.dp).background(neon.textDim, CircleShape))
+        Text(
+            "ready",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = neon.mono,
+            color = neon.textDim,
         )
     }
 }

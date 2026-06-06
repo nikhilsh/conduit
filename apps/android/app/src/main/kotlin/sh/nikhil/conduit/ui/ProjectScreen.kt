@@ -1,16 +1,16 @@
 package sh.nikhil.conduit.ui
 
+import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
@@ -20,11 +20,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionLifecycle
@@ -37,21 +36,22 @@ import uniffi.conduit_core.SessionStatus
 enum class ProjectTab(val label: String) { Chat("Chat"), Terminal("Terminal"), Browser("Browser") }
 
 /**
- * Conduit Stage 2 header (Android mirror of `apps/ios/Sources/Views/ProjectView.swift`).
+ * Conduit Round-2 header (Android mirror of
+ * `apps/ios/Sources/ConduitUI/Views/ConduitProjectView.swift`, handoff
+ * images 01→02).
  *
- * Three explicit rows wrapped in a single `glassRoundedRect` surface:
- *  - Row 1 [ControlsRow]: drawer toggle (left) · centered compound agent
- *    dropdown (health dot · agent · reasoning effort · chevron) · memory
- *    toggle + refresh + info (right).
- *  - Row 2 [PathRow]: single-line mono caption joining
- *    `path · branch · running · lifecycle` — middle-truncated, muted.
- *  - Row 3 [TabPickerRow]: Terminal / Chat / Browser tab picker wrapped
- *    in its own glass surface so it reads as the dominant affordance.
+ * Two rows wrapped in a single `glassRoundedRect` surface:
+ *  - Row 1 [ControlsRow]: drawer toggle (phone) · identity title block
+ *    (agent avatar · session name ▾ · mono `● agent · repo · branch`) ·
+ *    one ⓘ. The identity block opens the title menu (identity header +
+ *    Rename / Refresh / Export transcript / End session).
+ *  - Row 2 [TabPickerRow]: Terminal / Chat / Browser tab picker.
  *
- * Pure data structure factored into [ProjectHeaderModel] for unit
- * tests — the rendered view body references the same computed values
- * (`captionLabel`, `agentPill`) so drift between the model and the
- * surface is loud.
+ * The old separate path row is gone — its information lives on the
+ * identity block's context line. Pure data structure factored into
+ * [ProjectHeaderModel] for unit tests — the rendered view body references
+ * the same computed values (`identity`) so drift between the model and
+ * the surface is loud.
  */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -95,20 +95,44 @@ fun ProjectScreen(
     var showThreadSwitcher by remember { mutableStateOf(false) }
     var showAgentPicker by remember { mutableStateOf(false) }
     var showVoice by remember { mutableStateOf(false) }
+    // Title-menu flows (Round-2 fix 2): rename dialog + End-session confirm.
+    var showRename by remember { mutableStateOf(false) }
+    var renameDraft by remember { mutableStateOf("") }
+    var showEndConfirm by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
-    val headerModel = remember(session, status, lifecycle) {
-        ProjectHeaderModel.from(session, status, ProjectHeaderModel.lifecycleLabel(lifecycle))
-    }
-    // Whether the session has changes worth reviewing — gates the header
-    // "Changes" affordance. Reuses the exact signal the Diff surface itself
-    // uses: a session-level linesAdded/Removed rollup, or a parseable
+    val displayNames by store.displayNames.collectAsState()
+    val modelAliases by store.modelBySession.collectAsState()
+    // Whether the session has changes worth reviewing — gates the title
+    // menu's "View changes" row. Reuses the exact signal the Diff surface
+    // itself uses: a session-level linesAdded/Removed rollup, or a parseable
     // kind == "diff" item in the conversation log.
     val conversationLog by store.conversationLog.collectAsState()
     val hasChanges = remember(session, conversationLog) {
         (session.linesAdded?.toInt() ?: 0) > 0 ||
             (session.linesRemoved?.toInt() ?: 0) > 0 ||
             DiffReviewStats.hasInlineDiff(conversationLog[session.id].orEmpty())
+    }
+
+    // Friendly session title for the identity block — same resolution the
+    // drawer rows / voice screen use (custom rename → broker displayName →
+    // first user message → fallback).
+    val headerTitle = remember(session, displayNames, conversationLog) {
+        sh.nikhil.conduit.SessionNaming.friendlyFor(
+            session = session,
+            custom = displayNames[session.id],
+            firstUserMessage = sh.nikhil.conduit.firstUserMessageOf(conversationLog[session.id]),
+        )
+    }
+    val headerModel = remember(session, status, lifecycle, headerTitle, modelAliases) {
+        ProjectHeaderModel.from(
+            session = session,
+            status = status,
+            lifecycleLabel = ProjectHeaderModel.lifecycleLabel(lifecycle),
+            title = headerTitle,
+            modelAlias = modelAliases[session.id],
+        )
     }
     val agentAccent = neonAgentColor(session.assistant, LocalNeonTheme.current)
     val appearance = LocalAppearanceStore.current
@@ -143,29 +167,43 @@ fun ProjectScreen(
                 chatOnly = chatOnly,
                 agentAccent = agentAccent,
                 menuExpanded = menuExpanded,
-                onAgentTap = { menuExpanded = true },
+                onTitleTap = { menuExpanded = true },
                 onMenuDismiss = { menuExpanded = false },
-                onSwitchToClaude = { menuExpanded = false; store.switchAgent(session.id, "claude") },
-                onSwitchToCodex  = { menuExpanded = false; store.switchAgent(session.id, "codex") },
-                onEndSession    = { menuExpanded = false; store.archive(session.id) },
+                onRename = {
+                    menuExpanded = false
+                    renameDraft = headerTitle
+                    showRename = true
+                },
+                onReconnect = { menuExpanded = false; store.reconnect() },
+                onExportTranscript = {
+                    menuExpanded = false
+                    // Same share path as Session Info's Export pill — the
+                    // identical transcript markdown via the shared builder.
+                    val transcript = buildTranscriptMarkdown(
+                        headerTitle,
+                        session.assistant,
+                        session.branch,
+                        conversationLog[session.id].orEmpty(),
+                    )
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, transcript)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Export transcript"))
+                },
+                showChanges = hasChanges,
+                onShowChanges = { menuExpanded = false; showDiff = true },
                 browserMode = browserMode,
-                onBrowserModeChange = { browserMode = it },
-                onJumpToBrowser = {
+                onToggleMemory = {
+                    menuExpanded = false
+                    browserMode = if (browserMode == BrowserMode.Memory) BrowserMode.Preview else BrowserMode.Memory
                     scope.launch { pagerState.animateScrollToPage(ProjectTab.Browser.ordinal) }
                 },
+                onEndSession = { menuExpanded = false; showEndConfirm = true },
                 onOpenDrawer = onOpenDrawer,
-                onReconnect = { store.reconnect() },
                 onShowInfo = { showInfo = true },
-                // "Changes" affordance → Diff review, shown only when there's
-                // something to review.
-                showChanges = hasChanges,
-                onShowChanges = { showDiff = true },
-                disableSwitchClaude = session.assistant == "claude",
-                disableSwitchCodex = session.assistant == "codex",
                 viewerCount = status?.viewers?.toInt(),
             )
-
-            PathRow(model = headerModel)
 
             if (!isReadOnly && !chatOnly) {
                 TabPickerRow(
@@ -261,6 +299,54 @@ fun ProjectScreen(
         SessionInfoScreen(store = store, session = session, onDismiss = { showInfo = false })
     }
 
+    // Title-menu Rename (fix 2) — same local-rename semantics as Session
+    // Info's dialog (store.renameSession; the broker name stays).
+    if (showRename) {
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text("Rename session") },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { renameDraft = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        store.renameSession(session.id, renameDraft.trim())
+                        showRename = false
+                    },
+                    enabled = renameDraft.trim().isNotEmpty(),
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRename = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // Title-menu End session (fix 2) — confirmed, destructive. Same
+    // archive semantics as the Home swipe action.
+    if (showEndConfirm) {
+        AlertDialog(
+            onDismissRequest = { showEndConfirm = false },
+            title = { Text("End this session?") },
+            text = { Text("The agent stops and the box is released. The transcript stays in History.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showEndConfirm = false
+                    store.archive(session.id)
+                }) { Text("End session") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
     if (showDiff) {
         // Diff review for this session. Commit/PR CTAs stay default no-ops —
         // no backend action exists yet.
@@ -285,28 +371,24 @@ fun ProjectScreen(
     }
 
     if (showVoice) {
-        val voiceDisplayNames by store.displayNames.collectAsState()
-        val voiceSessionName = remember(session, voiceDisplayNames, conversationLog) {
-            sh.nikhil.conduit.SessionNaming.friendlyFor(
-                session = session,
-                custom = voiceDisplayNames[session.id],
-                firstUserMessage = sh.nikhil.conduit.firstUserMessageOf(conversationLog[session.id]),
-            )
-        }
         VoiceDictationScreen(
             onTranscript = { transcript -> store.sendChat(session.id, transcript) },
             onDismiss = { showVoice = false },
             agent = session.assistant,
-            sessionName = voiceSessionName,
+            // Same friendly-name resolution as the identity block.
+            sessionName = headerTitle,
         )
     }
 }
 
 /**
- * Row 1 — drawer toggle + centered compound agent dropdown + trailing
- * glass-capsule icon circles. Mirrors `controlsRow` in iOS ProjectView:
- * the agent pill is one compound control (HealthDot · agent · effort ·
- * chevron) rather than four sibling chips.
+ * Single-row header (Round-2 fix 1, Conduit_Fixes_Handoff images 01→02):
+ * drawer toggle (phone) · identity title block (agent avatar · session
+ * name ▾ · mono `● agent · repo · branch`) · one ⓘ. The identity block is
+ * the title-menu trigger (fix 2). Fork / Refresh / memory / changes are
+ * NOT header circles anymore — Refresh, Export, View changes and the
+ * memory toggle live in the title menu; Fork is its own flow in Session
+ * Info. The old full-width path row is folded into the identity line.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -315,29 +397,25 @@ private fun ControlsRow(
     chatOnly: Boolean = false,
     agentAccent: androidx.compose.ui.graphics.Color,
     menuExpanded: Boolean,
-    onAgentTap: () -> Unit,
+    onTitleTap: () -> Unit,
     onMenuDismiss: () -> Unit,
-    onSwitchToClaude: () -> Unit,
-    onSwitchToCodex: () -> Unit,
-    onEndSession: () -> Unit,
-    browserMode: BrowserMode,
-    onBrowserModeChange: (BrowserMode) -> Unit,
-    onJumpToBrowser: () -> Unit,
-    onOpenDrawer: () -> Unit,
+    onRename: () -> Unit,
     onReconnect: () -> Unit,
-    onShowInfo: () -> Unit,
-    // "Changes" → Diff review. Shown only when the session has changes
-    // (gated by the caller); chat-only (tablet) hides it like Info.
+    onExportTranscript: () -> Unit,
     showChanges: Boolean = false,
     onShowChanges: () -> Unit = {},
-    disableSwitchClaude: Boolean,
-    disableSwitchCodex: Boolean,
+    browserMode: BrowserMode,
+    onToggleMemory: () -> Unit,
+    onEndSession: () -> Unit,
+    onOpenDrawer: () -> Unit,
+    onShowInfo: () -> Unit,
     viewerCount: Int?,
 ) {
+    val neon = LocalNeonTheme.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // Tablet 3-pane centre (chatOnly): the sessions rail is already
         // pinned on the left, so the drawer toggle is a dead button here —
@@ -346,78 +424,91 @@ private fun ControlsRow(
             HeaderCircleButton(icon = Icons.Default.Menu, contentDescription = "Sessions", onClick = onOpenDrawer)
         }
 
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            AgentPill(
-                pill = model.agentPill,
+        Box(modifier = Modifier.weight(1f)) {
+            IdentityBlock(
+                identity = model.identity,
                 accent = agentAccent,
-                onTap = onAgentTap,
+                onTap = onTitleTap,
             )
             DropdownMenu(expanded = menuExpanded, onDismissRequest = onMenuDismiss) {
-                // Metadata that used to crowd the header inline (agent ·
-                // reasoning effort · model) now lives here as read-only info
-                // rows. Device feedback (iOS-parity): the always-visible
-                // header crammed agent + effort chips that could wrap; the
-                // pill stays a single-line tappable identity and the detail
-                // moves into this dropdown. Disabled `DropdownMenuItem`s read
-                // as static info lines (no tap target, muted).
-                DropdownMenuItem(
-                    text = { Text("Agent: ${model.agentPill.agentName}") },
-                    enabled = false,
-                    onClick = {},
-                )
-                DropdownMenuItem(
-                    text = { Text("Effort: ${model.agentPill.reasoningEffort}") },
-                    enabled = false,
-                    onClick = {},
-                )
-                // The broker reports no model string, so the model line
-                // mirrors iOS: agent · effort is the honest stand-in.
-                DropdownMenuItem(
-                    text = { Text("Model: ${model.agentPill.agentName} · ${model.agentPill.reasoningEffort}") },
-                    enabled = false,
-                    onClick = {},
-                )
+                // Identity header (fix 2): agent avatar + agent name + the
+                // honest model line, plus a mono repo·branch sub-line. No
+                // more "Agent: claude / Model: claude".
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(agentAccent.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+                                .border(1.dp, agentAccent.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            ConduitMark(size = 22.dp, color = agentAccent)
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                model.identity.agentDisplayName,
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = neon.text,
+                            )
+                            Text(
+                                model.identity.modelLabel,
+                                fontFamily = neon.mono,
+                                fontSize = 11.5.sp,
+                                color = neon.textDim,
+                            )
+                        }
+                    }
+                    model.identity.contextLine?.let { contextLine ->
+                        Text(
+                            contextLine,
+                            fontFamily = neon.mono,
+                            fontSize = 11.sp,
+                            color = neon.textFaint,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                HorizontalDivider()
+                DropdownMenuItem(text = { Text("Rename") }, onClick = onRename)
+                DropdownMenuItem(text = { Text("Refresh") }, onClick = onReconnect)
+                DropdownMenuItem(text = { Text("Export transcript") }, onClick = onExportTranscript)
+                // Diff review + the browser memory toggle keep entry points
+                // after losing their header circles (fix 1 allows only
+                // drawer · identity · ⓘ up top). Hidden in the tablet
+                // chat-only pane, where the right pane owns those surfaces.
+                if (!chatOnly && showChanges) {
+                    DropdownMenuItem(text = { Text("View changes") }, onClick = onShowChanges)
+                }
+                if (!chatOnly) {
+                    DropdownMenuItem(
+                        text = { Text(if (browserMode == BrowserMode.Memory) "Live preview" else "Session memory") },
+                        onClick = onToggleMemory,
+                    )
+                }
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("Switch to Claude") },
-                    enabled = !disableSwitchClaude,
-                    onClick = onSwitchToClaude,
-                )
-                DropdownMenuItem(
-                    text = { Text("Switch to Codex") },
-                    enabled = !disableSwitchCodex,
-                    onClick = onSwitchToCodex,
-                )
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text("End session") },
+                    text = { Text("End session", color = neon.red) },
                     onClick = onEndSession,
                 )
             }
         }
 
-        // sweswe-parity multi-viewer hint. Slots between the centered
-        // agent pill and the trailing icon circles so a shared session
-        // is visible without crowding the action buttons. Renders to
-        // nothing when count is null / 0 / 1 — see ViewerCountBadge.
+        // sweswe-parity multi-viewer hint. Renders to nothing when count is
+        // null / 0 / 1 — see ViewerCountBadge.
         ViewerCountBadge(count = viewerCount)
 
-        // In the tablet 3-pane the Browser and Info surfaces live in the
-        // right pane (NeonTabletRightPane), so the memory/browser toggle and
-        // the info button here are redundant — and the "jump to Browser"
-        // pager scroll does nothing in chat-only mode (there's no pager).
-        // Drop them; keep only Reconnect, which still applies.
-        if (!chatOnly) {
-            MemoryButton(
-                currentMode = browserMode,
-                onToggle = onBrowserModeChange,
-                onJumpToBrowser = onJumpToBrowser,
-            )
-        }
-        if (!chatOnly && showChanges) {
-            HeaderCircleButton(icon = Icons.AutoMirrored.Filled.CallSplit, contentDescription = "Changes", onClick = onShowChanges)
-        }
-        HeaderCircleButton(icon = Icons.Default.Refresh, contentDescription = "Reconnect", onClick = onReconnect)
+        // ONE trailing ⓘ → Session Info (hidden on tablet chat-only, where
+        // the right pane owns Info).
         if (!chatOnly) {
             HeaderCircleButton(icon = Icons.Outlined.Info, contentDescription = "Session info", onClick = onShowInfo)
         }
@@ -425,69 +516,82 @@ private fun ControlsRow(
 }
 
 /**
- * Centered compound agent dropdown. HealthDot · agent name · reasoning
- * effort · chevron, all wrapped in a glassCapsule tinted with the
- * per-agent accent — mirrors iOS `agentPill`.
+ * Identity title block — THE title-menu trigger (fix 1/2): agent avatar
+ * (daemon mark, agent-tinted rounded square) beside the session name with
+ * a caret, over a one-line mono status: `● agent · repo · branch`.
  */
 @Composable
-private fun AgentPill(
-    pill: ProjectHeaderModel.AgentPill,
+private fun IdentityBlock(
+    identity: ProjectHeaderModel.Identity,
     accent: androidx.compose.ui.graphics.Color,
     onTap: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     Row(
         modifier = Modifier
-            .glassCapsule(interactive = true, tint = accent.copy(alpha = 0.32f))
             .clickable(onClick = onTap)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        HealthDot(pill.healthKey, size = 8.dp)
-        // Single-line identity label. The reasoning-effort badge that used
-        // to sit beside it inline moved into the dropdown (device feedback:
-        // the inline agent + effort chips crammed/wrapped the header). The
-        // label never wraps — maxLines = 1 + ellipsis.
-        Text(
-            pill.agentName,
-            style = MaterialTheme.typography.titleSmall,
-            fontFamily = neon.sans,
-            fontWeight = FontWeight.SemiBold,
-            color = neon.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (pill.showsChevron) {
-            Icon(
-                Icons.Default.ExpandMore,
-                contentDescription = null,
-                tint = neon.textDim,
-                modifier = Modifier.size(14.dp),
-            )
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .background(accent.copy(alpha = 0.14f), RoundedCornerShape(9.dp))
+                .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            ConduitMark(size = 20.dp, color = accent)
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    identity.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.Bold,
+                    color = neon.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (identity.showsChevron) {
+                    Icon(
+                        Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = neon.textFaint,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                HealthDot(identity.healthKey, size = 5.dp)
+                Text(
+                    identity.agentName,
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.sp,
+                    color = accent,
+                )
+                identity.contextLine?.let { contextLine ->
+                    Text(
+                        "· $contextLine",
+                        fontFamily = neon.mono,
+                        fontSize = 11.sp,
+                        color = neon.textFaint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
-}
-
-/**
- * Row 2 — single-line mono caption combining `path · branch · running
- * · lifecycle`. Middle-truncation isn't available pre-Compose 1.7, so
- * we fall back to `TextOverflow.Ellipsis` (end) — same visual goal:
- * one line, muted, mono.
- */
-@Composable
-private fun PathRow(model: ProjectHeaderModel) {
-    val neon = LocalNeonTheme.current
-    Text(
-        model.captionLabel,
-        style = MaterialTheme.typography.labelSmall,
-        fontFamily = neon.mono,
-        color = neon.textFaint,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth(),
-    )
 }
 
 /**
@@ -582,74 +686,96 @@ private fun HeaderCircleButton(icon: ImageVector, contentDescription: String, on
 }
 
 /**
- * Pure-data description of the upstream Stage 2 Android header. Lifted
- * out of the `ProjectScreen` composable so unit tests can assert the
- * three-row structure and the compound-dropdown contents without
- * standing up a Compose host. Mirrors `ProjectHeaderModel` in
- * `apps/ios/Sources/Views/ProjectView.swift` — same Row enum, same
- * AgentPill payload, same captionLabel join order.
+ * Pure-data description of the Round-2 Android header (handoff images
+ * 01→02). Lifted out of the `ProjectScreen` composable so unit tests can
+ * assert the single-row structure and the identity-block contents without
+ * standing up a Compose host. Mirrors the iOS header in
+ * `apps/ios/Sources/ConduitUI/Views/ConduitProjectView.swift` — same
+ * identity payload, same `repo · branch` context join.
  */
 data class ProjectHeaderModel(
-    val agentPill: AgentPill,
-    val pathLabel: String,
-    val captionLabel: String,
+    val identity: Identity,
 ) {
-    /** Three rows, in render order — matches iOS and the spec in
-     *  `docs/PLAN-CONDUIT-UI.md` Stage 2. */
-    enum class Row { Controls, Path, TabPicker }
+    /** Render order — ONE controls/identity row, then the tab picker.
+     *  The old separate path row is gone (fix 1): its information lives
+     *  on the identity block's context line. */
+    enum class Row { Controls, TabPicker }
 
-    /** Centered compound-dropdown payload — asserts the one-compound-
-     *  control shape (status dot · agent name · reasoning effort ·
-     *  chevron) in tests. */
-    data class AgentPill(
+    /**
+     * Identity title block payload — the whole block is the title-menu
+     * trigger: session [title] (+ caret) over `● agent · repo · branch`,
+     * plus the agent/model lines the menu's identity header shows.
+     */
+    data class Identity(
         val healthKey: String,
+        /** Friendly session name (custom rename → broker displayName →
+         *  first message — resolved by the caller via SessionNaming). */
+        val title: String,
+        /** Lowercase agent key for the status line ("claude"). */
         val agentName: String,
-        val reasoningEffort: String,
+        /** Menu identity header title ("Claude"). */
+        val agentDisplayName: String,
+        /** Honest model line: the recorded `--model` alias, else
+         *  "default model" (+ effort) — never the agent name repeated. */
+        val modelLabel: String,
+        /** `repo · branch` (+ exited/failed suffix) — null when unknown. */
+        val contextLine: String?,
         val showsChevron: Boolean,
     )
 
     companion object {
-        val rows: List<Row> = listOf(Row.Controls, Row.Path, Row.TabPicker)
+        val rows: List<Row> = listOf(Row.Controls, Row.TabPicker)
 
         fun from(
             session: ProjectSession,
             status: SessionStatus?,
             lifecycleLabel: String?,
+            title: String? = null,
+            modelAlias: String? = null,
         ): ProjectHeaderModel {
-            // Path label still tracks the real cwd when present, but a
-            // user-supplied display name (rename_session, protocol §3.3)
-            // wins over both — matches iOS `navTitle` precedence so the
-            // two shells render the same friendly label for a renamed
-            // session. Fallback chain: displayName → cwd → name.
-            val displayLabel = session.displayName?.trim()?.takeIf { it.isNotEmpty() }
-            val pathLabel = displayLabel
-                ?: session.cwd?.trim()?.takeIf { it.isNotEmpty() }
+            // Title precedence: caller-resolved friendly name (rename /
+            // AI title / first message) → broker displayName → raw name.
+            val resolvedTitle = title?.trim()?.takeIf { it.isNotEmpty() }
+                ?: session.displayName?.trim()?.takeIf { it.isNotEmpty() }
                 ?: session.name
 
-            val reasoning = session.reasoningEffort?.trim()?.takeIf { it.isNotEmpty() } ?: "medium"
-
-            val caption = listOfNotNull(
-                pathLabel,
-                session.branch?.takeIf { it.isNotBlank() } ?: "no branch",
-                status?.phase ?: "ready",
+            // `repo · branch`: the repo is the last path component of the
+            // session cwd — the old full-width path row folded down to the
+            // bit that identifies the project. An exited/failed lifecycle
+            // stays visible as a suffix (honest read-only signal).
+            val cwd = status?.cwd?.trim()?.takeIf { it.isNotEmpty() }
+                ?: session.cwd?.trim()?.takeIf { it.isNotEmpty() }
+            val repo = cwd?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
+            val contextLine = listOfNotNull(
+                repo,
+                session.branch?.takeIf { it.isNotBlank() },
                 lifecycleLabel,
-            ).joinToString(" · ")
+            ).joinToString(" · ").takeIf { it.isNotEmpty() }
+
+            val effort = session.reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
+            val modelLabel = modelAlias?.trim()?.takeIf { it.isNotEmpty() }
+                ?: if (effort != null) "default model · $effort" else "default model"
 
             return ProjectHeaderModel(
-                agentPill = AgentPill(
+                identity = Identity(
                     healthKey = status?.health ?: "unknown",
-                    agentName = session.assistant,
-                    reasoningEffort = reasoning,
+                    title = resolvedTitle,
+                    agentName = session.assistant.lowercase(),
+                    agentDisplayName = when (session.assistant.lowercase()) {
+                        "claude" -> "Claude"
+                        "codex" -> "Codex"
+                        else -> session.assistant.replaceFirstChar { it.uppercase() }
+                    },
+                    modelLabel = modelLabel,
+                    contextLine = contextLine,
                     showsChevron = true,
                 ),
-                pathLabel = pathLabel,
-                captionLabel = caption,
             )
         }
 
         /** Match iOS `lifecycleLabel` — only `exited(N)` / `failed(msg)`
          *  surface; `creating` / `live` / `null` are dropped so the
-         *  caption stays terse. */
+         *  context line stays terse. */
         fun lifecycleLabel(lifecycle: SessionLifecycle?): String? = when (lifecycle) {
             is SessionLifecycle.Exited        -> "exited(${lifecycle.code})"
             is SessionLifecycle.FailedToStart  -> lifecycle.reason

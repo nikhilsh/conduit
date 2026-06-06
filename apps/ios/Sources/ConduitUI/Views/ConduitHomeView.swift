@@ -47,6 +47,9 @@ extension ConduitUI {
         /// `.alert(item:)` needs an Identifiable, so we wrap the target
         /// session id (`Identifiable` via the inner struct).
         @State private var pendingDelete: PendingSessionDelete?
+        /// Round-2 fix 5: whether the signed-in local device row is listed
+        /// under Boxes. Read from the Keychain once per appearance.
+        @State private var localDeviceListed = false
 
         var body: some View {
             @Bindable var store = store
@@ -188,6 +191,9 @@ extension ConduitUI {
                     } else if store.harness == .disconnected {
                         store.connect()
                     }
+                    // Round-2 fix 5: the signed-in local device is a box.
+                    // One Keychain read per appearance (not per render).
+                    localDeviceListed = AgentAccountStatus.current().contains(where: \.signedIn)
                 }
                 .tint(neon.accent)
             }
@@ -278,6 +284,46 @@ extension ConduitUI {
             .textCase(nil)
             .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 6, trailing: 14))
             .listRowBackground(Color.clear)
+        }
+
+        /// Pinned "This device" row: Conduit mark, `localhost:1977 ·
+        /// on-device`, a LOCAL badge (accent), and a `● ready` status. Not
+        /// tappable — there is no remote connection to manage for the phone
+        /// itself.
+        private var localDeviceRow: some View {
+            HStack(spacing: 11) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(neon.accent.opacity(0.12))
+                    .frame(width: 30, height: 30)
+                    .overlay(ConduitUI.ConduitMark(size: 18, color: neon.accent, glow: neon.glow))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("This device")
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text("localhost:1977 · on-device")
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textFaint)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text("LOCAL")
+                    .font(neon.mono(9).weight(.bold))
+                    .tracking(0.8)
+                    .foregroundStyle(neon.accent)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(neon.accent.opacity(0.14)))
+                HStack(spacing: 5) {
+                    Circle().fill(neon.textDim).frame(width: 6, height: 6)
+                    Text("ready")
+                        .font(neon.mono(11))
+                        .foregroundStyle(neon.textDim)
+                }
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12)
         }
 
         /// A paired-machine ("box") row: tinted server glyph, name, endpoint sub,
@@ -560,13 +606,20 @@ extension ConduitUI {
                     }
                 }
 
-                if !store.savedServers.isEmpty {
-                    // One machine = one row. The connected box is pinned first
-                    // and styled active (ACTIVE badge + `connected`); there is no
-                    // separate connection status card above (design handoff §3a).
+                if !store.savedServers.isEmpty || localDeviceListed {
+                    // One machine = one row. "This device" is pinned first
+                    // (Round-2 fix 5: the signed-in local device is itself a
+                    // box), then the connected remote box styled active
+                    // (ACTIVE badge + `connected`), then other saved boxes.
                     let boxes = store.savedServers.filter { $0.endpoint == store.endpoint }
                         + store.savedServers.filter { $0.endpoint != store.endpoint }
                     Section {
+                        if localDeviceListed {
+                            localDeviceRow
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                        }
                         ForEach(boxes) { server in
                             boxRow(server)
                                 .listRowBackground(Color.clear)
@@ -574,6 +627,14 @@ extension ConduitUI {
                                 .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                                 .contentShape(Rectangle())
                                 .onTapGesture { selectedBox = server }
+                        }
+                        if localDeviceListed {
+                            Text("your local box is auto-listed once you're signed in.")
+                                .font(neon.mono(10))
+                                .foregroundStyle(neon.textFaint)
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 14))
                         }
                     } header: {
                         sectionHeader("Boxes", actionIcon: "wifi", actionLabel: "Pair box", actionTint: neon.textDim) {

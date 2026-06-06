@@ -673,6 +673,23 @@ mod tests {
         assert_eq!(item.kind, "pending_input");
     }
 
+    /// Pins the exact shape the broker emits for an AskUserQuestion
+    /// tool_use (broker/internal/session/claudechat.go
+    /// askUserQuestionContent): question + numbered option menu must
+    /// classify as pending_input with the labels as tappable options.
+    #[test]
+    fn pending_input_ask_user_question_broker_shape() {
+        let item = item_from_chat_event(
+            &ev(
+                "assistant",
+                "Proceed with the merge?\n1. Merge now\n2. Hold off",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "pending_input");
+        assert_eq!(item.pending_options, vec!["Merge now", "Hold off"]);
+    }
+
     #[test]
     fn handoff_classified() {
         let item = item_from_chat_event(

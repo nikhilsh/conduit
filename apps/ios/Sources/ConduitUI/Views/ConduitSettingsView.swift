@@ -42,6 +42,11 @@ extension ConduitUI {
 
         @State private var showAddServer = false
         @State private var showAgentLogin = false
+        /// Per-agent signed-in + plan snapshot for the Accounts group
+        /// (fix 3). Refreshed on appear and whenever the login sheet closes.
+        @State private var agentAccounts: [AgentAccountStatus] = AgentAccountStatus.current()
+        /// Account whose Manage dialog (re-auth / sign out) is open.
+        @State private var manageTarget: AgentAccountStatus?
         /// Saved-server pending deletion (drives the confirmation alert
         /// for the Settings → Servers swipe-to-delete affordance).
         @State private var pendingServerDelete: PendingServerDelete?
@@ -89,7 +94,11 @@ extension ConduitUI {
                 .sheet(isPresented: $showAddServer) {
                     ConduitUI.AddServerSheet()
                 }
-                .sheet(isPresented: $showAgentLogin) {
+                .sheet(isPresented: $showAgentLogin, onDismiss: {
+                    // Re-read the Keychain so a fresh sign-in flips the
+                    // Accounts rows to `● signed in` immediately.
+                    agentAccounts = AgentAccountStatus.current()
+                }) {
                     ConduitUI.AgentLoginSheet()
                 }
                 .alert(
@@ -181,40 +190,183 @@ extension ConduitUI {
             )
         }
 
-        // MARK: Account
+        // MARK: Account (Round-2 fix 3 — per-agent Accounts group)
 
+        /// Accounts group (handoff images 05→06): the paired-box row stays on
+        /// top, then an AGENT ACCOUNTS list — one row per agent with a plan
+        /// badge, a live `● signed in` status, and a per-agent Manage
+        /// affordance (re-auth / sign out) — plus an "Add another account"
+        /// row. The old single opaque "Sign in to agent" row read as signed-
+        /// out even when both agents were authenticated.
         private var accountSection: some View {
-            sectionCard(title: "Account") {
-                VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                sectionCard(title: "Account") {
                     ConduitUI.navRow(
                         icon: "person.crop.circle.fill",
                         title: store.endpoint.isComplete ? store.endpoint.displayHost : "Not paired",
-                        subtitle: harnessSubtitle
+                        subtitle: store.harness.badgeLabel
                     )
-                    Divider()
-                        .background(neon.border)
-                        .padding(.leading, 46)
-                    Button {
-                        showAgentLogin = true
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "key.fill",
-                            title: "Sign in to agent",
-                            subtitle: "OAuth for Claude / ChatGPT (v2)",
-                            iconTint: neon.accent
-                        ) {
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                    }
-                    .buttonStyle(.plain)
                 }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("AGENT ACCOUNTS")
+                            .font(neon.mono(11).weight(.bold))
+                            .foregroundStyle(neon.textFaint)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        Spacer(minLength: 8)
+                        agentAccountsStatus
+                    }
+                    .padding(.horizontal, 4)
+
+                    VStack(spacing: 0) {
+                        ForEach(agentAccounts) { account in
+                            agentAccountRow(account)
+                            Divider()
+                                .background(neon.border)
+                                .padding(.leading, 60)
+                        }
+                        Button {
+                            showAgentLogin = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(neon.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                                    .frame(width: 38, height: 38)
+                                    .overlay(
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(neon.textDim)
+                                    )
+                                Text("Add another account")
+                                    .font(neon.sans(14.5).weight(.medium))
+                                    .foregroundStyle(neon.textDim)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+
+                    Text("Re-auth, switch plan, or sign out per agent — no more guessing whether you're connected.")
+                        .font(neon.mono(10))
+                        .foregroundStyle(neon.textFaint)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                }
+            }
+            .onAppear { agentAccounts = AgentAccountStatus.current() }
+            .confirmationDialog(
+                manageTarget.map { "\($0.displayName) account" } ?? "Account",
+                isPresented: Binding(
+                    get: { manageTarget != nil },
+                    set: { if !$0 { manageTarget = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: manageTarget
+            ) { account in
+                Button("Sign in again") {
+                    manageTarget = nil
+                    showAgentLogin = true
+                }
+                Button("Sign out", role: .destructive) {
+                    OAuthCredentialStore.clear(provider: account.provider)
+                    agentAccounts = AgentAccountStatus.current()
+                    manageTarget = nil
+                }
+                Button("Cancel", role: .cancel) { manageTarget = nil }
+            } message: { account in
+                Text(account.signedIn
+                    ? "Signing out clears the \(account.displayName) credential on this device. Sessions already running keep their credentials."
+                    : "Sign in to use \(account.displayName) through Conduit.")
             }
         }
 
-        private var harnessSubtitle: String {
-            store.harness.badgeLabel
+        /// `● both connected` / `● claude connected` / `● not signed in` —
+        /// the at-a-glance answer the old row never gave.
+        private var agentAccountsStatus: some View {
+            let signedIn = agentAccounts.filter(\.signedIn)
+            let (label, color): (String, Color) = {
+                if signedIn.count == agentAccounts.count, !agentAccounts.isEmpty {
+                    return ("both connected", neon.green)
+                }
+                if let only = signedIn.first, signedIn.count == 1 {
+                    return ("\(only.agent) connected", neon.green)
+                }
+                return ("not signed in", neon.textFaint)
+            }()
+            return HStack(spacing: 5) {
+                Circle().fill(color).frame(width: 5, height: 5)
+                Text(label)
+                    .font(neon.mono(10.5).weight(.semibold))
+                    .foregroundStyle(color)
+            }
+        }
+
+        /// One agent's account row: tinted daemon avatar, name + plan badge,
+        /// `● signed in` status, and the Manage / Sign in affordance.
+        private func agentAccountRow(_ account: AgentAccountStatus) -> some View {
+            let tint = neon.agentTint(forAgent: account.agent)
+            return Button {
+                if account.signedIn {
+                    manageTarget = account
+                } else {
+                    showAgentLogin = true
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(tint.opacity(neon.dark ? 0.14 : 0.10))
+                        .frame(width: 38, height: 38)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(tint.opacity(0.35), lineWidth: 1)
+                        )
+                        .overlay(ConduitUI.ConduitMark(size: 22, color: tint, glow: neon.glow))
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Text(account.displayName)
+                                .font(neon.sans(15).weight(.bold))
+                                .foregroundStyle(neon.text)
+                            if let plan = account.planLabel {
+                                Text(plan)
+                                    .font(neon.mono(9).weight(.bold))
+                                    .tracking(0.6)
+                                    .foregroundStyle(tint)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(tint.opacity(0.14)))
+                                    .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(account.signedIn ? neon.green : neon.textFaint)
+                                .frame(width: 5, height: 5)
+                            Text(account.signedIn ? "signed in" : "signed out")
+                                .font(neon.mono(10.5))
+                                .foregroundStyle(account.signedIn ? neon.green : neon.textFaint)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    HStack(spacing: 4) {
+                        Text(account.signedIn ? "Manage" : "Sign in")
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(account.signedIn ? neon.textDim : neon.accent)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
 
         // MARK: Usage & limits (account-wide, BOTH agents)

@@ -101,6 +101,83 @@ func TestProcessClaudeStreamOutput(t *testing.T) {
 	}
 }
 
+func TestAskUserQuestionContent(t *testing.T) {
+	cases := []struct {
+		name, input, want string
+		ok                bool
+	}{
+		{
+			name:  "single question with options",
+			input: `{"questions":[{"question":"Ship it?","header":"Deploy","multiSelect":false,"options":[{"label":"Yes","description":"go"},{"label":"No"}]}]}`,
+			want:  "Ship it?\n1. Yes\n2. No",
+			ok:    true,
+		},
+		{
+			name:  "two questions renumber per question",
+			input: `{"questions":[{"question":"Color?","options":[{"label":"Red"},{"label":"Blue"}]},{"question":"Size?","options":[{"label":"S"},{"label":"M"}]}]}`,
+			want:  "Color?\n1. Red\n2. Blue\n\nSize?\n1. S\n2. M",
+			ok:    true,
+		},
+		{
+			name:  "question without options still surfaces",
+			input: `{"questions":[{"question":"Anything else?","options":[]}]}`,
+			want:  "Anything else?",
+			ok:    true,
+		},
+		{name: "empty questions", input: `{"questions":[]}`, ok: false},
+		{name: "malformed", input: `{"questions":`, ok: false},
+		{name: "empty input", input: ``, ok: false},
+	}
+	for _, tc := range cases {
+		var raw json.RawMessage
+		if tc.input != "" {
+			raw = json.RawMessage(tc.input)
+		}
+		got, ok := askUserQuestionContent(raw)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Fatalf("%s: askUserQuestionContent(%q) = (%q, %v), want (%q, %v)",
+				tc.name, tc.input, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestProcessClaudeStreamOutputAskUserQuestion(t *testing.T) {
+	claudeChatNow = func() time.Time { return time.Unix(0, 0).UTC() }
+	defer func() { claudeChatNow = time.Now }()
+
+	// An AskUserQuestion tool_use must surface as a pending-input-shaped
+	// chat line (question + numbered options) — NOT a bare tool card —
+	// so the apps' classifier renders the interactive options card
+	// (device bug: "can't see approval").
+	stream := strings.Join([]string{
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Proceed with the merge?","header":"Merge","options":[{"label":"Merge now"},{"label":"Hold off"}]}]}}]}}`,
+	}, "\n")
+
+	type chatEv struct {
+		Event struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"event"`
+	}
+	var got []chatEv
+	err := processClaudeStreamOutput(strings.NewReader(stream), func(p []byte) {
+		var ev chatEv
+		if json.Unmarshal(p, &ev) == nil {
+			got = append(got, ev)
+		}
+	}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 chat event, got %d: %+v", len(got), got)
+	}
+	want := "Proceed with the merge?\n1. Merge now\n2. Hold off"
+	if got[0].Event.Role != "assistant" || got[0].Event.Content != want {
+		t.Fatalf("unexpected event: %+v (want assistant %q)", got[0], want)
+	}
+}
+
 func TestToolCardContent(t *testing.T) {
 	cases := []struct {
 		name, input, want string
