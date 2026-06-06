@@ -83,6 +83,13 @@ extension ConduitUI {
                 }
             }
             .neonAccentTint()
+            // Same navigation-container keyboard opt-out as HomeView's
+            // NavigationStack (see the comment there): the split view's
+            // hosting layer otherwise shifts the detail — and its right-pane
+            // terminal — when the soft keyboard appears. All tablet editors
+            // manual-lift or live in sheets, so nothing depends on the
+            // implicit avoidance this removes.
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
     }
 }
