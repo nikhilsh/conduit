@@ -4,6 +4,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import sh.nikhil.conduit.R
 
 /**
  * "Neon Terminal" theme system — Android mirror of
@@ -135,15 +136,17 @@ data class NeonTheme(
     val cardElevation: NeonCardElevation?,
 ) {
     /**
-     * Type intent (README §3.4): sans = Space Grotesk → system sans;
-     * mono = JetBrains Mono → system monospace. No font assets are
-     * bundled. Exposed as [androidx.compose.ui.text.font.FontFamily]
-     * accessors mirroring the iOS `sans`/`mono` helpers.
+     * Type intent (BRAND.md §4): sans = Space Grotesk, mono =
+     * JetBrains Mono — both BUNDLED in `res/font/` and resolved through
+     * [NeonBrandFonts] (lazy `ResourceFont` descriptors; nothing loads
+     * until first render, so the pure-JVM theme tests stay framework-
+     * free). Mirrors the iOS `sans()`/`mono()` helpers, which map to the
+     * same bundled faces.
      */
     val sans: androidx.compose.ui.text.font.FontFamily
-        get() = androidx.compose.ui.text.font.FontFamily.SansSerif
+        get() = NeonBrandFonts.sans
     val mono: androidx.compose.ui.text.font.FontFamily
-        get() = androidx.compose.ui.text.font.FontFamily.Monospace
+        get() = NeonBrandFonts.mono
 
     companion object {
         const val RADIUS_DP: Float = 20f
@@ -349,4 +352,27 @@ data class NeonTheme(
  */
 val LocalNeonTheme = staticCompositionLocalOf<NeonTheme> {
     NeonTheme.resolve(NeonPalette.ICE, dark = true, glow = true)
+}
+
+/**
+ * Bundled brand faces (BRAND.md §4), shared by every `neon.sans` /
+ * `neon.mono` callsite. `Font(resId, weight)` is a lazy descriptor —
+ * the TTF only loads when Compose first shapes text with it, so
+ * constructing these in a top-level object is free for the pure-JVM
+ * theme tests. Space Grotesk ships no SemiBold static, so W600 maps to
+ * the Medium face (nearest); JetBrains Mono carries all four weights.
+ */
+object NeonBrandFonts {
+    val sans = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.space_grotesk_regular, androidx.compose.ui.text.font.FontWeight.Normal),
+        androidx.compose.ui.text.font.Font(R.font.space_grotesk_medium, androidx.compose.ui.text.font.FontWeight.Medium),
+        androidx.compose.ui.text.font.Font(R.font.space_grotesk_medium, androidx.compose.ui.text.font.FontWeight.SemiBold),
+        androidx.compose.ui.text.font.Font(R.font.space_grotesk_bold, androidx.compose.ui.text.font.FontWeight.Bold),
+    )
+    val mono = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.jetbrains_mono_regular, androidx.compose.ui.text.font.FontWeight.Normal),
+        androidx.compose.ui.text.font.Font(R.font.jetbrains_mono_medium, androidx.compose.ui.text.font.FontWeight.Medium),
+        androidx.compose.ui.text.font.Font(R.font.jetbrains_mono_semibold, androidx.compose.ui.text.font.FontWeight.SemiBold),
+        androidx.compose.ui.text.font.Font(R.font.jetbrains_mono_bold, androidx.compose.ui.text.font.FontWeight.Bold),
+    )
 }

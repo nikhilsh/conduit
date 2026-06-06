@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - NeonTheme
 //
@@ -243,7 +244,8 @@ struct NeonTheme {
             borderStrong = Color(hex: palette.accentHex, alpha: 0x44)
             grid = Color(hex: palette.accentHex, alpha: 0x0e)
             text = Color(hex: "#eaf3ff")
-            textDim = Color(red: 196 / 255, green: 214 / 255, blue: 244 / 255, opacity: 0.66)
+            // BRAND.md §3 --text-dim: rgba(196,214,244,0.64).
+            textDim = Color(red: 196 / 255, green: 214 / 255, blue: 244 / 255, opacity: 0.64)
             textFaint = Color(red: 160 / 255, green: 184 / 255, blue: 224 / 255, opacity: 0.40)
             accentText = Color(hex: "#03121a")
             codeBg = Color(red: 0, green: 4 / 255, blue: 12 / 255, opacity: 0.6)
@@ -382,17 +384,37 @@ struct NeonTheme {
         )
     }
 
-    // MARK: Type intent (README §3.4)
+    // MARK: Type intent (BRAND.md §4)
     //
-    // sans = Space Grotesk → falls back to the system sans (SF Pro).
-    // mono = JetBrains Mono → falls back to SF Mono. No font assets are
-    // bundled; these expose the design intent consistent with
-    // `ConduitTypography`.
+    // sans = Space Grotesk (bundled Regular/Bold, registered in
+    // project.yml UIAppFonts). mono = JetBrains Mono (bundled, shared
+    // with the terminal font picker). Regular+Bold are style-linked, so
+    // `.bold()` / `.weight(.bold)` resolve inside the family; the
+    // intermediate weights render at the nearest registered face. The
+    // availability probe keeps us on the system fonts if registration
+    // ever breaks (a bad UIAppFonts edit) instead of silently falling
+    // back to an unthemed face.
 
-    /// Sans font at `size` (system sans fallback for Space Grotesk).
-    func sans(_ size: CGFloat) -> Font { .system(size: size, design: .default) }
-    /// Mono font at `size` (system mono fallback for JetBrains Mono).
-    func mono(_ size: CGFloat) -> Font { .system(size: size, design: .monospaced) }
+    /// Sans font at `size` — Space Grotesk per BRAND.md §4 (body/prose).
+    func sans(_ size: CGFloat) -> Font {
+        NeonBrandFonts.sansAvailable
+            ? .custom("Space Grotesk", size: size)
+            : .system(size: size, design: .default)
+    }
+    /// Mono font at `size` — JetBrains Mono per BRAND.md §4 (display/labels/code).
+    func mono(_ size: CGFloat) -> Font {
+        NeonBrandFonts.monoAvailable
+            ? .custom("JetBrains Mono", size: size)
+            : .system(size: size, design: .monospaced)
+    }
+}
+
+/// One-time availability probe for the bundled brand fonts. `UIFont` by
+/// PostScript name returns nil when the face isn't registered — cached
+/// statically so the check costs one lookup per launch, not one per call.
+private enum NeonBrandFonts {
+    static let sansAvailable = UIFont(name: "SpaceGrotesk-Regular", size: 12) != nil
+    static let monoAvailable = UIFont(name: "JetBrainsMono-Regular", size: 12) != nil
 }
 
 // MARK: - Hex with alpha helper
