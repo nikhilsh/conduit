@@ -135,6 +135,9 @@ targets:
           - FiraCode-Bold.ttf
           - IBMPlexMono-Regular.ttf
           - IBMPlexMono-Bold.ttf
+          # Brand body face (BRAND.md §4) — `neon.sans()` maps to it.
+          - SpaceGrotesk-Regular.ttf
+          - SpaceGrotesk-Bold.ttf
         NSMicrophoneUsageDescription: "Dictate replies to the coding agent."
         NSSpeechRecognitionUsageDescription: "Transcribe your voice on-device into chat messages for the coding agent."
         NSLocalNetworkUsageDescription: "Discover Conduit harnesses advertising on your Wi-Fi."
