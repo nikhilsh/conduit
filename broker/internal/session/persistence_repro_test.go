@@ -7,7 +7,7 @@ import (
 // TestSessionSurvivesLastViewerLeave reproduces the user-reported scenario:
 // the iPhone app (the only viewer) terminates, dropping its WebSocket. The
 // broker's serveWS handler runs its deferred Unsubscribe on that drop. The
-// agent session is supposed to keep running server-side (the "litter" model),
+// agent session is supposed to keep running server-side (the keep-alive model),
 // so a relaunch can reattach. This test asserts the session is NOT reaped and
 // the agent process is still alive + processing input after the last viewer
 // leaves.

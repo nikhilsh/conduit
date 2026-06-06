@@ -190,7 +190,7 @@ func (s *Server) serveRecentProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 // sessionsResponse is the body of GET /api/sessions — the authoritative
-// list of sessions the broker is keeping alive RIGHT NOW (the litter
+// list of sessions the broker is keeping alive RIGHT NOW (the live
 // "what's running" set). A reconnecting client reconciles against this:
 // only sessions present here (and `running`) belong in its ACTIVE list;
 // everything else it had saved as live has died and drops to History.

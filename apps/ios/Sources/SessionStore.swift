@@ -594,7 +594,7 @@ final class SessionStore {
                 // after a cold launch / app termination) and demote any
                 // saved `.live` row the broker no longer has to History.
                 // The broker — not our stale local flags — decides what's
-                // alive (the litter model). See `reconcileLiveSessions`.
+                // alive (the keep-alive model). See `reconcileLiveSessions`.
                 self.reconcileLiveSessions()
             } catch {
                 let detail = Self.describe(error)
@@ -746,7 +746,7 @@ final class SessionStore {
 
     /// Authoritative "what's alive on the broker RIGHT NOW" list
     /// (`GET /api/sessions`). Mirrors `fetchConversation`'s direct-HTTP +
-    /// bearer-auth pattern. This is the litter model: the broker is the
+    /// bearer-auth pattern. This is the keep-alive model: the broker is the
     /// source of truth for liveness, so a reconnecting client reconciles
     /// against it instead of blindly trusting locally-saved `.live` flags
     /// (which go stale the moment the broker restarts and the agents die).
@@ -2544,7 +2544,7 @@ final class SessionStore {
     }
 
     /// Reconcile the local session list against the broker's AUTHORITATIVE
-    /// live set on (re)connect — the litter model: the server is the source
+    /// live set on (re)connect — the keep-alive model: the server is the source
     /// of truth for liveness, not our locally-saved `.live` flags.
     ///
     /// The previous implementation blindly `joinSession`'d every saved

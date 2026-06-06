@@ -1168,7 +1168,7 @@ type LiveSessionInfo struct {
 }
 
 // LiveSessions returns a snapshot of the sessions CURRENTLY HELD IN MEMORY —
-// the litter-model "what is genuinely alive right now" set. It deliberately
+// the keep-alive-model "what is genuinely alive right now" set. It deliberately
 // does NOT touch disk or trigger recovery: a session that exited (or whose
 // agent died with a broker restart) and is only recoverable-from-disk is NOT
 // alive and must not be resurrected merely by listing. `Running` reflects

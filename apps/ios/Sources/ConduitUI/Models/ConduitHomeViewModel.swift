@@ -371,21 +371,34 @@ extension ConduitUI {
             return f.string(from: date)
         }
 
-        /// Title shown in the empty-state when there are no rows.
-        static func emptyTitle(_ snap: HomeSnapshot) -> String {
-            snap.harness.canIssueCommands ? "No sessions yet" : "Waiting for server"
+        /// `true` when nothing has ever been paired — no endpoint host to
+        /// even wait for. Distinct from "paired but unreachable", which
+        /// gets the waiting copy instead of the onboarding copy.
+        private static func isUnpaired(_ snap: HomeSnapshot) -> Bool {
+            (snap.endpointDisplayHost ?? "").isEmpty
         }
 
-        /// Body shown in the empty-state when there are no rows.
+        /// Title shown in the empty-state when there are no rows.
+        static func emptyTitle(_ snap: HomeSnapshot) -> String {
+            if snap.harness.canIssueCommands { return "No sessions yet" }
+            return isUnpaired(snap) ? "No sessions yet" : "Waiting for server"
+        }
+
+        /// Body shown in the empty-state when there are no rows. The
+        /// unpaired body is COPY_DECK.md's canonical empty state
+        /// ("No sessions yet — pair a machine to begin."); once a box is
+        /// paired the actionable "+" copy takes over.
         static func emptyBody(_ snap: HomeSnapshot) -> String {
-            snap.harness.canIssueCommands
-                ? "Tap + to spin up a new conversation."
+            if snap.harness.canIssueCommands { return "Tap + to spin up a new conversation." }
+            return isUnpaired(snap)
+                ? "Pair a machine to begin."
                 : "Once we can reach the server, your sessions appear here."
         }
 
         /// SF Symbol shown in the empty-state hero.
         static func emptySymbol(_ snap: HomeSnapshot) -> String {
-            snap.harness.canIssueCommands ? "sparkles" : "cloud.slash"
+            if snap.harness.canIssueCommands { return "sparkles" }
+            return isUnpaired(snap) ? "sparkles" : "cloud.slash"
         }
     }
 }

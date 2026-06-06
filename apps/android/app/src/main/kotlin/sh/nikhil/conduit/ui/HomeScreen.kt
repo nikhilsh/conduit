@@ -257,20 +257,25 @@ fun HomeScreen(
                 // above optical center so it doesn't feel marooned in
                 // the middle of a tall, otherwise-blank tablet pane.
                 val canCommand = canIssueCommands(harness)
+                // Fresh install (nothing paired — no endpoint URL at all):
+                // COPY_DECK.md's canonical onboarding empty state, not the
+                // "waiting" copy (there is no server to wait FOR yet).
+                // Mirrors iOS HomeViewModel.isUnpaired.
+                val unpaired = !canCommand && endpoint.url.isBlank()
                 Column(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 36.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Icon(
-                        if (canCommand) Icons.Default.AutoAwesome else Icons.Default.CloudOff,
+                        if (canCommand || unpaired) Icons.Default.AutoAwesome else Icons.Default.CloudOff,
                         contentDescription = null,
                         modifier = Modifier.size(40.dp),
                         tint = neon.accent,
                     )
                     Spacer(Modifier.height(14.dp))
                     Text(
-                        if (canCommand) "No sessions yet" else "Waiting for server",
+                        if (canCommand || unpaired) "No sessions yet" else "Waiting for server",
                         style = MaterialTheme.typography.titleMedium,
                         fontFamily = neon.sans,
                         fontWeight = FontWeight.SemiBold,
@@ -278,10 +283,11 @@ fun HomeScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        if (canCommand)
-                            "Tap + below to spin up a new conversation."
-                        else
-                            "Once we can reach the server, your sessions appear here.",
+                        when {
+                            canCommand -> "Tap + below to spin up a new conversation."
+                            unpaired -> "Pair a machine to begin."
+                            else -> "Once we can reach the server, your sessions appear here."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = neon.sans,
                         color = neon.textDim,

@@ -23,7 +23,7 @@ up in TestFlight.
 ## Automated post-upload (no manual ASC clicking)
 
 After the upload, the workflow runs `apps/ios/scripts/testflight-postprocess.py`
-(litter-style automation) which, via the ASC API:
+(scripted ASC automation) which, via the ASC API:
 
 1. **Waits** for Apple to finish processing the build.
 2. Sets the per-build **"What to Test"** from the recent commit log

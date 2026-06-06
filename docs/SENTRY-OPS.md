@@ -16,15 +16,17 @@ This script:
 
 Default scope:
 
-- org: `conduit` (post-migration org slug; the old `swe-kitty` org is retired)
+- org: `swe-kitty` (the Sentry org kept its original slug — verified live
+  2026-06-06: `conduit` returns `403`, `swe-kitty` returns `200`. Only the
+  PROJECTS were renamed in the rebrand; renaming a Sentry org breaks every
+  DSN, so the org slug is a permanent external identifier, same class as
+  the agents' names in `RENAME_MAP.md` §4.)
 - projects: `conduit-ios,conduit-android`
 - query: `is:unresolved`
 
-> The `conduit` org needs a token that is a **member** of it. A token scoped
-> only to the old `swe-kitty` org returns `403 You do not have permission`.
-> Drop a fresh conduit-scoped token at `/root/.config/sentry/auth-token`.
-> Pre-migration history lives in the `swe-kitty` org (projects `apple-ios` /
-> `android`) — reach it with `SENTRY_ORG=swe-kitty SENTRY_PROJECTS=apple-ios,android`.
+> Pre-rebrand history lives in the SAME org under the old project slugs
+> (`apple-ios` / `android`) — reach it with
+> `SENTRY_PROJECTS=apple-ios,android`.
 
 ## Usage
 

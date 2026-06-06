@@ -186,7 +186,22 @@ struct ConduitHomeViewModelTests {
     }
 
     @Test func emptyStateChangesByHarnessReachability() {
-        let unreachable = ConduitUI.HomeSnapshot.empty
+        // Fresh install: nothing paired (no endpoint host at all) — gets
+        // COPY_DECK.md's canonical onboarding empty state, not the
+        // "waiting" copy (there is no server to wait FOR yet).
+        let unpaired = ConduitUI.HomeSnapshot.empty
+        #expect(ConduitUI.HomeViewModel.emptyTitle(unpaired) == "No sessions yet")
+        #expect(ConduitUI.HomeViewModel.emptyBody(unpaired) == "Pair a machine to begin.")
+        #expect(ConduitUI.HomeViewModel.emptySymbol(unpaired) == "sparkles")
+
+        // Paired but unreachable: a host exists, so we're genuinely waiting.
+        let unreachable = ConduitUI.HomeSnapshot(
+            harness: .disconnected,
+            sessions: [],
+            placeholders: [],
+            selectedSessionID: nil,
+            endpointDisplayHost: "mac-studio"
+        )
         #expect(ConduitUI.HomeViewModel.emptyTitle(unreachable) == "Waiting for server")
         #expect(ConduitUI.HomeViewModel.emptySymbol(unreachable) == "cloud.slash")
 
