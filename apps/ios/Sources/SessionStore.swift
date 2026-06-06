@@ -531,11 +531,22 @@ final class SessionStore {
 
         // App returns to foreground after a long suspend — sockets may
         // be silently dead even though our state thinks they're live.
+        // Besides nudging the reconnect worker, re-pull every session's
+        // conversation: a reply that landed while we were suspended only
+        // exists in the broker's conversation.jsonl (live events aren't
+        // replayed on re-attach), so without this the transcript stays
+        // stale and the typing indicator spins forever — the "says
+        // connected but never replies" bug.
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
-        ) { _ in nudge() }
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.nudgeNetworkChange()
+                self?.refreshSessions()
+            }
+        }
 
         // App is about to background — flush any dirty terminal scrollback to
         // disk NOW so a subsequent kill (or our own crash) still leaves the
@@ -782,19 +793,48 @@ final class SessionStore {
     }
 
     /// Convenience flow: optionally switch endpoint, connect, then create a
-    /// new session and move it into `cwd`.
-    func connectAndStart(endpoint nextEndpoint: StoredEndpoint? = nil, assistant: String, cwd: String) {
+    /// new session and move it into `cwd`. Drives the new-session sheet's
+    /// box picker (start a session on a box other than the connected one);
+    /// model/effort/prompt ride through to `createSession` unchanged.
+    func connectAndStart(
+        endpoint nextEndpoint: StoredEndpoint? = nil,
+        assistant: String,
+        cwd: String?,
+        reasoningEffort: String? = nil,
+        model: String? = nil,
+        initialPrompt: String? = nil
+    ) {
         if let nextEndpoint {
             endpoint = nextEndpoint
-            upsertSavedServer(name: nextEndpoint.displayHost, endpoint: nextEndpoint, makeDefault: true)
+            // Preserve a custom server name if the box is already saved —
+            // re-upserting under displayHost would clobber the user's label.
+            let savedName = savedServers.first(where: { $0.endpoint == nextEndpoint })?.name
+            upsertSavedServer(name: savedName ?? nextEndpoint.displayHost, endpoint: nextEndpoint, makeDefault: true)
         }
+        Telemetry.breadcrumb("session", "connect+start", data: [
+            "host": endpoint.displayHost,
+            "assistant": assistant,
+            "hasCwd": "\(cwd?.isEmpty == false)",
+        ])
         disconnect()
         connect()
         Task { @MainActor in
             do {
                 try await waitUntilCommandReady()
-                createSession(assistant: assistant, startupCwd: cwd)
+                createSession(
+                    assistant: assistant,
+                    startupCwd: cwd,
+                    reasoningEffort: reasoningEffort,
+                    model: model,
+                    initialPrompt: initialPrompt
+                )
             } catch {
+                Telemetry.capture(
+                    error: error,
+                    message: "connect+start failed",
+                    tags: ["surface": "ios", "phase": "connect_and_start"],
+                    extras: ["endpoint": self.endpoint.displayHost, "assistant": assistant]
+                )
                 harness = .failed("Connect/start failed: \(error.localizedDescription)")
             }
         }

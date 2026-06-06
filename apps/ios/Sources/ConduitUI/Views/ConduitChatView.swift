@@ -1094,6 +1094,18 @@ private struct ConduitStructuredMarkdownView: View {
     /// looking double-spaced.
     private let blockSpacing: CGFloat = 10
 
+    /// Prose font for transcript text. The composer types in
+    /// `neon.sans` (Space Grotesk), but these blocks rendered in
+    /// `.system(design:)` — SF Pro — so what you typed and what the
+    /// chat showed were visibly different faces (device feedback,
+    /// round 3). Route through the brand sans, honoring the user's
+    /// explicit serif preference when set.
+    private func proseFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        design == .serif
+            ? .system(size: size, weight: weight, design: .serif)
+            : neon.sans(size).weight(weight)
+    }
+
     var body: some View {
         VStack(alignment: role == .user ? .trailing : .leading, spacing: blockSpacing) {
             ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
@@ -1111,7 +1123,7 @@ private struct ConduitStructuredMarkdownView: View {
             headingView(level: level, text: text)
         case .paragraph(let text):
             inlineText(text)
-                .font(.system(size: basePointSize, weight: .regular, design: design))
+                .font(proseFont(basePointSize))
         case .list(let ordered, let items):
             listView(ordered: ordered, items: items)
         case .table(let headers, let rows):
@@ -1134,7 +1146,7 @@ private struct ConduitStructuredMarkdownView: View {
         // keeps headings from jamming into the preceding text. The
         // outer VStack supplies the gap below.
         return inlineText(text)
-            .font(.system(size: basePointSize * mult, weight: .semibold, design: design))
+            .font(proseFont(basePointSize * mult, weight: .semibold))
             .padding(.top, level <= 2 ? 6 : 2)
     }
 
@@ -1145,11 +1157,11 @@ private struct ConduitStructuredMarkdownView: View {
             ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(ordered ? "\(idx + 1)." : "•")
-                        .font(.system(size: basePointSize, weight: .regular, design: design))
+                        .font(proseFont(basePointSize))
                         .foregroundStyle(role == .user ? neon.accentText.opacity(0.8) : neon.textDim)
                         .frame(minWidth: ordered ? 18 : 10, alignment: .trailing)
                     inlineText(item)
-                        .font(.system(size: basePointSize, weight: .regular, design: design))
+                        .font(proseFont(basePointSize))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1170,11 +1182,11 @@ private struct ConduitStructuredMarkdownView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             if !header.isEmpty {
                                 Text(header)
-                                    .font(.system(size: basePointSize * 0.85, weight: .semibold, design: design))
+                                    .font(proseFont(basePointSize * 0.85, weight: .semibold))
                                     .foregroundStyle(neon.textDim)
                             }
                             inlineText(cell)
-                                .font(.system(size: basePointSize, weight: .regular, design: design))
+                                .font(proseFont(basePointSize))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }

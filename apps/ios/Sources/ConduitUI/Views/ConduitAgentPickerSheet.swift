@@ -35,6 +35,23 @@ extension ConduitUI {
         /// on the agent-selection screen.
         @State private var pickedAgent: String?
 
+        /// Box the session should run on (device feedback, round 3:
+        /// "I can't choose where to start the session in"). nil =
+        /// whatever box is currently connected; an explicit pick of a
+        /// different box routes the create through
+        /// `store.connectAndStart` (switch endpoint → connect → create).
+        @State private var selectedServerID: String?
+
+        /// The effective box pick: the explicit selection, else the
+        /// saved server matching the live endpoint.
+        private var resolvedServer: SavedServer? {
+            if let id = selectedServerID,
+               let picked = store.savedServers.first(where: { $0.id == id }) {
+                return picked
+            }
+            return store.savedServers.first(where: { $0.endpoint == store.endpoint })
+        }
+
         var body: some View {
             NavigationStack {
                 ZStack {
@@ -57,6 +74,10 @@ extension ConduitUI {
                                 label: "Codex",
                                 subtitle: "Powered by OpenAI"
                             )
+                            if store.savedServers.count > 1 {
+                                sectionLabel("Box")
+                                boxSection
+                            }
                             if !store.harness.canIssueCommands {
                                 Text("Connect to a server first — open Settings to pair.")
                                     .font(neon.sans(13))
@@ -78,13 +99,26 @@ extension ConduitUI {
                         agentKind: kind,
                         initialPrompt: initialPrompt,
                         onCreate: { cwd, model, effort in
-                            store.createSession(
-                                assistant: kind,
-                                startupCwd: cwd,
-                                reasoningEffort: effort,
-                                model: model,
-                                initialPrompt: initialPrompt
-                            )
+                            if let target = resolvedServer, target.endpoint != store.endpoint {
+                                // Session targeted at a different box:
+                                // switch endpoint → connect → create.
+                                store.connectAndStart(
+                                    endpoint: target.endpoint,
+                                    assistant: kind,
+                                    cwd: cwd,
+                                    reasoningEffort: effort,
+                                    model: model,
+                                    initialPrompt: initialPrompt
+                                )
+                            } else {
+                                store.createSession(
+                                    assistant: kind,
+                                    startupCwd: cwd,
+                                    reasoningEffort: effort,
+                                    model: model,
+                                    initialPrompt: initialPrompt
+                                )
+                            }
                             // Defer the dismiss one runloop tick. createSession
                             // mutates the store → the app tree rebuilds; tearing
                             // down this pushed DirectoryPicker (a representable
@@ -160,6 +194,53 @@ extension ConduitUI {
                 .font(neon.mono(11).weight(.bold))
                 .tracking(0.6)
                 .foregroundStyle(neon.textFaint)
+        }
+
+        /// One row per paired box; the session is created on the checked
+        /// one. Only rendered when there's an actual choice (>1 saved
+        /// server). "This device" on the home Boxes list is display-only
+        /// — a phone can't host the broker — so it is deliberately not a
+        /// target here.
+        private var boxSection: some View {
+            VStack(spacing: 6) {
+                ForEach(store.savedServers) { server in
+                    let isSelected = server.id == resolvedServer?.id
+                    Button {
+                        selectedServerID = server.id
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(isSelected ? neon.accent : neon.textDim)
+                                .frame(width: 30, height: 30)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(server.name)
+                                    .font(neon.sans(13).weight(.semibold))
+                                    .foregroundStyle(neon.text)
+                                Text(server.endpoint.displayHost)
+                                    .font(neon.mono(11))
+                                    .foregroundStyle(neon.textDim)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(isSelected ? neon.accent : neon.textFaint)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .neonCardSurface(
+                            neon,
+                            fill: isSelected ? neon.accent.opacity(neon.dark ? 0.10 : 0.07) : neon.surface,
+                            cornerRadius: 13,
+                            border: isSelected ? neon.accent.opacity(0.5) : neon.border
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .accessibilityIdentifier("ConduitAgentPickerSheet.boxSection")
         }
 
         private func agentRow(kind: String, label: String, subtitle: String) -> some View {
