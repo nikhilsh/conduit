@@ -191,6 +191,21 @@ extension ConduitUI {
                 }
                 .tint(neon.accent)
             }
+            // Keyboard opt-out at the NAVIGATION-CONTAINER level. Device
+            // feedback round 3 (screen recording): on the Terminal tab the
+            // soft keyboard still pushed the WHOLE app up (~the accessory-bar
+            // height) — header clipped under the Dynamic Island — even though
+            // ProjectView's own root already ignores `.keyboard` (v0.0.106).
+            // The residual shift comes from the NavigationStack's hosting
+            // layer, which performs its own keyboard avoidance on the pushed
+            // destination; a destination-level `.ignoresSafeArea` can't reach
+            // it. Opting out on the stack itself pins the chrome. Safe
+            // because no inline editor relies on implicit avoidance: the chat
+            // composer manual-lifts (`keyboardInset`), the terminal reserves
+            // its own overlap (`sizeLayer`), History's search field is
+            // top-anchored, and every other editor lives in a sheet (separate
+            // presentation layer, unaffected by this modifier).
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
 
         // MARK: Subviews
