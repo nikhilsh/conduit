@@ -33,6 +33,15 @@ extension ConduitUI {
             return "resets in \(fmtInterval(secs))"
         }
 
+        /// Compact reset for tight window rows — just the countdown
+        /// (`5d 8h`), or `resetting…` once it elapses. "—" when unknown.
+        static func resetShort(_ iso: String?, now: Date) -> String {
+            guard let iso, let date = parseISO(iso) else { return "—" }
+            let secs = date.timeIntervalSince(now)
+            if secs <= 0 { return "resetting…" }
+            return fmtInterval(secs)
+        }
+
         static func parseISO(_ s: String) -> Date? {
             let f = ISO8601DateFormatter()
             f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -87,15 +96,27 @@ extension ConduitUI {
                         }
                     }
                     .buttonStyle(.plain)
+                    // Round-2 fix 4 (handoff images 07→08): every expanded
+                    // window row carries ALL THREE — meter · % used · reset.
+                    // The old rows showed only the reset caption, so the
+                    // expanded view had LESS information than the collapsed
+                    // glance. Two rows per agent (5h + weekly), agent-tinted.
                     if expanded {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(agents) { a in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(a.agent)
-                                        .font(neon.mono(10).weight(.semibold))
-                                        .foregroundStyle(neon.agentTint(forAgent: a.agent))
-                                    resetLine("5h window", a.fiveResetsAt)
-                                    resetLine("weekly", a.weekResetsAt)
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
+                                if idx > 0 {
+                                    Divider().background(neon.border)
+                                }
+                                let tint = neon.agentTint(forAgent: a.agent)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(spacing: 5) {
+                                        Circle().fill(tint).frame(width: 5, height: 5)
+                                        Text(a.agent)
+                                            .font(neon.mono(10.5).weight(.semibold))
+                                            .foregroundStyle(tint)
+                                    }
+                                    windowRow("5h", pct: a.fivePct, resetsAt: a.fiveResetsAt, tint: tint)
+                                    windowRow("weekly", pct: a.weekPct, resetsAt: a.weekResetsAt, tint: tint)
                                 }
                             }
                         }
@@ -134,10 +155,35 @@ extension ConduitUI {
             }
         }
 
-        private func resetLine(_ scope: String, _ iso: String?) -> some View {
-            Text("\(scope) · \(AccountUsageFormat.resetCaption(iso, now: now))")
-                .font(neon.mono(10.5))
-                .foregroundStyle(neon.textDim)
+        /// One expanded window row: `label · meter · NN% · reset` (fix 4).
+        /// The meter fills with the agent tint; % is bold; the reset is the
+        /// compact countdown so the row stays one line.
+        private func windowRow(_ label: String, pct: Double?, resetsAt: String?, tint: Color) -> some View {
+            let frac = CGFloat(max(0, min(1, (pct ?? 0) / 100)))
+            return HStack(spacing: 8) {
+                Text(label)
+                    .font(neon.mono(10))
+                    .foregroundStyle(neon.textFaint)
+                    .frame(width: 42, alignment: .leading)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(neon.border)
+                        Capsule().fill(tint)
+                            .frame(width: max(0, geo.size.width * frac))
+                            .neonGlowBox(neon.glow ? neon.glowBox?.tinted(tint) : nil)
+                    }
+                }
+                .frame(height: 6)
+                Text(pct.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .font(neon.mono(11.5).weight(.bold))
+                    .foregroundStyle(pct == nil ? neon.textFaint : neon.text)
+                    .frame(width: 38, alignment: .trailing)
+                Text(AccountUsageFormat.resetShort(resetsAt, now: now))
+                    .font(neon.mono(10))
+                    .foregroundStyle(neon.textFaint)
+                    .lineLimit(1)
+                    .frame(width: 64, alignment: .trailing)
+            }
         }
     }
 

@@ -141,6 +141,16 @@ internal object AccountUsageFormat {
         return "resets in ${fmtInterval(secs)}"
     }
 
+    /** Compact reset for tight window rows — just the countdown (`5d 8h`),
+     *  or `resetting…` once it elapses. "—" when unknown. */
+    fun resetShort(iso: String?): String {
+        if (iso == null) return "—"
+        val date = runCatching { java.time.OffsetDateTime.parse(iso) }.getOrNull() ?: return "—"
+        val secs = java.time.Duration.between(java.time.OffsetDateTime.now(), date).seconds
+        if (secs <= 0) return "resetting…"
+        return fmtInterval(secs)
+    }
+
     private fun fmtInterval(secs: Long): String {
         val days = secs / 86_400
         val hours = (secs % 86_400) / 3_600
@@ -194,17 +204,75 @@ fun HomeUsageStrip(store: SessionStore, modifier: Modifier = Modifier) {
                 tint = neon.textFaint,
             )
         }
+        // Round-2 fix 4 (handoff images 07→08): every expanded window row
+        // carries ALL THREE — meter · % used · reset. The old rows showed
+        // only the reset caption, so the expanded view had LESS information
+        // than the collapsed glance. Two rows per agent (5h + weekly),
+        // agent-tinted.
         if (expanded) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                agents.forEach { a ->
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(a.agent, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = neonAgentColor(a.agent, neon))
-                        Text("5h window · ${AccountUsageFormat.resetCaption(a.fiveResetsAt)}", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textDim)
-                        Text("weekly · ${AccountUsageFormat.resetCaption(a.weekResetsAt)}", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textDim)
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                agents.forEachIndexed { idx, a ->
+                    if (idx > 0) {
+                        androidx.compose.material3.HorizontalDivider(color = neon.border)
+                    }
+                    val tint = neonAgentColor(a.agent, neon)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Box(Modifier.size(5.dp).background(tint, CircleShape))
+                            Text(a.agent, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp, color = tint)
+                        }
+                        UsageWindowRow(neon, "5h", a.fivePct, a.fiveResetsAt, tint)
+                        UsageWindowRow(neon, "weekly", a.weekPct, a.weekResetsAt, tint)
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * One expanded window row: `label · meter · NN% · reset` (fix 4). The meter
+ * fills with the agent tint; % is bold; the reset is the compact countdown
+ * so the row stays one line.
+ */
+@Composable
+private fun UsageWindowRow(neon: NeonTheme, label: String, pct: Double?, resetsAt: String?, tint: Color) {
+    val frac = ((pct ?: 0.0) / 100.0).coerceIn(0.0, 1.0).toFloat()
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            label,
+            fontFamily = neon.mono,
+            fontSize = 10.sp,
+            color = neon.textFaint,
+            modifier = Modifier.width(42.dp),
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(6.dp)
+                .clip(CircleShape)
+                .background(neon.border),
+        ) {
+            Box(Modifier.fillMaxWidth(frac).height(6.dp).clip(CircleShape).background(tint))
+        }
+        Text(
+            if (pct != null) "${pct.roundToInt()}%" else "—",
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.Bold,
+            fontSize = 11.5.sp,
+            color = if (pct != null) neon.text else neon.textFaint,
+            modifier = Modifier.width(38.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
+        Text(
+            AccountUsageFormat.resetShort(resetsAt),
+            fontFamily = neon.mono,
+            fontSize = 10.sp,
+            color = neon.textFaint,
+            maxLines = 1,
+            modifier = Modifier.width(64.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
     }
 }
 

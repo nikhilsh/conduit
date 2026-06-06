@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -117,6 +118,21 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			switch {
 			case e.Text != "":
 				role, content = "assistant", e.Text
+			case e.ToolName == "AskUserQuestion":
+				// Interactive question tool: render the question + a
+				// numbered option menu so the client classifier
+				// (core/src/conversation.rs looks_like_pending_input /
+				// extract_pending_options) shows the tappable
+				// approval/options card. The generic tool-card summary
+				// matched none of AskUserQuestion's args, so the user saw
+				// a bare "AskUserQuestion:" row and no way to answer
+				// (device bug: "can't see approval").
+				q, ok := askUserQuestionContent(e.ToolInput)
+				if !ok {
+					role, content = "tool", toolCardContent(e.ToolName, e.ToolInput)
+					break
+				}
+				role, content = "assistant", q
 			case e.ToolName != "":
 				role, content = "tool", toolCardContent(e.ToolName, e.ToolInput)
 			default:
@@ -200,6 +216,54 @@ func publishChatSystem(publish func([]byte), content string) {
 		return
 	}
 	publish(payload)
+}
+
+// askUserQuestionContent renders an AskUserQuestion tool_use as a
+// pending-input-shaped chat line: each question's text followed by its
+// options as a numbered menu ("1. Label"). That is exactly the shape the
+// client classifier recognizes (numbered menu → kind "pending_input" with
+// tappable pending_options), so the question surfaces as the interactive
+// approval/options card on both apps. Returns ok=false on malformed input
+// (the caller falls back to the generic tool card).
+func askUserQuestionContent(input json.RawMessage) (string, bool) {
+	var payload struct {
+		Questions []struct {
+			Question string `json:"question"`
+			Options  []struct {
+				Label string `json:"label"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if len(input) == 0 || json.Unmarshal(input, &payload) != nil {
+		return "", false
+	}
+	var b strings.Builder
+	for _, q := range payload.Questions {
+		question := strings.TrimSpace(q.Question)
+		if question == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(question)
+		n := 0
+		for _, o := range q.Options {
+			label := strings.TrimSpace(o.Label)
+			if label == "" {
+				continue
+			}
+			n++
+			b.WriteString("\n")
+			b.WriteString(strconv.Itoa(n))
+			b.WriteString(". ")
+			b.WriteString(label)
+		}
+	}
+	if b.Len() == 0 {
+		return "", false
+	}
+	return b.String(), true
 }
 
 // toolCardContent formats a tool_use block as "Name: <summary>" — the shape

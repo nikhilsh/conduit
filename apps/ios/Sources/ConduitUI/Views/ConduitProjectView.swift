@@ -9,13 +9,16 @@ import UIKit
 // strip into a slim segmented control directly under the title so it
 // reads as sub-nav rather than chrome.
 //
-// Header layout:
-//   row 1: ← back · [● name ▼ identity-dropdown] · ↻ refresh · ⓘ info
-//          (the dropdown holds agent · effort · model + Rename/Fork/Info;
-//           device feedback: the old inline agent/effort chips wrapped +
-//           crammed the header, so they moved into the dropdown)
-//   row 2: path subtitle (truncated middle, mono)
-//   row 3: Terminal | Chat | Browser segmented picker
+// Header layout (Round-2 fix 1, Conduit_Fixes_Handoff images 01→02):
+//   ONE row: ← back · [identity block: agent avatar · session name ▾ ·
+//            mono `● agent · repo · branch` status line] · ⓘ info
+//   The identity block is the title-menu trigger (fix 2: a popover with
+//   an identity header — agent · model · branch — then Rename / Refresh /
+//   Export transcript and a destructive End session). Fork and Refresh
+//   are NOT header buttons (Fork is its own flow, reached from Session
+//   Info; Refresh lives in the title menu), and the old full-width path
+//   row is folded into the identity block's repo · branch line.
+//   row 2: Terminal | Chat | Browser segmented picker
 // Below: tab content (ConduitChatView for the chat tab, legacy
 // TerminalTabXterm + BrowserTab for the others — the ConduitUI rebuild
 // scope was the conversation + nav, not the terminal/browser
@@ -70,11 +73,14 @@ extension ConduitUI {
         /// Diff review sheet, opened from the header "Changes" button (shown
         /// only when the session has changes to review).
         @State private var showDiff = false
-        /// Rename / Fork sheets, reached from the header identity dropdown
-        /// (device feedback: the inline agent/effort chips wrapped + crammed
-        /// the header — they move into this dropdown alongside quick actions).
+        /// Rename sheet, reached from the title menu (fix 2). Fork is no
+        /// longer reachable from the header — it is a full-screen flow that
+        /// lives in Session Info.
         @State private var showRename = false
-        @State private var showFork = false
+        /// Title-menu popover anchored to the header identity block.
+        @State private var showTitleMenu = false
+        /// Destructive End-session confirmation (title menu's red row).
+        @State private var showEndConfirm = false
 
         /// A session whose agent has exited / been archived is read-only:
         /// there's no live WS to interact with, so we collapse the detail
@@ -153,11 +159,17 @@ extension ConduitUI {
                     initialDraft: store.displayName(for: session)
                 )
             }
-            .sheet(isPresented: $showFork) {
-                ConduitUI.ForkSheet(
-                    session: session,
-                    currentEffort: store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
-                )
+            // Centered `.alert` (not `.confirmationDialog`) for the same
+            // reason as SessionInfoView: dialogs anchored to a popover
+            // trigger mis-point on iPad; an alert always centers.
+            .alert("End this session?", isPresented: $showEndConfirm) {
+                Button("End session", role: .destructive) {
+                    store.archive(sessionID: session.id)
+                    if !chatOnly { dismiss() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The agent stops and the box is released. The transcript stays in History.")
             }
         }
 
@@ -193,19 +205,9 @@ extension ConduitUI {
             }
         }
 
-        // MARK: Header rows
+        // MARK: Header (single row — fix 1)
 
         private var header: some View {
-            VStack(alignment: .leading, spacing: 8) {
-                row1
-                row2
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-        }
-
-        private var row1: some View {
             HStack(spacing: 10) {
                 // Tablet 3-pane centre (chatOnly): the sessions rail owns
                 // navigation and the right pane owns Session Info, so the
@@ -213,72 +215,99 @@ extension ConduitUI {
                 // — hide them. Phone keeps both (back pops the nav stack; ⓘ
                 // is the only route to Session Info).
                 if !chatOnly {
-                    headerIcon("chevron.left", weight: .semibold, tint: neon.text, label: "Back") {
+                    // Plain chevron, no circle (fix 1 — the circled back
+                    // button crowded the row).
+                    Button {
                         dismiss()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(neon.text)
+                            .frame(width: 30, height: 32)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
                 }
 
-                // Identity dropdown: a single tappable control showing
-                // status dot · session name · chevron on the neon card
-                // surface. Device feedback: the always-visible header crammed
-                // a truncated name + an agent chip that WRAPPED to two lines +
-                // an effort chip + 3 icons. The agent / effort / model metadata
-                // now lives in the `Menu` below (never visible inline, so it
-                // can't wrap), and the name is the only inline label — single
-                // line, middle-truncated, never wraps.
-                Menu {
-                    identityMenu
+                // Identity title block — THE menu trigger (fix 2). Avatar +
+                // session name (+ caret) over a one-line mono status:
+                // `● agent · repo · branch`. This folds the old full-width
+                // path row into the identity; there is no separate path line.
+                Button {
+                    showTitleMenu = true
                 } label: {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 8, height: 8)
-                            .neonGlowBox(neon.glow ? neon.glowBox?.tinted(statusColor) : nil)
-                        Text(store.displayName(for: session))
-                            .font(neon.sans(15).weight(.semibold))
-                            .foregroundStyle(neon.text)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(agentTint)
+                    HStack(spacing: 9) {
+                        avatarTile(size: 34, markSize: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 5) {
+                                Text(store.displayName(for: session))
+                                    .font(neon.sans(16).weight(.bold))
+                                    .foregroundStyle(neon.text)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(neon.textFaint)
+                            }
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(statusColor)
+                                    .frame(width: 5, height: 5)
+                                    .neonGlowBox(neon.glow ? neon.glowBox?.tinted(statusColor) : nil)
+                                Text(session.assistant.lowercased())
+                                    .font(neon.mono(11).weight(.semibold))
+                                    .foregroundStyle(agentTint)
+                                if let context = repoContextLine {
+                                    Text("·")
+                                        .font(neon.mono(11))
+                                        .foregroundStyle(neon.textFaint)
+                                    Text(context)
+                                        .font(neon.mono(11))
+                                        .foregroundStyle(neon.textFaint)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                            }
+                        }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    // Hug the content (dot · name · chevron) instead of
-                    // stretching edge-to-edge — a full-width card left a large
-                    // dead gap before the refresh/info buttons (device
-                    // feedback: "empty space beside Claude at the top"). The
-                    // trailing Spacer below absorbs the slack and the name
-                    // still truncates via its own lineLimit when the row is
-                    // tight (no fixedSize, which would defeat that truncation).
-                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
+                    .contentShape(Rectangle())
                 }
-                .menuStyle(.button)
                 .buttonStyle(.plain)
                 .accessibilityLabel("Session details")
+                .popover(isPresented: $showTitleMenu, arrowEdge: .top) {
+                    titleMenu
+                        .presentationCompactAdaptation(.popover)
+                }
 
                 Spacer(minLength: 8)
 
-                // "Changes" affordance → Diff review. Shown only when there's
-                // something to review (linesAdded/Removed > 0 or a parseable
-                // diff item exists). Hidden in the tablet chat-only pane (the
-                // right pane owns diff/info there).
-                if !chatOnly && hasChanges {
-                    headerIcon("arrow.triangle.branch", tint: neon.textDim, label: "Changes") {
-                        showDiff = true
-                    }
-                }
-
-                headerIcon("arrow.clockwise", tint: neon.textDim, label: "Refresh") {
-                    store.reconnect()
-                }
+                // ONE trailing ⓘ → Session Info (fix 1). Fork and Refresh are
+                // deliberately NOT here: Fork is a full-screen flow inside
+                // Session Info, Refresh lives in the title menu.
                 if !chatOnly {
                     headerIcon("info.circle", tint: neon.textDim, label: "Session info") {
                         showInfo = true
                     }
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+        }
+
+        /// Agent avatar tile: the daemon mark tinted to the agent color on a
+        /// soft rounded-square (same treatment as SessionInfoView's identity
+        /// hero, sized for the header / menu).
+        private func avatarTile(size: CGFloat, markSize: CGFloat) -> some View {
+            RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                .fill(agentTint.opacity(neon.dark ? 0.14 : 0.10))
+                .frame(width: size, height: size)
+                .overlay(
+                    RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                        .stroke(agentTint.opacity(0.35), lineWidth: 1)
+                )
+                .overlay(ConduitUI.ConduitMark(size: markSize, color: agentTint, glow: neon.glow))
+                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(agentTint) : nil)
         }
 
         /// Circular neon icon button used in the header slots.
@@ -302,69 +331,151 @@ extension ConduitUI {
             .accessibilityLabel(label)
         }
 
-        /// Dropdown contents for the header identity control. The metadata
-        /// that used to crowd the header inline (agent · reasoning effort ·
-        /// model) lives here as a non-tappable info section, followed by the
-        /// quick actions already wired elsewhere (Rename · Fork · Session
-        /// info). `Menu` rows can't carry custom fonts, so we lean on
-        /// `Section` + `Label`/`Text` for the native dropdown look.
-        @ViewBuilder
-        private var identityMenu: some View {
-            // Metadata section — read-only "current settings" rows. The
-            // broker doesn't report a model string, so the model line mirrors
-            // SessionInfoView: agent (+ effort) is the honest stand-in.
-            Section {
-                Text("Agent: \(session.assistant)")
-                if let effort = liveEffort, !effort.isEmpty {
-                    Text("Effort: \(effort)")
-                }
-                Text("Model: \(modelLine)")
-            }
-            // Quick actions — reuse the exact store-driven flows the Session
-            // Info screen exposes, so data flow is unchanged.
-            Section {
-                Button {
-                    showRename = true
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-                Button {
-                    showFork = true
-                } label: {
-                    Label("Fork", systemImage: "arrow.triangle.branch")
-                }
-                if !chatOnly {
-                    Button {
-                        showInfo = true
-                    } label: {
-                        Label("Session info", systemImage: "info.circle")
+        // MARK: Title menu (fix 2)
+
+        /// Popover opened by the identity title block. Leads with a REAL
+        /// identity header — agent avatar · agent name · model line, plus a
+        /// mono `repo · branch` sub-line (no more "claude / claude") — then
+        /// hairline-separated actions (Rename · Refresh · Export transcript)
+        /// and a destructive End session row. Fork is deliberately absent:
+        /// it is its own full-screen flow, reached from Session Info.
+        private var titleMenu: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        avatarTile(size: 40, markSize: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(agentDisplayName)
+                                .font(neon.sans(15).weight(.bold))
+                                .foregroundStyle(neon.text)
+                            Text(modelDisplay)
+                                .font(neon.mono(11.5))
+                                .foregroundStyle(neon.textDim)
+                        }
+                    }
+                    if let context = repoContextLine {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(neon.textFaint)
+                            Text(context)
+                                .font(neon.mono(11))
+                                .foregroundStyle(neon.textFaint)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+
+                Divider().background(neon.border)
+
+                menuRow("pencil", "Rename") {
+                    showTitleMenu = false
+                    showRename = true
+                }
+                menuRow("arrow.clockwise", "Refresh") {
+                    showTitleMenu = false
+                    store.reconnect()
+                }
+                ShareLink(item: ConduitUI.TranscriptExport.markdown(for: session, store: store)) {
+                    menuRowBody("square.and.arrow.up", "Export transcript", tint: neon.text)
+                }
+                .buttonStyle(.plain)
+                // Diff review keeps an entry point after losing its header
+                // circle (fix 1 allows only back · identity · ⓘ up top).
+                // Shown only when there's something to review.
+                if !chatOnly && hasChanges {
+                    menuRow("plus.forwardslash.minus", "View changes") {
+                        showTitleMenu = false
+                        showDiff = true
+                    }
+                }
+
+                Divider().background(neon.border)
+
+                menuRow("trash", "End session", tint: neon.red) {
+                    showTitleMenu = false
+                    showEndConfirm = true
+                }
             }
+            .frame(width: 264)
+            .presentationBackground(neon.surfaceSolid)
         }
+
+        private func menuRow(
+            _ systemName: String,
+            _ label: String,
+            tint: Color? = nil,
+            action: @escaping () -> Void
+        ) -> some View {
+            Button(action: action) {
+                menuRowBody(systemName, label, tint: tint ?? neon.text)
+            }
+            .buttonStyle(.plain)
+        }
+
+        private func menuRowBody(_ systemName: String, _ label: String, tint: Color) -> some View {
+            HStack(spacing: 11) {
+                Image(systemName: systemName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(tint == neon.text ? neon.textDim : tint)
+                    .frame(width: 20)
+                Text(label)
+                    .font(neon.sans(14.5).weight(.medium))
+                    .foregroundStyle(tint)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+
+        // MARK: Derived identity
 
         /// Live reasoning effort (status overrides the session's seed value).
         private var liveEffort: String? {
             store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
         }
 
-        /// Honest model line: the broker doesn't report a model string, so
-        /// show the agent (+ effort) — same stand-in SessionInfoView uses.
-        private var modelLine: String {
-            if let effort = liveEffort, !effort.isEmpty {
-                return "\(session.assistant.lowercased()) · \(effort)"
+        /// Friendly agent name for the menu identity header.
+        private var agentDisplayName: String {
+            switch session.assistant.lowercased() {
+            case "claude": return "Claude"
+            case "codex":  return "Codex"
+            default:        return session.assistant.capitalized
             }
-            return session.assistant.lowercased()
         }
 
-        private var row2: some View {
-            HStack {
-                Text(session.cwd ?? "—")
-                    .font(neon.mono(11))
-                    .foregroundStyle(neon.textFaint)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        /// Honest model line for the identity header. The broker doesn't
+        /// report a live model string, so this shows the alias the session
+        /// was actually created/forked with when the store recorded one,
+        /// else "default model" (+ effort) — never the agent name repeated.
+        private var modelDisplay: String {
+            if let alias = store.modelBySession[session.id], !alias.isEmpty {
+                return alias
             }
+            if let effort = liveEffort, !effort.isEmpty {
+                return "default model · \(effort)"
+            }
+            return "default model"
+        }
+
+        /// `repo · branch` — the repo is the last path component of the
+        /// session's working directory (the old full-width path row, folded
+        /// down to the bit that identifies the project). nil when neither
+        /// exists so the status line gracefully shrinks to `● agent`.
+        private var repoContextLine: String? {
+            let cwd = store.statusBySession[session.id]?.cwd ?? session.cwd
+            let repo = cwd.flatMap { path -> String? in
+                let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
+                let last = trimmed.split(separator: "/").last.map(String.init)
+                return (last?.isEmpty == false) ? last : nil
+            }
+            let branch = session.branch?.trimmingCharacters(in: .whitespaces)
+            let parts = [repo, (branch?.isEmpty == false) ? branch : nil].compactMap { $0 }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
 
         private var statusColor: Color {

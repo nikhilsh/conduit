@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -125,6 +126,17 @@ fun SettingsScreen(
     var showAppFont by remember { mutableStateOf(false) }
     var showTerminalTheme by remember { mutableStateOf(false) }
     var showAgentLogin by remember { mutableStateOf(false) }
+    // Per-agent signed-in + plan snapshot for the Accounts group (fix 3).
+    // Re-read whenever the login sheet closes so a fresh sign-in flips the
+    // rows to `● signed in` immediately.
+    val context = LocalContext.current
+    var agentAccounts by remember {
+        mutableStateOf(sh.nikhil.conduit.auth.AgentAccountStatus.current(context))
+    }
+    // Account whose Manage dialog (re-auth / sign out) is open.
+    var manageTarget by remember {
+        mutableStateOf<sh.nikhil.conduit.auth.AgentAccountStatus?>(null)
+    }
     // Saved-server pending deletion. Mirror of iOS PR #128's
     // `pendingServerDelete`: gating the destructive sweep behind an
     // explicit confirm lets us call `forgetServer` (which also drops
@@ -151,7 +163,11 @@ fun SettingsScreen(
             // identity — `>conduit` wordmark + version + live/offline badge.
             IdentityCard(neon = neon, version = versionLabel, harness = harness)
 
-            // Account — pairing row + sign-in to agent.
+            // Account — pairing row, then the per-agent Accounts group
+            // (Round-2 fix 3, handoff images 05→06): one row per agent with
+            // plan badge + `● signed in` + Manage, plus Add-another. The old
+            // single "Sign in to agent" row read as signed-out even when
+            // both agents were authenticated.
             SettingsSection("Account") {
                 SettingsRow(
                     icon = Icons.Filled.Person,
@@ -159,14 +175,14 @@ fun SettingsScreen(
                     subtitle = harness.badgeLabel,
                     onClick = { showAgentLogin = true },
                 )
-                SettingsDivider()
-                SettingsRow(
-                    icon = Icons.Filled.Person,
-                    title = "Sign in to agent",
-                    subtitle = "OAuth for Claude / ChatGPT",
-                    onClick = { showAgentLogin = true },
-                )
             }
+
+            AgentAccountsSection(
+                accounts = agentAccounts,
+                onManage = { manageTarget = it },
+                onSignIn = { showAgentLogin = true },
+                onAddAccount = { showAgentLogin = true },
+            )
 
             // Usage & limits — account-wide, BOTH agents (claude + codex),
             // each with a 5-hour AND a weekly window. Numbers are per-account,
@@ -459,7 +475,46 @@ fun SettingsScreen(
         TerminalThemePickerSheet(appearance = appearance, current = terminalTheme, onDismiss = { showTerminalTheme = false })
     }
     if (showAgentLogin) {
-        AgentLoginSheet(store = store, onDismiss = { showAgentLogin = false })
+        AgentLoginSheet(store = store, onDismiss = {
+            showAgentLogin = false
+            // Re-read the credential store so a fresh sign-in flips the
+            // Accounts rows to `● signed in` immediately.
+            agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
+        })
+    }
+    // Per-agent Manage dialog (fix 3): re-auth or sign out for ONE agent.
+    manageTarget?.let { account ->
+        AlertDialog(
+            onDismissRequest = { manageTarget = null },
+            title = { Text("${account.displayName} account") },
+            text = {
+                Text(
+                    if (account.signedIn) {
+                        "Signing out clears the ${account.displayName} credential on this device. Sessions already running keep their credentials."
+                    } else {
+                        "Sign in to use ${account.displayName} through Conduit."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    manageTarget = null
+                    showAgentLogin = true
+                }) { Text("Sign in again") }
+            },
+            dismissButton = {
+                Row {
+                    if (account.signedIn) {
+                        TextButton(onClick = {
+                            sh.nikhil.conduit.auth.OAuthStore.clear(context, account.provider)
+                            agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
+                            manageTarget = null
+                        }) { Text("Sign out", color = LocalNeonTheme.current.red) }
+                    }
+                    TextButton(onClick = { manageTarget = null }) { Text("Cancel") }
+                }
+            },
+        )
     }
     pendingForget?.let { target ->
         AlertDialog(
@@ -698,6 +753,182 @@ private fun SectionEyebrow(title: String) {
         softWrap = false,
         modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
     )
+}
+
+/**
+ * AGENT ACCOUNTS group (Round-2 fix 3, handoff images 05→06): an eyebrow
+ * with a live `● both connected` status, one row per agent (daemon avatar,
+ * name + plan badge, `● signed in`, Manage › / Sign in ›), an Add-another
+ * row, and the per-agent management caption.
+ */
+@Composable
+private fun AgentAccountsSection(
+    accounts: List<sh.nikhil.conduit.auth.AgentAccountStatus>,
+    onManage: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
+    onSignIn: () -> Unit,
+    onAddAccount: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
+        ) {
+            Text(
+                "AGENT ACCOUNTS",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                color = neon.textDim,
+                maxLines = 1,
+                softWrap = false,
+            )
+            Spacer(Modifier.weight(1f))
+            // `● both connected` / `● claude connected` / `● not signed in`.
+            val signedIn = accounts.filter { it.signedIn }
+            val (statusLabel, statusColor) = when {
+                accounts.isNotEmpty() && signedIn.size == accounts.size -> "both connected" to neon.green
+                signedIn.size == 1 -> "${signedIn.first().agent} connected" to neon.green
+                else -> "not signed in" to neon.textFaint
+            }
+            Box(Modifier.size(5.dp).background(statusColor, CircleShape))
+            Spacer(Modifier.width(5.dp))
+            Text(
+                statusLabel,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 10.5.sp,
+                color = statusColor,
+            )
+        }
+
+        val shape = RoundedCornerShape(14.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .neonCardSurface(neon = neon, shape = shape, fill = neon.surface),
+        ) {
+            accounts.forEach { account ->
+                AgentAccountRow(
+                    account = account,
+                    onClick = { if (account.signedIn) onManage(account) else onSignIn() },
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 60.dp),
+                    color = neon.border,
+                )
+            }
+            // `+ Add another account`.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onAddAccount)
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .border(1.dp, neon.border, RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("+", fontFamily = neon.mono, fontSize = 16.sp, color = neon.textDim)
+                }
+                Text(
+                    "Add another account",
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.5.sp,
+                    color = neon.textDim,
+                )
+            }
+        }
+
+        Text(
+            "Re-auth, switch plan, or sign out per agent — no more guessing whether you're connected.",
+            fontFamily = neon.mono,
+            fontSize = 10.sp,
+            color = neon.textFaint,
+            modifier = Modifier.padding(start = 4.dp, top = 8.dp),
+        )
+    }
+}
+
+/** One agent's account row inside [AgentAccountsSection]. */
+@Composable
+private fun AgentAccountRow(
+    account: sh.nikhil.conduit.auth.AgentAccountStatus,
+    onClick: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    val tint = neonAgentColor(account.agent, neon)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(tint.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+                .border(1.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            ConduitMark(size = 22.dp, color = tint)
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(
+                    account.displayName,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = neon.text,
+                )
+                account.planLabel?.let { plan ->
+                    Text(
+                        plan,
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 9.sp,
+                        letterSpacing = 0.6.sp,
+                        color = tint,
+                        modifier = Modifier
+                            .background(tint.copy(alpha = 0.14f), RoundedCornerShape(50))
+                            .border(1.dp, tint.copy(alpha = 0.4f), RoundedCornerShape(50))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                val statusColor = if (account.signedIn) neon.green else neon.textFaint
+                Box(Modifier.size(5.dp).background(statusColor, CircleShape))
+                Text(
+                    if (account.signedIn) "signed in" else "signed out",
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = statusColor,
+                )
+            }
+        }
+        Text(
+            if (account.signedIn) "Manage" else "Sign in",
+            fontFamily = neon.sans,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 13.sp,
+            color = if (account.signedIn) neon.textDim else neon.accent,
+        )
+        Icon(
+            Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = neon.textFaint,
+            modifier = Modifier.size(16.dp),
+        )
+    }
 }
 
 /**

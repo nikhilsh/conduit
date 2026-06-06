@@ -538,6 +538,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val displayNames: StateFlow<Map<String, String>> = _displayNames.asStateFlow()
 
     /**
+     * Model alias each session was created with (`--model` override), keyed
+     * by session id. The broker doesn't report a live model string, so this
+     * client-side record is the only honest source for the title menu's
+     * identity header (Round-2 fix 2). Absent for sessions that inherited
+     * the agent default — the UI says "default model", never a fabrication.
+     * Mirror of iOS `SessionStore.modelBySession`.
+     */
+    private val _modelBySession = MutableStateFlow<Map<String, String>>(emptyMap())
+    val modelBySession: StateFlow<Map<String, String>> = _modelBySession.asStateFlow()
+
+    /**
      * Broker AI-generated session titles (task: ai-session-titles), keyed
      * by session id. Delivered as a `view:"session_title"` view_event and
      * folded in by [ingestSessionTitle]. SEPARATE from [_displayNames] so a
@@ -1280,6 +1291,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
+                // Record the explicit --model override for the title menu's
+                // identity header (inherit stays absent on purpose).
+                pickedModel?.let { picked -> _modelBySession.value = _modelBySession.value + (id to picked) }
                 startup?.let { rememberRecentDirectory(it) }
                 initialPrompt?.trim()?.takeIf { it.isNotEmpty() }?.let { prompt ->
                     runCatching { withContext(Dispatchers.IO) { c.sendChat(id, prompt) } }

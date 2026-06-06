@@ -430,6 +430,13 @@ final class SessionStore {
         didSet { SessionStore.persistDisplayNames(displayNames) }
     }
 
+    /// Model alias each session was created/forked with (`--model` override),
+    /// keyed by session id. The broker doesn't report a live model string, so
+    /// this client-side record is the only honest source for the title menu's
+    /// identity header. Absent for sessions that inherited the agent default
+    /// (the UI says "default model") — never fabricated.
+    var modelBySession: [String: String] = [:]
+
     /// Broker AI-generated session titles (task: ai-session-titles) — keyed
     /// by session id, value is the short title the broker minted from the
     /// conversation's purpose, delivered as a `view:"session_title"`
@@ -1024,6 +1031,12 @@ final class SessionStore {
                 let pickedEffort = (trimmedEffort?.isEmpty == false) ? trimmedEffort : nil
                 let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup)
                 Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
+                // Record the explicit --model override so the title menu's
+                // identity header can show the real model (the broker never
+                // reports one back). Inherit (nil) stays absent on purpose.
+                if let pickedModel {
+                    self.modelBySession[id] = pickedModel
+                }
                 if let startup {
                     self.rememberRecentDirectory(startup)
                 }
@@ -2773,6 +2786,14 @@ final class SessionStore {
                 )
                 let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."
                 try? await client.sendChat(sessionId: newID, msg: seed)
+                // Same model record as createSession: an explicit fork-onto
+                // model is the only honest source for the identity header;
+                // a no-override fork inherits the original's record.
+                if let model, !model.isEmpty {
+                    self.modelBySession[newID] = model
+                } else if let inherited = self.modelBySession[sessionID] {
+                    self.modelBySession[newID] = inherited
+                }
                 self.sessionLifecycle[newID] = .live
                 self.refreshSessions()
                 self.selectedSessionID = newID
