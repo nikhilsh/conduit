@@ -195,6 +195,11 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, "assistant_unknown", msg)
 		case strings.Contains(msg, "invalid cwd"):
 			writeAPIError(w, http.StatusBadRequest, "invalid_cwd", msg)
+		case strings.Contains(msg, "gave up"):
+			// Restart budget spent (session/restartbudget.go): the
+			// session was archived and will not respawn. 410 so clients
+			// can distinguish "ended for good" from a transient failure.
+			writeAPIError(w, http.StatusGone, "session_gave_up", msg)
 		default:
 			writeAPIError(w, http.StatusInternalServerError, "session_start_failed", msg)
 		}

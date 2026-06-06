@@ -14,8 +14,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import sh.nikhil.conduit.auth.OAuthCredential
 import sh.nikhil.conduit.auth.OAuthRequest
 import sh.nikhil.conduit.state.NetworkReachabilityObserver
@@ -715,8 +717,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val lifecycleObserver = object : DefaultLifecycleObserver {
         override fun onResume(owner: LifecycleOwner) {
             // App came back from background — local sockets may be
-            // silently dead. Nudge every worker into reconnect.
+            // silently dead. Nudge every worker into reconnect, and
+            // re-pull every session's conversation: a reply that landed
+            // while suspended only exists in the broker's
+            // conversation.jsonl (live events aren't replayed on
+            // re-attach), so without this the transcript stays stale and
+            // the typing indicator spins forever. Mirror of iOS.
             client?.notifyNetworkChange()
+            refreshSessions()
         }
 
         override fun onStop(owner: LifecycleOwner) {
@@ -834,6 +842,43 @@ class SessionStore : ViewModel(), ConduitDelegate {
         if (autoConnect) {
             disconnect()
             connect()
+        }
+    }
+
+    /**
+     * Switch to [serverId]'s endpoint, reconnect, and create a session on
+     * it once the harness can issue commands again. Mirror of iOS
+     * `connectAndStart`; drives the new-session sheet's box picker
+     * (round 3: "I can't choose where to start the session in").
+     */
+    fun connectAndStart(
+        serverId: String,
+        assistant: String,
+        cwd: String?,
+        reasoningEffort: String? = null,
+        model: String? = null,
+    ) {
+        Telemetry.breadcrumb(
+            "session",
+            "connect+start",
+            mapOf("server" to serverId, "assistant" to assistant, "hasCwd" to (!cwd.isNullOrBlank()).toString()),
+        )
+        selectSavedServer(serverId, autoConnect = true)
+        viewModelScope.launch {
+            val ready = withTimeoutOrNull(15_000L) {
+                harness.first { it.canIssueCommands }
+            }
+            if (ready != null) {
+                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model)
+            } else {
+                Telemetry.capture(
+                    IllegalStateException("connect+start timed out"),
+                    "connect+start failed",
+                    tags = mapOf("surface" to "android", "phase" to "connect_and_start"),
+                    extras = mapOf("server" to serverId, "assistant" to assistant),
+                )
+                _harness.value = HarnessState.Failed("Connect/start failed: box never became ready")
+            }
         }
     }
 

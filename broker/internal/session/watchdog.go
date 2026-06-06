@@ -53,6 +53,11 @@ func (s *Session) runWatchdogChecks() {
 	if err := atomicWriteFile(probe, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
 		s.setHealthWithReason("warning", "stalled", "probe_write_failed")
 	}
+
+	// Heal an expired private credential copy from the host login so the
+	// per-call OAuth fetchers (account usage, quick replies, titles) and
+	// the next agent spawn don't 401 (credfresh.go).
+	s.refreshStaleAgentCredentials()
 }
 
 func (s *Session) processAlive() bool {

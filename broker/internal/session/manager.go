@@ -88,6 +88,17 @@ type Session struct {
 	lastOutput     time.Time
 	lastCheckpoint time.Time
 	startedAt      time.Time
+	// spawnedAt is when THIS agent process started. Unlike startedAt it
+	// is never restored from metadata on recovery — it anchors the
+	// fast-exit detection in restartbudget.go.
+	spawnedAt time.Time
+	// consecutiveFastExits counts agent deaths within fastExitWindow of
+	// spawn (persisted across recoveries; reset by any healthy run).
+	// At maxConsecutiveFastExits the session refuses to respawn.
+	consecutiveFastExits int
+	// closing marks an intentional Close() in progress so drain's EOF
+	// wakeup doesn't count the teardown as an agent crash.
+	closing bool
 	// Per-session token/cost usage, folded from each turn's usage event
 	// (claude `result` / codex `turn.completed`). Guarded by mu; surfaced
 	// via Usage() into the status frame. See usage.go.
@@ -167,6 +178,12 @@ type Session struct {
 	// agent runs headless here while the PTY hosts a shell for the
 	// Terminal tab (B-i). See docs/PLAN-CHAT-CHANNEL.md (task #24).
 	chat chatBackend
+	// chatRespawn re-creates the long-lived stream-json chat process
+	// after it died underneath us (crash/OOM while the app was
+	// backgrounded). Set only for the claude backend — codex spawns
+	// per-turn and needs no respawn. nil → no self-heal, errors surface
+	// via the system chat message in SendChat.
+	chatRespawn func() (chatBackend, error)
 
 	// recorder writes PTY bytes + view_events to a per-session
 	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
@@ -199,6 +216,12 @@ type Session struct {
 	// each agent rotates its own copy of the OAuth refresh token,
 	// not a shared file. Removed on Close.
 	agentHomeDir string
+	// agentCredProvider is the OAuth provider key whose credentials were
+	// (attempted to be) populated into agentHomeDir ("anthropic" /
+	// "openai", "" when the adapter has no OAuth flow). Set once at
+	// spawn before the session is shared; read-only after — drives the
+	// watchdog's stale-credential re-mirror (credfresh.go).
+	agentCredProvider string
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
@@ -273,6 +296,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		reasonCode: "ok",
 		lastOutput: time.Now().UTC(),
 		startedAt:  time.Now().UTC(),
+		spawnedAt:  time.Now().UTC(),
 	}
 	s.applyPaths()
 	if err := s.prepareFilesystem(); err != nil {
@@ -325,12 +349,29 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		fmt.Fprintf(os.Stderr, "session %s: agent-home mkdir: %v (agent will inherit broker $HOME)\n", s.ID, err)
 	} else {
 		s.agentHomeDir = ephemeral
+		s.agentCredProvider = provider
 		populated := false
 		if opts.credStore != nil && provider != "" && opts.credStore.Has(provider) {
-			if err := opts.credStore.Materialize(provider, ephemeral); err != nil {
-				fmt.Fprintf(os.Stderr, "session %s: credentials.Materialize(%s): %v (falling back to host-creds copy)\n", s.ID, provider, err)
-			} else {
-				populated = true
+			// Stale-blob guard (credfresh.go): an app-pushed blob whose
+			// token already expired can't be refreshed by the agent
+			// (Anthropic rotates refresh tokens, and the host login has
+			// long since consumed this lineage's) — materializing it
+			// verbatim yields a session that 401s on every turn while
+			// the box itself is happily logged in. Prefer the host
+			// login when it's strictly fresher than an expired blob.
+			useBlob := true
+			if blob, err := opts.credStore.Get(provider); err == nil {
+				if skip, blobExp, hostExp := useHostOverAppBlob(provider, blob); skip {
+					useBlob = false
+					fmt.Fprintf(os.Stderr, "session %s: stored %s OAuth blob expired (expiry %d < host %d); using host credentials\n", s.ID, provider, blobExp, hostExp)
+				}
+			}
+			if useBlob {
+				if err := opts.credStore.Materialize(provider, ephemeral); err != nil {
+					fmt.Fprintf(os.Stderr, "session %s: credentials.Materialize(%s): %v (falling back to host-creds copy)\n", s.ID, provider, err)
+				} else {
+					populated = true
+				}
 			}
 		}
 		if !populated && provider != "" {
@@ -443,6 +484,21 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
 		} else {
 			s.chat = chat
+		}
+		// Same argv/env for the self-heal respawn in SendChat. The
+		// captured generators are per-session, not per-process, so the
+		// fresh agent keeps quick replies + titling.
+		s.chatRespawn = func() (chatBackend, error) {
+			return startChatProcess(
+				context.Background(),
+				claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)),
+				s.commandEnv(nil),
+				s.workspaceDir,
+				s.PublishText,
+				gen,
+				s.titleGen,
+				s.accumulateUsage,
+			)
 		}
 	case "codex":
 		// codex via per-turn exec/resume; constructed lazily (spawns on
@@ -690,14 +746,49 @@ func (s *Session) SendChat(msg string) bool {
 	// Capture the opening prompt (once) so the AI title generator can
 	// summarize the conversation's purpose at the next turn-end.
 	s.captureFirstUserPrompt(msg)
-	if err := s.chat.Send(msg); err != nil {
+	err := s.chat.Send(msg)
+	if err != nil && s.chatRespawn != nil {
+		// The long-lived stream-json agent died underneath us (any send
+		// error means its stdin is gone — crash, OOM, kill). Self-heal:
+		// spawn a fresh agent and retry once, rather than dropping the
+		// message. Skip when the session itself is tearing down.
+		s.mu.Lock()
+		closing := s.closing
+		s.mu.Unlock()
+		if !closing {
+			if fresh, rerr := s.chatRespawn(); rerr == nil {
+				s.mu.Lock()
+				old := s.chat
+				s.chat = fresh
+				s.mu.Unlock()
+				if old != nil {
+					_ = old.Close()
+				}
+				log.Printf("session %s: chat agent respawned after send error: %v", s.ID, err)
+				err = fresh.Send(msg)
+			} else {
+				fmt.Fprintf(os.Stderr, "session %s: chat respawn: %v\n", s.ID, rerr)
+			}
+		}
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "session %s: chat send: %v\n", s.ID, err)
+		// Surface the failure in the Chat tab — stderr-only here is the
+		// "says connected but never replies" bug: the user's message
+		// silently vanishes and the typing dots spin forever.
+		publishChatSystem(s.PublishText, "⚠️ Couldn't deliver your message to the agent ("+err.Error()+"). Try again, or start a new session.")
 	}
 	return true
 }
 
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
+		// Flag the teardown FIRST: killing the PTY below wakes drain()
+		// with an EOF, and its recordAgentExit must see this is an
+		// intentional close, not an agent crash (restartbudget.go).
+		s.mu.Lock()
+		s.closing = true
+		s.mu.Unlock()
 		if s.chat != nil {
 			// Stop the headless stream-json agent (closes stdin + kills
 			// the process) so it doesn't outlive the session.
@@ -954,6 +1045,9 @@ func (s *Session) drain(f *os.File) {
 			if !stillCurrent {
 				return
 			}
+			// The agent died on its own (EOF on the PTY) — charge the
+			// restart budget before Close persists metadata.
+			s.recordAgentExit()
 			s.Close()
 			return
 		}
@@ -1287,6 +1381,18 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		if err == nil {
 			return s, false, nil
 		}
+		if errors.Is(err, errSessionGaveUp) {
+			// End it for good: move the directory out of the active set
+			// so the session stops resurrecting on every reconnect (the
+			// transcript stays readable from the archive), and refuse
+			// the open instead of falling through to a blank re-create
+			// under the same id.
+			killTmuxSession(id)
+			if aerr := m.archiveSessionDir(id); aerr != nil {
+				fmt.Fprintf(os.Stderr, "session %s: archive after give-up: %v\n", id, aerr)
+			}
+			return nil, false, err
+		}
 	}
 	adapter, err := m.registry.Get(assistant)
 	if err != nil {
@@ -1457,6 +1563,12 @@ type sessionMetadata struct {
 	// the recovery-time defaults newSession assigns.
 	StartedAt      string `json:"started_at,omitempty"`
 	LastActivityAt string `json:"last_activity_at,omitempty"`
+	// ConsecutiveFastExits is the restart budget spent so far (agent
+	// deaths within fastExitWindow of spawn, in a row). Persisted so a
+	// crash-looping session gives up across recoveries instead of
+	// resurrecting forever — see restartbudget.go. omitempty: healthy
+	// sessions never carry the field.
+	ConsecutiveFastExits int `json:"consecutive_fast_exits,omitempty"`
 }
 
 func (s *Session) applyPaths() {
@@ -1483,6 +1595,8 @@ func (s *Session) persistMetadata() error {
 		ExitCode:     s.exitCode,
 		AITitle:      s.aiTitle,
 		WorkspaceDir: s.workspaceDir,
+
+		ConsecutiveFastExits: s.consecutiveFastExits,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

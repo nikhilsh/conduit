@@ -26,6 +26,13 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	if meta.Assistant == "" {
 		return nil, fmt.Errorf("session %s missing assistant metadata", id)
 	}
+	// Restart budget spent? Refuse to respawn — the caller archives the
+	// session so it reads as ended instead of crash-looping forever
+	// (restartbudget.go).
+	if meta.ConsecutiveFastExits >= maxConsecutiveFastExits {
+		return nil, fmt.Errorf("session %s: agent died %d times in a row within %s of spawn: %w",
+			id, meta.ConsecutiveFastExits, fastExitWindow, errSessionGaveUp)
+	}
 	adapter, err := m.registry.Get(meta.Assistant)
 	if err != nil {
 		return nil, err
@@ -72,6 +79,9 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		s.reasonCode = meta.ReasonCode
 	}
 	s.exitCode = meta.ExitCode
+	// Restore the spent restart budget so a crash-looper keeps counting
+	// up across recoveries rather than starting fresh each time.
+	s.consecutiveFastExits = meta.ConsecutiveFastExits
 	// Restore the AI title (task: ai-session-titles) so a recovered
 	// session keeps its name without re-generating.
 	s.aiTitle = meta.AITitle

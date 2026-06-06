@@ -67,6 +67,16 @@ fun AgentPickerSheet(
     val harness by store.harness.collectAsState()
     val neon = LocalNeonTheme.current
     var pickedAgent by remember { mutableStateOf<String?>(null) }
+    // Box the session should run on (round 3: "I can't choose where to
+    // start the session in"). null = the currently connected box; an
+    // explicit pick of a different box routes the create through
+    // `store.connectAndStart` (switch endpoint → connect → create).
+    // Mirror of iOS ConduitAgentPickerSheet.
+    val savedServers by store.savedServers.collectAsState()
+    val endpoint by store.endpoint.collectAsState()
+    var selectedServerId by remember { mutableStateOf<String?>(null) }
+    val resolvedServerId = selectedServerId
+        ?: savedServers.firstOrNull { it.endpoint == endpoint }?.id
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -80,6 +90,9 @@ fun AgentPickerSheet(
                 store = store,
                 headerNote = headerNote,
                 canIssue = harness.canIssueCommands,
+                servers = savedServers,
+                selectedServerId = resolvedServerId,
+                onSelectServer = { selectedServerId = it },
                 onPick = { pickedAgent = it },
             )
         } else {
@@ -87,7 +100,14 @@ fun AgentPickerSheet(
                 store = store,
                 assistant = agent,
                 onCreate = { cwd, model, effort ->
-                    store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model)
+                    val target = savedServers.firstOrNull { it.id == resolvedServerId }
+                    if (target != null && target.endpoint != endpoint) {
+                        // Session targeted at a different box: switch
+                        // endpoint → connect → create.
+                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model)
+                    } else {
+                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model)
+                    }
                     onDismiss()
                 },
             )
@@ -100,6 +120,9 @@ private fun AgentStep(
     store: SessionStore,
     headerNote: String?,
     canIssue: Boolean,
+    servers: List<sh.nikhil.conduit.SavedServer>,
+    selectedServerId: String?,
+    onSelectServer: (String) -> Unit,
     onPick: (String) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
@@ -154,6 +177,27 @@ private fun AgentStep(
             enabled = canIssue,
             onTap = { onPick("codex") },
         )
+        // Box choice — only when there's an actual choice (>1 paired
+        // box). "This device" on the home Boxes list is display-only (a
+        // phone can't host the broker), so it is deliberately not a
+        // target here. Mirror of iOS boxSection.
+        if (servers.size > 1) {
+            Text(
+                "BOX",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                color = neon.textFaint,
+            )
+            servers.forEach { server ->
+                BoxRow(
+                    name = server.name,
+                    host = server.endpoint.displayHost,
+                    selected = server.id == selectedServerId,
+                    onTap = { onSelectServer(server.id) },
+                )
+            }
+        }
         if (!canIssue) {
             Text(
                 "Connect to a server first — open Settings to pair.",
@@ -499,6 +543,61 @@ private fun displayName(path: String): String {
     val trimmed = path.trimEnd('/')
     val last = trimmed.substringAfterLast('/', "")
     return last.ifEmpty { trimmed }
+}
+
+/**
+ * One paired box the session can be created on; the checked row wins.
+ * Mirror of iOS `ConduitAgentPickerSheet.boxSection`.
+ */
+@Composable
+private fun BoxRow(
+    name: String,
+    host: String,
+    selected: Boolean,
+    onTap: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(13.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = shape,
+                fill = if (selected) neon.accent.copy(alpha = 0.10f) else neon.surface,
+                borderColor = if (selected) neon.accent.copy(alpha = 0.5f) else neon.border,
+            )
+            .clickable(onClick = onTap),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
+                )
+                Text(
+                    host,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = if (selected) "Selected box" else null,
+                tint = if (selected) neon.accent else neon.textFaint.copy(alpha = 0.35f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
 }
 
 @Composable
