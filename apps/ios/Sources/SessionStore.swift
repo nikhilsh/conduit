@@ -1168,12 +1168,6 @@ final class SessionStore {
                 if let startup {
                     self.rememberRecentDirectory(startup)
                 }
-                if let initialPrompt {
-                    let trimmed = initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        try? await client.sendChat(sessionId: id, msg: trimmed)
-                    }
-                }
                 self.sessionLifecycle[pendingID] = nil
                 self.sessionLifecycle[id] = .live
                 if self.useRustStore {
@@ -1212,6 +1206,20 @@ final class SessionStore {
                     )
                 }
                 self.recordSavedSession(forSessionID: id)
+                // Seed the first turn (e.g. a voice-dictated prompt). Route it
+                // through the same path as a normal composer send: optimistic
+                // local echo so the user sees their prompt, slash-command
+                // handling, and a *surfaced* (not `try?`-swallowed) WS failure.
+                // The old fire-and-forget `try? client.sendChat` here silently
+                // dropped the prompt on any transient — the device-reported
+                // "talk on home, start a session, prompt never sent".
+                if let initialPrompt {
+                    let trimmed = initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        Telemetry.breadcrumb("session", "seed prompt", data: ["id": id, "chars": "\(trimmed.count)"])
+                        self.sendChat(sessionID: id, message: trimmed)
+                    }
+                }
                 // Defer selecting the new session by one runloop tick.
                 // Selecting it flips `ConduitRootView`'s `.id(session.id)`,
                 // which tears down the prior detail subtree AND mounts the
