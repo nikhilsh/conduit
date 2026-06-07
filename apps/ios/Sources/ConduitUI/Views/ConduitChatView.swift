@@ -418,9 +418,13 @@ extension ConduitUI {
                 // while the user hasn't scrolled up.
                 .onChange(of: streamingContentLength) { _, _ in
                     guard autoScroll.shouldFollowStreaming else { return }
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                    }
+                    // Follow the stream WITHOUT animating each token: a fresh
+                    // `withAnimation` scroll 50×/sec scheduled a CADisplayLink
+                    // interpolation per token and was a primary streaming-jank
+                    // source. An unanimated jump-to-bottom tracks the growing
+                    // content smoothly (the new-message / settle handlers below
+                    // still animate their one-off scrolls).
+                    proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
                 }
                 // A brand-new message (user send / fresh assistant turn).
                 .onChange(of: events.last?.id) { _, _ in
@@ -1226,7 +1230,7 @@ private struct ConduitMarkdownBlock: View {
 
     var body: some View {
         ConduitStructuredMarkdownView(
-            pieces: pieces,
+            pieces: visiblePieces,
             role: role,
             basePointSize: appearance.bodyPointSize,
             // §2: prose renders in the sans family (NOT mono). The user's
@@ -1235,27 +1239,35 @@ private struct ConduitMarkdownBlock: View {
             design: appearance.fontFamily == .serif ? .serif : .default
         )
         .frame(maxWidth: role == .user ? nil : .infinity, alignment: role == .user ? .trailing : .leading)
-        .transition(isStreaming ? .opacity : .identity)
-        .animation(isStreaming ? .easeOut(duration: 0.05) : nil, value: pieces)
-        // Parse once per key into @State. `.task(id:)` cancels +
-        // re-runs when `renderKey` changes; the synchronous seed below
-        // covers the very first frame (and recycled rows that already
-        // match) so the row never flashes empty at 0px.
-        .task(id: renderKey) {
-            if renderedKey != renderKey {
-                pieces = ConduitMarkdownStructure.parse(displayedText)
-                renderedKey = renderKey
-            }
-        }
-        .onAppear {
-            // First appearance (or recycle into a row whose key differs
-            // from the last assignment): seed synchronously so we don't
-            // draw an empty row for one frame while the `.task`
-            // schedules.
-            if renderedKey != renderKey {
-                pieces = ConduitMarkdownStructure.parse(displayedText)
-                renderedKey = renderKey
-            }
+        // No per-token layout animation: interpolating piece layout on every
+        // streamed token was a major scroll-jank source. Litter rendered
+        // streaming text flat and stayed smooth — we match that.
+        .animation(nil, value: visiblePieces)
+        // Run the EXPENSIVE structured parse (headings/lists/tables) only
+        // once the turn settles — never per token. While streaming the id
+        // stays nil so this fires once (and no-ops); when the turn ends the
+        // id becomes `renderKey` and the full parse runs a single time.
+        .task(id: isStreaming ? nil : renderKey) { parseIfSettled() }
+        .onAppear { parseIfSettled() }
+    }
+
+    /// What actually renders. While streaming, the raw buffer is shown
+    /// cheaply as one paragraph (no block parse); once settled, the
+    /// structured `pieces` render. Falls back to the raw text until the
+    /// settle-parse lands so a just-finished row never flashes empty.
+    private var visiblePieces: [ConduitMarkdownPiece] {
+        if isStreaming { return [.paragraph(displayedText)] }
+        return pieces.isEmpty ? [.paragraph(displayedText)] : pieces
+    }
+
+    /// Parse the settled body into structured pieces once. No-op while
+    /// streaming (the buffer is rendered raw) and when the key is unchanged
+    /// (recycled row already parsed).
+    private func parseIfSettled() {
+        guard !isStreaming else { return }
+        if renderedKey != renderKey {
+            pieces = ConduitMarkdownStructure.parse(displayedText)
+            renderedKey = renderKey
         }
     }
 }

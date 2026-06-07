@@ -41,17 +41,25 @@ func (s *Session) runWatchdogChecks() {
 	lastCheckpoint := s.lastCheckpoint
 	s.mu.Unlock()
 
+	// A quiet stretch mid-turn (the agent thinking, or a long tool call
+	// with no stdout) is NORMAL — the process is alive. Record it as a
+	// `warning` HEALTH with a reason code, but keep PHASE = "running" so
+	// clients still treat the session as live. Previously these flipped
+	// phase to "stalled", which the apps classify as non-live → the
+	// composer went read-only mid-conversation (and the persisted phase
+	// kept it read-only across reconnects). Only an actually-dead process
+	// (process_exited above) gets a non-running phase.
 	if time.Since(lastOutput) > s.stallAfter {
-		s.setHealthWithReason("warning", "stalled", "no_output")
+		s.setHealthWithReason("warning", "running", "no_output")
 	} else if !lastCheckpoint.IsZero() && time.Since(lastCheckpoint) > s.checkpointEvery+(s.checkpointEvery/2) {
-		s.setHealthWithReason("warning", "stalled", "checkpoint_lagging")
+		s.setHealthWithReason("warning", "running", "checkpoint_lagging")
 	} else {
 		s.setHealthWithReason("healthy", "running", "ok")
 	}
 
 	probe := filepath.Join(s.kittyRoot, "memory", ".probe-"+s.ID)
 	if err := atomicWriteFile(probe, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
-		s.setHealthWithReason("warning", "stalled", "probe_write_failed")
+		s.setHealthWithReason("warning", "running", "probe_write_failed")
 	}
 
 	// Heal an expired private credential copy from the host login so the
