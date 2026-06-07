@@ -91,17 +91,26 @@ struct BrowserTab: View {
     private var resolvedURL: URL? {
         switch mode {
         case .preview:
-            guard let p = store.preview[session.id] else { return nil }
-            return resolve(p.url)
+            return BrowserTab.previewURL(for: session, store: store)
         case .memory:
-            return resolve("/memory/sessions/\(session.id).html")
+            return BrowserTab.resolve("/memory/sessions/\(session.id).html", store: store)
         }
+    }
+
+    /// Resolved live-preview URL for `session`, or nil when the agent hasn't
+    /// reported a (non-empty, resolvable) preview. Drives both this tab's
+    /// content AND whether the Browser tab is offered at all — the phone
+    /// `ConduitProjectView` and tablet `TabletRightPane` hide the Browser tab
+    /// when this is nil (per the user's ask: no valid website → no tab).
+    static func previewURL(for session: ProjectSession, store: SessionStore) -> URL? {
+        guard let p = store.preview[session.id], !p.url.isEmpty else { return nil }
+        return resolve(p.url, store: store)
     }
 
     /// Resolve a server-emitted path (which is typically relative, e.g.
     /// "/preview/<uuid>/") against the connection endpoint, swapping
     /// ws→http / wss→https. Absolute http(s) URLs pass through.
-    private func resolve(_ pathOrURL: String) -> URL? {
+    static func resolve(_ pathOrURL: String, store: SessionStore) -> URL? {
         if let u = URL(string: pathOrURL), let scheme = u.scheme,
            ["http", "https"].contains(scheme.lowercased()) {
             return u

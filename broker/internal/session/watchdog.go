@@ -1,7 +1,9 @@
 package session
 
 import (
+	"log"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -41,14 +43,12 @@ func (s *Session) runWatchdogChecks() {
 	lastCheckpoint := s.lastCheckpoint
 	s.mu.Unlock()
 
-	// A quiet stretch mid-turn (the agent thinking, or a long tool call
-	// with no stdout) is NORMAL — the process is alive. Record it as a
-	// `warning` HEALTH with a reason code, but keep PHASE = "running" so
-	// clients still treat the session as live. Previously these flipped
-	// phase to "stalled", which the apps classify as non-live → the
-	// composer went read-only mid-conversation (and the persisted phase
-	// kept it read-only across reconnects). Only an actually-dead process
-	// (process_exited above) gets a non-running phase.
+	// A quiet or checkpoint-lagging agent is still a LIVE process — keep the
+	// phase "running" (the app reads ANY non-live phase as read-only and tears
+	// down the chat composer, dropping the keyboard + the unsent draft) and
+	// carry the concern in health/reasonCode so the UI can warn without
+	// locking the user out. Only an actually-dead process (above) goes
+	// non-live.
 	if time.Since(lastOutput) > s.stallAfter {
 		s.setHealthWithReason("warning", "running", "no_output")
 	} else if !lastCheckpoint.IsZero() && time.Since(lastCheckpoint) > s.checkpointEvery+(s.checkpointEvery/2) {
@@ -84,12 +84,39 @@ func (s *Session) setHealth(health, phase string) {
 
 func (s *Session) setHealthWithReason(health, phase, reason string) {
 	s.mu.Lock()
+	prevPhase := s.phase
 	changed := s.health != health || s.phase != phase || s.reasonCode != reason
 	s.health = health
 	s.phase = phase
 	s.reasonCode = reason
 	s.mu.Unlock()
-	if changed {
-		_ = s.persistMetadata()
+	if !changed {
+		return
+	}
+	_ = s.persistMetadata()
+	if prevPhase != phase {
+		log.Printf("session %s: phase %s -> %s (health=%s reason=%s)", s.ID, prevPhase, phase, health, reason)
+	}
+	// Push the new health/phase to every subscribed client. Without this a
+	// watchdog transition — most importantly the flip BACK to "running" once a
+	// quiet or recovered agent resumes — only reached the app on its NEXT
+	// reconnect, so a session that briefly went non-live stayed read-only
+	// ("keeps going to starting and never back to running"). The connect path
+	// still sends the first frame; this covers changes while a client is
+	// subscribed. Must run AFTER releasing s.mu: broadcastStatus re-acquires
+	// it via StatusPayload + PublishText.
+	s.broadcastStatus()
+}
+
+// isLivePhase mirrors the apps' classifier (SessionStore.isLivePhase): a phase
+// names an actively-running agent. Anything not affirmatively running (empty,
+// exited/failed/dead, or the process-died "stalled") is NOT live, so the app
+// opens the session read-only. Keep in sync with apps/ios + apps/android.
+func isLivePhase(phase string) bool {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "running", "ready", "idle", "thinking", "working", "starting", "booting", "swapping":
+		return true
+	default:
+		return false
 	}
 }

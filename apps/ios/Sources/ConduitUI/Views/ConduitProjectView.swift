@@ -114,6 +114,15 @@ extension ConduitUI {
             return ConduitUI.DiffReviewModel.hasInlineDiff(in: store.conversationLog[session.id] ?? [])
         }
 
+        /// Whether the agent has reported a resolvable live-preview URL for
+        /// this session. The Browser tab is hidden until one exists (per the
+        /// user's ask: "if there's no valid website then hide the browser
+        /// tab"). Re-evaluates with the observable store, so the tab appears
+        /// the moment a preview arrives and disappears if it's withdrawn.
+        private var hasBrowserPreview: Bool {
+            BrowserTab.previewURL(for: session, store: store) != nil
+        }
+
         var body: some View {
             VStack(spacing: 0) {
                 header
@@ -162,6 +171,12 @@ extension ConduitUI {
                 // to mount (and stay mounted thereafter). Deliberate, outside
                 // the session-create CA commit.
                 if newTab == .terminal { terminalActivated = true }
+            }
+            // If a withdrawn preview removes the Browser tab while it's the
+            // active tab, fall back to Chat so we don't strand the user on a
+            // tab that's no longer in the strip.
+            .onChange(of: hasBrowserPreview) { _, has in
+                if !has && tab == .browser { tab = .chat }
             }
             .sheet(isPresented: $showInfo) {
                 ConduitUI.SessionInfoView(session: session)
@@ -530,8 +545,11 @@ extension ConduitUI {
                 // Chat · Terminal · Browser order (the enum's declaration
                 // order is terminal/chat/browser; the pill presents Chat
                 // first as the default landing tab).
+                // Browser is offered only once the agent reports a live
+                // preview URL — no valid website → no Browser tab.
+                let tabs: [ProjectTab] = hasBrowserPreview ? [.chat, .terminal, .browser] : [.chat, .terminal]
                 NeonSegmentedPill(
-                    segments: [ProjectTab.chat, .terminal, .browser].map {
+                    segments: tabs.map {
                         NeonSegmentedPill<ProjectTab>.Segment(id: $0, label: $0.label, systemImage: $0.systemImage)
                     },
                     selection: $tab

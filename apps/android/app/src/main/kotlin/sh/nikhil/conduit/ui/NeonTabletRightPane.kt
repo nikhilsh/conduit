@@ -15,9 +15,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -47,6 +50,22 @@ fun NeonTabletRightPane(store: SessionStore, session: ProjectSession) {
     val appearance = LocalAppearanceStore.current
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     var tab by rememberSaveable { mutableStateOf(RightPaneTab.Terminal) }
+    val previews by store.previews.collectAsState()
+    val endpoint by store.endpoint.collectAsState()
+    // Browser tab is offered only when the agent reports a resolvable
+    // live-preview URL (no valid website -> no tab).
+    val showBrowser by remember {
+        derivedStateOf {
+            previews[session.id]?.url?.let { resolvePreviewUrl(endpoint.httpBaseUrl, it) } != null
+        }
+    }
+    val visibleTabs = if (showBrowser) RightPaneTab.entries.toList()
+    else RightPaneTab.entries.filter { it != RightPaneTab.Browser }
+    // If the preview is withdrawn while Browser is selected, fall back to
+    // Terminal (the pane's default surface).
+    LaunchedEffect(showBrowser) {
+        if (!showBrowser && tab == RightPaneTab.Browser) tab = RightPaneTab.Terminal
+    }
 
     // statusBarsPadding so the Terminal/Browser/Info tab row clears the
     // system status bar (device bug: top cuts into the status bar).
@@ -55,7 +74,7 @@ fun NeonTabletRightPane(store: SessionStore, session: ProjectSession) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            RightPaneTab.entries.forEach { t ->
+            visibleTabs.forEach { t ->
                 val selected = t == tab
                 Text(
                     t.label,
