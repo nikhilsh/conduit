@@ -377,11 +377,11 @@ func (s *Session) Checkpoint(reason string) error {
 
 	snapshot := s.Snapshot()
 	if err := atomicWriteFile(s.scrollbackPath, snapshot); err != nil {
-		s.setHealth("warning", "stalled")
+		s.setHealth("warning", "running")
 		return err
 	}
 	if err := s.writeMemoryHTML(snapshot); err != nil {
-		s.setHealth("warning", "stalled")
+		s.setHealth("warning", "running")
 		return err
 	}
 	s.maybeAutoWIP()
