@@ -2,6 +2,8 @@ package session
 
 import (
 	"encoding/json"
+	"net"
+	"strconv"
 	"time"
 )
 
@@ -62,11 +64,8 @@ func (s *Session) StatusPayload() map[string]any {
 	}
 	// preview — the per-session dev-server surface (WEBSOCKET-PROTOCOL.md §3.2).
 	// The agent binds $PORT; the app loads the proxied URL in its Browser tab.
-	if s.previewPort > 0 {
-		payload["preview"] = map[string]any{
-			"port": s.previewPort,
-			"url":  "/preview/" + s.ID + "/",
-		}
+	if pv := previewPayload(s.previewPort, s.ID); pv != nil {
+		payload["preview"] = pv
 	}
 	if u := s.Usage(); u.HasUsage {
 		payload["total_input_tokens"] = u.InputTokens
@@ -112,4 +111,37 @@ func (s *Session) statusFrameJSON() []byte {
 // update live instead of only on reconnect.
 func (s *Session) broadcastStatus() {
 	s.PublishText(s.statusFrameJSON())
+}
+
+// previewPayload builds the status frame's `preview` object, or nil when no
+// dev-server port is allocated. The `url` is populated only when something is
+// actually listening on the port — otherwise it's empty, which the client
+// reads as "no live site → withdraw the Browser tab".
+//
+// This retracts a stale preview: the port is allocated once at session create
+// and never freed, so the old "previewPort > 0 ⇒ advertise a url" rule left the
+// Browser tab pinned forever even after the dev server died or was never
+// started. Probing liveness on each status frame makes the tab track reality —
+// it appears when the agent's server comes up and disappears when it stops.
+func previewPayload(port int, sessionID string) map[string]any {
+	if port <= 0 {
+		return nil
+	}
+	url := ""
+	if previewPortLive(port) {
+		url = "/preview/" + sessionID + "/"
+	}
+	return map[string]any{"port": port, "url": url}
+}
+
+// previewPortLive reports whether a dev server is currently accepting
+// connections on the session's preview port. A short timeout keeps the
+// status-frame build cheap; the dial is to loopback so it resolves fast.
+func previewPortLive(port int) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 150*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
