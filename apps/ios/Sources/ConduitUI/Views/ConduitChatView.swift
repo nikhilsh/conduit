@@ -242,6 +242,15 @@ extension ConduitUI {
                     .animation(.easeOut(duration: 0.18), value: isAgentWorking)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // Empty conversation: a centered placeholder so a fresh chat
+                // reads as "ready" instead of a blank void between the header
+                // and the composer (device feedback).
+                .overlay {
+                    if events.isEmpty && !isReadOnly {
+                        ConduitChatEmptyState(agent: session.assistant)
+                            .allowsHitTesting(false)
+                    }
+                }
                 // Device feedback v0.0.49 (round 2) #2: the scroll-to-bottom
                 // arrow must float just ABOVE the composer, never on top of
                 // the send button. It's applied BEFORE `.safeAreaInset(.bottom)`
@@ -684,11 +693,17 @@ extension ConduitUI {
                 .foregroundStyle(neon.text)
                 .tint(neon.accent)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.vertical, 8)
+                // A rounded rect (not a Capsule) so multi-line input grows
+                // into a tidy box instead of ballooning into a tall oval.
                 .background(
-                    Capsule().fill(neon.surface)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(neon.surface)
                 )
-                .overlay(Capsule().stroke(neon.border, lineWidth: 1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(neon.border, lineWidth: 1)
+                )
                 .onSubmit { send() }
 
                 // Send is enabled by a non-empty draft OR at least one
@@ -793,6 +808,35 @@ extension ConduitUI {
     }
 }
 
+// MARK: - Empty state
+
+/// Centered placeholder shown when a live conversation has no events yet, so a
+/// fresh chat doesn't render as a large empty void above the composer.
+private struct ConduitChatEmptyState: View {
+    let agent: String
+    @Environment(\.neonTheme) private var neon
+
+    private var agentName: String {
+        let trimmed = agent.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "your agent" : trimmed.capitalized
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(neon.accent)
+                .neonTextGlow(neon.glow ? neon.textGlow?.tinted(neon.accent) : nil)
+            Text("Message \(agentName) to get started")
+                .font(neon.sans(15))
+                .foregroundStyle(neon.textDim)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity)
+    }
+}
+
 // MARK: - ConduitEventRow
 //
 // Per-message dispatch — routes `ConversationItem` to the right inline
@@ -807,6 +851,7 @@ private struct ConduitEventRow: View {
     /// resend the command to the right session.
     var sessionID: String = ""
     let onQuickReply: (String) -> Void
+    @Environment(AppearanceStore.self) private var appearance
 
     var body: some View {
         if event.status.lowercased() == "swapping" {
@@ -822,7 +867,7 @@ private struct ConduitEventRow: View {
         } else if event.kind == "subagent" {
             ConduitSubagentCard(event: event)
         } else if event.role.lowercased() == "tool" {
-            ConduitToolCard(event: event, sessionID: sessionID)
+            ConduitToolCard(event: event, sessionID: sessionID, collapseDefault: appearance.collapseTurns)
         } else {
             ConduitChatMessageRow(event: event, isContinuation: isContinuation)
         }
@@ -1516,13 +1561,17 @@ extension NeonTheme {
 private struct ConduitToolCard: View {
     let event: ConversationItem
     var sessionID: String = ""
+    /// When true (Settings → Collapse Turns), the headline command card
+    /// opens collapsed instead of expanded. The compact tool row already
+    /// opens collapsed regardless (device feedback v0.0.47 #2).
+    var collapseDefault: Bool = false
 
     var body: some View {
         // §4.1 vs §4.5: shell/exec calls (or anything carrying a
         // command) get the headline CommandCard; everything else gets
         // the compact neon tool row.
         if NeonToolClassifier.isCommand(toolName: event.toolName, command: ConversationRenderer.extractCommand(from: event)) {
-            ConduitNeonCommandCard(event: event, sessionID: sessionID)
+            ConduitNeonCommandCard(event: event, sessionID: sessionID, collapseDefault: collapseDefault)
         } else {
             ConduitNeonToolCard(event: event)
         }
@@ -1666,12 +1715,20 @@ extension EnvironmentValues {
 
 private struct ConduitNeonCommandCard: View {
     let event: ConversationItem
-    var sessionID: String = ""
-    @State private var expanded = true
+    var sessionID: String
+    @State private var expanded: Bool
     @State private var blink = false
     @Environment(\.neonTheme) private var neon
     @Environment(SessionStore.self) private var store
     @Environment(\.openTerminalAction) private var openTerminalAction
+
+    init(event: ConversationItem, sessionID: String = "", collapseDefault: Bool = false) {
+        self.event = event
+        self.sessionID = sessionID
+        // "Collapse Turns" (Settings) starts command cards collapsed;
+        // otherwise they open expanded as before.
+        _expanded = State(initialValue: !collapseDefault)
+    }
 
     private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
     private var command: String { ConversationRenderer.extractCommand(from: event) ?? event.content }
