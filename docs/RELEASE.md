@@ -72,6 +72,14 @@ As a server-side backstop, the `prepare` job in `release.yml` also fails fast on
 a tag push if the tagged commit isn't contained in `origin/main` — so a
 hand-tagged stale commit can't slip through CI either.
 
+**If the release contains `broker/` changes, REDEPLOY THE BROKER** (see
+`docs/BROKER-REDEPLOY.md`). Tagging only ships app builds — the box keeps
+serving the old broker binary until someone swaps it. On 2026-06-07 every
+broker fix merged that day (watchdog phases, context gauge, WS keep-alive)
+was tagged across four releases and **none was serving**: 100% of that day's
+"the fix didn't work" reports were this gap. After the redeploy, run the
+2-minute idle-socket sanity (a quiet WS must survive >90s).
+
 ## Release flow
 
 1. Make sure `main` contains the code you want to ship.
