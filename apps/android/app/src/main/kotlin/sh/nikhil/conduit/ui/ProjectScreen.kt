@@ -63,7 +63,13 @@ fun ProjectScreen(
     // Info live in the sibling NeonTabletRightPane. Phone/default = tabs.
     chatOnly: Boolean = false,
 ) {
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { ProjectTab.entries.size })
+    // `shell` sessions (Box health → Shell: the broker's hidden bash
+    // adapter) are pure terminals — land on the Terminal tab instead of
+    // Chat. Mirrors iOS `ProjectView.init`.
+    val pagerState = rememberPagerState(
+        initialPage = if (session.assistant.equals("shell", ignoreCase = true)) ProjectTab.Terminal.ordinal else 0,
+        pageCount = { ProjectTab.entries.size },
+    )
     val statuses by store.statusBySession.collectAsState()
     val lifecycleMap by store.sessionLifecycle.collectAsState()
     val status = statuses[session.id]

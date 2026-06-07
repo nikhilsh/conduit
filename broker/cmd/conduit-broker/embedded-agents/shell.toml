@@ -1,0 +1,13 @@
+# Built-in plain-terminal "agent" backing the Box health → SSH button:
+# the app creates a `shell` session and gets a login shell on the box in
+# its Terminal tab (the broker already runs ON the box, so a local shell
+# IS the box shell — no ssh hop needed). `hidden` keeps it out of the
+# agent picker and the capabilities assistants list; the app discovers it
+# via the `shell_sessions` feature flag instead.
+name    = "shell"
+command = ["bash"]
+args    = ["-l"]
+workdir = "/workspace"
+hidden  = true
+# Legacy PTY chat mode (empty chat_mode): the PTY hosts bash directly.
+# No hooks — memory render/checkpoint are agent-session concerns.

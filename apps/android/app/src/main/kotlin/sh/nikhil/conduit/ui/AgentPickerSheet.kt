@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.RemoteDirectoryListing
 import sh.nikhil.conduit.SessionStore
 
@@ -177,11 +178,13 @@ private fun AgentStep(
             enabled = canIssue,
             onTap = { onPick("codex") },
         )
-        // Box choice — only when there's an actual choice (>1 paired
-        // box). "This device" on the home Boxes list is display-only (a
-        // phone can't host the broker), so it is deliberately not a
-        // target here. Mirror of iOS boxSection.
-        if (servers.size > 1) {
+        // Box choice — always shown so the user can see where the session
+        // will run (device feedback round 4: gated on >1 servers, a
+        // single-box user "can't choose the box" and can't tell local vs
+        // server). "This device" on the home Boxes list is display-only (a
+        // phone can't host the broker), so it is deliberately not a target
+        // here; the single-box footnote says so. Mirror of iOS boxSection.
+        if (servers.isNotEmpty()) {
             Text(
                 "BOX",
                 style = MaterialTheme.typography.labelSmall,
@@ -195,6 +198,14 @@ private fun AgentStep(
                     host = server.endpoint.displayHost,
                     selected = server.id == selectedServerId,
                     onTap = { onSelectServer(server.id) },
+                )
+            }
+            if (servers.size == 1) {
+                Text(
+                    "Sessions run on a paired box — this device can't host them. Pair another box in Settings.",
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = neon.textFaint,
                 )
             }
         }
