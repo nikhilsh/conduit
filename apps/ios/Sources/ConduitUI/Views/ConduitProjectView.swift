@@ -156,6 +156,10 @@ extension ConduitUI {
             .background(GlassAppBackground().ignoresSafeArea(.container, edges: .all))
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .navigationBar)
+            // Hiding the nav bar / back button (above) disables UIKit's
+            // left-edge swipe-back; this re-enables it. Zero-size, no layout
+            // impact — it only reaches the hosting UINavigationController.
+            .background(InteractivePopGestureEnabler().frame(width: 0, height: 0))
             // Dismiss the keyboard on every tab switch. The Terminal tab's
             // WKWebView owns a custom inputAccessoryView (the terminal key
             // bar); without this, switching Terminal→Chat left that
@@ -636,3 +640,43 @@ extension ConduitUI {
         }
     }
 }
+
+// MARK: - Interactive swipe-back
+
+/// Re-enables UIKit's left-edge swipe-to-go-back on screens that hide the
+/// navigation bar / default back button.
+///
+/// `ProjectView` sets `.navigationBarBackButtonHidden(true)` +
+/// `.toolbar(.hidden, for: .navigationBar)` so it can draw its own slim
+/// header. The side effect: UIKit gates `interactivePopGestureRecognizer`
+/// on the presence of the system back button, so hiding it silently kills
+/// the edge swipe — leaving the custom chevron as the only way back. We
+/// drop an empty representable into the hierarchy, walk up to the hosting
+/// `UINavigationController`, and re-attach a permissive delegate so the
+/// edge swipe pops the NavigationStack again. The delegate only allows the
+/// gesture when there's something to pop, so the root screen is unaffected.
+private struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Proxy { Proxy() }
+    func updateUIViewController(_ controller: Proxy, context: Context) {
+        controller.reattach()
+    }
+
+    final class Proxy: UIViewController, UIGestureRecognizerDelegate {
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            reattach()
+        }
+
+        func reattach() {
+            guard let gesture = navigationController?.interactivePopGestureRecognizer
+            else { return }
+            gesture.delegate = self
+            gesture.isEnabled = true
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            (navigationController?.viewControllers.count ?? 0) > 1
+        }
+    }
+}
+
