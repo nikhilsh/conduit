@@ -2940,9 +2940,12 @@ private struct ConduitPendingInputCard: View {
     let onQuickReply: (String) -> Void
     @Environment(\.neonTheme) private var neon
 
-    /// Chosen option per question index. Drives the selection highlight and
-    /// gates the multi-question Send button.
+    /// Chosen option per single-select question index. Drives the
+    /// selection highlight and gates the Send button.
     @State private var selections: [Int: String] = [:]
+    /// Chosen options per MULTI-select question index (round-4 device
+    /// feedback: multiSelect questions previously rendered single-choice).
+    @State private var multiSelections: [Int: Set<String>] = [:]
     /// Once answered, the card locks: the choice is marked and the rest
     /// dimmed/disabled so it reads as a settled decision.
     @State private var submitted = false
@@ -2960,7 +2963,10 @@ private struct ConduitPendingInputCard: View {
 
     var body: some View {
         let questions = self.questions
-        let multi = questions.count > 1
+        // The explicit Send appears for multiple questions OR any
+        // multi-select question — only a lone single-select question
+        // keeps tap-to-send.
+        let needsSend = questions.count > 1 || questions.contains { $0.multiSelect }
         return VStack(alignment: .leading, spacing: 12) {
             Text("NEEDS YOUR INPUT")
                 .font(neon.mono(11).weight(.bold))
@@ -2972,13 +2978,32 @@ private struct ConduitPendingInputCard: View {
                     if !question.prompt.isEmpty {
                         ConduitMarkdownBlock(text: question.prompt, role: .assistant)
                     }
+                    if question.multiSelect {
+                        Text("select all that apply")
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(neon.textFaint)
+                    }
                     ForEach(Array(question.options.enumerated()), id: \.offset) { oIdx, option in
-                        optionRow(question: qIdx, option: option, index: oIdx, multi: multi)
+                        optionRow(
+                            question: qIdx, option: option, index: oIdx,
+                            needsSend: needsSend, multiSelect: question.multiSelect
+                        )
                     }
                 }
             }
-            if multi && !submitted {
+            if needsSend && !submitted {
                 sendButton(questions: questions)
+            }
+            if submitted {
+                // Round-4 device feedback: a tap had no visible "delivered"
+                // affordance, so a sent answer read as nothing happening.
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Sent")
+                        .font(neon.mono(11).weight(.semibold))
+                }
+                .foregroundStyle(neon.green)
             }
         }
         .padding(14)
@@ -2994,15 +3019,27 @@ private struct ConduitPendingInputCard: View {
     }
 
     @ViewBuilder
-    private func optionRow(question qIdx: Int, option: String, index oIdx: Int, multi: Bool) -> some View {
-        let selected = selections[qIdx] == option
+    private func optionRow(
+        question qIdx: Int, option: String, index oIdx: Int,
+        needsSend: Bool, multiSelect: Bool
+    ) -> some View {
+        let selected = multiSelect
+            ? (multiSelections[qIdx]?.contains(option) ?? false)
+            : selections[qIdx] == option
         let dimmed = submitted && !selected
         Button {
             guard !submitted else { return }
+            if multiSelect {
+                // Checkbox semantics: toggle membership; Send delivers.
+                var set = multiSelections[qIdx] ?? []
+                if set.contains(option) { set.remove(option) } else { set.insert(option) }
+                multiSelections[qIdx] = set
+                return
+            }
             selections[qIdx] = option
-            // Single question → send immediately (tap == answer). Multi
-            // waits for the explicit Send once every question is answered.
-            if !multi {
+            // A lone single-select question sends immediately (tap ==
+            // answer); anything needing Send waits for the explicit tap.
+            if !needsSend {
                 submit([option])
             }
         } label: {
@@ -3037,17 +3074,28 @@ private struct ConduitPendingInputCard: View {
         .buttonStyle(.plain)
         .disabled(submitted)
         .opacity(dimmed ? 0.45 : 1)
-        .accessibilityHint(multi ? "Select this option" : "Send this reply")
+        .accessibilityHint(needsSend ? "Select this option" : "Send this reply")
+    }
+
+    /// One question's answer string: multi-select joins the chosen labels
+    /// (in option order) with ", "; single-select is the chosen label.
+    private func answer(for qIdx: Int, question: ConduitUI.PendingQuestion) -> String? {
+        if question.multiSelect {
+            guard let set = multiSelections[qIdx], !set.isEmpty else { return nil }
+            return question.options.filter { set.contains($0) }.joined(separator: ", ")
+        }
+        return selections[qIdx]
     }
 
     @ViewBuilder
     private func sendButton(questions: [ConduitUI.PendingQuestion]) -> some View {
         // Only questions that actually offer options need an answer.
         let answerable = questions.enumerated().filter { !$0.element.options.isEmpty }
-        let allAnswered = answerable.allSatisfy { selections[$0.offset] != nil }
+        let answers = answerable.compactMap { answer(for: $0.offset, question: $0.element) }
+        let allAnswered = answers.count == answerable.count
         Button {
             guard allAnswered else { return }
-            submit(answerable.compactMap { selections[$0.offset] })
+            submit(answers)
         } label: {
             Text("Send")
                 .font(neon.sans(15).weight(.semibold))

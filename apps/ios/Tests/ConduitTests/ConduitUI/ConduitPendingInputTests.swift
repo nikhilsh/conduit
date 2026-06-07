@@ -79,4 +79,25 @@ struct ConduitPendingInputTests {
         let b = item(kind: "message", content: "general kenobi")
         #expect(ConduitUI.ChatViewModel.dropPendingInputEchoes([a, b]).count == 2)
     }
+
+    // MARK: multiSelect marker (round-4 — broker appends
+    // " (select all that apply)" to multi-select questions)
+
+    @Test func stripsMultiSelectMarkerIntoFlag() {
+        let qs = ConduitUI.ChatViewModel.parsePendingQuestions(
+            "Pick colors (select all that apply)\n1. Red\n2. Green\n\nPick one\n1. A\n2. B"
+        )
+        #expect(qs.count == 2)
+        #expect(qs[0].multiSelect)
+        #expect(qs[0].prompt == "Pick colors")
+        #expect(qs[0].options == ["Red", "Green"])
+        #expect(!qs[1].multiSelect)
+        #expect(qs[1].prompt == "Pick one")
+    }
+
+    @Test func plainQuestionHasNoMultiFlag() {
+        let qs = ConduitUI.ChatViewModel.parsePendingQuestions("Proceed?\n1. Yes\n2. No")
+        #expect(qs.count == 1)
+        #expect(!qs[0].multiSelect)
+    }
 }
