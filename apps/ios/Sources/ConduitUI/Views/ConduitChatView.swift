@@ -777,6 +777,15 @@ extension ConduitUI {
                 pendingAttachments: attachments,
                 sessionID: sessionID
             )
+            // Stash image bytes so the user's bubble can show a thumbnail of
+            // what they just sent (the reference line only carries the path).
+            for attachment in attachments where attachment.kind == .image {
+                AttachmentBytesCache.shared.put(
+                    sessionID: sessionID,
+                    filename: attachment.filename,
+                    bytes: attachment.bytes
+                )
+            }
             draft = ""
             pendingAttachments = []
             attachError = nil
@@ -915,27 +924,9 @@ private struct ConduitChatMessageRow: View {
             // the assistant/system prose renders flat on the canvas (no
             // heavy bubble), styled inside ConduitBlockStack.
             if role == .user {
-                ConduitBlockStack(
-                    blocks: ConversationRenderer.blocks(for: event.content),
-                    role: role,
-                    itemID: event.id
-                )
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    // Device feedback v0.0.68: fill the user pill with the
-                    // primary `accent`, NOT `accent2`. `accentText` (the pill's
-                    // text colour) is the guaranteed-contrast partner of
-                    // `accent` everywhere else (send button, primary buttons),
-                    // but in LIGHT mode `accent2` is a bright tint (e.g. Matrix
-                    // lime #b6f23d) and `accentText` is white — white-on-lime
-                    // was unreadable. `accent` is the mode-aware brand colour
-                    // (bright in dark, darker in light) so the white/dark
-                    // accentText reads cleanly in both modes.
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(neon.accent)
-                )
-                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+                // The bubble strips its own `[attached …]` reference lines
+                // and renders them as chips/thumbnails instead of raw paths.
+                ConduitUserBubble(event: event)
             } else {
                 ConduitBlockStack(
                     blocks: ConversationRenderer.blocks(for: event.content),
@@ -976,6 +967,102 @@ private struct ConduitChatMessageRow: View {
         switch role {
         case .user, .tool: return neon.textGlow?.tinted(roleColor)
         default:           return nil
+        }
+    }
+}
+
+// MARK: - User bubble + attachments
+
+/// In-memory cache of just-sent attachment bytes, keyed by
+/// `sessionID/filename`, so the user's bubble can show a real image
+/// thumbnail for what they just sent. Reloaded transcripts (bytes not
+/// cached) fall back to a filename chip — fetching upload bytes back from
+/// the broker is out of scope.
+@MainActor
+final class AttachmentBytesCache {
+    static let shared = AttachmentBytesCache()
+    private var store: [String: Data] = [:]
+
+    private func key(_ sessionID: String, _ filename: String) -> String {
+        "\(sessionID)/\(filename)"
+    }
+
+    func put(sessionID: String, filename: String, bytes: Data) {
+        store[key(sessionID, filename)] = bytes
+    }
+
+    func image(sessionID: String, filename: String) -> UIImage? {
+        guard let data = store[key(sessionID, filename)] else { return nil }
+        return UIImage(data: data)
+    }
+}
+
+/// User message bubble: renders the prose pill (when any) plus a
+/// chip/thumbnail per attachment, with the raw `uploads/…` reference
+/// lines stripped from the visible text.
+private struct ConduitUserBubble: View {
+    let event: ConversationItem
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        let parsed = ConduitUI.splitAttachmentReferences(event.content)
+        return VStack(alignment: .trailing, spacing: 8) {
+            if !parsed.text.isEmpty {
+                ConduitBlockStack(
+                    blocks: ConversationRenderer.blocks(for: parsed.text),
+                    role: .user,
+                    itemID: event.id
+                )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                // Device feedback v0.0.68: fill with primary `accent` (not
+                // `accent2`) so `accentText` stays readable in both modes.
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(neon.accent)
+                )
+                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+            }
+            ForEach(parsed.attachments, id: \.filename) { ref in
+                ConduitAttachmentChip(ref: ref)
+            }
+        }
+    }
+}
+
+/// A single attachment in a user bubble: an image thumbnail when the
+/// bytes are cached from this session's send, else a compact filename
+/// chip.
+private struct ConduitAttachmentChip: View {
+    let ref: ConduitUI.AttachmentRef
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        if ref.kind == .image,
+           let image = AttachmentBytesCache.shared.image(sessionID: ref.sessionID, filename: ref.filename) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 168, height: 168)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(neon.border, lineWidth: 1)
+                )
+        } else {
+            HStack(spacing: 6) {
+                Image(systemName: ref.kind == .image ? "photo" : "doc")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(ref.filename)
+                    .font(neon.sans(13))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .foregroundStyle(neon.text)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(neon.surface))
+            .overlay(Capsule().stroke(neon.border, lineWidth: 1))
         }
     }
 }

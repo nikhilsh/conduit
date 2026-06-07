@@ -64,10 +64,22 @@ extension ConduitUI {
         /// event missing from the typed log gets synthesized into a
         /// `ConversationItem` and spliced in by timestamp so the chat
         /// surface stays chronological.
+        /// A client-synthesized "uploaded …" tool card the broker emits on
+        /// each file upload. The user already sees the attachment as a chip
+        /// in their own bubble, so the duplicate activity card is dropped
+        /// from the chat transcript.
+        static func isUploadToolEvent(_ item: ConversationItem) -> Bool {
+            if (item.toolName ?? "").lowercased() == "file_upload" { return true }
+            // PTY-scraped chatlog fallback carries no toolName.
+            return item.role.lowercased() == "tool"
+                && item.content.hasPrefix("uploaded ")
+        }
+
         static func mergedEvents(
             conversation: [ConversationItem],
             chatLog: [ChatEvent]
         ) -> [ConversationItem] {
+            let conversation = conversation.filter { !isUploadToolEvent($0) }
             // Fast path: nothing raw to fold in.
             guard !chatLog.isEmpty else { return conversation }
 
@@ -101,6 +113,7 @@ extension ConduitUI {
                     planSteps: []
                 )
             }
+            .filter { !isUploadToolEvent($0) }
             guard !synthetic.isEmpty else { return conversation }
             // Sort by ts (PR #111 contract — typed log is ts-sorted).
             // Epoch-normalized (not raw String): a `+09:00` offset or a
