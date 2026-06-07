@@ -1,6 +1,7 @@
 package session
 
 import (
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,13 +43,21 @@ func TestCommandEnv_NoPreviewPortWhenUnallocated(t *testing.T) {
 // TestStatusPayload_IncludesPreview asserts the status frame carries the
 // preview {port,url} bundle (WEBSOCKET-PROTOCOL.md §3.2) when a port is set.
 func TestStatusPayload_IncludesPreview(t *testing.T) {
-	s := &Session{ID: "abc123", previewPort: 3007}
+	// A live dev server on the preview port → status frame advertises the url.
+	// (A dead/absent server withdraws it; see TestPreviewPayload.)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	s := &Session{ID: "abc123", previewPort: port}
 	prev, ok := s.StatusPayload()["preview"].(map[string]any)
 	if !ok {
 		t.Fatalf("preview missing/!map in status payload")
 	}
-	if prev["port"] != 3007 {
-		t.Errorf("preview.port = %v, want 3007", prev["port"])
+	if prev["port"] != port {
+		t.Errorf("preview.port = %v, want %d", prev["port"], port)
 	}
 	if prev["url"] != "/preview/abc123/" {
 		t.Errorf("preview.url = %v, want /preview/abc123/", prev["url"])

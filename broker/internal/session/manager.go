@@ -746,7 +746,10 @@ func (s *Session) SendChat(msg string) bool {
 	// Capture the opening prompt (once) so the AI title generator can
 	// summarize the conversation's purpose at the next turn-end.
 	s.captureFirstUserPrompt(msg)
-	err := s.chat.Send(msg)
+	// Rewrite relative upload refs to the absolute durable path for the
+	// AGENT only (persistence above keeps the relative form for the client).
+	agentMsg := s.RewriteUploadRefs(msg)
+	err := s.chat.Send(agentMsg)
 	if err != nil && s.chatRespawn != nil {
 		// The long-lived stream-json agent died underneath us (any send
 		// error means its stdin is gone — crash, OOM, kill). Self-heal:
@@ -765,7 +768,7 @@ func (s *Session) SendChat(msg string) bool {
 					_ = old.Close()
 				}
 				log.Printf("session %s: chat agent respawned after send error: %v", s.ID, err)
-				err = fresh.Send(msg)
+				err = fresh.Send(agentMsg)
 			} else {
 				fmt.Fprintf(os.Stderr, "session %s: chat respawn: %v\n", s.ID, rerr)
 			}
@@ -1588,6 +1591,48 @@ type sessionMetadata struct {
 	TotalCostUSD        float64 `json:"total_cost_usd,omitempty"`
 	ContextUsedTokens   uint64  `json:"context_used_tokens,omitempty"`
 	ContextWindowTokens uint64  `json:"context_window_tokens,omitempty"`
+}
+
+// UploadBaseDir is the durable root under which chat file-uploads are
+// stored (`<base>/uploads/<sid>/<file>`). It is the per-session state dir,
+// which lives OUTSIDE the agent's git working tree.
+//
+// Uploads were historically written into the workspace (`<cwd>/uploads/`),
+// but that dir is untracked-and-not-ignored: a routine `git reset --hard`
+// / `git clean` (which agents and CI run constantly) wipes it out from
+// under the agent before it can read the file — the "uploaded image can't
+// be read / always cleared" bug. Rooting uploads at the session state dir
+// ties their lifecycle to the session (GC / archive move them along) and
+// keeps any git hygiene in the workspace from touching them.
+//
+// Falls back to the workspace for sessions with no state dir (shouldn't
+// happen for live sessions, but keeps the upload path total).
+func (s *Session) UploadBaseDir() string {
+	if s.sessionDir != "" {
+		return s.sessionDir
+	}
+	return s.WorkspaceDir()
+}
+
+// RewriteUploadRefs rewrites a composer message's relative upload
+// references (`uploads/<id>/<name>`) to the absolute on-disk path the
+// broker actually persisted the bytes to (`<UploadBaseDir>/uploads/<id>/
+// <name>`). The mobile composer only knows the protocol-relative form and
+// the agent's cwd is the git worktree — without this rewrite a relative
+// `uploads/...` resolves into the worktree, where the bytes are
+// deliberately NOT written (see UploadBaseDir).
+//
+// Only the copy handed to the AGENT is rewritten; the persisted transcript
+// keeps the relative form so the mobile client can still parse it back into
+// an attachment chip/thumbnail.
+func (s *Session) RewriteUploadRefs(msg string) string {
+	base := s.UploadBaseDir()
+	if base == "" {
+		return msg
+	}
+	rel := "uploads/" + s.ID + "/"
+	abs := filepath.Join(base, "uploads", s.ID) + "/"
+	return strings.ReplaceAll(msg, rel, abs)
 }
 
 func (s *Session) applyPaths() {

@@ -516,7 +516,7 @@ func (c *client) handleBinary(payload []byte) {
 			c.emitUploadToolEvent("upload rejected: session id mismatch")
 			return
 		}
-		dst, err := writeUpload(c.sess.WorkspaceDir(), frame.SessionID, frame.Filename, frame.Body)
+		dst, err := writeUpload(c.sess.UploadBaseDir(), frame.SessionID, frame.Filename, frame.Body)
 		if err != nil {
 			c.emitUploadToolEvent("upload rejected: " + err.Error())
 			return
@@ -648,8 +648,9 @@ func (c *client) handleText(payload []byte) {
 				// TUI agents (Claude, Codex) submit on CR, not LF —
 				// writing "\n" left the typed text in the prompt without
 				// being entered, forcing users to switch to the Terminal
-				// tab and press Return manually.
-				_, _ = c.sess.Write([]byte(env.Msg + "\r"))
+				// tab and press Return manually. Rewrite upload refs to the
+				// absolute durable path for the agent (see RewriteUploadRefs).
+				_, _ = c.sess.Write([]byte(c.sess.RewriteUploadRefs(env.Msg) + "\r"))
 			}
 		}
 	case "account_usage":

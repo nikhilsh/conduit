@@ -223,12 +223,11 @@ public final class TurnLiveActivityController {
             // `Activity.request` throws on: simulators without a Mac host
             // recent enough, Live Activities disabled in Settings, or a
             // mismatch between the host + widget `ActivityAttributes`
-            // shape. Swallow — the controller stays functional and the
-            // next turn's effect will retry.
-            Telemetry.breadcrumb(
-                "live_activity", "start failed",
-                data: ["error": String(describing: error)]
-            )
+            // shape. The controller stays functional and the next turn's
+            // effect will retry — but capture it so a release build that
+            // silently shows no Live Activity is diagnosable from Sentry
+            // (e.g. the widget extension isn't embedded in the IPA).
+            Telemetry.capture(error: error, message: "Live Activity request failed", tags: ["flow": "liveactivity"], extras: ["session": sessionID])
         }
         #endif
     }
