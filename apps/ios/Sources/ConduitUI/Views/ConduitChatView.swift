@@ -89,6 +89,12 @@ extension ConduitUI {
         // drag + bottom-proximity + streaming signals and reads back
         // `shouldFollow…` / `showScrollToBottomButton`.
         @State private var autoScroll = ChatAutoScrollController()
+        // Opening a session must land on the LATEST message, not the top of
+        // the history. The stream/new-message autoscroll observers only fire on
+        // *changes*, so a session opened with pre-existing events never got an
+        // initial scroll and sat at the top (device: "when I open a session I
+        // start at the top, it should be at the bottom"). One-shot per session.
+        @State private var didInitialScroll = false
 
         var body: some View {
             // The composer + suggestion cluster is hosted via
@@ -204,6 +210,22 @@ extension ConduitUI {
             }
             jump()
             DispatchQueue.main.async { jump() }
+        }
+
+        /// On first open of a session, jump straight to the latest message. Not
+        /// animated — we want to *start* at the bottom, not show a scroll from
+        /// the top. Re-pinned across the first few layout passes because the
+        /// `LazyVStack` rows resolve their heights lazily, so a single jump while
+        /// history is still measuring lands short.
+        private func scrollToBottomOnOpen(_ proxy: ScrollViewProxy) {
+            guard !didInitialScroll, !events.isEmpty else { return }
+            didInitialScroll = true
+            Task { @MainActor in
+                for delayMs: UInt64 in [0, 60, 200, 500] {
+                    if delayMs > 0 { try? await Task.sleep(nanoseconds: delayMs * 1_000_000) }
+                    proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                }
+            }
         }
 
         private var messagesList: some View {
@@ -401,8 +423,17 @@ extension ConduitUI {
                 .onAppear {
                     composerFocused = false
                     dismissStrayKeyboard()
+                    // Land on the latest message when history is already loaded.
+                    scrollToBottomOnOpen(proxy)
                 }
                 .onDisappear { composerFocused = false }
+                // History often streams in just after appear (empty → populated);
+                // pin the bottom on that first population too.
+                .onChange(of: events.count) { old, new in
+                    if old == 0 && new > 0 { scrollToBottomOnOpen(proxy) }
+                }
+                // Switching sessions reuses this view — re-arm for the next one.
+                .onChange(of: session.id) { _, _ in didInitialScroll = false }
                 // The view stays mounted across tab switches now, so drive
                 // keyboard state off the active flag rather than appear/
                 // disappear: drop focus + the keyboard when hidden behind
