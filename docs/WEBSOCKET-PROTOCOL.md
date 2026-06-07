@@ -261,7 +261,10 @@ Closing the socket does NOT stop the session. Sessions live until an explicit `{
 - `GET /api/fs/list` returns directory-only children with metadata and pagination.
 - `POST /api/session/start` accepts `{session_id?, assistant?, cwd?}` and returns `{session_id, assistant, ws_path, created}`.
 - `GET /api/recent-projects` returns most-recent workspace paths for cross-device continuity.
+- `GET /api/host/metrics` (v0.0.111, feature flag `host_metrics`) returns the Box health snapshot `{cpu_pct, mem_pct, disk_pct, load1, uptime_secs, sampled_at}` (percentages 0–100; Linux `/proc` + statfs, cached ~2s). **503** `metrics_unavailable` on platforms that can't report. See `broker/internal/hostmetrics`.
 - Error responses are JSON: `{"error":{"code":"...","message":"..."}}`.
+
+The feature flag `shell_sessions` (v0.0.111) advertises the hidden built-in `shell` assistant — a plain `bash -l` PTY session with no chat backend, created via the normal session-create paths with `assistant=shell`. It is deliberately absent from the `assistants` list; apps surface it as Box health → Shell, not as an agent.
 
 Status/exit payloads include machine-readable `reason_code` (examples: `ok`, `agent_switched`, `agent_switch_in_progress`, `process_exited`, `session_closed`).
 

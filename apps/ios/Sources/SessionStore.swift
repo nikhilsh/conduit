@@ -661,6 +661,94 @@ final class SessionStore {
         return try JSONDecoder().decode(RemoteDirectoryListing.self, from: data)
     }
 
+    /// Host health snapshot from `GET /api/host/metrics` (broker v0.0.111+).
+    /// Percentages are 0–100; see broker/internal/hostmetrics.
+    struct HostMetrics: Decodable {
+        let cpuPct: Double
+        let memPct: Double
+        let diskPct: Double
+        let load1: Double?
+        let uptimeSecs: Int64?
+
+        enum CodingKeys: String, CodingKey {
+            case cpuPct = "cpu_pct"
+            case memPct = "mem_pct"
+            case diskPct = "disk_pct"
+            case load1
+            case uptimeSecs = "uptime_secs"
+        }
+    }
+
+    /// What the Box health screen needs to know about a box's broker.
+    /// `nil` fields on failure paths collapse to "hide the affordance".
+    struct BoxFeatures {
+        var hostMetrics: Bool
+        var shellSessions: Bool
+    }
+
+    /// Probe `GET /api/capabilities` on a specific saved endpoint (works
+    /// for non-active boxes too — plain authed GET, no WS needed).
+    /// Returns nil on any failure (old broker, unreachable, 401): the
+    /// caller hides the dependent affordances rather than erroring.
+    func fetchBoxFeatures(endpoint: StoredEndpoint) async -> BoxFeatures? {
+        struct CapsEnvelope: Decodable {
+            struct Features: Decodable {
+                let hostMetrics: Bool?
+                let shellSessions: Bool?
+                enum CodingKeys: String, CodingKey {
+                    case hostMetrics = "host_metrics"
+                    case shellSessions = "shell_sessions"
+                }
+            }
+            let features: Features?
+        }
+        guard let data = await getJSON(endpoint: endpoint, path: "/api/capabilities"),
+              let caps = try? JSONDecoder().decode(CapsEnvelope.self, from: data)
+        else {
+            Telemetry.breadcrumb("box_health", "capabilities probe failed", data: ["host": endpoint.displayHost])
+            return nil
+        }
+        return BoxFeatures(
+            hostMetrics: caps.features?.hostMetrics ?? false,
+            shellSessions: caps.features?.shellSessions ?? false
+        )
+    }
+
+    /// Fetch live CPU/MEM/DISK for a box. nil = box doesn't report metrics
+    /// (old broker 404, non-Linux 503, unreachable) → hide the health
+    /// section (honest-state rule).
+    func fetchHostMetrics(endpoint: StoredEndpoint) async -> HostMetrics? {
+        guard let data = await getJSON(endpoint: endpoint, path: "/api/host/metrics"),
+              let metrics = try? JSONDecoder().decode(HostMetrics.self, from: data)
+        else {
+            Telemetry.breadcrumb("box_health", "metrics fetch failed", data: ["host": endpoint.displayHost])
+            return nil
+        }
+        Telemetry.breadcrumb("box_health", "metrics fetched", data: [
+            "cpu": String(format: "%.0f", metrics.cpuPct),
+            "mem": String(format: "%.0f", metrics.memPct),
+            "disk": String(format: "%.0f", metrics.diskPct),
+        ])
+        return metrics
+    }
+
+    /// Shared authed-GET against an arbitrary stored endpoint — the
+    /// `listDirectories` direct-HTTP pattern, parameterized on endpoint so
+    /// Box health can probe boxes that aren't the active connection.
+    private func getJSON(endpoint: StoredEndpoint, path: String) async -> Data? {
+        guard let base = endpoint.httpBaseURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = path
+        guard let url = components?.url else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 10
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else { return nil }
+        return data
+    }
+
     /// Fetch a session's persisted transcript read-only over HTTP
     /// (`GET /api/session/conversation/<id>`, broker PR #196). Mirrors
     /// `listDirectories`' direct-HTTP + bearer-auth pattern. Used by the
@@ -1847,8 +1935,11 @@ final class SessionStore {
                 sessionLifecycle[s.id] = .exited(Self.exitCode(fromPhase: phase) ?? 0)
             }
         }
+        // Fan out the per-session conversation pulls OFF the main thread:
+        // doing N blocking FFI clones on the @MainActor every status delta
+        // was the App Hang source. Results apply back on the main actor.
         for s in self.sessions {
-            refreshConversation(sessionID: s.id)
+            refreshConversationOffMain(sessionID: s.id)
         }
     }
 
@@ -1918,32 +2009,69 @@ final class SessionStore {
         }
     }
 
+    /// Synchronous refresh — used where the caller reads `conversationLog`
+    /// right after (e.g. `ingestChat` resolves the streaming item id against
+    /// the freshly-merged log). Single-session and low-frequency (once per
+    /// turn), so the blocking FFI here isn't the hang source.
     fileprivate func refreshConversation(sessionID: String) {
         guard let client else { return }
-        if let items = try? client.listConversationItems(sessionId: sessionID) {
-            // Preserve locally-echoed `local-*` items not yet reflected by
-            // the server (matched by role+content). Once the harness mirrors
-            // the same text back under a server id, the local copy drops.
-            //
-            // Bug #3 nuance: the broker doesn't loop user messages back as
-            // `on_chat_event`, so the user's `local-*` echo lives forever
-            // in `stillPending`. Appending it *after* `items` would render
-            // the assistant's reply above the user's prompt — confusing.
-            // Splice by timestamp so order stays chronological.
-            let existing = conversationLog[sessionID] ?? []
-            let serverFingerprints = Set(items.map { "\($0.role)|\($0.content)" })
-            let stillPending = existing.filter {
-                $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
-            }
-            // Merge under any restored-from-disk past chat (a reattached
-            // session — the broker doesn't replay chat over the WS, so the
-            // Rust core's live `items` only cover turns since reattach).
-            conversationLog[sessionID] = Self.mergeConversation(
-                past: hydratedChat[sessionID] ?? [],
-                live: items,
-                pending: stillPending
-            )
+        guard let items = try? client.listConversationItems(sessionId: sessionID) else { return }
+        applyRefreshedConversation(sessionID: sessionID, items: items)
+    }
+
+    /// Off-main refresh for the `refreshSessions` fan-out. `listConversationItems`
+    /// is a BLOCKING FFI call (locks the core session mutex, deep-clones the
+    /// whole conversation, marshals every record across UniFFI). Doing it for
+    /// EVERY session on each status delta on the @MainActor froze the UI on long
+    /// transcripts / under ingest-lock contention past Sentry's 2s App Hang
+    /// threshold (CONDUIT-IOS App Hanging). Pull off the main thread; apply the
+    /// merge back on it. The UniFFI client is thread-safe (Arc+Mutex in Rust)
+    /// but isn't `Sendable`, hence the explicit unsafe capture; the result rides
+    /// back across the actor hop inside a `@unchecked Sendable` box.
+    private func refreshConversationOffMain(sessionID: String) {
+        guard let client else { return }
+        nonisolated(unsafe) let capturedClient = client
+        Task.detached(priority: .utility) { [weak self] in
+            guard let items = try? capturedClient.listConversationItems(sessionId: sessionID) else { return }
+            await self?.applyRefreshedConversation(sessionID: sessionID, box: SendableConvItems(items: items))
         }
+    }
+
+    /// Box that carries the (value-type, effectively-immutable) conversation
+    /// items across the off-main → main-actor hop under strict concurrency.
+    private struct SendableConvItems: @unchecked Sendable {
+        let items: [ConversationItem]
+    }
+
+    /// Main-actor entry for the off-main path — unwraps the box on the main
+    /// actor, then merges.
+    private func applyRefreshedConversation(sessionID: String, box: SendableConvItems) {
+        applyRefreshedConversation(sessionID: sessionID, items: box.items)
+    }
+
+    /// Merge freshly-pulled live items into `conversationLog` on the main
+    /// actor (shared by the sync + off-main refresh paths).
+    private func applyRefreshedConversation(sessionID: String, items: [ConversationItem]) {
+        // Preserve locally-echoed `local-*` items not yet reflected by the
+        // server (matched by role+content). Once the harness mirrors the same
+        // text back under a server id, the local copy drops.
+        //
+        // Bug #3 nuance: the broker doesn't loop user messages back as
+        // `on_chat_event`, so the user's `local-*` echo lives forever in
+        // `stillPending`. Splicing by timestamp keeps order chronological.
+        let existing = conversationLog[sessionID] ?? []
+        let serverFingerprints = Set(items.map { "\($0.role)|\($0.content)" })
+        let stillPending = existing.filter {
+            $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
+        }
+        // Merge under any restored-from-disk past chat (a reattached session —
+        // the broker doesn't replay chat over the WS, so the Rust core's live
+        // `items` only cover turns since reattach).
+        conversationLog[sessionID] = Self.mergeConversation(
+            past: hydratedChat[sessionID] ?? [],
+            live: items,
+            pending: stillPending
+        )
     }
 
     /// Splice restored-from-disk past chat (`past`) under the live Rust-core

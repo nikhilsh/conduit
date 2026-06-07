@@ -573,7 +573,7 @@ extension ConduitUI {
                 ConduitUI.toggleRow(
                     icon: "arrow.up.arrow.down",
                     title: "Collapse Turns",
-                    subtitle: "Hide reasoning blocks by default",
+                    subtitle: "Start command cards collapsed by default",
                     isOn: $appearance.collapseTurns
                 )
             }

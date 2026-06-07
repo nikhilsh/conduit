@@ -83,6 +83,11 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	// turn so the turn-end `result` can hand the generator the message it
 	// should base chips on (and an id the apps tie the chips to).
 	var lastAssistantText, lastAssistantTS string
+	// Current context-window occupancy, latched from each assistant
+	// message's per-call usage. The turn-end `result` usage is a SUM across
+	// every API call in the turn, so it overcounts context badly on
+	// tool-heavy turns; the last call's prompt size is the real occupancy.
+	var lastContextTokens uint64
 	for sc.Scan() {
 		line := sc.Bytes()
 		if claudeStreamLineIsTurnEnd(line) {
@@ -93,13 +98,27 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			// reset for the next turn.
 			if onUsage != nil {
 				if u, ok := parseClaudeUsage(line); ok {
+					// Prefer the latched last-call prompt size for context
+					// occupancy; the result envelope's own contextUsed is a
+					// sum across the turn's API calls (kept only as a
+					// fallback for turns where no per-message usage arrived).
+					if lastContextTokens > 0 {
+						u.contextUsed = lastContextTokens
+					}
 					onUsage(u)
 				}
 			}
 			gen.kickoff(lastAssistantText, lastAssistantTS)
 			titleGen.onTurnEnd(lastAssistantText)
 			lastAssistantText, lastAssistantTS = "", ""
+			lastContextTokens = 0
 			continue
+		}
+		// Latch this assistant message's per-call prompt size as the live
+		// context occupancy (see parseClaudeContextTokens). Falls through to
+		// normal event processing below.
+		if c, ok := parseClaudeContextTokens(line); ok {
+			lastContextTokens = c
 		}
 		// Surface /compact progress + result as a system chat line — the
 		// stream-json engine reports it via system/status events that
