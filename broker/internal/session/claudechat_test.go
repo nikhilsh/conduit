@@ -45,6 +45,9 @@ func TestClaudeStreamCommand(t *testing.T) {
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
+		// AskUserQuestion waits for the phone's answer via the stdio
+		// control protocol (askcontrol.go) instead of headless auto-deny.
+		"--permission-prompt-tool", "stdio",
 	}
 	if len(argv) != len(want) {
 		t.Fatalf("argv = %v, want %v", argv, want)
@@ -84,7 +87,7 @@ func TestProcessClaudeStreamOutput(t *testing.T) {
 		if json.Unmarshal(p, &ev) == nil {
 			got = append(got, ev)
 		}
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -165,7 +168,7 @@ func TestProcessClaudeStreamOutputAskUserQuestion(t *testing.T) {
 		if json.Unmarshal(p, &ev) == nil {
 			got = append(got, ev)
 		}
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}

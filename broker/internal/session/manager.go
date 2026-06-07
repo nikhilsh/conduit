@@ -184,6 +184,9 @@ type Session struct {
 	// per-turn and needs no respawn. nil → no self-heal, errors surface
 	// via the system chat message in SendChat.
 	chatRespawn func() (chatBackend, error)
+	// pendingAsk is a blocked AskUserQuestion control request waiting
+	// for the user's answer (askcontrol.go). Guarded by mu.
+	pendingAsk *pendingAsk
 
 	// recorder writes PTY bytes + view_events to a per-session
 	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
@@ -479,6 +482,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			gen,
 			s.titleGen,
 			s.accumulateUsage,
+			s.handleAskControl,
 		)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
@@ -498,6 +502,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 				gen,
 				s.titleGen,
 				s.accumulateUsage,
+				s.handleAskControl,
 			)
 		}
 	case "codex":
@@ -749,6 +754,21 @@ func (s *Session) SendChat(msg string) bool {
 	// Rewrite relative upload refs to the absolute durable path for the
 	// AGENT only (persistence above keeps the relative form for the client).
 	agentMsg := s.RewriteUploadRefs(msg)
+	// If the agent is blocked on an AskUserQuestion control request
+	// (--permission-prompt-tool stdio, see askcontrol.go), this message
+	// IS the answer — a card tap or typed free text both count. Respond
+	// on the control channel so the agent's turn RESUMES with the real
+	// answer, instead of queueing a new user turn behind a blocked one.
+	if ask := s.takePendingAsk(); ask != nil {
+		if line, encErr := encodeAskAnswer(ask.requestID, ask.input, agentMsg); encErr == nil {
+			if err := ask.cp.SendRaw(line); err == nil {
+				return true
+			}
+			// stdin gone (agent died holding the question) — fall
+			// through to the normal send path, whose self-heal respawns
+			// a fresh agent and delivers the text as a plain user turn.
+		}
+	}
 	err := s.chat.Send(agentMsg)
 	if err != nil && s.chatRespawn != nil {
 		// The long-lived stream-json agent died underneath us (any send

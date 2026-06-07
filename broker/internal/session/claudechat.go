@@ -35,6 +35,13 @@ func claudeStreamCommand(command, args []string) []string {
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
+		// Route interactive-tool permission asks (AskUserQuestion) to
+		// stdin/stdout control_request/control_response instead of the
+		// headless auto-DENY, so the agent genuinely WAITS for the
+		// phone's answer (see askcontrol.go). Ordinary tools still
+		// auto-allow under --dangerously-skip-permissions — verified
+		// live against claude-code 2.1.168.
+		"--permission-prompt-tool", "stdio",
 	)
 	return argv
 }
@@ -74,7 +81,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta)) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest)) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -90,6 +97,15 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	var lastContextTokens uint64
 	for sc.Scan() {
 		line := sc.Bytes()
+		// Control protocol (--permission-prompt-tool stdio): a blocked
+		// can_use_tool request. Routed to the session's bridge — never
+		// rendered as chat content.
+		if req, ok := parseControlRequest(line); ok {
+			if onControl != nil {
+				onControl(req)
+			}
+			continue
+		}
 		if claudeStreamLineIsTurnEnd(line) {
 			// Turn complete: fold the turn's token/cost usage from the
 			// `result` envelope, kick off best-effort AI quick replies for
@@ -247,8 +263,9 @@ func publishChatSystem(publish func([]byte), content string) {
 func askUserQuestionContent(input json.RawMessage) (string, bool) {
 	var payload struct {
 		Questions []struct {
-			Question string `json:"question"`
-			Options  []struct {
+			Question    string `json:"question"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
 				Label string `json:"label"`
 			} `json:"options"`
 		} `json:"questions"`
@@ -266,6 +283,13 @@ func askUserQuestionContent(input json.RawMessage) (string, bool) {
 			b.WriteString("\n\n")
 		}
 		b.WriteString(question)
+		// Multi-select travels INSIDE the text (no schema change across
+		// broker → core → apps): the apps' pending-input parser detects
+		// this exact marker and renders checkboxes + Send instead of
+		// tap-to-send. Doubles as honest prose for clients that don't.
+		if q.MultiSelect {
+			b.WriteString(multiSelectMarker)
+		}
 		n := 0
 		for _, o := range q.Options {
 			label := strings.TrimSpace(o.Label)
