@@ -289,13 +289,18 @@ extension ConduitUI {
         /// `● both connected` / `● claude connected` / `● not signed in` —
         /// the at-a-glance answer the old row never gave.
         private var agentAccountsStatus: some View {
-            let signedIn = agentAccounts.filter(\.signedIn)
+            // "Connected" means usable — an EXPIRED credential doesn't
+            // count (the broker won't use it for new sessions).
+            let usable = agentAccounts.filter(\.usable)
             let (label, color): (String, Color) = {
-                if signedIn.count == agentAccounts.count, !agentAccounts.isEmpty {
+                if usable.count == agentAccounts.count, !agentAccounts.isEmpty {
                     return ("both connected", neon.green)
                 }
-                if let only = signedIn.first, signedIn.count == 1 {
+                if let only = usable.first, usable.count == 1 {
                     return ("\(only.agent) connected", neon.green)
+                }
+                if agentAccounts.contains(where: { $0.expired }) {
+                    return ("sign-in expired", neon.yellow)
                 }
                 return ("not signed in", neon.textFaint)
             }()
@@ -312,9 +317,10 @@ extension ConduitUI {
         private func agentAccountRow(_ account: AgentAccountStatus) -> some View {
             let tint = neon.agentTint(forAgent: account.agent)
             return Button {
-                if account.signedIn {
+                if account.usable {
                     manageTarget = account
                 } else {
+                    // Signed out OR expired — both need the login flow.
                     showAgentLogin = true
                 }
             } label: {
@@ -344,19 +350,23 @@ extension ConduitUI {
                             }
                         }
                         HStack(spacing: 5) {
+                            let (statusText, statusColor): (String, Color) =
+                                account.usable ? ("signed in", neon.green)
+                                : account.expired ? ("sign-in expired", neon.yellow)
+                                : ("signed out", neon.textFaint)
                             Circle()
-                                .fill(account.signedIn ? neon.green : neon.textFaint)
+                                .fill(statusColor)
                                 .frame(width: 5, height: 5)
-                            Text(account.signedIn ? "signed in" : "signed out")
+                            Text(statusText)
                                 .font(neon.mono(10.5))
-                                .foregroundStyle(account.signedIn ? neon.green : neon.textFaint)
+                                .foregroundStyle(statusColor)
                         }
                     }
                     Spacer(minLength: 8)
                     HStack(spacing: 4) {
-                        Text(account.signedIn ? "Manage" : "Sign in")
+                        Text(account.usable ? "Manage" : "Sign in")
                             .font(neon.sans(13).weight(.semibold))
-                            .foregroundStyle(account.signedIn ? neon.textDim : neon.accent)
+                            .foregroundStyle(account.usable ? neon.textDim : neon.accent)
                         Image(systemName: "chevron.right")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(neon.textFaint)
