@@ -174,7 +174,9 @@ targets:
   ConduitWidgets:
     type: app-extension
     platform: iOS
-    deploymentTarget: "16.1"
+    # 17.0 for modern ActivityKit (context.isStale rendering, intents).
+    # The host app targets far newer, so this floor is never the limiter.
+    deploymentTarget: "17.0"
     sources:
       - path: Widgets
       # ActivityAttributes type must be compiled into BOTH the host
@@ -185,6 +187,9 @@ targets:
       # widget extension can't (and shouldn't) link.
       - path: Sources/Models/TurnActivityModel.swift
       - path: Sources/Models/TurnActivityAttributes.swift
+      # LiveActivityIntent shared with the host so Button(intent:) in the
+      # widget and perform() in the app agree on the same type.
+      - path: Sources/Models/ApproveSessionIntent.swift
     info:
       path: Widgets/Info.plist
       properties:

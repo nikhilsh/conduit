@@ -249,4 +249,97 @@ struct TurnLiveActivityModelTests {
             Issue.record("expected .start after restart, got \(restart)")
         }
     }
+
+    // MARK: - Pending input (round-3 §2 "needs you")
+
+    @Test func pendingInputStartsActivityWithPendingStatus() {
+        // An approval waiting on the lock screen is the whole point —
+        // a pending-input item starts an activity even with no prior tool.
+        var model = TurnActivityModel()
+        let effect = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: Date()),
+            sessionID: "s1",
+            agentName: "claude",
+            sessionName: "Code Review"
+        )
+
+        guard case let .start(attrs, state) = effect else {
+            Issue.record("expected .start for pendingInput, got \(effect)")
+            return
+        }
+        #expect(state.status == "pending")
+        #expect(attrs.sessionName == "Code Review")
+    }
+
+    @Test func pendingInputFlipsRunningActivityToPending() {
+        var model = TurnActivityModel()
+        _ = model.apply(
+            item: TurnActivityItem(id: "i1", kind: .tool, toolName: "Bash", timestamp: Date()),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+
+        let effect = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: Date()),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+
+        guard case let .update(state) = effect else {
+            Issue.record("expected .update, got \(effect)")
+            return
+        }
+        #expect(state.status == "pending")
+    }
+
+    @Test func idleTickSparesPendingActivity() {
+        // An approval can wait minutes — the idle timeout must not reap
+        // a "needs you" card; only a fresh item or a session exit may.
+        var model = TurnActivityModel(idleTimeout: 5)
+        let t0 = Date(timeIntervalSince1970: 100)
+        _ = model.apply(
+            item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: t0),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+
+        let wayPastIdle = model.tick(now: t0.addingTimeInterval(600))
+
+        #expect(wayPastIdle == .noop)
+        #expect(model.isActive)
+    }
+
+    @Test func sessionExitedCarriesSummary() {
+        var model = TurnActivityModel()
+        _ = model.apply(
+            item: TurnActivityItem(id: "i1", kind: .tool, toolName: "Bash", timestamp: Date()),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+
+        let effect = model.sessionExited(summary: "exit 0")
+
+        guard case let .end(state) = effect else {
+            Issue.record("expected .end, got \(effect)")
+            return
+        }
+        #expect(state.summary == "exit 0")
+        #expect(state.status == "exited")
+    }
+}
+
+/// Round-3 §2 helpers around the bridge shell.
+@Suite("TurnLiveActivityBridge exit summary")
+struct TurnLiveActivityExitSummaryTests {
+    @Test func parsesExitCodeFromPhase() {
+        #expect(TurnLiveActivityBridge.exitSummary(phase: "exited(0)") == "exit 0")
+        #expect(TurnLiveActivityBridge.exitSummary(phase: "exited(137)") == "exit 137")
+    }
+
+    @Test func nilOrCodelessPhaseGivesNil() {
+        #expect(TurnLiveActivityBridge.exitSummary(phase: nil) == nil)
+        #expect(TurnLiveActivityBridge.exitSummary(phase: "exited") == nil)
+        #expect(TurnLiveActivityBridge.exitSummary(phase: "running") == nil)
+        #expect(TurnLiveActivityBridge.exitSummary(phase: "exited()") == nil)
+    }
 }

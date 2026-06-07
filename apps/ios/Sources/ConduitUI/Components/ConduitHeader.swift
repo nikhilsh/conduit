@@ -43,6 +43,9 @@ extension ConduitUI {
                         tint: ConduitUI.Palette.surface.color.opacity(0.65),
                         config: .floating
                     )
+                    // Round-3 §4: visuals stay 36pt; hit area is ≥44×44.
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(accessibilityLabel ?? systemImage)

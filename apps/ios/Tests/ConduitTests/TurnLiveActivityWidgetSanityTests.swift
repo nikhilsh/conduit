@@ -26,10 +26,13 @@ struct TurnLiveActivityWidgetSanityTests {
     }
 
     @Test func attributesRoundTripFromPureData() {
-        let data = TurnActivityAttributesData(agentName: "claude", sessionID: "s-42")
+        let data = TurnActivityAttributesData(
+            agentName: "claude", sessionID: "s-42", sessionName: "Code Review"
+        )
         let attrs = TurnActivityAttributes(from: data)
         #expect(attrs.agentName == "claude")
         #expect(attrs.sessionID == "s-42")
+        #expect(attrs.sessionName == "Code Review")
     }
 
     @Test func contentStateRoundTripFromPureData() throws {
@@ -39,7 +42,9 @@ struct TurnLiveActivityWidgetSanityTests {
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             tokensIn: 12,
             tokensOut: 34,
-            status: "running"
+            status: "running",
+            syncedAt: Date(timeIntervalSince1970: 1_700_000_100),
+            summary: "exit 0"
         )
         let content = TurnActivityAttributes.ContentState(from: state)
         #expect(content.currentTool == "Bash")
@@ -47,6 +52,8 @@ struct TurnLiveActivityWidgetSanityTests {
         #expect(content.tokensIn == 12)
         #expect(content.tokensOut == 34)
         #expect(content.status == "running")
+        #expect(content.syncedAt == Date(timeIntervalSince1970: 1_700_000_100))
+        #expect(content.summary == "exit 0")
 
         // Encode + decode so we catch a Codable-shape break the
         // moment a field rename slips past code review.

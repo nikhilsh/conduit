@@ -79,6 +79,11 @@ public struct TurnLiveActivityBridgeCore {
     /// item arrives (which clears the entry on observe). Prevents the
     /// idle-tick path from emitting `.end` repeatedly.
     public private(set) var endedSessions: Set<String> = []
+    /// Sessions whose latest driving item is a pending-input (the agent
+    /// is blocked on the user). Exempt from the idle sweep — an approval
+    /// can wait minutes and the lock-screen card asking for it IS the
+    /// feature (round-3 §2). Cleared by the next tool/command/exit.
+    public private(set) var pendingSessions: Set<String> = []
 
     public let idleTimeout: TimeInterval
 
@@ -123,7 +128,7 @@ public struct TurnLiveActivityBridgeCore {
                     }
                     continue
                 }
-                if item.kind == .tool || item.kind == .command {
+                if item.kind == .tool || item.kind == .command || item.kind == .pendingInput {
                     intents.append(.observe(
                         sessionID: sid,
                         agentName: session.agentName,
@@ -131,10 +136,18 @@ public struct TurnLiveActivityBridgeCore {
                     ))
                     lastActivityAt[sid] = item.timestamp
                     endedSessions.remove(sid)
+                    // Pending-input marks the session as waiting on the
+                    // user; any tool/command resumes normal idle rules.
+                    if item.kind == .pendingInput {
+                        pendingSessions.insert(sid)
+                    } else {
+                        pendingSessions.remove(sid)
+                    }
                 } else if item.kind == .exit {
                     if !endedSessions.contains(sid) {
                         intents.append(.end(sessionID: sid))
                         endedSessions.insert(sid)
+                        pendingSessions.remove(sid)
                     }
                 }
                 lastSeenItemID[sid] = item.id
@@ -153,8 +166,10 @@ public struct TurnLiveActivityBridgeCore {
 
         // Idle-timeout sweep: any session that's past the window
         // without a fresh tool item and hasn't already been ended.
+        // Sessions blocked on the user (pending approval) are exempt —
+        // their card waits for the human, not the clock.
         for (sid, last) in lastActivityAt {
-            guard !endedSessions.contains(sid) else { continue }
+            guard !endedSessions.contains(sid), !pendingSessions.contains(sid) else { continue }
             if now.timeIntervalSince(last) >= idleTimeout {
                 intents.append(.end(sessionID: sid))
                 endedSessions.insert(sid)
@@ -313,12 +328,36 @@ public final class TurnLiveActivityBridge {
     private func apply(intent: TurnLiveActivityIntent) {
         switch intent {
         case let .observe(sessionID, agentName, item):
-            controller.observe(item: item, in: sessionID, agentName: agentName)
+            // Resolve the display name here (not in the intent) so the
+            // pure core + its pinned tests stay untouched.
+            let sessionName: String = {
+                guard let store,
+                      let session = store.sessions.first(where: { $0.id == sessionID })
+                else { return "" }
+                return store.displayName(for: session)
+            }()
+            controller.observe(
+                item: item, in: sessionID, agentName: agentName, sessionName: sessionName
+            )
         case let .end(sessionID):
-            controller.sessionExited(sessionID: sessionID)
+            controller.sessionExited(
+                sessionID: sessionID,
+                summary: Self.exitSummary(phase: store?.statusBySession[sessionID]?.phase)
+            )
         case .tick:
             controller.tickAll()
         }
+    }
+
+    /// "exited(0)" → "exit 0" for the done-state closing line. Nil when
+    /// the phase carries no code — the widget then just says "done".
+    /// Nonisolated: pure string mapping, also exercised by tests off the
+    /// main actor.
+    nonisolated static func exitSummary(phase: String?) -> String? {
+        guard let phase, phase.hasPrefix("exited(") else { return nil }
+        let code = phase.dropFirst("exited(".count).prefix { $0 != ")" }
+        guard !code.isEmpty else { return nil }
+        return "exit \(code)"
     }
 
 }

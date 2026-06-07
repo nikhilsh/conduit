@@ -68,6 +68,18 @@ struct ConduitChatGroupingTests {
         #expect(rows.count == 5)
     }
 
+    @Test func minRunTwoCollapsesPairs() {
+        // Round-3 §1: the chat surface now groups with minRun 2 and
+        // includes command tools — a pair of adjacent tool calls bundles.
+        let rows = group(
+            [item("tool", "t1"), item("tool", "t2"), item("assistant", "a1")],
+            minRun: 2
+        )
+        #expect(rows.count == 2)
+        guard case .toolGroup(let g) = rows[0] else { Issue.record("row0 should be group"); return }
+        #expect(g.count == 2)
+    }
+
     @Test func groupIdIsStable() {
         let rows = group([item("tool", "t1"), item("tool", "t2"), item("tool", "t3")])
         #expect(rows.count == 1)
