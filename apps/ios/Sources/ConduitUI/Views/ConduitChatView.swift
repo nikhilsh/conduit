@@ -1707,6 +1707,21 @@ private struct ConduitNeonCommandCard: View {
     private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
     private var command: String { ConversationRenderer.extractCommand(from: event) ?? event.content }
     private var sections: [ToolSection] { ConversationRenderer.toolSections(for: event) }
+    /// Sections that actually draw something in the collapsible body. `.meta`
+    /// and `.command` are already rendered in the header / meta strip, so a
+    /// command with no captured output would otherwise expand into an empty body
+    /// — a dead gap above the action bar (device: "when I expand a tool the
+    /// bottom is very empty").
+    private var renderableSections: [ToolSection] {
+        sections.filter { section in
+            switch section {
+            case .meta, .command: return false
+            default: return true
+            }
+        }
+    }
+    /// Only show the collapsible body when there's something to show.
+    private var hasBody: Bool { !renderableSections.isEmpty || state == .running }
     private var railColor: Color { state.color(neon) }
 
     var body: some View {
@@ -1721,7 +1736,7 @@ private struct ConduitNeonCommandCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 metaStrip
-                if expanded { output }
+                if expanded && hasBody { output }
                 actionBar
             }
         }
@@ -1840,7 +1855,7 @@ private struct ConduitNeonCommandCard: View {
     // block cursor while running.
     private var output: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+            ForEach(Array(renderableSections.enumerated()), id: \.offset) { _, section in
                 switch section {
                 case .stdout(let text):
                     outputText(text, color: neon.codeText)
