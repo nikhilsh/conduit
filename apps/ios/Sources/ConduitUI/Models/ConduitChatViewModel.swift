@@ -75,13 +75,89 @@ extension ConduitUI {
                 && item.content.hasPrefix("uploaded ")
         }
 
+        /// One question inside a pending-input prompt: its text plus its own
+        /// options. AskUserQuestion can carry several of these; the broker
+        /// flattens them into `"<q1>\n1.a\n2.b\n\n<q2>\n1.c\n2.d"` and core
+        /// flattens the options into one array, so we recover the grouping
+        /// here from `content` (#7).
+        struct PendingQuestion: Equatable {
+            let prompt: String
+            let options: [String]
+        }
+
+        /// Recover per-question groups from a pending-input `content` body.
+        /// Blocks are separated by blank lines; within a block the leading
+        /// prose is the question and the numbered/bulleted lines are its
+        /// options. Pure + unit-tested.
+        static func parsePendingQuestions(_ content: String) -> [PendingQuestion] {
+            var result: [PendingQuestion] = []
+            for block in content.components(separatedBy: "\n\n") {
+                var prompt: [String] = []
+                var options: [String] = []
+                for rawLine in block.components(separatedBy: "\n") {
+                    let line = rawLine.trimmingCharacters(in: .whitespaces)
+                    if line.isEmpty { continue }
+                    if let opt = optionText(line) {
+                        options.append(opt)
+                    } else if options.isEmpty {
+                        prompt.append(line)
+                    }
+                    // Stray prose AFTER options started is dropped — the
+                    // broker never emits it for AskUserQuestion.
+                }
+                let promptText = prompt.joined(separator: "\n")
+                if !options.isEmpty || !promptText.isEmpty {
+                    result.append(PendingQuestion(prompt: promptText, options: options))
+                }
+            }
+            return result
+        }
+
+        /// Strip a numbered (`1.`/`1)`) or bulleted (`-`/`*`) option marker,
+        /// returning the option text, or nil when the line isn't an option.
+        private static func optionText(_ line: String) -> String? {
+            if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                return String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            }
+            var idx = line.startIndex
+            var sawDigit = false
+            while idx < line.endIndex, line[idx].isNumber {
+                sawDigit = true
+                idx = line.index(after: idx)
+            }
+            guard sawDigit, idx < line.endIndex, line[idx] == "." || line[idx] == ")" else { return nil }
+            let after = line.index(after: idx)
+            guard after < line.endIndex, line[after] == " " else { return nil }
+            let text = String(line[after...]).trimmingCharacters(in: .whitespaces)
+            return text.isEmpty ? nil : text
+        }
+
+        /// Drop a plain message echo of a pending-input question — the
+        /// interactive card already shows it, so the duplicate is noise
+        /// (#5). Conservative: only drops a non-pending item whose content
+        /// equals, or is fully contained in, a pending-input body. The
+        /// length floor avoids matching trivial strings.
+        static func dropPendingInputEchoes(_ items: [ConversationItem]) -> [ConversationItem] {
+            let pending = items
+                .filter { $0.kind == "pending_input" }
+                .map { $0.content.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { $0.count >= 8 }
+            guard !pending.isEmpty else { return items }
+            return items.filter { item in
+                if item.kind == "pending_input" { return true }
+                let c = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard c.count >= 8 else { return true }
+                return !pending.contains { $0 == c || $0.contains(c) }
+            }
+        }
+
         static func mergedEvents(
             conversation: [ConversationItem],
             chatLog: [ChatEvent]
         ) -> [ConversationItem] {
             let conversation = conversation.filter { !isUploadToolEvent($0) }
             // Fast path: nothing raw to fold in.
-            guard !chatLog.isEmpty else { return conversation }
+            guard !chatLog.isEmpty else { return dropPendingInputEchoes(conversation) }
 
             // Same fingerprint shape `refreshConversation` uses to dedupe
             // local echoes against the server's typed log — role+content
@@ -114,13 +190,15 @@ extension ConduitUI {
                 )
             }
             .filter { !isUploadToolEvent($0) }
-            guard !synthetic.isEmpty else { return conversation }
+            guard !synthetic.isEmpty else { return dropPendingInputEchoes(conversation) }
             // Sort by ts (PR #111 contract — typed log is ts-sorted).
             // Epoch-normalized (not raw String): a `+09:00` offset or a
             // fractional-second mismatch would otherwise mis-sort, and an
             // empty live `ts` must stay newest. Mirrors Android
             // `sortedByConversationTs`.
-            return (conversation + synthetic).sortedByConversationTs { $0.ts }
+            return dropPendingInputEchoes(
+                (conversation + synthetic).sortedByConversationTs { $0.ts }
+            )
         }
 
         /// A renderable row in the transcript: either a standalone event or

@@ -2393,29 +2393,45 @@ private struct ConduitPendingInputCard: View {
     let onQuickReply: (String) -> Void
     @Environment(\.neonTheme) private var neon
 
-    private var options: [String] {
-        if !event.pendingOptions.isEmpty { return event.pendingOptions }
-        return ConversationRenderer.extractPendingOptions(from: event.content)
+    /// Chosen option per question index. Drives the selection highlight and
+    /// gates the multi-question Send button.
+    @State private var selections: [Int: String] = [:]
+    /// Once answered, the card locks: the choice is marked and the rest
+    /// dimmed/disabled so it reads as a settled decision.
+    @State private var submitted = false
+
+    /// Per-question groups recovered from the prompt body (#7). Falls back
+    /// to the flat `pendingOptions` as a single unlabeled question.
+    private var questions: [ConduitUI.PendingQuestion] {
+        let parsed = ConduitUI.ChatViewModel.parsePendingQuestions(event.content)
+        if !parsed.isEmpty { return parsed }
+        let flat = event.pendingOptions.isEmpty
+            ? ConversationRenderer.extractPendingOptions(from: event.content)
+            : event.pendingOptions
+        return [ConduitUI.PendingQuestion(prompt: "", options: flat)]
     }
 
     var body: some View {
-        // §6: claude-tinted wash + 1.5px claude border, glowing. Big
-        // tappable option rows — the first is the filled primary, the
-        // rest bordered with a trailing index number.
-        VStack(alignment: .leading, spacing: 10) {
+        let questions = self.questions
+        let multi = questions.count > 1
+        return VStack(alignment: .leading, spacing: 12) {
             Text("NEEDS YOUR INPUT")
                 .font(neon.mono(11).weight(.bold))
                 .tracking(0.8)
                 .foregroundStyle(neon.claude)
                 .neonTextGlow(neon.textGlow?.tinted(neon.claude))
-            // Prompt in sans.
-            ConduitMarkdownBlock(text: event.content, role: .assistant)
-            if !options.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(Array(options.enumerated()), id: \.offset) { idx, option in
-                        optionRow(option, index: idx)
+            ForEach(Array(questions.enumerated()), id: \.offset) { qIdx, question in
+                VStack(alignment: .leading, spacing: 8) {
+                    if !question.prompt.isEmpty {
+                        ConduitMarkdownBlock(text: question.prompt, role: .assistant)
+                    }
+                    ForEach(Array(question.options.enumerated()), id: \.offset) { oIdx, option in
+                        optionRow(question: qIdx, option: option, index: oIdx, multi: multi)
                     }
                 }
+            }
+            if multi && !submitted {
+                sendButton(questions: questions)
             }
         }
         .padding(14)
@@ -2431,21 +2447,30 @@ private struct ConduitPendingInputCard: View {
     }
 
     @ViewBuilder
-    private func optionRow(_ option: String, index: Int) -> some View {
-        let isPrimary = index == 0
-        Button { onQuickReply(option) } label: {
+    private func optionRow(question qIdx: Int, option: String, index oIdx: Int, multi: Bool) -> some View {
+        let selected = selections[qIdx] == option
+        let dimmed = submitted && !selected
+        Button {
+            guard !submitted else { return }
+            selections[qIdx] = option
+            // Single question → send immediately (tap == answer). Multi
+            // waits for the explicit Send once every question is answered.
+            if !multi {
+                submit([option])
+            }
+        } label: {
             HStack(spacing: 10) {
-                if isPrimary {
+                if selected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(neon.accentText)
                 }
                 Text(option)
-                    .font(neon.sans(15).weight(isPrimary ? .semibold : .medium))
-                    .foregroundStyle(isPrimary ? neon.accentText : neon.text)
+                    .font(neon.sans(15).weight(selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? neon.accentText : neon.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if !isPrimary {
-                    Text("\(index)")
+                if !selected {
+                    Text("\(oIdx + 1)")
                         .font(neon.mono(12).weight(.bold))
                         .foregroundStyle(neon.textFaint)
                 }
@@ -2454,16 +2479,47 @@ private struct ConduitPendingInputCard: View {
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isPrimary ? neon.claude : Color.clear)
+                    .fill(selected ? neon.claude : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isPrimary ? Color.clear : neon.border, lineWidth: 1)
+                    .stroke(selected ? Color.clear : neon.border, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Send this reply")
+        .disabled(submitted)
+        .opacity(dimmed ? 0.45 : 1)
+        .accessibilityHint(multi ? "Select this option" : "Send this reply")
+    }
+
+    @ViewBuilder
+    private func sendButton(questions: [ConduitUI.PendingQuestion]) -> some View {
+        // Only questions that actually offer options need an answer.
+        let answerable = questions.enumerated().filter { !$0.element.options.isEmpty }
+        let allAnswered = answerable.allSatisfy { selections[$0.offset] != nil }
+        Button {
+            guard allAnswered else { return }
+            submit(answerable.compactMap { selections[$0.offset] })
+        } label: {
+            Text("Send")
+                .font(neon.sans(15).weight(.semibold))
+                .foregroundStyle(neon.accentText)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(neon.claude)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!allAnswered)
+        .opacity(allAnswered ? 1 : 0.5)
+    }
+
+    /// Lock the card and send the chosen answer(s). Multiple answers are
+    /// newline-joined into one chat message.
+    private func submit(_ answers: [String]) {
+        submitted = true
+        onQuickReply(answers.joined(separator: "\n"))
     }
 }
 
