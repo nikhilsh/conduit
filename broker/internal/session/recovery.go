@@ -93,6 +93,18 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// Restore the spent restart budget so a crash-looper keeps counting
 	// up across recoveries rather than starting fresh each time.
 	s.consecutiveFastExits = meta.ConsecutiveFastExits
+	// Restore usage totals + the context gauge so a broker restart
+	// doesn't blank the Session Info usage card. The totals are lifetime
+	// sums and the gauge is the latest turn's snapshot — both still true
+	// after recovery; the next turn accumulates / overwrites as usual.
+	s.totalInputTokens = meta.TotalInputTokens
+	s.totalOutputTokens = meta.TotalOutputTokens
+	s.totalCachedTokens = meta.TotalCachedTokens
+	s.totalCostUSD = meta.TotalCostUSD
+	s.contextUsedTokens = meta.ContextUsedTokens
+	s.contextWindowTokens = meta.ContextWindowTokens
+	s.hasUsage = meta.TotalInputTokens > 0 || meta.TotalOutputTokens > 0 ||
+		meta.ContextUsedTokens > 0
 	// Restore the AI title (task: ai-session-titles) so a recovered
 	// session keeps its name without re-generating.
 	s.aiTitle = meta.AITitle

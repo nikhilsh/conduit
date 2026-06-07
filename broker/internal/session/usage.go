@@ -62,6 +62,13 @@ func (s *Session) accumulateUsage(d usageDelta) {
 	if s.Assistant == "codex" {
 		go s.RefreshAccountUsage()
 	}
+	// Persist the updated totals (meta.json) so a broker restart doesn't
+	// blank the usage card — recovery restores these fields. Best-effort
+	// and once per turn-completion, so the extra write is negligible.
+	// (metaPath is empty on bare test fixtures — nothing to persist to.)
+	if s.metaPath != "" {
+		_ = s.persistMetadata()
+	}
 }
 
 // Usage returns the cumulative usage snapshot for the status frame.

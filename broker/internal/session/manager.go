@@ -1576,6 +1576,18 @@ type sessionMetadata struct {
 	// resurrecting forever — see restartbudget.go. omitempty: healthy
 	// sessions never carry the field.
 	ConsecutiveFastExits int `json:"consecutive_fast_exits,omitempty"`
+	// Usage totals + the context gauge (see usage.go). Persisted so a
+	// broker restart doesn't blank the Session Info usage card — the
+	// totals/cost are lifetime sums and the context gauge is the latest
+	// turn's snapshot, both of which remain true after a recovery (the
+	// next turn's usage event simply overwrites the gauge). omitempty:
+	// sessions that never reported usage carry none of these.
+	TotalInputTokens    uint64  `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens   uint64  `json:"total_output_tokens,omitempty"`
+	TotalCachedTokens   uint64  `json:"total_cached_tokens,omitempty"`
+	TotalCostUSD        float64 `json:"total_cost_usd,omitempty"`
+	ContextUsedTokens   uint64  `json:"context_used_tokens,omitempty"`
+	ContextWindowTokens uint64  `json:"context_window_tokens,omitempty"`
 }
 
 func (s *Session) applyPaths() {
@@ -1604,6 +1616,13 @@ func (s *Session) persistMetadata() error {
 		WorkspaceDir: s.workspaceDir,
 
 		ConsecutiveFastExits: s.consecutiveFastExits,
+
+		TotalInputTokens:    s.totalInputTokens,
+		TotalOutputTokens:   s.totalOutputTokens,
+		TotalCachedTokens:   s.totalCachedTokens,
+		TotalCostUSD:        s.totalCostUSD,
+		ContextUsedTokens:   s.contextUsedTokens,
+		ContextWindowTokens: s.contextWindowTokens,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)
