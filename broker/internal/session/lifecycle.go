@@ -376,12 +376,15 @@ func (s *Session) Checkpoint(reason string) error {
 	defer s.checkpointMu.Unlock()
 
 	snapshot := s.Snapshot()
+	// A failed checkpoint write is a disk hiccup, not a dead agent — keep the
+	// phase "running" (health "warning") so a transient write error doesn't
+	// flip the live session read-only on the app. See watchdog.setHealth*.
 	if err := atomicWriteFile(s.scrollbackPath, snapshot); err != nil {
-		s.setHealth("warning", "stalled")
+		s.setHealth("warning", "running")
 		return err
 	}
 	if err := s.writeMemoryHTML(snapshot); err != nil {
-		s.setHealth("warning", "stalled")
+		s.setHealth("warning", "running")
 		return err
 	}
 	s.maybeAutoWIP()

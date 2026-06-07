@@ -78,6 +78,17 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	if meta.ReasonCode != "" {
 		s.reasonCode = meta.ReasonCode
 	}
+	// A recovered session has a freshly-spawned, LIVE agent process. If the
+	// persisted phase was a non-live state (the "stalled" the watchdog records
+	// when the prior process died, or "exited"), don't resurrect it: that
+	// opens the recovered session read-only on the app until the next watchdog
+	// tick — the "stuck not-running after a reconnect" report. Normalize to a
+	// live running phase; the watchdog refines health from here.
+	if !isLivePhase(s.phase) {
+		s.phase = "running"
+		s.health = "healthy"
+		s.reasonCode = "recovered"
+	}
 	s.exitCode = meta.ExitCode
 	// Restore the spent restart budget so a crash-looper keeps counting
 	// up across recoveries rather than starting fresh each time.
