@@ -52,9 +52,9 @@ A goroutine per session, independent of the PTY drain. Runs three checks every 3
 
 | Check | Probe | Failure action |
 |---|---|---|
-| Agent process alive | the PTY child's exit is observed | Mark session `dead`; broadcast `phase: "stalled"`; emit `view_event` to chat tab; **do not** auto-restart |
-| PTY producing output | bytes-since-last-output > `[watchdog] stall_alert_after_sec` (default 300s) | Mark `warning`; broadcast `phase: "stalled"`; emit alert `view_event` |
-| Memory writable | open + fsync probe file under `.conduit/memory/` | Log error; broadcast `phase: "stalled"`; do not crash broker |
+| Agent process alive | the PTY child's exit is observed | Mark session `dead`; broadcast the phase change; emit `view_event` to chat tab; **do not** auto-restart |
+| PTY producing output | bytes-since-last-output > `[watchdog] stall_alert_after_sec` (default 300s) | Mark health `warning`; **phase stays `running`** (PR #385 — a quiet-but-alive agent must not flip the app read-only); broadcast the health change |
+| Memory writable | open + fsync probe file under `.conduit/memory/` | Log error; health `warning`; **phase stays `running`**; do not crash broker |
 
 `auto_restart_on_crash` is `false` by default (avoids agents looping forever burning credits). Users tap "Resume" in the mobile app to restart.
 

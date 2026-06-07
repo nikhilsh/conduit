@@ -32,7 +32,18 @@ const (
 	tagSnapshot byte = 0x02
 	tagEscape   byte = 0xFF
 	snapChunk        = 32 * 1024
-	pongWait         = 90 * time.Second
+)
+
+// Keep-alive tuning. Vars (not consts) so the keep-alive regression
+// tests can shrink them; production values otherwise.
+var (
+	// pongWait is the read-deadline window: a socket with no inbound
+	// frames AND no pong replies for this long is considered dead.
+	pongWait = 90 * time.Second
+	// pingInterval is the cadence of the server's heartbeat (both the
+	// protocol-level Ping that solicits the deadline-refreshing Pong
+	// and the app-level JSON ping clients key their own liveness off).
+	pingInterval = 30 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
@@ -447,6 +458,14 @@ func (c *client) readLoop() {
 		if err != nil {
 			return
 		}
+		// Any inbound frame proves the peer is alive — re-arm the read
+		// deadline. Previously the deadline was re-armed ONLY by the
+		// PongHandler, but neither side ever sent a protocol-level Ping
+		// (both 30s heartbeats are JSON text frames, which don't touch
+		// the deadline), so EVERY socket was hard-closed exactly
+		// pongWait after connect no matter how chatty it was — the
+		// "random disconnects" users saw every ~90s.
+		_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		switch mt {
 		case websocket.BinaryMessage:
 			c.handleBinary(payload)
@@ -816,7 +835,7 @@ func (c *client) broadcastCredentialsRefreshed(provider string) {
 // writeLoop forwards PTY output to the WebSocket and emits periodic pings.
 func (c *client) writeLoop(sub chan []byte, textSub chan []byte, done <-chan struct{}) {
 	defer c.close()
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -838,6 +857,13 @@ func (c *client) writeLoop(sub chan []byte, textSub chan []byte, done <-chan str
 				return
 			}
 		case <-ticker.C:
+			// Protocol-level Ping first: the peer's automatic Pong
+			// re-arms our read deadline via the PongHandler, keeping a
+			// quiet-but-alive client connected even if it sends nothing.
+			// (Safe alongside writeJSON — gorilla's WriteControl may be
+			// called concurrently with other writes.) Errors fall
+			// through to the JSON write, which returns on a dead socket.
+			_ = c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
 			if err := c.writeJSON(map[string]any{"type": "ping", "ts": time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
 				return
 			}
