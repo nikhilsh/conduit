@@ -18,10 +18,14 @@ import Foundation
 public struct TurnActivityAttributesData: Equatable, Hashable, Codable, Sendable {
     public var agentName: String
     public var sessionID: String
+    /// Display name of the session ("Code Review · PaperTrail") for the
+    /// activity title. Defaulted so older call sites keep compiling.
+    public var sessionName: String
 
-    public init(agentName: String, sessionID: String) {
+    public init(agentName: String, sessionID: String, sessionName: String = "") {
         self.agentName = agentName
         self.sessionID = sessionID
+        self.sessionName = sessionName
     }
 }
 
@@ -32,9 +36,17 @@ public struct TurnActivityContentState: Equatable, Hashable, Codable, Sendable {
     public var startedAt: Date
     public var tokensIn: Int
     public var tokensOut: Int
-    /// "running", "pending", or "exited" — matches Conduit's vocabulary
-    /// so the widget renderer can switch on a known string set.
+    /// "running", "pending" (needs the user — an approval is waiting),
+    /// or "exited" — matches Conduit's vocabulary so the widget renderer
+    /// can switch on a known string set.
     public var status: String
+    /// When this snapshot was pushed — the widget's honesty stamp
+    /// ("synced just now" / "synced 6m ago"). Round-3 §2: content only
+    /// refreshes when the app gets execution time, so the stamp is the
+    /// user-visible truth about how live the card is.
+    public var syncedAt: Date
+    /// Short closing line for the done state ("exit 0"). Nil until end.
+    public var summary: String?
 
     public init(
         currentTool: String? = nil,
@@ -42,7 +54,9 @@ public struct TurnActivityContentState: Equatable, Hashable, Codable, Sendable {
         startedAt: Date,
         tokensIn: Int = 0,
         tokensOut: Int = 0,
-        status: String = "running"
+        status: String = "running",
+        syncedAt: Date? = nil,
+        summary: String? = nil
     ) {
         self.currentTool = currentTool
         self.currentCommand = currentCommand
@@ -50,6 +64,8 @@ public struct TurnActivityContentState: Equatable, Hashable, Codable, Sendable {
         self.tokensIn = tokensIn
         self.tokensOut = tokensOut
         self.status = status
+        self.syncedAt = syncedAt ?? startedAt
+        self.summary = summary
     }
 }
 
@@ -62,6 +78,9 @@ public struct TurnActivityItem: Equatable, Hashable, Sendable {
         case command
         case message
         case exit
+        /// The agent is blocked on the user (AskUserQuestion / approval).
+        /// Drives the "needs you" Live-Activity state (round-3 §2).
+        case pendingInput
         case other
     }
 
@@ -142,7 +161,8 @@ public struct TurnActivityModel: Equatable, Sendable {
     public mutating func apply(
         item: TurnActivityItem,
         sessionID: String,
-        agentName: String
+        agentName: String,
+        sessionName: String = ""
     ) -> TurnActivityEffect {
         // Terminal kinds end the activity unconditionally.
         if item.kind == .exit {
@@ -152,23 +172,29 @@ public struct TurnActivityModel: Equatable, Sendable {
             return endActivity(at: item.timestamp, status: "exited")
         }
 
-        // Only tool/command items drive start/update — chat messages alone
-        // don't justify a lock-screen card.
-        guard item.kind == .tool || item.kind == .command else {
+        // Tool/command items drive start/update; a pending-input item
+        // flips the activity to "needs you" (round-3 §2) — and is
+        // important enough to START one if none is live (an approval
+        // waiting on the lock screen is the whole point). Plain chat
+        // messages alone don't justify a card.
+        let isPending = item.kind == .pendingInput
+        guard item.kind == .tool || item.kind == .command || isPending else {
             return .noop
         }
 
         lastActivityAt = item.timestamp
 
         if !isActive {
-            let attrs = TurnActivityAttributesData(agentName: agentName, sessionID: sessionID)
+            let attrs = TurnActivityAttributesData(
+                agentName: agentName, sessionID: sessionID, sessionName: sessionName
+            )
             let state = TurnActivityContentState(
                 currentTool: item.toolName,
                 currentCommand: item.command,
                 startedAt: item.timestamp,
                 tokensIn: 0,
                 tokensOut: 0,
-                status: "running"
+                status: isPending ? "pending" : "running"
             )
             attributes = attrs
             contentState = state
@@ -179,22 +205,29 @@ public struct TurnActivityModel: Equatable, Sendable {
         var next = contentState ?? TurnActivityContentState(startedAt: item.timestamp)
         next.currentTool = item.toolName ?? next.currentTool
         next.currentCommand = item.command ?? next.currentCommand
-        next.status = "running"
+        next.status = isPending ? "pending" : "running"
         contentState = next
         return .update(state: next)
     }
 
     /// Externally-signalled end (session lifecycle exit, controller reset,
     /// app teardown). Idempotent — calling on an inactive model is a noop.
-    public mutating func sessionExited(at when: Date = Date(), status: String = "exited") -> TurnActivityEffect {
-        return endActivity(at: when, status: status)
+    /// `summary` is the done-state closing line ("exit 0"), when known.
+    public mutating func sessionExited(
+        at when: Date = Date(), status: String = "exited", summary: String? = nil
+    ) -> TurnActivityEffect {
+        return endActivity(at: when, status: status, summary: summary)
     }
 
     /// Time-driven step. Called periodically (or on any external nudge) so
     /// the model can end the activity after `idleTimeout` without a new tool.
-    /// Returns `.end` exactly once per active turn.
+    /// Returns `.end` exactly once per active turn. A "pending" activity
+    /// (the agent is blocked on the user) is exempt — an approval can wait
+    /// minutes, and the lock-screen card asking for it is the feature
+    /// (round-3 §2); only a fresh item or a session exit closes it.
     public mutating func tick(now: Date) -> TurnActivityEffect {
         guard let last = lastActivityAt, isActive else { return .noop }
+        if contentState?.status == "pending" { return .noop }
         if now.timeIntervalSince(last) >= idleTimeout {
             return endActivity(at: now, status: "exited")
         }
@@ -212,12 +245,15 @@ public struct TurnActivityModel: Equatable, Sendable {
         return .update(state: next)
     }
 
-    private mutating func endActivity(at when: Date, status: String) -> TurnActivityEffect {
+    private mutating func endActivity(
+        at when: Date, status: String, summary: String? = nil
+    ) -> TurnActivityEffect {
         guard var final = contentState else {
             attributes = nil
             return .noop
         }
         final.status = status
+        final.summary = summary ?? final.summary
         let effect = TurnActivityEffect.end(state: final)
         attributes = nil
         contentState = nil

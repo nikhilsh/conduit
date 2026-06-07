@@ -106,7 +106,9 @@ public final class TurnLiveActivityController {
     /// `ingest(sessionID:agentName:latestItem:sessionPhase:)` path is
     /// kept for the older "view-layer fire-and-forget" call sites that
     /// already feed a phase signal alongside the latest item.
-    public func observe(item: TurnActivityItem, in sessionID: String, agentName: String) {
+    public func observe(
+        item: TurnActivityItem, in sessionID: String, agentName: String, sessionName: String = ""
+    ) {
         var model = models[sessionID, default: TurnActivityModel()]
         if lastSeenItemID[sessionID] == item.id {
             // Idempotent re-emit. Tick so an idle close still fires.
@@ -116,19 +118,33 @@ public final class TurnLiveActivityController {
             return
         }
         lastSeenItemID[sessionID] = item.id
-        let effect = model.apply(item: item, sessionID: sessionID, agentName: agentName)
+        let effect = model.apply(
+            item: item, sessionID: sessionID, agentName: agentName, sessionName: sessionName
+        )
         apply(effect: effect, sessionID: sessionID)
         models[sessionID] = model
     }
 
     /// External "session was reaped" signal (user tapped Exit, or the
     /// harness reported `onExit`). Ends the activity without waiting for
-    /// the idle timeout.
-    public func sessionExited(sessionID: String) {
+    /// the idle timeout. `summary` becomes the done-state closing line.
+    public func sessionExited(sessionID: String, summary: String? = nil) {
         guard var model = models[sessionID] else { return }
-        let effect = model.sessionExited()
+        let effect = model.sessionExited(summary: summary)
         apply(effect: effect, sessionID: sessionID)
         models[sessionID] = model
+    }
+
+    /// Re-push every live activity's current content with a fresh
+    /// `syncedAt` + `staleDate`. Round-3 §2: called on every scrap of
+    /// execution time the app gets (foreground, scene-phase changes, the
+    /// "Tap to refresh" deep link) so the lock-screen card's freshness
+    /// stamp reflects reality.
+    public func refreshAll() {
+        for (sessionID, model) in models {
+            guard model.isActive, let state = model.contentState else { continue }
+            updateActivity(state: state, sessionID: sessionID)
+        }
     }
 
     /// Periodic tick — called from a timer in the app or driven by the
@@ -157,6 +173,20 @@ public final class TurnLiveActivityController {
         }
     }
 
+    /// How long a pushed snapshot stays "fresh". Past this, iOS marks the
+    /// activity stale (`context.isStale`) and the widget dims + swaps its
+    /// CTA to "Tap to refresh" (round-3 §2). 9 min sits in the spec's
+    /// 8–10 min window.
+    public static let staleInterval: TimeInterval = 9 * 60
+
+    /// Stamp a snapshot at push time: `syncedAt` = now is the honesty
+    /// stamp the widget renders ("synced just now / Nm ago").
+    private static func stamped(_ state: TurnActivityContentState) -> TurnActivityContentState {
+        var s = state
+        s.syncedAt = Date()
+        return s
+    }
+
     private func startActivity(
         attributes: TurnActivityAttributesData,
         state: TurnActivityContentState,
@@ -172,21 +202,23 @@ public final class TurnLiveActivityController {
         }
 
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            Telemetry.breadcrumb("liveactivity", "start skipped — Live Activities disabled in Settings", data: ["session": sessionID])
+            Telemetry.breadcrumb("live_activity", "start skipped: activities disabled")
             return
         }
 
         let attrs = TurnActivityAttributes(from: attributes)
-        let content = TurnActivityAttributes.ContentState(from: state)
-        Telemetry.breadcrumb("liveactivity", "requesting activity", data: ["session": sessionID])
+        let content = TurnActivityAttributes.ContentState(from: Self.stamped(state))
         do {
             let activity = try Activity<TurnActivityAttributes>.request(
                 attributes: attrs,
-                content: ActivityContent(state: content, staleDate: nil),
+                content: ActivityContent(
+                    state: content,
+                    staleDate: Date().addingTimeInterval(Self.staleInterval)
+                ),
                 pushType: nil
             )
             activeActivityIDs[sessionID] = activity.id
-            Telemetry.breadcrumb("liveactivity", "activity started", data: ["session": sessionID, "id": activity.id])
+            Telemetry.breadcrumb("live_activity", "started", data: ["session": sessionID])
         } catch {
             // `Activity.request` throws on: simulators without a Mac host
             // recent enough, Live Activities disabled in Settings, or a
@@ -203,10 +235,13 @@ public final class TurnLiveActivityController {
     private func updateActivity(state: TurnActivityContentState, sessionID: String) {
         #if canImport(ActivityKit)
         guard let activityID = activeActivityIDs[sessionID] else { return }
-        let content = TurnActivityAttributes.ContentState(from: state)
+        let content = TurnActivityAttributes.ContentState(from: Self.stamped(state))
         Task {
             for activity in Activity<TurnActivityAttributes>.activities where activity.id == activityID {
-                await activity.update(ActivityContent(state: content, staleDate: nil))
+                await activity.update(ActivityContent(
+                    state: content,
+                    staleDate: Date().addingTimeInterval(Self.staleInterval)
+                ))
             }
         }
         #endif
@@ -216,13 +251,16 @@ public final class TurnLiveActivityController {
         #if canImport(ActivityKit)
         guard let activityID = activeActivityIDs[sessionID] else { return }
         activeActivityIDs[sessionID] = nil
-        Telemetry.breadcrumb("liveactivity", "ending activity", data: ["session": sessionID, "id": activityID])
-        let content = TurnActivityAttributes.ContentState(from: state)
+        let content = TurnActivityAttributes.ContentState(from: Self.stamped(state))
         Task {
             for activity in Activity<TurnActivityAttributes>.activities where activity.id == activityID {
+                // Final (done) content never goes stale — it's a finished
+                // fact, not a live claim. The card lingers per system
+                // policy with the green done state.
                 await activity.end(ActivityContent(state: content, staleDate: nil), dismissalPolicy: .default)
             }
         }
+        Telemetry.breadcrumb("live_activity", "ended", data: ["session": sessionID])
         #endif
     }
 
@@ -251,7 +289,8 @@ public enum TurnLiveActivityMapping {
         // re-open the activity.
         for raw in items.reversed() {
             if let mapped = TurnLiveActivityMapping.map(raw),
-               mapped.kind == .tool || mapped.kind == .command || mapped.kind == .exit {
+               mapped.kind == .tool || mapped.kind == .command || mapped.kind == .exit
+                || mapped.kind == .pendingInput {
                 return mapped
             }
         }
@@ -261,11 +300,12 @@ public enum TurnLiveActivityMapping {
     static func map(_ item: ConversationItem) -> TurnActivityItem? {
         let kind: TurnActivityItem.Kind
         switch item.kind {
-        case "tool":     kind = .tool
-        case "command":  kind = .command
-        case "message":  kind = .message
-        case "exit":     kind = .exit
-        default:         kind = .other
+        case "tool":          kind = .tool
+        case "command":       kind = .command
+        case "message":       kind = .message
+        case "exit":          kind = .exit
+        case "pending_input": kind = .pendingInput
+        default:              kind = .other
         }
         let timestamp = TurnLiveActivityMapping.parseTimestamp(item.ts) ?? Date()
         return TurnActivityItem(

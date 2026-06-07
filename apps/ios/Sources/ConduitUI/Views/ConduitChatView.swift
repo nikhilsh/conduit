@@ -61,8 +61,21 @@ extension ConduitUI {
         /// were laggy because every row (markdown / tool parse) was laid out
         /// each render; we cap to the tail and let "Load earlier" widen it.
         @State private var visibleRowWindow = ConduitUI.ChatView.rowWindowStep
-        /// Step for the initial window and each "Load earlier" tap.
+        /// Initial window size.
         static let rowWindowStep = 80
+        /// Rows added per infinite-scroll widen. Half the initial window:
+        /// an 80-row burst blocked the main thread long enough to read as
+        /// scroll jank (perf investigation, post-v0.0.116); 40 keeps the
+        /// eager prefetch comfortably ahead of the finger at half the
+        /// per-widen cost.
+        static let rowWidenStep = 40
+        /// Rows from the top of the window that count as "nearing the
+        /// top" — appearing one of these eagerly widens the window so
+        /// older history is usually in place before the user hits it.
+        static let eagerPrefetchRows = 8
+        /// True while an infinite-scroll widen is in flight (spinner
+        /// visible, repeated onAppear triggers coalesce).
+        @State private var isWideningWindow = false
         // Composer attachments (#240 cross-surface): files picked via the
         // "+" menu sit here as removable chips until send. On send each
         // is uploaded via core `send_file` (0x01 frame → broker writes
@@ -134,36 +147,90 @@ extension ConduitUI {
 
         // MARK: Messages
 
-        private var events: [ConversationItem] {
+        /// Reference-typed memo for the transcript pipeline. `events` /
+        /// `chatRows` are computed properties, so without this the FULL
+        /// merge (fingerprint set + O(N log N) ts-sort) and grouping
+        /// (with a per-tool `extractCommand` classification) re-ran on
+        /// EVERY body evaluation — i.e. on every keyboard inset change,
+        /// autoscroll flip, and every near-top row's `onAppear` guard.
+        /// That recompute tax was the top cause of scroll jank (perf
+        /// investigation, post-v0.0.116). A class (not @State value) so
+        /// refreshing the memo never invalidates the view.
+        private final class TranscriptMemo {
+            var fingerprint: Int?
+            var events: [ConversationItem] = []
+            var rows: [ConduitUI.ChatRow] = []
+        }
+        @State private var transcriptMemo = TranscriptMemo()
+
+        /// Cheap O(N) change detector over the memo's inputs — id /
+        /// status / content length per item (no full-content hashing).
+        /// Orders of magnitude cheaper than the merge+sort+classify it
+        /// guards; any mutation the pipeline could surface (new item,
+        /// status flip, exit code, streamed content growth) moves it.
+        private static func transcriptFingerprint(
+            conversation: [ConversationItem],
+            chatLog: [ChatEvent],
+            readOnly: Bool
+        ) -> Int {
+            var hasher = Hasher()
+            hasher.combine(readOnly)
+            hasher.combine(conversation.count)
+            hasher.combine(chatLog.count)
+            for item in conversation {
+                hasher.combine(item.id)
+                hasher.combine(item.status)
+                hasher.combine(item.content.count)
+                hasher.combine(item.exitCode)
+            }
+            for ev in chatLog {
+                hasher.combine(ev.ts)
+                hasher.combine(ev.content.count)
+            }
+            return hasher.finalize()
+        }
+
+        /// Single memoized entry point for the transcript pipeline.
+        private var transcript: (events: [ConversationItem], rows: [ConduitUI.ChatRow]) {
+            let conversation = readOnlyItems ?? store.conversationLog[session.id] ?? []
+            let chatLog = readOnlyItems == nil ? (store.chatLog[session.id] ?? []) : []
+            let key = Self.transcriptFingerprint(
+                conversation: conversation, chatLog: chatLog, readOnly: readOnlyItems != nil
+            )
+            if transcriptMemo.fingerprint == key {
+                return (transcriptMemo.events, transcriptMemo.rows)
+            }
             // Read-only mode (exited session): render the injected
             // persisted transcript verbatim — nothing in the live store
             // to merge.
-            if let readOnlyItems { return readOnlyItems }
-            // PR #111 + legacy ChatTab parity: prefer the typed
-            // `conversationLog`, but fall back to the broker's raw
+            //
+            // Live mode (PR #111 + legacy ChatTab parity): prefer the
+            // typed `conversationLog`, but fall back to the broker's raw
             // `chatLog` for events that haven't surfaced through the
             // structured `view_event` stream yet. Without this, codex
             // assistant replies (delivered via `on_chat_event`) showed
             // up in the Terminal tab but never reached the chat tab —
             // the #119 cutover dropped the legacy mapIndexed fallback.
-            return ConduitUI.ChatViewModel.mergedEvents(
-                conversation: store.conversationLog[session.id] ?? [],
-                chatLog: store.chatLog[session.id] ?? []
-            )
+            let events = readOnlyItems
+                ?? ConduitUI.ChatViewModel.mergedEvents(conversation: conversation, chatLog: chatLog)
+            // Fold into rows, collapsing contiguous runs of tool cards
+            // (commands included — round-3 §1) into one quiet bundle. A
+            // run is "adjacent tool calls with no assistant prose between
+            // them": any non-tool event closes the current bundle.
+            let rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
+                ev.role.lowercased() == "tool"
+                    && ev.status.lowercased() != "swapping"
+                    && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
+            }
+            transcriptMemo.fingerprint = key
+            transcriptMemo.events = events
+            transcriptMemo.rows = rows
+            return (events, rows)
         }
 
-        /// `events` folded into rows, collapsing contiguous runs of
-        /// non-command tool cards (reads/greps/edits) into one group.
-        /// Command (shell) cards stay standalone so they remain prominent.
-        private var chatRows: [ConduitUI.ChatRow] {
-            ConduitUI.ChatViewModel.groupedRows(events) { ev in
-                ev.role.lowercased() == "tool"
-                    && !NeonToolClassifier.isCommand(
-                        toolName: ev.toolName,
-                        command: ConversationRenderer.extractCommand(from: ev)
-                    )
-            }
-        }
+        private var events: [ConversationItem] { transcript.events }
+
+        private var chatRows: [ConduitUI.ChatRow] { transcript.rows }
 
         /// Continuation = the previous row is a single message of the same
         /// role (used to suppress a repeated sender label). A tool group
@@ -239,6 +306,41 @@ extension ConduitUI {
             DispatchQueue.main.async { jump() }
         }
 
+        /// Widen the visible row window for infinite scroll. Guarded so
+        /// (a) the LazyVStack's initial top-down layout pass on open
+        /// (before the jump-to-bottom lands) can't trigger a widen — the
+        /// user must actually have scrolled up; (b) repeated onAppear
+        /// bursts coalesce into one widen. After the new rows land, the
+        /// previous top row is pinned back to the viewport top so the
+        /// user's place is kept (content inserted above would otherwise
+        /// shove the transcript down).
+        private func widenRowWindow(proxy: ScrollViewProxy, anchorRowID: String?) {
+            guard !isWideningWindow else { return }
+            guard autoScroll.userScrolledUp else { return }
+            guard chatRows.count > visibleRowWindow else { return }
+            isWideningWindow = true
+            // Brief defer so the spinner paints before the main-thread
+            // row parse/layout burst.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                visibleRowWindow += Self.rowWidenStep
+                DispatchQueue.main.async {
+                    if let anchorRowID {
+                        proxy.scrollTo(anchorRowID, anchor: .top)
+                    }
+                    isWideningWindow = false
+                    // LazyVStack resolves the inserted rows' heights
+                    // lazily, so the first pin can land while content
+                    // above is still growing; re-pin once more after
+                    // layout settles (same trick as scrollToBottomOnOpen).
+                    if let anchorRowID {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            proxy.scrollTo(anchorRowID, anchor: .top)
+                        }
+                    }
+                }
+            }
+        }
+
         /// On first open of a session, jump straight to the latest message. Not
         /// animated — we want to *start* at the bottom, not show a scroll from
         /// the top. Re-pinned across the first few layout passes because the
@@ -268,39 +370,56 @@ extension ConduitUI {
                         let rows = allRows.count > visibleRowWindow
                             ? Array(allRows.suffix(visibleRowWindow))
                             : allRows
+                        // Infinite scroll (round-3 §6): a spinner sentinel
+                        // replaces the old "Load earlier" button. Nearing
+                        // the top eagerly widens the window; if the user
+                        // outruns the prefetch they land on this spinner,
+                        // which widens on appear — then they can keep
+                        // scrolling into the loaded history.
                         if rows.count < allRows.count {
-                            Button {
-                                visibleRowWindow += Self.rowWindowStep
-                            } label: {
-                                Text("Load earlier messages")
-                                    .font(neon.sans(13).weight(.medium))
-                                    .foregroundStyle(neon.accent)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(neon.accent)
+                                Text("Loading earlier messages…")
+                                    .font(neon.sans(12).weight(.medium))
+                                    .foregroundStyle(neon.textDim)
                             }
-                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .onAppear {
+                                widenRowWindow(proxy: proxy, anchorRowID: rows.first?.id)
+                            }
                         }
                         ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
-                            switch row {
-                            case .single(let event):
-                                ConduitEventRow(
-                                    event: event,
-                                    isContinuation: continuation(in: rows, at: idx, role: event.role),
-                                    sessionID: session.id,
-                                    onQuickReply: { reply in
-                                        store.sendChat(sessionID: session.id, message: reply)
-                                    }
-                                )
-                                .id(event.id)
-                                .padding(.horizontal, 16)
-                            case .toolGroup(let items):
-                                ConduitToolGroupCard(
-                                    items: items,
-                                    sessionID: session.id,
-                                    collapseDefault: appearance.collapseTurns
-                                )
-                                .id(row.id)
-                                .padding(.horizontal, 16)
+                            Group {
+                                switch row {
+                                case .single(let event):
+                                    ConduitEventRow(
+                                        event: event,
+                                        isContinuation: continuation(in: rows, at: idx, role: event.role),
+                                        sessionID: session.id,
+                                        onQuickReply: { reply in
+                                            store.sendChat(sessionID: session.id, message: reply)
+                                        }
+                                    )
+                                    .id(event.id)
+                                    .padding(.horizontal, 16)
+                                case .toolGroup(let items):
+                                    ConduitToolBundleCard(items: items, sessionID: session.id)
+                                        .id(row.id)
+                                        .padding(.horizontal, 16)
+                                }
+                            }
+                            // Eager prefetch: materializing a row near the
+                            // window top means the user is approaching it.
+                            // Anchor on THIS row (it's entering at the
+                            // viewport's top edge) so the restore after the
+                            // widen barely moves the user's place.
+                            .onAppear {
+                                if idx < Self.eagerPrefetchRows, rows.count < allRows.count {
+                                    widenRowWindow(proxy: proxy, anchorRowID: row.id)
+                                }
                             }
                         }
                         // BUG 3: "agent is typing" indicator lives inside
@@ -1745,75 +1864,410 @@ extension NeonTheme {
     }
 }
 
-// MARK: - Tool group card (#4)
+// MARK: - Tool bundle card (round-3 §1)
 
-/// A collapsed run of consecutive tool cards (e.g. several "Read files"
-/// in a row). Starts collapsed; expanding reveals each underlying
-/// `ConduitToolCard`. Keeps long read/grep/edit sequences from flooding
-/// the transcript.
-private struct ConduitToolGroupCard: View {
+/// The failure tint the round-3 design assigns to bundles containing a
+/// non-zero exit (`#FF7847`) — warmer than `neon.red` so a failed sweep
+/// reads as "needs a look", not "crash".
+private enum ConduitBundleTint {
+    static let fail = Color(hex: "#ff7847")
+}
+
+/// A consecutive run of tool calls collapsed into ONE quiet row: icon,
+/// a human verb ("Explored the codebase"), a mono kind sub-line
+/// ("grep · find · 12 more"), and an aggregate status pill ("14 runs" /
+/// "1 failed"). Tap to expand → every call is a single line; tap a line
+/// to focus it → only then its output + actions appear. A non-zero exit
+/// auto-expands the bundle, tints it orange, and floats the failing
+/// rows up — failures never hide inside a collapsed bundle.
+private struct ConduitToolBundleCard: View {
     let items: [ConversationItem]
     var sessionID: String
-    var collapseDefault: Bool
-    @State private var expanded = false
+
+    // Derived ONCE at init (perf, post-v0.0.116): these were computed
+    // properties, so every body render re-ran `kindWord` —
+    // `extractCommand` string-scans included — over the whole run,
+    // three times over (dominant kind, verb, subline). A 20-item
+    // bundle cost ~40 extract calls per frame while scrolling. The
+    // struct re-inits only when the parent's (memoized) rows change,
+    // so stored lets make the header render O(1).
+    private let displayItems: [ConversationItem]
+    private let failCount: Int
+    private let anyRunning: Bool
+    private let dominantRole: NeonToolTint
+    private let iconName: String
+    private let verb: String
+    private let subline: String
+
+    @State private var expanded: Bool
+    @State private var focusedID: String?
     @Environment(\.neonTheme) private var neon
 
-    init(items: [ConversationItem], sessionID: String = "", collapseDefault: Bool = false) {
+    init(items: [ConversationItem], sessionID: String = "") {
         self.items = items
         self.sessionID = sessionID
-        self.collapseDefault = collapseDefault
+
+        // One pass over the run: kind words, failure split, running flag.
+        var kindWords: [String] = []
+        kindWords.reserveCapacity(items.count)
+        var fails: [ConversationItem] = []
+        var rest: [ConversationItem] = []
+        var running = false
+        for item in items {
+            kindWords.append(Self.kindWord(for: item))
+            switch NeonCardState(status: item.status, exitCode: item.exitCode) {
+            case .fail:    fails.append(item)
+            case .running: running = true; rest.append(item)
+            default:       rest.append(item)
+            }
+        }
+        // Failing rows float to the top so their output is the first
+        // thing visible; otherwise chronological.
+        self.displayItems = fails.isEmpty ? items : fails + rest
+        self.failCount = fails.count
+        self.anyRunning = running
+
+        // Most frequent kind drives icon + tint; mixed roles read as
+        // exploration.
+        var counts: [String: Int] = [:]
+        for word in kindWords { counts[word, default: 0] += 1 }
+        let dominant = counts.max { $0.value < $1.value }?.key
+        self.dominantRole = NeonToolClassifier.tintRole(forToolName: dominant)
+        self.iconName = NeonToolClassifier.icon(forToolName: dominant)
+        let roles = Set(kindWords.map { NeonToolClassifier.tintRole(forToolName: $0) })
+        if roles.count > 1 {
+            self.verb = "Explored the codebase"
+        } else {
+            switch roles.first ?? .accent {
+            case .purple: self.verb = "Explored the codebase"
+            case .blue:   self.verb = "Read files"
+            case .claude: self.verb = "Edited files"
+            case .green:  self.verb = "Ran commands"
+            case .red:    self.verb = "Tool errors"
+            case .accent: self.verb = "Used tools"
+            }
+        }
+        // "grep · find · 12 more" — first two distinct kinds + remainder.
+        var seen: [String] = []
+        for word in kindWords where !seen.contains(word) {
+            seen.append(word)
+            if seen.count == 2 { break }
+        }
+        if items.count > 2 { seen.append("\(items.count - 2) more") }
+        self.subline = seen.joined(separator: " · ")
+
+        // Failures auto-surface: open expanded with the first failing
+        // row focused. (The row identity includes the item count, so a
+        // failure that lands mid-stream re-creates the card and this
+        // initial state re-evaluates.)
+        _expanded = State(initialValue: !fails.isEmpty)
+        _focusedID = State(initialValue: fails.first?.id)
     }
 
-    /// "Read files · 4" when the run is homogeneous, else "4 tool steps".
-    private var headerLabel: String {
-        let labels = Set(items.map {
-            NeonToolClassifier.humanLabel(toolName: $0.toolName, fileCount: $0.files.count)
-        })
-        if labels.count == 1, let only = labels.first {
-            return "\(only) · \(items.count)"
+    private var tint: Color {
+        failCount > 0 ? ConduitBundleTint.fail : neon.color(for: dominantRole)
+    }
+
+    /// Short mono word for one item — the command's first token
+    /// (`grep`, `find`) or the tool name.
+    private static func kindWord(for item: ConversationItem) -> String {
+        if let cmd = ConversationRenderer.extractCommand(from: item),
+           let first = cmd.split(separator: " ").first, !first.isEmpty {
+            // Strip a path prefix so "/usr/bin/grep" reads "grep".
+            return String(first.split(separator: "/").last ?? first)
         }
-        return "\(items.count) tool steps"
+        return (item.toolName ?? "tool").lowercased()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Image(systemName: "square.stack.3d.up.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(neon.textDim)
-                    .frame(width: 22, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(neon.textDim.opacity(0.14))
-                    )
-                Text(headerLabel)
-                    .font(neon.sans(13).weight(.semibold))
-                    .foregroundStyle(neon.text)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(neon.textDim)
-                    .rotationEffect(.degrees(expanded ? 180 : 0))
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
+            header
             if expanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                        ConduitToolCard(event: item, sessionID: sessionID, collapseDefault: collapseDefault)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(displayItems, id: \.id) { item in
+                        ConduitBundleRow(
+                            item: item,
+                            sessionID: sessionID,
+                            focused: focusedID == item.id,
+                            onTap: {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    focusedID = focusedID == item.id ? nil : item.id
+                                }
+                            }
+                        )
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 10)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .neonCardSurface(neon, fill: neon.surface, cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, glowTint: nil)
+        .neonCardSurface(
+            neon,
+            fill: neon.surface,
+            cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius,
+            border: failCount > 0 ? ConduitBundleTint.fail.opacity(0.55) : nil,
+            glowTint: failCount > 0 ? ConduitBundleTint.fail : nil
+        )
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: failCount > 0 ? "exclamationmark.triangle" : iconName)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(tint.opacity(0.16))
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verb)
+                    .font(neon.sans(13.5).weight(.semibold))
+                    .foregroundStyle(neon.text)
+                    .lineLimit(1)
+                Text(subline)
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(neon.textFaint)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            statusPill
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(neon.textDim)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        // ≥44pt row height + full-width hit area (round-3 §4).
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(verb), \(items.count) tool runs\(failCount > 0 ? ", \(failCount) failed" : "")")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        if failCount > 0 {
+            pill("\(failCount) failed", color: ConduitBundleTint.fail)
+        } else if anyRunning {
+            pill("running", color: neon.accent2)
+        } else {
+            pill(items.count == 1 ? "1 run" : "\(items.count) runs", color: neon.green)
+        }
+    }
+
+    private func pill(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(neon.mono(10.5).weight(.bold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(color.opacity(0.16)))
+            .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
+    }
+}
+
+/// One call inside an expanded bundle: a single mono line (`$ cmd …` or
+/// `toolname · file`), a pass/fail dot, and a chevron. Tapping focuses
+/// the row — only then its output (clipped short) and the Copy /
+/// Re-run / Open-in-terminal actions appear, scoped to this row.
+private struct ConduitBundleRow: View {
+    let item: ConversationItem
+    var sessionID: String
+    let focused: Bool
+    let onTap: () -> Void
+
+    // Derived once at init (perf, post-v0.0.116): `command`/`line` were
+    // computed properties calling `extractCommand` (a content string
+    // scan for PTY-scraped items) on every render of every visible row.
+    private let state: NeonCardState
+    private let command: String?
+    private let line: String
+
+    @Environment(\.neonTheme) private var neon
+    @Environment(SessionStore.self) private var store
+    @Environment(\.openTerminalAction) private var openTerminalAction
+
+    init(item: ConversationItem, sessionID: String, focused: Bool, onTap: @escaping () -> Void) {
+        self.item = item
+        self.sessionID = sessionID
+        self.focused = focused
+        self.onTap = onTap
+        self.state = NeonCardState(status: item.status, exitCode: item.exitCode)
+        let command = ConversationRenderer.extractCommand(from: item)
+        self.command = command
+        // The single-line body: `$ cmd` for commands, `tool · file` else.
+        if let command {
+            self.line = command
+        } else {
+            let label = (item.toolName ?? "tool").lowercased()
+            if let file = item.files.first {
+                let name = file.path.split(separator: "/").last.map(String.init) ?? file.path
+                self.line = "\(label) · \(name)"
+            } else {
+                self.line = label
+            }
+        }
+    }
+
+    /// Output sections stay lazy — only the focused row pays for them.
+    private var sections: [ToolSection] { ConversationRenderer.toolSections(for: item) }
+
+    private var dotColor: Color {
+        switch state {
+        case .ok:               return neon.green
+        case .fail:             return ConduitBundleTint.fail
+        case .running, .pending: return neon.accent2
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("$")
+                    .font(neon.mono(12).weight(.bold))
+                    .foregroundStyle(command != nil ? dotColor : neon.textFaint)
+                Text(line)
+                    .font(neon.mono(12))
+                    .foregroundStyle(state == .fail ? ConduitBundleTint.fail : neon.codeText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 6, height: 6)
+                Image(systemName: focused ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(neon.textFaint)
+            }
+            .padding(.horizontal, 8)
+            // ≥44pt tappable row, single-line visual (round-3 §4).
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(line), \(state == .fail ? "failed" : "ok")")
+            .accessibilityAddTraits(.isButton)
+
+            if focused {
+                focusedDetail
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(focused ? neon.codeBg : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(focused ? (state == .fail ? ConduitBundleTint.fail.opacity(0.45) : neon.border) : Color.clear,
+                        lineWidth: 1)
+        )
+    }
+
+    // Output (clipped to a few lines) + per-row actions.
+    private var focusedDetail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                    sectionView(section)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: 96, alignment: .topLeading)
+            .clipped()
+            if let meta = metaLine {
+                Text(meta)
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(state == .fail ? ConduitBundleTint.fail : neon.textFaint)
+            }
+            actionRow
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    private var metaLine: String? {
+        var parts: [String] = []
+        if let code = item.exitCode, code != 0 { parts.append("exit \(code)") }
+        if let duration = ConversationRenderer.extractMetadata(from: item).duration,
+           !duration.isEmpty { parts.append(duration) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func sectionView(_ section: ToolSection) -> some View {
+        switch section {
+        case .stdout(let text), .text(let text):
+            outputText(text, color: neon.codeText)
+        case .stderr(let text):
+            outputText(text, color: ConduitBundleTint.fail)
+        case .code(let language, let content):
+            ConduitCodeBlock(language: language, content: content)
+        case .diff(let diff):
+            ConduitDiffBlock(content: diff, diffSummary: item.diffSummary)
+        case .files(let files):
+            ConduitFileStrip(files: files)
+        case .meta, .command:
+            EmptyView()  // command is the row line; meta is the meta line
+        }
+    }
+
+    private func outputText(_ text: String, color: Color) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(text)
+                .font(neon.mono(11))
+                .foregroundStyle(color)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // Copy · Re-run · Open in terminal — scoped to the focused row.
+    // Re-run / terminal only make sense for shell commands.
+    private var actionRow: some View {
+        HStack(spacing: 8) {
+            rowAction("Copy", icon: "doc.on.doc") {
+                UIPasteboard.general.string = command ?? item.content
+            }
+            if let command {
+                rowAction("Re-run", icon: "arrow.clockwise", disabled: sessionID.isEmpty) {
+                    guard !sessionID.isEmpty else { return }
+                    store.sendChat(sessionID: sessionID, message: command)
+                }
+                rowAction("Open in terminal", icon: "terminal", disabled: openTerminalAction == nil) {
+                    openTerminalAction?()
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func rowAction(
+        _ title: String, icon: String, disabled: Bool = false, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(title).font(neon.mono(11).weight(.medium))
+            }
+            .foregroundStyle(neon.textDim)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(neon.border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
     }
 }
 
@@ -1985,8 +2439,10 @@ private struct ConduitNeonCommandCard: View {
         self.event = event
         self.sessionID = sessionID
         // "Collapse Turns" (Settings) starts command cards collapsed;
-        // otherwise they open expanded as before.
-        _expanded = State(initialValue: !collapseDefault)
+        // otherwise they open expanded as before. A non-zero exit always
+        // opens expanded — failures never hide (round-3 §1).
+        let failed = NeonCardState(status: event.status, exitCode: event.exitCode) == .fail
+        _expanded = State(initialValue: !collapseDefault || failed)
     }
 
     private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
@@ -2021,8 +2477,15 @@ private struct ConduitNeonCommandCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 metaStrip
-                if expanded && hasBody { output }
-                actionBar
+                // Round-3 §1: no permanent action bar — Copy / Re-run /
+                // Open-in-terminal appear only when the card is expanded
+                // (the standalone-card equivalent of "the focused row").
+                // `hasBody` (PR #386): never render an empty output block
+                // for an output-less tool card.
+                if expanded {
+                    if hasBody { output }
+                    actionBar
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

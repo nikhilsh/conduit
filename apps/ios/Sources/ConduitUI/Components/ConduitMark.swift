@@ -15,6 +15,9 @@ extension ConduitUI {
         var size: CGFloat = 28
         var color: Color? = nil
         var glow: Bool = true
+        /// Draws the eyes as closed lids (short horizontal strokes) for
+        /// the `AnimatedBrandMark` blink. Default open.
+        var eyesClosed: Bool = false
 
         // Theme-aware like the design `ConduitMark`: on a light canvas the pastel
         // cyan→green washes out and the near-white eyes vanish ("logo not
@@ -60,10 +63,15 @@ extension ConduitUI {
                 ctx.fill(Path(roundedRect: CGRect(x: 14.4 * s, y: 4.4 * s, width: 3.2 * s, height: 2 * s), cornerRadius: 1 * s), with: topFill)
                 ctx.fill(Path(roundedRect: CGRect(x: 14.4 * s, y: 25.6 * s, width: 3.2 * s, height: 2 * s), cornerRadius: 1 * s), with: bottomFill)
 
-                // Face: `>` `<` squint eyes + smile.
+                // Face: `>` `<` squint eyes (or closed lids mid-blink) + smile.
                 var face = Path()
-                face.move(to: pt(11, 13.4)); face.addLine(to: pt(13.6, 15.4)); face.addLine(to: pt(11, 17.4))
-                face.move(to: pt(21, 13.4)); face.addLine(to: pt(18.4, 15.4)); face.addLine(to: pt(21, 17.4))
+                if eyesClosed {
+                    face.move(to: pt(11, 15.4)); face.addLine(to: pt(13.6, 15.4))
+                    face.move(to: pt(18.4, 15.4)); face.addLine(to: pt(21, 15.4))
+                } else {
+                    face.move(to: pt(11, 13.4)); face.addLine(to: pt(13.6, 15.4)); face.addLine(to: pt(11, 17.4))
+                    face.move(to: pt(21, 13.4)); face.addLine(to: pt(18.4, 15.4)); face.addLine(to: pt(21, 17.4))
+                }
                 face.move(to: pt(13, 20)); face.addQuadCurve(to: pt(19, 20), control: pt(16, 22.4))
                 ctx.stroke(face, with: .color(eyeColor),
                            style: StrokeStyle(lineWidth: 1.7 * s, lineCap: .round, lineJoin: .round))

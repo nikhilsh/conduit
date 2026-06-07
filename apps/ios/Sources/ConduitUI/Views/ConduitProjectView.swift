@@ -156,10 +156,10 @@ extension ConduitUI {
             .background(GlassAppBackground().ignoresSafeArea(.container, edges: .all))
             .navigationBarBackButtonHidden(true)
             .toolbar(.hidden, for: .navigationBar)
-            // Hiding the nav bar / back button (above) disables UIKit's
-            // left-edge swipe-back; this re-enables it. Zero-size, no layout
-            // impact — it only reaches the hosting UINavigationController.
-            .background(InteractivePopGestureEnabler().frame(width: 0, height: 0))
+            // Round-3 §5: hiding the nav bar disables UIKit's edge-swipe
+            // back; this zero-size hook re-arms the interactive pop
+            // (full left edge, parallax, ~40% commit + light haptic).
+            .background(ConduitUI.SwipeBackEnabler().frame(width: 0, height: 0))
             // Dismiss the keyboard on every tab switch. The Terminal tab's
             // WKWebView owns a custom inputAccessoryView (the terminal key
             // bar); without this, switching Terminal→Chat left that
@@ -250,14 +250,17 @@ extension ConduitUI {
                 // is the only route to Session Info).
                 if !chatOnly {
                     // Plain chevron, no circle (fix 1 — the circled back
-                    // button crowded the row).
+                    // button crowded the row). Round-3 §4: the glyph stays
+                    // 16pt but the tappable frame is ≥44×44 — the back
+                    // button at the screen edge was the worst offender.
                     Button {
                         dismiss()
                     } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(neon.text)
-                            .frame(width: 30, height: 32)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Back")
@@ -304,6 +307,9 @@ extension ConduitUI {
                             }
                         }
                     }
+                    // Round-3 §4: the ENTIRE title block (avatar + name +
+                    // caret + status line) is one ≥44pt-tall target.
+                    .frame(minHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -324,7 +330,10 @@ extension ConduitUI {
                     }
                 }
             }
-            .padding(.horizontal, 14)
+            // Was 14 — the back/info frames grew by ~6–7pt per side for
+            // their 44pt hit areas, so the edge padding shrinks to keep
+            // the GLYPHS visually where they were (round-3 §4).
+            .padding(.horizontal, 8)
             .padding(.top, 12)
             .padding(.bottom, 8)
         }
@@ -360,6 +369,10 @@ extension ConduitUI {
                     .background(Circle().fill(neon.surface))
                     .overlay(Circle().stroke(neon.borderStrong, lineWidth: 1))
                     .neonGlowBox(neon.glow ? neon.glowBox : nil)
+                    // Round-3 §4: the 32pt circle stays as drawn; the
+                    // tappable frame extends to ≥44×44 around it.
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(label)
@@ -642,41 +655,4 @@ extension ConduitUI {
 }
 
 // MARK: - Interactive swipe-back
-
-/// Re-enables UIKit's left-edge swipe-to-go-back on screens that hide the
-/// navigation bar / default back button.
-///
-/// `ProjectView` sets `.navigationBarBackButtonHidden(true)` +
-/// `.toolbar(.hidden, for: .navigationBar)` so it can draw its own slim
-/// header. The side effect: UIKit gates `interactivePopGestureRecognizer`
-/// on the presence of the system back button, so hiding it silently kills
-/// the edge swipe — leaving the custom chevron as the only way back. We
-/// drop an empty representable into the hierarchy, walk up to the hosting
-/// `UINavigationController`, and re-attach a permissive delegate so the
-/// edge swipe pops the NavigationStack again. The delegate only allows the
-/// gesture when there's something to pop, so the root screen is unaffected.
-private struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> Proxy { Proxy() }
-    func updateUIViewController(_ controller: Proxy, context: Context) {
-        controller.reattach()
-    }
-
-    final class Proxy: UIViewController, UIGestureRecognizerDelegate {
-        override func didMove(toParent parent: UIViewController?) {
-            super.didMove(toParent: parent)
-            reattach()
-        }
-
-        func reattach() {
-            guard let gesture = navigationController?.interactivePopGestureRecognizer
-            else { return }
-            gesture.delegate = self
-            gesture.isEnabled = true
-        }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            (navigationController?.viewControllers.count ?? 0) > 1
-        }
-    }
-}
 
