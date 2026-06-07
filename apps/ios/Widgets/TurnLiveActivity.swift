@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -393,11 +394,17 @@ private struct ActionButtons: View {
             )
         case .needsYou:
             HStack(spacing: 8) {
-                ctaLink(
-                    "Approve", icon: "checkmark",
-                    fill: ConduitBrand.cyan, foreground: .black,
-                    action: "approve"
-                )
+                // In-place approval: a LiveActivityIntent performs in the
+                // app process WITHOUT opening the UI (round-3 §2
+                // follow-up) — the host answers the pending card with its
+                // affirmative option.
+                Button(intent: ApproveSessionIntent(sessionID: sessionID)) {
+                    ctaLabel(
+                        "Approve", icon: "checkmark",
+                        fill: ConduitBrand.cyan, foreground: .black
+                    )
+                }
+                .buttonStyle(.plain)
                 ctaLink(
                     "View diff", icon: "eye",
                     fill: Color.white.opacity(0.12), foreground: .white,
@@ -417,14 +424,20 @@ private struct ActionButtons: View {
         _ title: String, icon: String, fill: Color, foreground: Color, action: String?
     ) -> some View {
         Link(destination: TurnPresentation.deepLink(sessionID: sessionID, action: action)) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 11, weight: .bold))
-                Text(title).font(.system(.footnote, design: .default).weight(.bold))
-            }
-            .foregroundStyle(foreground)
-            .frame(maxWidth: .infinity)
-            .frame(height: 36)
-            .background(Capsule().fill(fill))
+            ctaLabel(title, icon: icon, fill: fill, foreground: foreground)
         }
+    }
+
+    private func ctaLabel(
+        _ title: String, icon: String, fill: Color, foreground: Color
+    ) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 11, weight: .bold))
+            Text(title).font(.system(.footnote, design: .default).weight(.bold))
+        }
+        .foregroundStyle(foreground)
+        .frame(maxWidth: .infinity)
+        .frame(height: 36)
+        .background(Capsule().fill(fill))
     }
 }

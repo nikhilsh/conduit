@@ -187,6 +187,9 @@ targets:
       # widget extension can't (and shouldn't) link.
       - path: Sources/Models/TurnActivityModel.swift
       - path: Sources/Models/TurnActivityAttributes.swift
+      # LiveActivityIntent shared with the host so Button(intent:) in the
+      # widget and perform() in the app agree on the same type.
+      - path: Sources/Models/ApproveSessionIntent.swift
     info:
       path: Widgets/Info.plist
       properties:

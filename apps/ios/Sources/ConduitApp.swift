@@ -84,6 +84,15 @@ struct ConduitApp: App {
                             bridge.start()
                             liveActivityBridge = bridge
                         }
+                        // Lock-screen Approve (LiveActivityIntent) runs in
+                        // this process; hand it the store-backed approval.
+                        let store = store
+                        let liveActivity = liveActivity
+                        ConduitApprovalBridge.handler = { sessionID in
+                            await Self.approvePendingInput(
+                                store: store, controller: liveActivity, sessionID: sessionID
+                            )
+                        }
                     }
                     .onOpenURL { url in
                         if !applySessionURL(url) {
@@ -160,6 +169,50 @@ struct ConduitApp: App {
                 }
             }
         )
+    }
+
+    /// Approve the latest pending-input card of a session from the lock
+    /// screen (round-3 §2 follow-up). Mirrors the in-app card: the reply
+    /// is the FIRST option's text (option 1 is the affirmative by
+    /// convention — same numbering the card shows). Runs headless via
+    /// `ApproveSessionIntent`, possibly in a cold background launch, so
+    /// it bounded-waits for the transport before sending.
+    @MainActor
+    static func approvePendingInput(
+        store: SessionStore,
+        controller: TurnLiveActivityController,
+        sessionID: String
+    ) async {
+        Telemetry.breadcrumb("live_activity", "approve intent", data: ["session": sessionID])
+        if !store.harness.canIssueCommands {
+            // Cold/background launch: dial in first. Bounded so the
+            // intent never hangs the system's intent runner.
+            switch store.harness {
+            case .disconnected, .failed: store.connect()
+            default: break  // already connecting/reconnecting — just wait
+            }
+            for _ in 0..<16 where !store.harness.canIssueCommands {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+        guard store.harness.canIssueCommands else {
+            Telemetry.breadcrumb(
+                "live_activity", "approve failed: no transport",
+                data: ["session": sessionID, "state": store.harness.badgeLabel]
+            )
+            return
+        }
+        let pending = (store.conversationLog[sessionID] ?? [])
+            .last(where: { $0.kind == "pending_input" })
+        let reply = pending?.pendingOptions.first ?? "yes"
+        store.sendChat(sessionID: sessionID, message: reply)
+        Telemetry.breadcrumb(
+            "live_activity", "approve sent",
+            data: ["session": sessionID, "reply": reply]
+        )
+        // Re-stamp the card; the status flips to running once the
+        // agent's next item flows through the normal pipeline.
+        controller.refreshAll()
     }
 
     /// Handle the Live Activity's `conduit://session/<id>[?action=…]`
