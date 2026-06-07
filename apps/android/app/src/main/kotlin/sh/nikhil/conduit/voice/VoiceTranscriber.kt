@@ -254,7 +254,17 @@ class VoiceTranscriber(private val context: Context) {
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
                 ?: return
-            if (txt.isNotBlank()) restartCount = 0
+            if (txt.isBlank()) {
+                // A pause can make the recognizer drop its current hypothesis and
+                // emit a blank partial before the next utterance starts — the
+                // on-screen text vanishes. Letting it overwrite a non-blank
+                // segmentPartial is the "I pause, the text disappears, and the next
+                // thing I say starts from the beginning" bug. Commit what we have so
+                // the next utterance appends instead of replacing it (parity w/ iOS).
+                if (segmentPartial.isNotBlank()) commitSegment()
+                return
+            }
+            restartCount = 0
             segmentPartial = txt
             _partial.value = combine(accumulated, segmentPartial)
         }
