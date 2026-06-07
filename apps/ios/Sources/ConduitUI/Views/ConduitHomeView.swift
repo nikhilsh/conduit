@@ -278,8 +278,16 @@ extension ConduitUI {
                         Text(actionLabel).font(neon.sans(12.5).weight(.semibold))
                     }
                     .foregroundStyle(actionTint)
+                    // Round-3 §4: pad the hit area to ≥44pt tall without
+                    // moving the layout (negative outer padding cancels
+                    // the visual growth).
+                    .padding(.vertical, 13)
+                    .padding(.horizontal, 8)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .padding(.vertical, -13)
+                .padding(.horizontal, -8)
             }
             .textCase(nil)
             .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 6, trailing: 14))
