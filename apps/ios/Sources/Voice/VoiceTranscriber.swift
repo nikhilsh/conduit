@@ -217,8 +217,24 @@ final class VoiceTranscriber: ObservableObject {
 
     private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
         if let result {
-            segmentPartial = result.bestTranscription.formattedString
-            partialTranscript = combine(accumulated, segmentPartial)
+            let next = result.bestTranscription.formattedString
+            if next.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // A long pause can make SFSpeech reset its hypothesis *within* the
+                // same task and emit a blank partial — the on-screen text vanishes —
+                // before it fires the `isFinal`/end-of-speech that would normally
+                // commit the segment. Letting that blank overwrite `segmentPartial`
+                // is the device-reported bug: "I pause, the text disappears, and the
+                // next thing I say starts from the beginning." Commit what we have so
+                // the pause can't wipe it; the next utterance appends onto `accumulated`.
+                if !segmentPartial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    commitSegment()
+                } else {
+                    partialTranscript = combine(accumulated, "")
+                }
+            } else {
+                segmentPartial = next
+                partialTranscript = combine(accumulated, segmentPartial)
+            }
             if result.isFinal {
                 commitSegment()
                 onSegmentEnded()
