@@ -57,6 +57,12 @@ extension ConduitUI {
 
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
+        /// How many of the most-recent transcript rows to render. Long chats
+        /// were laggy because every row (markdown / tool parse) was laid out
+        /// each render; we cap to the tail and let "Load earlier" widen it.
+        @State private var visibleRowWindow = ConduitUI.ChatView.rowWindowStep
+        /// Step for the initial window and each "Load earlier" tap.
+        static let rowWindowStep = 80
         // Composer attachments (#240 cross-surface): files picked via the
         // "+" menu sit here as removable chips until send. On send each
         // is uploaded via core `send_file` (0x01 frame → broker writes
@@ -231,7 +237,27 @@ extension ConduitUI {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
-                        let rows = chatRows
+                        // Window the transcript to the most recent rows so long
+                        // chats stay smooth (parsing/laying out the full history
+                        // every render was the lag source). "Load earlier"
+                        // widens the window; the bottom anchor + autoscroll are
+                        // unaffected since we keep the tail.
+                        let allRows = chatRows
+                        let rows = allRows.count > visibleRowWindow
+                            ? Array(allRows.suffix(visibleRowWindow))
+                            : allRows
+                        if rows.count < allRows.count {
+                            Button {
+                                visibleRowWindow += Self.rowWindowStep
+                            } label: {
+                                Text("Load earlier messages")
+                                    .font(neon.sans(13).weight(.medium))
+                                    .foregroundStyle(neon.accent)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+                        }
                         ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
                             switch row {
                             case .single(let event):
