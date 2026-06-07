@@ -36,6 +36,11 @@ struct ConduitApp: App {
     /// events. Wired up in `onAppear` so we have a live `store`
     /// reference; tear-down at app exit is implicit (App-scoped).
     @State private var liveActivityBridge: TurnLiveActivityBridge?
+    /// Round-3 §2: every scene-phase transition is "a scrap of execution
+    /// time" — used to re-stamp live activities (fresh `syncedAt` +
+    /// `staleDate`) so the lock-screen card degrades honestly instead of
+    /// presenting stale data as live.
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         Telemetry.configure()
@@ -81,7 +86,14 @@ struct ConduitApp: App {
                         }
                     }
                     .onOpenURL { url in
-                        applyPairingURL(url)
+                        if !applySessionURL(url) {
+                            applyPairingURL(url)
+                        }
+                    }
+                    .onChange(of: scenePhase) { _, _ in
+                        // Foreground, background, inactive — any wake is
+                        // execution time; re-stamp the live activities.
+                        liveActivity.refreshAll()
                     }
                     .sheet(item: hostKeyBinding) { prompt in
                         HostKeyPromptSheet(prompt: prompt) { accepted in
@@ -148,6 +160,34 @@ struct ConduitApp: App {
                 }
             }
         )
+    }
+
+    /// Handle the Live Activity's `conduit://session/<id>[?action=…]`
+    /// deep links (round-3 §2). Returns false when the URL isn't a
+    /// session link so the pairing path can have a look.
+    ///
+    /// Actions:
+    ///   - `refresh` — the stale card's "Tap to refresh": opening the app
+    ///     IS the refresh (execution time → `refreshAll()` re-stamps).
+    ///   - `approve` / `diff` — currently focus the session so the user
+    ///     lands on the pending-approval card / can open the diff from
+    ///     there. In-place approval without opening the session is a
+    ///     follow-up (needs an AppIntent + approval plumbing reachable
+    ///     from the widget process).
+    private func applySessionURL(_ url: URL) -> Bool {
+        guard url.scheme == "conduit", url.host == "session" else { return false }
+        let sessionID = url.lastPathComponent
+        guard !sessionID.isEmpty, sessionID != "session" else { return false }
+        let action = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "action" })?.value
+        Telemetry.breadcrumb(
+            "live_activity", "deep link",
+            data: ["session": sessionID, "action": action ?? "open"]
+        )
+        store.selectedSessionID = sessionID
+        // Any wake is execution time — re-stamp the cards.
+        liveActivity.refreshAll()
+        return true
     }
 
     /// Handle a `conduit://host[:port]?token=…` deep link by re-pointing

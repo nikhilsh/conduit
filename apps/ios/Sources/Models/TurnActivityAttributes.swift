@@ -26,6 +26,11 @@ public struct TurnActivityAttributes: ActivityAttributes {
         public var tokensIn: Int
         public var tokensOut: Int
         public var status: String
+        /// When this snapshot was pushed — the widget's "synced Xm ago"
+        /// honesty stamp (round-3 §2).
+        public var syncedAt: Date
+        /// Done-state closing line ("exit 0"), nil while running.
+        public var summary: String?
 
         public init(from state: TurnActivityContentState) {
             self.currentTool = state.currentTool
@@ -34,6 +39,8 @@ public struct TurnActivityAttributes: ActivityAttributes {
             self.tokensIn = state.tokensIn
             self.tokensOut = state.tokensOut
             self.status = state.status
+            self.syncedAt = state.syncedAt
+            self.summary = state.summary
         }
 
         public init(
@@ -42,7 +49,9 @@ public struct TurnActivityAttributes: ActivityAttributes {
             startedAt: Date,
             tokensIn: Int = 0,
             tokensOut: Int = 0,
-            status: String = "running"
+            status: String = "running",
+            syncedAt: Date? = nil,
+            summary: String? = nil
         ) {
             self.currentTool = currentTool
             self.currentCommand = currentCommand
@@ -50,20 +59,26 @@ public struct TurnActivityAttributes: ActivityAttributes {
             self.tokensIn = tokensIn
             self.tokensOut = tokensOut
             self.status = status
+            self.syncedAt = syncedAt ?? startedAt
+            self.summary = summary
         }
     }
 
     public var agentName: String
     public var sessionID: String
+    /// Session display name for the activity title.
+    public var sessionName: String
 
     public init(from data: TurnActivityAttributesData) {
         self.agentName = data.agentName
         self.sessionID = data.sessionID
+        self.sessionName = data.sessionName
     }
 
-    public init(agentName: String, sessionID: String) {
+    public init(agentName: String, sessionID: String, sessionName: String = "") {
         self.agentName = agentName
         self.sessionID = sessionID
+        self.sessionName = sessionName
     }
 }
 #endif
