@@ -171,10 +171,14 @@ public final class TurnLiveActivityController {
             activeActivityIDs[sessionID] = nil
         }
 
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            Telemetry.breadcrumb("liveactivity", "start skipped — Live Activities disabled in Settings", data: ["session": sessionID])
+            return
+        }
 
         let attrs = TurnActivityAttributes(from: attributes)
         let content = TurnActivityAttributes.ContentState(from: state)
+        Telemetry.breadcrumb("liveactivity", "requesting activity", data: ["session": sessionID])
         do {
             let activity = try Activity<TurnActivityAttributes>.request(
                 attributes: attrs,
@@ -182,12 +186,16 @@ public final class TurnLiveActivityController {
                 pushType: nil
             )
             activeActivityIDs[sessionID] = activity.id
+            Telemetry.breadcrumb("liveactivity", "activity started", data: ["session": sessionID, "id": activity.id])
         } catch {
             // `Activity.request` throws on: simulators without a Mac host
             // recent enough, Live Activities disabled in Settings, or a
             // mismatch between the host + widget `ActivityAttributes`
-            // shape. Swallow — the controller stays functional and the
-            // next turn's effect will retry.
+            // shape. The controller stays functional and the next turn's
+            // effect will retry — but capture it so a release build that
+            // silently shows no Live Activity is diagnosable from Sentry
+            // (e.g. the widget extension isn't embedded in the IPA).
+            Telemetry.capture(error: error, message: "Live Activity request failed", tags: ["flow": "liveactivity"], extras: ["session": sessionID])
         }
         #endif
     }
@@ -208,6 +216,7 @@ public final class TurnLiveActivityController {
         #if canImport(ActivityKit)
         guard let activityID = activeActivityIDs[sessionID] else { return }
         activeActivityIDs[sessionID] = nil
+        Telemetry.breadcrumb("liveactivity", "ending activity", data: ["session": sessionID, "id": activityID])
         let content = TurnActivityAttributes.ContentState(from: state)
         Task {
             for activity in Activity<TurnActivityAttributes>.activities where activity.id == activityID {
