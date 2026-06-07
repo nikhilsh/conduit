@@ -38,6 +38,31 @@ extension ConduitUI {
         )
     }
 
+    /// One question inside a pending-input prompt: its text plus its own
+    /// options. AskUserQuestion can carry several of these; the broker
+    /// flattens them into `"<q1>\n1.a\n2.b\n\n<q2>\n1.c\n2.d"` and core
+    /// flattens the options into one array, so we recover the grouping
+    /// from `content` (#7).
+    struct PendingQuestion: Equatable {
+        let prompt: String
+        let options: [String]
+    }
+
+    /// A renderable row in the transcript: either a standalone event or a
+    /// collapsed run of consecutive tool cards (#4 — keeps long
+    /// read/grep/edit sequences from flooding the screen).
+    enum ChatRow: Identifiable {
+        case single(ConversationItem)
+        case toolGroup([ConversationItem])
+
+        var id: String {
+            switch self {
+            case .single(let item): return item.id
+            case .toolGroup(let items): return "toolgroup-\(items.first?.id ?? "")-\(items.count)"
+            }
+        }
+    }
+
     enum ChatViewModel {
         /// True when the composer's send button should be enabled.
         static func canSend(_ snap: ChatSnapshot) -> Bool {
@@ -73,16 +98,6 @@ extension ConduitUI {
             // PTY-scraped chatlog fallback carries no toolName.
             return item.role.lowercased() == "tool"
                 && item.content.hasPrefix("uploaded ")
-        }
-
-        /// One question inside a pending-input prompt: its text plus its own
-        /// options. AskUserQuestion can carry several of these; the broker
-        /// flattens them into `"<q1>\n1.a\n2.b\n\n<q2>\n1.c\n2.d"` and core
-        /// flattens the options into one array, so we recover the grouping
-        /// here from `content` (#7).
-        struct PendingQuestion: Equatable {
-            let prompt: String
-            let options: [String]
         }
 
         /// Recover per-question groups from a pending-input `content` body.
@@ -199,21 +214,6 @@ extension ConduitUI {
             return dropPendingInputEchoes(
                 (conversation + synthetic).sortedByConversationTs { $0.ts }
             )
-        }
-
-        /// A renderable row in the transcript: either a standalone event or
-        /// a collapsed run of consecutive tool cards (#4 — keeps long
-        /// read/grep/edit sequences from flooding the screen).
-        enum ChatRow: Identifiable {
-            case single(ConversationItem)
-            case toolGroup([ConversationItem])
-
-            var id: String {
-                switch self {
-                case .single(let item): return item.id
-                case .toolGroup(let items): return "toolgroup-\(items.first?.id ?? "")-\(items.count)"
-                }
-            }
         }
 
         /// Fold an event list into rows, collapsing a contiguous run of

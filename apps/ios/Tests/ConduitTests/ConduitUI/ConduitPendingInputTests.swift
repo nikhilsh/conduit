@@ -44,8 +44,8 @@ struct ConduitPendingInputTests {
         let body = "Color?\n1. Red\n2. Blue\n\nSize?\n1. S\n2. M"
         let qs = ConduitUI.ChatViewModel.parsePendingQuestions(body)
         #expect(qs.count == 2)
-        #expect(qs[0] == ConduitUI.ChatViewModel.PendingQuestion(prompt: "Color?", options: ["Red", "Blue"]))
-        #expect(qs[1] == ConduitUI.ChatViewModel.PendingQuestion(prompt: "Size?", options: ["S", "M"]))
+        #expect(qs[0] == ConduitUI.PendingQuestion(prompt: "Color?", options: ["Red", "Blue"]))
+        #expect(qs[1] == ConduitUI.PendingQuestion(prompt: "Size?", options: ["S", "M"]))
     }
 
     @Test func parsesQuestionWithoutOptions() {
