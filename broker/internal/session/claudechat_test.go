@@ -37,7 +37,7 @@ func TestEncodeClaudeUserMessage(t *testing.T) {
 }
 
 func TestClaudeStreamCommand(t *testing.T) {
-	argv := claudeStreamCommand([]string{"claude"}, []string{"--dangerously-skip-permissions"})
+	argv := claudeStreamCommand([]string{"claude"}, []string{"--dangerously-skip-permissions"}, "")
 	want := []string{
 		"claude", "--dangerously-skip-permissions",
 		"-p",
@@ -87,7 +87,7 @@ func TestProcessClaudeStreamOutput(t *testing.T) {
 		if json.Unmarshal(p, &ev) == nil {
 			got = append(got, ev)
 		}
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestProcessClaudeStreamOutputAskUserQuestion(t *testing.T) {
 		if json.Unmarshal(p, &ev) == nil {
 			got = append(got, ev)
 		}
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}

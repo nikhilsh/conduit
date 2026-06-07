@@ -25,10 +25,21 @@ var claudeChatNow = time.Now
 // command + args, then the stream-json flags. `-p` + stream-json output
 // requires `--verbose` (verified against Claude Code 2.1.x); without it the
 // CLI refuses.
-func claudeStreamCommand(command, args []string) []string {
-	argv := make([]string, 0, len(command)+len(args)+6)
+// `resumeSessionID`, when non-empty, appends `--resume <id>` so a
+// RESPAWNED agent (broker restart, self-heal after a crash) picks the
+// conversation back up instead of starting amnesiac (device feedback:
+// "it went down and lost where it was"). The CLI's conversation files
+// live in the per-session agent-home, which persists on disk, so resume
+// works across broker restarts. An unknown id fails fast with a clean
+// error result (verified live), which lands in the normal agent-exit
+// notice path rather than hanging.
+func claudeStreamCommand(command, args []string, resumeSessionID string) []string {
+	argv := make([]string, 0, len(command)+len(args)+8)
 	argv = append(argv, command...)
 	argv = append(argv, args...)
+	if resumeSessionID != "" {
+		argv = append(argv, "--resume", resumeSessionID)
+	}
 	argv = append(argv,
 		"-p",
 		"--input-format", "stream-json",
@@ -44,6 +55,22 @@ func claudeStreamCommand(command, args []string) []string {
 		"--permission-prompt-tool", "stdio",
 	)
 	return argv
+}
+
+// claudeStreamInitSessionID extracts the CLI's own conversation id from
+// a `system/init` stream-json line. Captured + persisted so respawns can
+// `--resume` it; ok=false for any other line.
+func claudeStreamInitSessionID(line []byte) (string, bool) {
+	var ev struct {
+		Type      string `json:"type"`
+		Subtype   string `json:"subtype"`
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(line, &ev) != nil || ev.Type != "system" ||
+		ev.Subtype != "init" || ev.SessionID == "" {
+		return "", false
+	}
+	return ev.SessionID, true
 }
 
 // encodeClaudeUserMessage builds one stream-json input line for the user's
@@ -81,7 +108,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest)) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest), onInit func(string)) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -97,6 +124,14 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	var lastContextTokens uint64
 	for sc.Scan() {
 		line := sc.Bytes()
+		// The CLI announces its conversation id on init; latch it so
+		// respawns can --resume this exact conversation.
+		if id, ok := claudeStreamInitSessionID(line); ok {
+			if onInit != nil {
+				onInit(id)
+			}
+			continue
+		}
 		// Control protocol (--permission-prompt-tool stdio): a blocked
 		// can_use_tool request. Routed to the session's bridge — never
 		// rendered as chat content.

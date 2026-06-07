@@ -2,6 +2,8 @@ package session
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -139,5 +141,56 @@ func TestAskUserQuestionContentMultiSelectMarker(t *testing.T) {
 	}
 	if strings.Contains(content, "Pick one"+multiSelectMarker) {
 		t.Fatalf("single-select question must not carry the marker: %q", content)
+	}
+}
+
+// Resume-on-respawn (round-4 device feedback: "session went down and
+// lost where it was" — a broker restart/self-heal respawned the claude
+// agent WITHOUT --resume, so it started a brand-new conversation).
+
+func TestClaudeStreamCommandResume(t *testing.T) {
+	argv := claudeStreamCommand([]string{"claude"}, nil, "sess-123")
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--resume sess-123") {
+		t.Fatalf("expected --resume in argv: %v", argv)
+	}
+	fresh := claudeStreamCommand([]string{"claude"}, nil, "")
+	if strings.Contains(strings.Join(fresh, " "), "--resume") {
+		t.Fatalf("fresh spawn must not carry --resume: %v", fresh)
+	}
+}
+
+func TestClaudeStreamInitSessionID(t *testing.T) {
+	id, ok := claudeStreamInitSessionID([]byte(`{"type":"system","subtype":"init","session_id":"abc-1"}`))
+	if !ok || id != "abc-1" {
+		t.Fatalf("init parse: %q %v", id, ok)
+	}
+	for _, bad := range []string{
+		`{"type":"system","subtype":"status"}`,
+		`{"type":"assistant"}`,
+		`{"type":"system","subtype":"init"}`, // no id
+	} {
+		if _, ok := claudeStreamInitSessionID([]byte(bad)); ok {
+			t.Fatalf("should not parse: %s", bad)
+		}
+	}
+}
+
+func TestLatchChatSessionIDPersists(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{}
+	s.metaPath = filepath.Join(dir, "meta.json")
+	s.latchChatSessionID("conv-42")
+
+	raw, err := os.ReadFile(s.metaPath)
+	if err != nil {
+		t.Fatalf("meta.json not written: %v", err)
+	}
+	var meta sessionMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if meta.ClaudeChatSessionID != "conv-42" {
+		t.Fatalf("persisted id = %q", meta.ClaudeChatSessionID)
 	}
 }
