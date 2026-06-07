@@ -114,6 +114,15 @@ func TestWatchdogMarksWarningAndDead(t *testing.T) {
 	if got := sess.Status().Health; got != "warning" {
 		t.Fatalf("expected warning health, got %q", got)
 	}
+	// Regression guard: a quiet-but-alive process is a HEALTH warning, not
+	// a phase change. Phase must stay "running" so clients keep the session
+	// live (a non-running phase mid-turn made the app composer read-only).
+	if got := sess.Status().Phase; got != "running" {
+		t.Fatalf("expected phase to stay running on a no_output warning, got %q", got)
+	}
+	if got := sess.Status().ReasonCode; got != "no_output" {
+		t.Fatalf("expected reason no_output, got %q", got)
+	}
 
 	if sess.cmd == nil || sess.cmd.Process == nil {
 		t.Fatal("session process missing")

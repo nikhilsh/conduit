@@ -38,6 +38,12 @@ func (s *Session) accumulateUsage(d usageDelta) {
 	if d.contextWindow > 0 {
 		s.contextWindowTokens = d.contextWindow
 	}
+	// Defensive clamp: current context occupancy can never exceed the
+	// model's window. A bad delta (e.g. a summed-across-API-calls value)
+	// would otherwise pin the gauge past 100%.
+	if s.contextWindowTokens > 0 && s.contextUsedTokens > s.contextWindowTokens {
+		s.contextUsedTokens = s.contextWindowTokens
+	}
 	s.hasUsage = true
 	s.mu.Unlock()
 	// Push the updated totals to connected clients NOW. Usage accumulates on
@@ -108,6 +114,43 @@ func parseClaudeUsage(line []byte) (usageDelta, bool) {
 		contextUsed:   ev.Usage.InputTokens + cached,
 		contextWindow: window,
 	}, true
+}
+
+// parseClaudeContextTokens lifts the *current* context-window occupancy from a
+// claude stream-json `assistant` message line: the prompt size of that single
+// API call (input + cache read + cache creation). Claude makes one such call
+// per tool-use cycle within a turn, so the LATEST assistant message reflects the
+// live context size.
+//
+// This exists because the turn-end `result` envelope's usage is the SUM across
+// every API call in the turn (its total_cost_usd is likewise cumulative). A turn
+// with many tool calls re-reads the cached conversation prefix on each call, so
+// the summed cache_read alone can reach millions — which is how the context
+// gauge showed "2.5M / 1.0M" after a 111-command turn. The last call's prompt
+// size is the real occupancy and is bounded by the window.
+//
+// ok=false for any non-assistant line or one carrying no usage.
+func parseClaudeContextTokens(line []byte) (uint64, bool) {
+	var ev struct {
+		Type    string `json:"type"`
+		Message struct {
+			Usage struct {
+				InputTokens              uint64 `json:"input_tokens"`
+				CacheReadInputTokens     uint64 `json:"cache_read_input_tokens"`
+				CacheCreationInputTokens uint64 `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil || ev.Type != "assistant" {
+		return 0, false
+	}
+	used := ev.Message.Usage.InputTokens +
+		ev.Message.Usage.CacheReadInputTokens +
+		ev.Message.Usage.CacheCreationInputTokens
+	if used == 0 {
+		return 0, false
+	}
+	return used, true
 }
 
 // parseCodexUsage lifts one turn's usage out of a codex `turn.completed`

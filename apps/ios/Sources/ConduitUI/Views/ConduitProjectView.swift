@@ -69,6 +69,21 @@ extension ConduitUI {
         // session-create never touches libghostty, and once opened the
         // terminal stays mounted (opacity) so #294's no-rebuild warmth holds.
         @State private var terminalActivated = false
+
+        /// `shell` sessions (Box health → Shell: the broker's hidden bash
+        /// adapter) are pure terminals — land on the Terminal tab instead
+        /// of Chat. Set via init so the first render is already terminal
+        /// (an onAppear flip would flash Chat first). Mounting the terminal
+        /// here is safe w.r.t. the #294 crash: the shell session's detail
+        /// view mounts a runloop tick after create (see `createSession`'s
+        /// deferred select), not in the create commit itself.
+        init(session: ProjectSession, chatOnly: Bool = false) {
+            self.session = session
+            self.chatOnly = chatOnly
+            let isShell = session.assistant.lowercased() == "shell"
+            _tab = State(initialValue: isShell ? .terminal : .chat)
+            _terminalActivated = State(initialValue: isShell)
+        }
         @State private var showInfo = false
         /// Diff review sheet, opened from the header "Changes" button (shown
         /// only when the session has changes to review).

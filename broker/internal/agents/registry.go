@@ -41,7 +41,12 @@ type Adapter struct {
 	// "medium" in the status frame as a placeholder, this carries
 	// the per-agent override when set in the toml.
 	ReasoningEffort string `toml:"reasoning_effort"`
-	Hooks           Hooks  `toml:"hooks"`
+	// Hidden keeps the adapter out of Names() (and so out of the app's
+	// agent picker / capabilities assistants) while still resolvable by
+	// Get(). Used by the built-in `shell` adapter, which is a Box-health
+	// affordance rather than an agent.
+	Hidden bool  `toml:"hidden"`
+	Hooks  Hooks `toml:"hooks"`
 }
 
 func (a Adapter) Validate() error {
@@ -110,7 +115,10 @@ func (r *Registry) Get(name string) (Adapter, error) {
 
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.adapters))
-	for name := range r.adapters {
+	for name, adapter := range r.adapters {
+		if adapter.Hidden {
+			continue
+		}
 		names = append(names, name)
 	}
 	slices.Sort(names)

@@ -5,11 +5,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/nikhilsh/conduit/broker/internal/hostmetrics"
 	"github.com/nikhilsh/conduit/broker/internal/session"
 )
 
@@ -37,10 +41,39 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
+// authRejectLog rate-limits the 401 log line: at most one line per
+// authRejectLogEvery, with a count of how many rejections it covers.
+// Before this, auth rejections were completely silent server-side, which
+// made device-reported 401s undiagnosable from the broker log.
+var authRejectLog struct {
+	sync.Mutex
+	last       time.Time
+	suppressed int
+}
+
+const authRejectLogEvery = 10 * time.Second
+
+func logAuthReject(r *http.Request) {
+	authRejectLog.Lock()
+	defer authRejectLog.Unlock()
+	if time.Since(authRejectLog.last) < authRejectLogEvery {
+		authRejectLog.suppressed++
+		return
+	}
+	extra := ""
+	if n := authRejectLog.suppressed; n > 0 {
+		extra = fmt.Sprintf(" (+%d suppressed)", n)
+	}
+	log.Printf("auth: rejected %s %s from %s%s", r.Method, r.URL.Path, r.RemoteAddr, extra)
+	authRejectLog.last = time.Now()
+	authRejectLog.suppressed = 0
+}
+
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	if s.Auth.Check(r) {
 		return true
 	}
+	logAuthReject(r)
 	writeAPIError(w, http.StatusUnauthorized, "auth_expired", "unauthorized")
 	return false
 }
@@ -62,6 +95,13 @@ type capabilitiesResponse struct {
 		SwitchAgent       bool `json:"switch_agent"`
 		StructuredErrors  bool `json:"structured_errors"`
 		TokenInQueryParam bool `json:"token_in_query_param"`
+		// HostMetrics: GET /api/host/metrics serves CPU/MEM/DISK for the
+		// Box health screen. False (or absent, on older brokers) → the
+		// app hides the health section.
+		HostMetrics bool `json:"host_metrics"`
+		// ShellSessions: the hidden `shell` adapter exists, so the app may
+		// create a plain terminal session on this box (Box health → SSH).
+		ShellSessions bool `json:"shell_sessions"`
 	} `json:"features"`
 }
 
@@ -84,7 +124,24 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.SwitchAgent = true
 	resp.Features.StructuredErrors = true
 	resp.Features.TokenInQueryParam = true
+	resp.Features.HostMetrics = hostmetrics.Available()
+	resp.Features.ShellSessions = s.Sessions.HasAssistant("shell")
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// serveHostMetrics serves GET /api/host/metrics — the Box health screen's
+// CPU/MEM/DISK source. 503 metrics_unavailable when the platform cannot
+// report (the app treats that the same as an old broker: hide the section).
+func (s *Server) serveHostMetrics(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	snap, ok := hostmetrics.Sample()
+	if !ok {
+		writeAPIError(w, http.StatusServiceUnavailable, "metrics_unavailable", "host metrics not supported on this box")
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
 }
 
 type startSessionRequest struct {

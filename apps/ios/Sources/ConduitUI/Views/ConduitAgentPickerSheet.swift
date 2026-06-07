@@ -74,7 +74,12 @@ extension ConduitUI {
                                 label: "Codex",
                                 subtitle: "Powered by OpenAI"
                             )
-                            if store.savedServers.count > 1 {
+                            // Always show where the session will run — even
+                            // with one box. Device feedback round 4: with the
+                            // section gated on >1 servers, a single-box user
+                            // "can't choose the box" and can't tell local vs
+                            // server. One box = one checked row + footnote.
+                            if !store.savedServers.isEmpty {
                                 sectionLabel("Box")
                                 boxSection
                             }
@@ -197,10 +202,10 @@ extension ConduitUI {
         }
 
         /// One row per paired box; the session is created on the checked
-        /// one. Only rendered when there's an actual choice (>1 saved
-        /// server). "This device" on the home Boxes list is display-only
-        /// — a phone can't host the broker — so it is deliberately not a
-        /// target here.
+        /// one. "This device" on the home Boxes list is display-only — a
+        /// phone can't host the broker — so it is deliberately not a
+        /// target here; the single-box footnote says so instead of
+        /// offering a dead option.
         private var boxSection: some View {
             VStack(spacing: 6) {
                 ForEach(store.savedServers) { server in
@@ -238,6 +243,13 @@ extension ConduitUI {
                         )
                     }
                     .buttonStyle(.plain)
+                }
+                if store.savedServers.count == 1 {
+                    Text("Sessions run on a paired box — this device can't host them. Pair another box in Settings.")
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textFaint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
                 }
             }
             .accessibilityIdentifier("ConduitAgentPickerSheet.boxSection")

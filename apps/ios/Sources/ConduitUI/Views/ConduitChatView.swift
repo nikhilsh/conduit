@@ -57,6 +57,12 @@ extension ConduitUI {
 
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
+        /// How many of the most-recent transcript rows to render. Long chats
+        /// were laggy because every row (markdown / tool parse) was laid out
+        /// each render; we cap to the tail and let "Load earlier" widen it.
+        @State private var visibleRowWindow = ConduitUI.ChatView.rowWindowStep
+        /// Step for the initial window and each "Load earlier" tap.
+        static let rowWindowStep = 80
         // Composer attachments (#240 cross-surface): files picked via the
         // "+" menu sit here as removable chips until send. On send each
         // is uploaded via core `send_file` (0x01 frame → broker writes
@@ -146,6 +152,27 @@ extension ConduitUI {
             )
         }
 
+        /// `events` folded into rows, collapsing contiguous runs of
+        /// non-command tool cards (reads/greps/edits) into one group.
+        /// Command (shell) cards stay standalone so they remain prominent.
+        private var chatRows: [ConduitUI.ChatRow] {
+            ConduitUI.ChatViewModel.groupedRows(events) { ev in
+                ev.role.lowercased() == "tool"
+                    && !NeonToolClassifier.isCommand(
+                        toolName: ev.toolName,
+                        command: ConversationRenderer.extractCommand(from: ev)
+                    )
+            }
+        }
+
+        /// Continuation = the previous row is a single message of the same
+        /// role (used to suppress a repeated sender label). A tool group
+        /// always breaks the run.
+        private func continuation(in rows: [ConduitUI.ChatRow], at idx: Int, role: String) -> Bool {
+            guard idx > 0, case .single(let prev) = rows[idx - 1] else { return false }
+            return prev.role.lowercased() == role.lowercased()
+        }
+
         /// Total length of all currently-streaming buffers. Changes on
         /// every token while the agent streams, so observing it drives
         /// "follow the stream" without re-reading the whole event list.
@@ -232,19 +259,49 @@ extension ConduitUI {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
-                            let previousRole = idx > 0 ? events[idx - 1].role : nil
-                            let isContinuation = previousRole?.lowercased() == event.role.lowercased()
-                            ConduitEventRow(
-                                event: event,
-                                isContinuation: isContinuation,
-                                sessionID: session.id,
-                                onQuickReply: { reply in
-                                    store.sendChat(sessionID: session.id, message: reply)
-                                }
-                            )
-                            .id(event.id)
-                            .padding(.horizontal, 16)
+                        // Window the transcript to the most recent rows so long
+                        // chats stay smooth (parsing/laying out the full history
+                        // every render was the lag source). "Load earlier"
+                        // widens the window; the bottom anchor + autoscroll are
+                        // unaffected since we keep the tail.
+                        let allRows = chatRows
+                        let rows = allRows.count > visibleRowWindow
+                            ? Array(allRows.suffix(visibleRowWindow))
+                            : allRows
+                        if rows.count < allRows.count {
+                            Button {
+                                visibleRowWindow += Self.rowWindowStep
+                            } label: {
+                                Text("Load earlier messages")
+                                    .font(neon.sans(13).weight(.medium))
+                                    .foregroundStyle(neon.accent)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                            switch row {
+                            case .single(let event):
+                                ConduitEventRow(
+                                    event: event,
+                                    isContinuation: continuation(in: rows, at: idx, role: event.role),
+                                    sessionID: session.id,
+                                    onQuickReply: { reply in
+                                        store.sendChat(sessionID: session.id, message: reply)
+                                    }
+                                )
+                                .id(event.id)
+                                .padding(.horizontal, 16)
+                            case .toolGroup(let items):
+                                ConduitToolGroupCard(
+                                    items: items,
+                                    sessionID: session.id,
+                                    collapseDefault: appearance.collapseTurns
+                                )
+                                .id(row.id)
+                                .padding(.horizontal, 16)
+                            }
                         }
                         // BUG 3: "agent is typing" indicator lives inside
                         // the scroll content so it follows autoscroll like
@@ -264,6 +321,15 @@ extension ConduitUI {
                     .animation(.easeOut(duration: 0.18), value: isAgentWorking)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // Empty conversation: a centered placeholder so a fresh chat
+                // reads as "ready" instead of a blank void between the header
+                // and the composer (device feedback).
+                .overlay {
+                    if events.isEmpty && !isReadOnly {
+                        ConduitChatEmptyState(agent: session.assistant)
+                            .allowsHitTesting(false)
+                    }
+                }
                 // Device feedback v0.0.49 (round 2) #2: the scroll-to-bottom
                 // arrow must float just ABOVE the composer, never on top of
                 // the send button. It's applied BEFORE `.safeAreaInset(.bottom)`
@@ -374,9 +440,13 @@ extension ConduitUI {
                 // while the user hasn't scrolled up.
                 .onChange(of: streamingContentLength) { _, _ in
                     guard autoScroll.shouldFollowStreaming else { return }
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                    }
+                    // Follow the stream WITHOUT animating each token: a fresh
+                    // `withAnimation` scroll 50×/sec scheduled a CADisplayLink
+                    // interpolation per token and was a primary streaming-jank
+                    // source. An unanimated jump-to-bottom tracks the growing
+                    // content smoothly (the new-message / settle handlers below
+                    // still animate their one-off scrolls).
+                    proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
                 }
                 // A brand-new message (user send / fresh assistant turn).
                 .onChange(of: events.last?.id) { _, _ in
@@ -715,11 +785,17 @@ extension ConduitUI {
                 .foregroundStyle(neon.text)
                 .tint(neon.accent)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.vertical, 8)
+                // A rounded rect (not a Capsule) so multi-line input grows
+                // into a tidy box instead of ballooning into a tall oval.
                 .background(
-                    Capsule().fill(neon.surface)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(neon.surface)
                 )
-                .overlay(Capsule().stroke(neon.border, lineWidth: 1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(neon.border, lineWidth: 1)
+                )
                 .onSubmit { send() }
 
                 // Send is enabled by a non-empty draft OR at least one
@@ -793,6 +869,15 @@ extension ConduitUI {
                 pendingAttachments: attachments,
                 sessionID: sessionID
             )
+            // Stash image bytes so the user's bubble can show a thumbnail of
+            // what they just sent (the reference line only carries the path).
+            for attachment in attachments where attachment.kind == .image {
+                AttachmentBytesCache.shared.put(
+                    sessionID: sessionID,
+                    filename: attachment.filename,
+                    bytes: attachment.bytes
+                )
+            }
             draft = ""
             pendingAttachments = []
             attachError = nil
@@ -824,6 +909,35 @@ extension ConduitUI {
     }
 }
 
+// MARK: - Empty state
+
+/// Centered placeholder shown when a live conversation has no events yet, so a
+/// fresh chat doesn't render as a large empty void above the composer.
+private struct ConduitChatEmptyState: View {
+    let agent: String
+    @Environment(\.neonTheme) private var neon
+
+    private var agentName: String {
+        let trimmed = agent.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "your agent" : trimmed.capitalized
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(neon.accent)
+                .neonTextGlow(neon.glow ? neon.textGlow?.tinted(neon.accent) : nil)
+            Text("Message \(agentName) to get started")
+                .font(neon.sans(15))
+                .foregroundStyle(neon.textDim)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity)
+    }
+}
+
 // MARK: - ConduitEventRow
 //
 // Per-message dispatch — routes `ConversationItem` to the right inline
@@ -838,6 +952,7 @@ private struct ConduitEventRow: View {
     /// resend the command to the right session.
     var sessionID: String = ""
     let onQuickReply: (String) -> Void
+    @Environment(AppearanceStore.self) private var appearance
 
     var body: some View {
         if event.status.lowercased() == "swapping" {
@@ -853,7 +968,7 @@ private struct ConduitEventRow: View {
         } else if event.kind == "subagent" {
             ConduitSubagentCard(event: event)
         } else if event.role.lowercased() == "tool" {
-            ConduitToolCard(event: event, sessionID: sessionID)
+            ConduitToolCard(event: event, sessionID: sessionID, collapseDefault: appearance.collapseTurns)
         } else {
             ConduitChatMessageRow(event: event, isContinuation: isContinuation)
         }
@@ -901,27 +1016,9 @@ private struct ConduitChatMessageRow: View {
             // the assistant/system prose renders flat on the canvas (no
             // heavy bubble), styled inside ConduitBlockStack.
             if role == .user {
-                ConduitBlockStack(
-                    blocks: ConversationRenderer.blocks(for: event.content),
-                    role: role,
-                    itemID: event.id
-                )
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    // Device feedback v0.0.68: fill the user pill with the
-                    // primary `accent`, NOT `accent2`. `accentText` (the pill's
-                    // text colour) is the guaranteed-contrast partner of
-                    // `accent` everywhere else (send button, primary buttons),
-                    // but in LIGHT mode `accent2` is a bright tint (e.g. Matrix
-                    // lime #b6f23d) and `accentText` is white — white-on-lime
-                    // was unreadable. `accent` is the mode-aware brand colour
-                    // (bright in dark, darker in light) so the white/dark
-                    // accentText reads cleanly in both modes.
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(neon.accent)
-                )
-                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+                // The bubble strips its own `[attached …]` reference lines
+                // and renders them as chips/thumbnails instead of raw paths.
+                ConduitUserBubble(event: event)
             } else {
                 ConduitBlockStack(
                     blocks: ConversationRenderer.blocks(for: event.content),
@@ -962,6 +1059,102 @@ private struct ConduitChatMessageRow: View {
         switch role {
         case .user, .tool: return neon.textGlow?.tinted(roleColor)
         default:           return nil
+        }
+    }
+}
+
+// MARK: - User bubble + attachments
+
+/// In-memory cache of just-sent attachment bytes, keyed by
+/// `sessionID/filename`, so the user's bubble can show a real image
+/// thumbnail for what they just sent. Reloaded transcripts (bytes not
+/// cached) fall back to a filename chip — fetching upload bytes back from
+/// the broker is out of scope.
+@MainActor
+final class AttachmentBytesCache {
+    static let shared = AttachmentBytesCache()
+    private var store: [String: Data] = [:]
+
+    private func key(_ sessionID: String, _ filename: String) -> String {
+        "\(sessionID)/\(filename)"
+    }
+
+    func put(sessionID: String, filename: String, bytes: Data) {
+        store[key(sessionID, filename)] = bytes
+    }
+
+    func image(sessionID: String, filename: String) -> UIImage? {
+        guard let data = store[key(sessionID, filename)] else { return nil }
+        return UIImage(data: data)
+    }
+}
+
+/// User message bubble: renders the prose pill (when any) plus a
+/// chip/thumbnail per attachment, with the raw `uploads/…` reference
+/// lines stripped from the visible text.
+private struct ConduitUserBubble: View {
+    let event: ConversationItem
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        let parsed = ConduitUI.splitAttachmentReferences(event.content)
+        return VStack(alignment: .trailing, spacing: 8) {
+            if !parsed.text.isEmpty {
+                ConduitBlockStack(
+                    blocks: ConversationRenderer.blocks(for: parsed.text),
+                    role: .user,
+                    itemID: event.id
+                )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                // Device feedback v0.0.68: fill with primary `accent` (not
+                // `accent2`) so `accentText` stays readable in both modes.
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(neon.accent)
+                )
+                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+            }
+            ForEach(parsed.attachments, id: \.filename) { ref in
+                ConduitAttachmentChip(ref: ref)
+            }
+        }
+    }
+}
+
+/// A single attachment in a user bubble: an image thumbnail when the
+/// bytes are cached from this session's send, else a compact filename
+/// chip.
+private struct ConduitAttachmentChip: View {
+    let ref: ConduitUI.AttachmentRef
+    @Environment(\.neonTheme) private var neon
+
+    var body: some View {
+        if ref.kind == .image,
+           let image = AttachmentBytesCache.shared.image(sessionID: ref.sessionID, filename: ref.filename) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 168, height: 168)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(neon.border, lineWidth: 1)
+                )
+        } else {
+            HStack(spacing: 6) {
+                Image(systemName: ref.kind == .image ? "photo" : "doc")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(ref.filename)
+                    .font(neon.sans(13))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .foregroundStyle(neon.text)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(neon.surface))
+            .overlay(Capsule().stroke(neon.border, lineWidth: 1))
         }
     }
 }
@@ -1068,7 +1261,7 @@ private struct ConduitMarkdownBlock: View {
 
     var body: some View {
         ConduitStructuredMarkdownView(
-            pieces: pieces,
+            pieces: visiblePieces,
             role: role,
             basePointSize: appearance.bodyPointSize,
             // §2: prose renders in the sans family (NOT mono). The user's
@@ -1077,27 +1270,35 @@ private struct ConduitMarkdownBlock: View {
             design: appearance.fontFamily == .serif ? .serif : .default
         )
         .frame(maxWidth: role == .user ? nil : .infinity, alignment: role == .user ? .trailing : .leading)
-        .transition(isStreaming ? .opacity : .identity)
-        .animation(isStreaming ? .easeOut(duration: 0.05) : nil, value: pieces)
-        // Parse once per key into @State. `.task(id:)` cancels +
-        // re-runs when `renderKey` changes; the synchronous seed below
-        // covers the very first frame (and recycled rows that already
-        // match) so the row never flashes empty at 0px.
-        .task(id: renderKey) {
-            if renderedKey != renderKey {
-                pieces = ConduitMarkdownStructure.parse(displayedText)
-                renderedKey = renderKey
-            }
-        }
-        .onAppear {
-            // First appearance (or recycle into a row whose key differs
-            // from the last assignment): seed synchronously so we don't
-            // draw an empty row for one frame while the `.task`
-            // schedules.
-            if renderedKey != renderKey {
-                pieces = ConduitMarkdownStructure.parse(displayedText)
-                renderedKey = renderKey
-            }
+        // No per-token layout animation: interpolating piece layout on every
+        // streamed token was a major scroll-jank source. Litter rendered
+        // streaming text flat and stayed smooth — we match that.
+        .animation(nil, value: visiblePieces)
+        // Run the EXPENSIVE structured parse (headings/lists/tables) only
+        // once the turn settles — never per token. While streaming the id
+        // stays nil so this fires once (and no-ops); when the turn ends the
+        // id becomes `renderKey` and the full parse runs a single time.
+        .task(id: isStreaming ? nil : renderKey) { parseIfSettled() }
+        .onAppear { parseIfSettled() }
+    }
+
+    /// What actually renders. While streaming, the raw buffer is shown
+    /// cheaply as one paragraph (no block parse); once settled, the
+    /// structured `pieces` render. Falls back to the raw text until the
+    /// settle-parse lands so a just-finished row never flashes empty.
+    private var visiblePieces: [ConduitMarkdownPiece] {
+        if isStreaming { return [.paragraph(displayedText)] }
+        return pieces.isEmpty ? [.paragraph(displayedText)] : pieces
+    }
+
+    /// Parse the settled body into structured pieces once. No-op while
+    /// streaming (the buffer is rendered raw) and when the key is unchanged
+    /// (recycled row already parsed).
+    private func parseIfSettled() {
+        guard !isStreaming else { return }
+        if renderedKey != renderKey {
+            pieces = ConduitMarkdownStructure.parse(displayedText)
+            renderedKey = renderKey
         }
     }
 }
@@ -1544,16 +1745,92 @@ extension NeonTheme {
     }
 }
 
+// MARK: - Tool group card (#4)
+
+/// A collapsed run of consecutive tool cards (e.g. several "Read files"
+/// in a row). Starts collapsed; expanding reveals each underlying
+/// `ConduitToolCard`. Keeps long read/grep/edit sequences from flooding
+/// the transcript.
+private struct ConduitToolGroupCard: View {
+    let items: [ConversationItem]
+    var sessionID: String
+    var collapseDefault: Bool
+    @State private var expanded = false
+    @Environment(\.neonTheme) private var neon
+
+    init(items: [ConversationItem], sessionID: String = "", collapseDefault: Bool = false) {
+        self.items = items
+        self.sessionID = sessionID
+        self.collapseDefault = collapseDefault
+    }
+
+    /// "Read files · 4" when the run is homogeneous, else "4 tool steps".
+    private var headerLabel: String {
+        let labels = Set(items.map {
+            NeonToolClassifier.humanLabel(toolName: $0.toolName, fileCount: $0.files.count)
+        })
+        if labels.count == 1, let only = labels.first {
+            return "\(only) · \(items.count)"
+        }
+        return "\(items.count) tool steps"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(neon.textDim)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(neon.textDim.opacity(0.14))
+                    )
+                Text(headerLabel)
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.text)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(neon.textDim)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+            }
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                        ConduitToolCard(event: item, sessionID: sessionID, collapseDefault: collapseDefault)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, glowTint: nil)
+    }
+}
+
 private struct ConduitToolCard: View {
     let event: ConversationItem
     var sessionID: String = ""
+    /// When true (Settings → Collapse Turns), the headline command card
+    /// opens collapsed instead of expanded. The compact tool row already
+    /// opens collapsed regardless (device feedback v0.0.47 #2).
+    var collapseDefault: Bool = false
 
     var body: some View {
         // §4.1 vs §4.5: shell/exec calls (or anything carrying a
         // command) get the headline CommandCard; everything else gets
         // the compact neon tool row.
         if NeonToolClassifier.isCommand(toolName: event.toolName, command: ConversationRenderer.extractCommand(from: event)) {
-            ConduitNeonCommandCard(event: event, sessionID: sessionID)
+            ConduitNeonCommandCard(event: event, sessionID: sessionID, collapseDefault: collapseDefault)
         } else {
             ConduitNeonToolCard(event: event)
         }
@@ -1697,12 +1974,20 @@ extension EnvironmentValues {
 
 private struct ConduitNeonCommandCard: View {
     let event: ConversationItem
-    var sessionID: String = ""
-    @State private var expanded = true
+    var sessionID: String
+    @State private var expanded: Bool
     @State private var blink = false
     @Environment(\.neonTheme) private var neon
     @Environment(SessionStore.self) private var store
     @Environment(\.openTerminalAction) private var openTerminalAction
+
+    init(event: ConversationItem, sessionID: String = "", collapseDefault: Bool = false) {
+        self.event = event
+        self.sessionID = sessionID
+        // "Collapse Turns" (Settings) starts command cards collapsed;
+        // otherwise they open expanded as before.
+        _expanded = State(initialValue: !collapseDefault)
+    }
 
     private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
     private var command: String { ConversationRenderer.extractCommand(from: event) ?? event.content }
@@ -2192,29 +2477,45 @@ private struct ConduitPendingInputCard: View {
     let onQuickReply: (String) -> Void
     @Environment(\.neonTheme) private var neon
 
-    private var options: [String] {
-        if !event.pendingOptions.isEmpty { return event.pendingOptions }
-        return ConversationRenderer.extractPendingOptions(from: event.content)
+    /// Chosen option per question index. Drives the selection highlight and
+    /// gates the multi-question Send button.
+    @State private var selections: [Int: String] = [:]
+    /// Once answered, the card locks: the choice is marked and the rest
+    /// dimmed/disabled so it reads as a settled decision.
+    @State private var submitted = false
+
+    /// Per-question groups recovered from the prompt body (#7). Falls back
+    /// to the flat `pendingOptions` as a single unlabeled question.
+    private var questions: [ConduitUI.PendingQuestion] {
+        let parsed = ConduitUI.ChatViewModel.parsePendingQuestions(event.content)
+        if !parsed.isEmpty { return parsed }
+        let flat = event.pendingOptions.isEmpty
+            ? ConversationRenderer.extractPendingOptions(from: event.content)
+            : event.pendingOptions
+        return [ConduitUI.PendingQuestion(prompt: "", options: flat)]
     }
 
     var body: some View {
-        // §6: claude-tinted wash + 1.5px claude border, glowing. Big
-        // tappable option rows — the first is the filled primary, the
-        // rest bordered with a trailing index number.
-        VStack(alignment: .leading, spacing: 10) {
+        let questions = self.questions
+        let multi = questions.count > 1
+        return VStack(alignment: .leading, spacing: 12) {
             Text("NEEDS YOUR INPUT")
                 .font(neon.mono(11).weight(.bold))
                 .tracking(0.8)
                 .foregroundStyle(neon.claude)
                 .neonTextGlow(neon.textGlow?.tinted(neon.claude))
-            // Prompt in sans.
-            ConduitMarkdownBlock(text: event.content, role: .assistant)
-            if !options.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(Array(options.enumerated()), id: \.offset) { idx, option in
-                        optionRow(option, index: idx)
+            ForEach(Array(questions.enumerated()), id: \.offset) { qIdx, question in
+                VStack(alignment: .leading, spacing: 8) {
+                    if !question.prompt.isEmpty {
+                        ConduitMarkdownBlock(text: question.prompt, role: .assistant)
+                    }
+                    ForEach(Array(question.options.enumerated()), id: \.offset) { oIdx, option in
+                        optionRow(question: qIdx, option: option, index: oIdx, multi: multi)
                     }
                 }
+            }
+            if multi && !submitted {
+                sendButton(questions: questions)
             }
         }
         .padding(14)
@@ -2230,21 +2531,30 @@ private struct ConduitPendingInputCard: View {
     }
 
     @ViewBuilder
-    private func optionRow(_ option: String, index: Int) -> some View {
-        let isPrimary = index == 0
-        Button { onQuickReply(option) } label: {
+    private func optionRow(question qIdx: Int, option: String, index oIdx: Int, multi: Bool) -> some View {
+        let selected = selections[qIdx] == option
+        let dimmed = submitted && !selected
+        Button {
+            guard !submitted else { return }
+            selections[qIdx] = option
+            // Single question → send immediately (tap == answer). Multi
+            // waits for the explicit Send once every question is answered.
+            if !multi {
+                submit([option])
+            }
+        } label: {
             HStack(spacing: 10) {
-                if isPrimary {
+                if selected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(neon.accentText)
                 }
                 Text(option)
-                    .font(neon.sans(15).weight(isPrimary ? .semibold : .medium))
-                    .foregroundStyle(isPrimary ? neon.accentText : neon.text)
+                    .font(neon.sans(15).weight(selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? neon.accentText : neon.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if !isPrimary {
-                    Text("\(index)")
+                if !selected {
+                    Text("\(oIdx + 1)")
                         .font(neon.mono(12).weight(.bold))
                         .foregroundStyle(neon.textFaint)
                 }
@@ -2253,16 +2563,47 @@ private struct ConduitPendingInputCard: View {
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isPrimary ? neon.claude : Color.clear)
+                    .fill(selected ? neon.claude : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isPrimary ? Color.clear : neon.border, lineWidth: 1)
+                    .stroke(selected ? Color.clear : neon.border, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Send this reply")
+        .disabled(submitted)
+        .opacity(dimmed ? 0.45 : 1)
+        .accessibilityHint(multi ? "Select this option" : "Send this reply")
+    }
+
+    @ViewBuilder
+    private func sendButton(questions: [ConduitUI.PendingQuestion]) -> some View {
+        // Only questions that actually offer options need an answer.
+        let answerable = questions.enumerated().filter { !$0.element.options.isEmpty }
+        let allAnswered = answerable.allSatisfy { selections[$0.offset] != nil }
+        Button {
+            guard allAnswered else { return }
+            submit(answerable.compactMap { selections[$0.offset] })
+        } label: {
+            Text("Send")
+                .font(neon.sans(15).weight(.semibold))
+                .foregroundStyle(neon.accentText)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(neon.claude)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!allAnswered)
+        .opacity(allAnswered ? 1 : 0.5)
+    }
+
+    /// Lock the card and send the chosen answer(s). Multiple answers are
+    /// newline-joined into one chat message.
+    private func submit(_ answers: [String]) {
+        submitted = true
+        onQuickReply(answers.joined(separator: "\n"))
     }
 }
 

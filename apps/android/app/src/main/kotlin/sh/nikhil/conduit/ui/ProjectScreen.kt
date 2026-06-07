@@ -77,8 +77,11 @@ fun ProjectScreen(
     }
     val visibleTabs = if (showBrowser) ProjectTab.entries.toList()
     else ProjectTab.entries.filter { it != ProjectTab.Browser }
+    // `shell` sessions (Box health → Shell: the broker's hidden bash
+    // adapter) are pure terminals — land on the Terminal tab instead of
+    // Chat. Mirrors iOS `ProjectView.init`.
     val pagerState = rememberPagerState(
-        initialPage = 0,
+        initialPage = if (session.assistant.equals("shell", ignoreCase = true)) ProjectTab.Terminal.ordinal else 0,
         pageCount = { if (showBrowser) ProjectTab.entries.size else ProjectTab.entries.size - 1 },
     )
     val statuses by store.statusBySession.collectAsState()
