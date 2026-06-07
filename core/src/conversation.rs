@@ -350,7 +350,12 @@ fn looks_like_pending_input(text: &str) -> bool {
     if lower.contains("request_user_input") {
         return true;
     }
-    if lower.contains("pending") && lower.contains("input") {
+    // Literal marker only. The previous `contains("pending") && contains("input")`
+    // matched any prose that merely mentioned both words — even as substrings of a
+    // larger identifier like `dropPendingInputEchoes` — turning ordinary assistant
+    // messages into bogus "NEEDS YOUR INPUT" option cards (device feedback: "these
+    // need-your-input cards don't make sense"). Require the contiguous marker.
+    if lower.contains("pending_input") || lower.contains("pending input") {
         return true;
     }
     if lower.contains("select") && (lower.contains("option") || lower.contains("choice")) {
@@ -360,21 +365,22 @@ fn looks_like_pending_input(text: &str) -> bool {
     if lower.contains("[a]pprove") || lower.contains("approve / edit / reject") {
         return true;
     }
-    // Numbered menu: "1. Yes\n2. No"
-    let mut numbered = 0;
+    // Numbered menu: "1. Yes\n2. No" — but only when the numbered lines look like
+    // short option *labels*. Ordinary assistant prose routinely contains two or
+    // more long "1. …/2. …" sentences; counting those as a menu was the other half
+    // of the false-positive. A real choice menu's options are terse, so cap the
+    // label length before counting it.
+    const MAX_OPTION_LABEL_CHARS: usize = 48;
+    let mut short_options = 0;
     for line in text.lines() {
-        let trimmed = line.trim_start();
-        if trimmed
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-            && trimmed.contains(". ")
-        {
-            numbered += 1;
+        if let Some(rest) = strip_numbered_prefix(line.trim_start()) {
+            let label = rest.trim();
+            if !label.is_empty() && label.chars().count() <= MAX_OPTION_LABEL_CHARS {
+                short_options += 1;
+            }
         }
     }
-    numbered >= 2
+    short_options >= 2
 }
 
 fn looks_like_handoff(text: &str) -> bool {
@@ -776,6 +782,20 @@ mod tests {
     #[test]
     fn pending_options_empty_when_not_pending() {
         let item = item_from_chat_event(&ev("assistant", "Just a message"), 0);
+        assert!(item.pending_options.is_empty());
+    }
+
+    #[test]
+    fn pending_input_ignores_prose_mentioning_pending_and_input() {
+        // Regression (device feedback): an ordinary explanation that happens to
+        // mention the identifier `dropPendingInputEchoes` (substrings "pending" +
+        // "input") and uses a long numbered list must NOT become a pending-input
+        // card with bogus tappable options.
+        let content = "Two key clarifications:\n\
+            1. `dropPendingInputEchoes` doesn't exist anywhere in the code or history, so the frame names are mis-symbolicated.\n\
+            2. The latest hang is on 0.0.115, so it's current.";
+        let item = item_from_chat_event(&ev("assistant", content), 0);
+        assert_eq!(item.kind, "message");
         assert!(item.pending_options.is_empty());
     }
 
