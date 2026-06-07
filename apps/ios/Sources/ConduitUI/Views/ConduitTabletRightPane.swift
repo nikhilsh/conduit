@@ -37,6 +37,7 @@ extension ConduitUI {
 
     struct TabletRightPane: View {
         let session: ProjectSession
+        @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @State private var tab: RightPaneTab = .terminal
         // Lazy-mount gate for the native terminal (same fix as phone
@@ -47,11 +48,20 @@ extension ConduitUI {
         // first; it then stays mounted (opacity) per #294.
         @State private var terminalActivated = false
 
+        /// Whether the agent has reported a resolvable live-preview URL —
+        /// the Browser tab is offered only then (no valid website → no tab).
+        private var hasBrowserPreview: Bool {
+            BrowserTab.previewURL(for: session, store: store) != nil
+        }
+
         var body: some View {
             VStack(spacing: 0) {
                 HStack {
+                    let tabs: [RightPaneTab] = hasBrowserPreview
+                        ? RightPaneTab.allCases
+                        : RightPaneTab.allCases.filter { $0 != .browser }
                     NeonSegmentedPill(
-                        segments: RightPaneTab.allCases.map {
+                        segments: tabs.map {
                             NeonSegmentedPill<RightPaneTab>.Segment(
                                 id: $0, label: $0.label, systemImage: $0.systemImage
                             )
@@ -73,6 +83,11 @@ extension ConduitUI {
             // Defer the native-terminal mount to the next runloop, off the
             // session-create CA commit (see terminalActivated).
             .task { terminalActivated = true }
+            // If a withdrawn preview removes the Browser tab while it's active,
+            // fall back to Terminal (the pane's default surface).
+            .onChange(of: hasBrowserPreview) { _, has in
+                if !has && tab == .browser { tab = .terminal }
+            }
         }
 
         // Keep Terminal + Browser MOUNTED across the right-pane tab switches
