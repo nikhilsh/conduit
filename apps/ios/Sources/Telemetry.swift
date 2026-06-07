@@ -6,6 +6,17 @@ import Sentry
 enum Telemetry {
     static func configure() {
 #if canImport(Sentry)
+        // Never report from a test run. The unit tests host the real app
+        // and deliberately exercise failure paths (e.g. the login sheet's
+        // "CLI not installed on broker host" fixture) — with a live DSN
+        // those shipped to production Sentry as ERRORs on every CI run
+        // (314 events of pure noise under release 0.0.1+13). CI no
+        // longer passes a DSN to the test step; this guard is the
+        // defense in depth.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil {
+            return
+        }
         let dsn = sentryDSN
         guard !dsn.isEmpty else { return }
         SentrySDK.start { options in

@@ -135,8 +135,12 @@ jobs:
       - name: xcodebuild test (ConduitTests, simulator)
         if: steps.detect.outputs.skip != 'true' && hashFiles('apps/ios/Tests/ConduitTests/**/*.swift') != ''
         working-directory: apps/ios
-        env:
-          SENTRY_DSN_IOS: ${{ secrets.SENTRY_DSN_IOS }}
+        # NO SENTRY_DSN for the test run, deliberately: the test host runs
+        # the real app, and with a live DSN every unit-test exercise of a
+        # failure path shipped synthetic ERRORs to production Sentry (e.g.
+        # the "CLI not installed on broker host" login-sheet fixture — 314
+        # events of pure CI noise, release 0.0.1+13). Telemetry.configure()
+        # also refuses to start under XCTest as defense in depth.
         run: |
           # Find an available simulator on this runner. macos-26 doesn't
           # guarantee any specific named device pre-installed, so we
@@ -159,7 +163,6 @@ jobs:
             -skipPackagePluginValidation \
             -skipMacroValidation \
             -resultBundlePath build/Conduit.xcresult \
-            SENTRY_DSN="$SENTRY_DSN_IOS" \
             test 2>&1 | tee build/ci-logs/xcodebuild-test.log
       - name: Capture Swift compiler warnings
         if: steps.detect.outputs.skip != 'true' && !cancelled()
