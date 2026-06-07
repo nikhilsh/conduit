@@ -121,6 +121,9 @@ func (s *Server) Handler() http.Handler {
 	// degradation surfaces in the operator's logs.
 	mux.HandleFunc("/healthz", s.serveHealthz)
 	mux.HandleFunc("/api/capabilities", s.serveCapabilities)
+	// GET /api/host/metrics — coarse box health (CPU/MEM/DISK/load/uptime)
+	// for the app's Box health rings. See internal/hostmetrics.
+	mux.HandleFunc("/api/host/metrics", s.serveHostMetrics)
 	mux.HandleFunc("/api/session/start", s.serveSessionStart)
 	// GET /api/sessions — authoritative "what's alive right now" list a
 	// reconnecting client reconciles against. Exact pattern (no trailing

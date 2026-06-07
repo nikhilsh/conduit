@@ -661,6 +661,94 @@ final class SessionStore {
         return try JSONDecoder().decode(RemoteDirectoryListing.self, from: data)
     }
 
+    /// Host health snapshot from `GET /api/host/metrics` (broker v0.0.111+).
+    /// Percentages are 0–100; see broker/internal/hostmetrics.
+    struct HostMetrics: Decodable {
+        let cpuPct: Double
+        let memPct: Double
+        let diskPct: Double
+        let load1: Double?
+        let uptimeSecs: Int64?
+
+        enum CodingKeys: String, CodingKey {
+            case cpuPct = "cpu_pct"
+            case memPct = "mem_pct"
+            case diskPct = "disk_pct"
+            case load1
+            case uptimeSecs = "uptime_secs"
+        }
+    }
+
+    /// What the Box health screen needs to know about a box's broker.
+    /// `nil` fields on failure paths collapse to "hide the affordance".
+    struct BoxFeatures {
+        var hostMetrics: Bool
+        var shellSessions: Bool
+    }
+
+    /// Probe `GET /api/capabilities` on a specific saved endpoint (works
+    /// for non-active boxes too — plain authed GET, no WS needed).
+    /// Returns nil on any failure (old broker, unreachable, 401): the
+    /// caller hides the dependent affordances rather than erroring.
+    func fetchBoxFeatures(endpoint: StoredEndpoint) async -> BoxFeatures? {
+        struct CapsEnvelope: Decodable {
+            struct Features: Decodable {
+                let hostMetrics: Bool?
+                let shellSessions: Bool?
+                enum CodingKeys: String, CodingKey {
+                    case hostMetrics = "host_metrics"
+                    case shellSessions = "shell_sessions"
+                }
+            }
+            let features: Features?
+        }
+        guard let data = await getJSON(endpoint: endpoint, path: "/api/capabilities"),
+              let caps = try? JSONDecoder().decode(CapsEnvelope.self, from: data)
+        else {
+            Telemetry.breadcrumb("box_health", "capabilities probe failed", data: ["host": endpoint.displayHost])
+            return nil
+        }
+        return BoxFeatures(
+            hostMetrics: caps.features?.hostMetrics ?? false,
+            shellSessions: caps.features?.shellSessions ?? false
+        )
+    }
+
+    /// Fetch live CPU/MEM/DISK for a box. nil = box doesn't report metrics
+    /// (old broker 404, non-Linux 503, unreachable) → hide the health
+    /// section (honest-state rule).
+    func fetchHostMetrics(endpoint: StoredEndpoint) async -> HostMetrics? {
+        guard let data = await getJSON(endpoint: endpoint, path: "/api/host/metrics"),
+              let metrics = try? JSONDecoder().decode(HostMetrics.self, from: data)
+        else {
+            Telemetry.breadcrumb("box_health", "metrics fetch failed", data: ["host": endpoint.displayHost])
+            return nil
+        }
+        Telemetry.breadcrumb("box_health", "metrics fetched", data: [
+            "cpu": String(format: "%.0f", metrics.cpuPct),
+            "mem": String(format: "%.0f", metrics.memPct),
+            "disk": String(format: "%.0f", metrics.diskPct),
+        ])
+        return metrics
+    }
+
+    /// Shared authed-GET against an arbitrary stored endpoint — the
+    /// `listDirectories` direct-HTTP pattern, parameterized on endpoint so
+    /// Box health can probe boxes that aren't the active connection.
+    private func getJSON(endpoint: StoredEndpoint, path: String) async -> Data? {
+        guard let base = endpoint.httpBaseURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = path
+        guard let url = components?.url else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 10
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else { return nil }
+        return data
+    }
+
     /// Fetch a session's persisted transcript read-only over HTTP
     /// (`GET /api/session/conversation/<id>`, broker PR #196). Mirrors
     /// `listDirectories`' direct-HTTP + bearer-auth pattern. Used by the

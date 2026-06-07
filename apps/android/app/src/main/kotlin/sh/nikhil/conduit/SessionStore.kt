@@ -1831,6 +1831,102 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
+     * Host health snapshot from `GET /api/host/metrics` (broker v0.0.111+,
+     * `broker/internal/hostmetrics`). Percentages are 0–100. Mirror of iOS
+     * `SessionStore.HostMetrics`.
+     */
+    data class HostMetrics(
+        val cpuPct: Double,
+        val memPct: Double,
+        val diskPct: Double,
+        val load1: Double?,
+        val uptimeSecs: Long?,
+    )
+
+    /** Box-broker feature probe result. Mirror of iOS `BoxFeatures`. */
+    data class BoxFeatures(
+        val hostMetrics: Boolean,
+        val shellSessions: Boolean,
+    )
+
+    /**
+     * Probe `GET /api/capabilities` on a specific saved endpoint (works for
+     * non-active boxes — plain authed GET, no WS needed). Null on any
+     * failure (old broker, unreachable, 401): the Box health screen hides
+     * the dependent affordances rather than erroring.
+     */
+    suspend fun fetchBoxFeatures(endpoint: Endpoint): BoxFeatures? = withContext(Dispatchers.IO) {
+        val raw = getJsonOrNull(endpoint, "/api/capabilities")
+        if (raw == null) {
+            Telemetry.breadcrumb("box_health", "capabilities probe failed", mapOf("host" to endpoint.displayHost))
+            return@withContext null
+        }
+        runCatching {
+            val features = JSONObject(raw).optJSONObject("features")
+            BoxFeatures(
+                hostMetrics = features?.optBoolean("host_metrics", false) ?: false,
+                shellSessions = features?.optBoolean("shell_sessions", false) ?: false,
+            )
+        }.getOrNull()
+    }
+
+    /**
+     * Live CPU/MEM/DISK for a box. Null = box doesn't report metrics (old
+     * broker 404, non-Linux 503, unreachable) → the health section is
+     * hidden (honest-state rule). Mirror of iOS `fetchHostMetrics`.
+     */
+    suspend fun fetchHostMetrics(endpoint: Endpoint): HostMetrics? = withContext(Dispatchers.IO) {
+        val raw = getJsonOrNull(endpoint, "/api/host/metrics")
+        if (raw == null) {
+            Telemetry.breadcrumb("box_health", "metrics fetch failed", mapOf("host" to endpoint.displayHost))
+            return@withContext null
+        }
+        runCatching {
+            val obj = JSONObject(raw)
+            val metrics = HostMetrics(
+                cpuPct = obj.optDouble("cpu_pct", 0.0),
+                memPct = obj.optDouble("mem_pct", 0.0),
+                diskPct = obj.optDouble("disk_pct", 0.0),
+                load1 = if (obj.has("load1")) obj.optDouble("load1") else null,
+                uptimeSecs = if (obj.has("uptime_secs")) obj.optLong("uptime_secs") else null,
+            )
+            Telemetry.breadcrumb(
+                "box_health", "metrics fetched",
+                mapOf(
+                    "cpu" to "%.0f".format(metrics.cpuPct),
+                    "mem" to "%.0f".format(metrics.memPct),
+                    "disk" to "%.0f".format(metrics.diskPct),
+                ),
+            )
+            metrics
+        }.getOrNull()
+    }
+
+    /**
+     * Authed GET against an arbitrary stored endpoint — [listDirectories]'
+     * direct-HTTP pattern, parameterized on endpoint so Box health can
+     * probe boxes that aren't the active connection. Blocking; call on
+     * Dispatchers.IO. Null on any failure.
+     */
+    private fun getJsonOrNull(endpoint: Endpoint, path: String): String? {
+        val base = endpoint.httpBaseUrl ?: return null
+        return runCatching {
+            val conn = (URL("$base$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                connectTimeout = 7_000
+                readTimeout = 10_000
+            }
+            try {
+                if (conn.responseCode !in 200..299) return@runCatching null
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()
+    }
+
+    /**
      * Fetch a session's persisted transcript read-only over HTTP
      * (`GET /api/session/conversation/<id>`, broker PR #196). Mirrors
      * [listDirectories]' direct-HTTP + bearer-auth pattern, and iOS

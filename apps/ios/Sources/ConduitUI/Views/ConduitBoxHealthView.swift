@@ -4,19 +4,24 @@ import SwiftUI
 //
 // Per-box detail surface. The redesign reference (`images/08-box-health.png`)
 // shows CPU / MEM / DISK rings + load / uptime / agent-runtime, the sessions
-// running on the box, and a Reconnect · SSH · Wake action row.
+// running on the box, and a Reconnect · SSH action row.
 //
 // ── Data honesty ───────────────────────────────────────────────────────────
-// There is **NO host-metrics source** anywhere in the stack. Grepped
-// `core/src` (`SessionStatus` in `core/src/views.rs`, `ProjectSession` in
-// `core/src/session.rs`) and `broker/internal` for cpu / mem / disk / load /
-// uptime / loadavg / sysinfo — zero hits. So the design's percentage rings and
-// the load/uptime/runtime readouts have no data to bind to. Rather than
-// fabricate numbers, the health section renders an **honest unavailable
-// state**: dimmed rings showing "—" plus a one-line note ("metrics not
-// reported by this box").
+// Host metrics are real as of broker v0.0.111: `GET /api/host/metrics`
+// (broker/internal/hostmetrics) serves CPU / MEM / DISK / load / uptime,
+// advertised by the `host_metrics` capability. The screen probes the box on
+// open; when the box does NOT report (older broker, non-Linux, unreachable)
+// the entire health section is hidden — device feedback explicitly asked for
+// hide-over-dashes, replacing the earlier "—" placeholder rings.
 //
-// What IS real and shown:
+// SSH is real too: brokers advertising `shell_sessions` carry a hidden
+// `shell` adapter (bash in the session PTY), so the button creates a plain
+// terminal session on the box and opens it (ProjectView lands shell
+// sessions on the Terminal tab). The broker runs ON the box, so a local
+// shell IS the box shell — no ssh hop. Wake was removed: there is no
+// wake-on-LAN path to a WAN box, so the button could never act.
+//
+// What else is real and shown:
 //   • Box identity      — `SavedServer.name` + `endpoint.displayHost`.
 //   • Connection status — derived exactly like Home's boxRow:
 //                          `store.endpoint == server.endpoint` (is this the
@@ -34,7 +39,7 @@ import SwiftUI
 // ── Presentation / entry suggestion ──────────────────────────────────────────
 // Present as a sheet (or push) opened by tapping a box row in Home's Boxes list
 // (`ConduitHomeView.boxRow`). Caller passes the tapped `SavedServer` plus the
-// real reconnect action and (optional) SSH / Wake closures:
+// real reconnect action:
 //
 //     .sheet(item: $selectedBox) { server in
 //         ConduitUI.BoxHealthView(
@@ -45,9 +50,9 @@ import SwiftUI
 //
 // `onReconnect` defaults to a no-op so the view compiles standalone; the real
 // reconnect path is `store.reconnect()` (current endpoint) or
-// `store.selectSavedServer(_:autoConnect:)` (switch + connect). SSH and Wake
-// have NO backing action in the store today, so they default to no-ops and the
-// row reads as caller-supplied affordances.
+// `store.selectSavedServer(_:autoConnect:)` (switch + connect). SSH is
+// self-contained: `store.createSession(assistant: "shell")` on the active
+// box, shown only when the box advertises `shell_sessions` and is connected.
 
 extension ConduitUI {
 
@@ -63,10 +68,11 @@ extension ConduitUI {
         /// Real reconnect/connect path supplied by the caller (e.g.
         /// `store.selectSavedServer(server.id, autoConnect: true)`).
         var onReconnect: () -> Void = {}
-        /// No backing action in the store today — caller-supplied / no-op.
-        var onSSH: () -> Void = {}
-        /// No backing action in the store today — caller-supplied / no-op.
-        var onWake: () -> Void = {}
+
+        /// Probe results for THIS box (fetched on open). nil = probe not
+        /// finished or box doesn't answer — dependent UI stays hidden.
+        @State private var metrics: SessionStore.HostMetrics?
+        @State private var features: SessionStore.BoxFeatures?
 
         /// Hosted inline (e.g. a tablet right-pane tab) rather than a sheet →
         /// drop the "Done" affordance.
@@ -119,13 +125,24 @@ extension ConduitUI {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         header
-                        healthSection
+                        // Hidden (not dashed) when the box doesn't report —
+                        // device feedback round 4.
+                        if let metrics {
+                            healthSection(metrics)
+                        }
                         sessionsSection
                         limitsPointer
                         actionRow
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
+                }
+            }
+            .task(id: server.id) {
+                Telemetry.breadcrumb("box_health", "open", data: ["host": server.endpoint.displayHost])
+                features = await store.fetchBoxFeatures(endpoint: server.endpoint)
+                if features?.hostMetrics == true {
+                    metrics = await store.fetchHostMetrics(endpoint: server.endpoint)
                 }
             }
         }
@@ -178,13 +195,13 @@ extension ConduitUI {
             )
         }
 
-        // MARK: Health — HONEST "metrics not reported" state
+        // MARK: Health — live CPU / MEM / DISK rings
         //
-        // The reference shows CPU / MEM / DISK rings. We keep the three-ring
-        // layout (so the surface matches the design) but render each ring
-        // dimmed at 0 with a "—" value, because no host-metrics frame exists.
+        // Rendered only when the box reported a snapshot (the section is
+        // hidden otherwise — see `content`). Ring color escalates with
+        // pressure: accent → yellow ≥ 75 → red ≥ 90.
 
-        private var healthSection: some View {
+        private func healthSection(_ metrics: SessionStore.HostMetrics) -> some View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Health")
                     .font(neon.mono(11).weight(.bold))
@@ -192,50 +209,62 @@ extension ConduitUI {
                     .textCase(.uppercase)
                     .tracking(1.2)
                 HStack(spacing: 12) {
-                    unavailableRing(label: "CPU")
-                    unavailableRing(label: "MEM")
-                    unavailableRing(label: "DISK")
+                    metricRing(label: "CPU", pct: metrics.cpuPct)
+                    metricRing(label: "MEM", pct: metrics.memPct)
+                    metricRing(label: "DISK", pct: metrics.diskPct)
                 }
-                HStack(spacing: 7) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 11))
-                        .foregroundStyle(neon.textFaint)
-                    Text("metrics not reported by this box")
-                        .font(neon.mono(11))
-                        .foregroundStyle(neon.textFaint)
+                if let load = metrics.load1, let up = metrics.uptimeSecs {
+                    HStack(spacing: 7) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(neon.textFaint)
+                        Text("load \(String(format: "%.2f", load)) · up \(Self.uptimeText(up))")
+                            .font(neon.mono(11))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                    .padding(.top, 2)
                 }
-                .padding(.top, 2)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
         }
 
-        // A dimmed ring — same arc idiom as the Session Info context ring
+        // A live ring — same arc idiom as the Session Info context ring
         // (`ConduitUsageCard.contextRing`): two stacked `Circle`s, the
-        // trimmed accent arc rotated -90°. Here the arc is empty (no data)
-        // and rendered in the faint border color, value shown as "—".
-        private func unavailableRing(label: String) -> some View {
-            VStack(spacing: 8) {
+        // trimmed arc rotated -90° so it grows clockwise from 12 o'clock.
+        private func metricRing(label: String, pct: Double) -> some View {
+            let clamped = min(max(pct, 0), 100)
+            let color: Color = clamped >= 90 ? neon.red : (clamped >= 75 ? neon.yellow : neon.accent)
+            return VStack(spacing: 8) {
                 ZStack {
                     Circle()
                         .stroke(neon.border, lineWidth: 7)
                     Circle()
-                        .trim(from: 0, to: 0)
-                        .stroke(neon.textFaint, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                        .trim(from: 0, to: clamped / 100)
+                        .stroke(color, style: StrokeStyle(lineWidth: 7, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                    Text("—")
-                        .font(neon.mono(18).weight(.bold))
-                        .foregroundStyle(neon.textFaint)
+                    Text("\(Int(clamped.rounded()))%")
+                        .font(neon.mono(15).weight(.bold))
+                        .foregroundStyle(neon.text)
                 }
                 .frame(width: 64, height: 64)
-                .opacity(0.8)
                 Text(label)
                     .font(neon.mono(10).weight(.semibold))
                     .foregroundStyle(neon.textFaint)
                     .tracking(1.0)
             }
             .frame(maxWidth: .infinity)
+        }
+
+        /// "3d 4h" / "5h 12m" / "9m" — coarse box uptime.
+        static func uptimeText(_ secs: Int64) -> String {
+            let mins = secs / 60
+            let hours = mins / 60
+            let days = hours / 24
+            if days > 0 { return "\(days)d \(hours % 24)h" }
+            if hours > 0 { return "\(hours)h \(mins % 60)m" }
+            return "\(mins)m"
         }
 
         // MARK: Sessions on this box
@@ -330,14 +359,30 @@ extension ConduitUI {
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12)
         }
 
-        // MARK: Actions — Reconnect · SSH · Wake
+        // MARK: Actions — Reconnect · SSH
+        //
+        // SSH shows only when this box's broker advertises `shell_sessions`
+        // AND the box is the connected one (session create rides the live
+        // WS client, which is bound to the active endpoint). Wake is gone:
+        // no backend can wake a WAN box, and dead buttons read as bugs
+        // (device feedback round 4).
 
         private var actionRow: some View {
             HStack(spacing: 12) {
                 actionButton(systemImage: "arrow.clockwise", label: "Reconnect", action: onReconnect)
-                actionButton(systemImage: "terminal", label: "SSH", action: onSSH)
-                actionButton(systemImage: "power", label: "Wake", action: onWake)
+                if features?.shellSessions == true && connected {
+                    actionButton(systemImage: "terminal", label: "Shell", action: openShell)
+                }
             }
+        }
+
+        /// Open a plain terminal on the box: create a `shell` session (the
+        /// broker's hidden bash adapter) — `createSession` self-selects it,
+        /// and ProjectView lands `shell` sessions on the Terminal tab.
+        private func openShell() {
+            Telemetry.breadcrumb("box_health", "shell open", data: ["host": server.endpoint.displayHost])
+            store.createSession(assistant: "shell")
+            dismiss()
         }
 
         private func actionButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {

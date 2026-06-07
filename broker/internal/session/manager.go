@@ -1307,6 +1307,13 @@ func (m *Manager) AssistantNames() []string {
 	return m.registry.Names()
 }
 
+// HasAssistant reports whether an adapter exists under this name —
+// including hidden ones (e.g. "shell") that Names() deliberately omits.
+func (m *Manager) HasAssistant(name string) bool {
+	_, err := m.registry.Get(name)
+	return err == nil
+}
+
 // ConversationLog returns the persisted conversation transcript for a
 // session id, read from `<kittyRoot>/sessions/<id>/conversation.jsonl`.
 // Works for both live and exited sessions — both append to the same
