@@ -193,4 +193,57 @@ extension ConduitUI {
         }
         return pieces.joined(separator: "\n\n")
     }
+
+    /// A parsed `[attached …]` reference recovered from a sent message, so
+    /// the transcript can render an attachment as a chip/thumbnail instead
+    /// of the raw `uploads/<sessionID>/<filename>` path text.
+    struct AttachmentRef: Equatable {
+        let kind: AttachKind
+        let filename: String
+        let sessionID: String
+    }
+
+    /// Inverse of `attachmentReferenceLine`: parse one line back into an
+    /// `AttachmentRef`, or nil if it isn't an attachment reference. Hand
+    /// parsing (no regex) keeps it cheap on the render path. Mirrors the
+    /// cross-surface shape
+    /// `[attached <kind>: <filename> — uploads/<sessionID>/<filename>]`.
+    static func parseAttachmentReferenceLine(_ line: String) -> AttachmentRef? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("[attached "), trimmed.hasSuffix("]") else { return nil }
+        let inner = String(trimmed.dropFirst("[attached ".count).dropLast())
+        guard let colon = inner.range(of: ": ") else { return nil }
+        let kind: AttachKind
+        switch String(inner[..<colon.lowerBound]) {
+        case AttachKind.image.referenceToken: kind = .image
+        case AttachKind.file.referenceToken:  kind = .file
+        default: return nil
+        }
+        let rest = String(inner[colon.upperBound...])
+        guard let dash = rest.range(of: " — uploads/") else { return nil }
+        let filename = String(rest[..<dash.lowerBound])
+        let path = String(rest[dash.upperBound...]) // "<sessionID>/<filename>"
+        guard let slash = path.firstIndex(of: "/") else { return nil }
+        let sessionID = String(path[..<slash])
+        guard !filename.isEmpty, !sessionID.isEmpty else { return nil }
+        return AttachmentRef(kind: kind, filename: filename, sessionID: sessionID)
+    }
+
+    /// Split a sent message into its display text (attachment reference
+    /// lines removed) and the attachments those lines referenced. The
+    /// raw content the agent received is untouched; this only shapes what
+    /// the user sees in their own bubble.
+    static func splitAttachmentReferences(_ content: String) -> (text: String, attachments: [AttachmentRef]) {
+        var refs: [AttachmentRef] = []
+        var kept: [String] = []
+        for line in content.components(separatedBy: "\n") {
+            if let ref = parseAttachmentReferenceLine(line) {
+                refs.append(ref)
+            } else {
+                kept.append(line)
+            }
+        }
+        let text = kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (text, refs)
+    }
 }
