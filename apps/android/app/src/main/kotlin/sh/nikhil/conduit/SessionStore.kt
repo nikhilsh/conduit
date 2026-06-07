@@ -1340,13 +1340,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // identity header (inherit stays absent on purpose).
                 pickedModel?.let { picked -> _modelBySession.value = _modelBySession.value + (id to picked) }
                 startup?.let { rememberRecentDirectory(it) }
-                initialPrompt?.trim()?.takeIf { it.isNotEmpty() }?.let { prompt ->
-                    runCatching { withContext(Dispatchers.IO) { c.sendChat(id, prompt) } }
-                }
                 updateLifecycle { (it - pendingId) + (id to SessionLifecycle.Live) }
                 _harness.value = HarnessState.Live
                 refreshSessions()
                 _selectedId.value = id
+                // Seed the first turn (e.g. a voice-dictated prompt) through the
+                // same path as a normal composer send: optimistic local echo so
+                // the user sees their prompt + slash-command handling. The old
+                // fire-and-forget `runCatching { c.sendChat }` here silently
+                // dropped the prompt on any transient — the device-reported
+                // "talk on home, start a session, prompt never sent".
+                initialPrompt?.trim()?.takeIf { it.isNotEmpty() }?.let { prompt ->
+                    Telemetry.breadcrumb("session", "seed prompt", mapOf("id" to id, "chars" to prompt.length.toString()))
+                    sendChat(id, prompt)
+                }
             } catch (t: Throwable) {
                 val reason = describe(t)
                 updateLifecycle { it + (pendingId to SessionLifecycle.FailedToStart(reason)) }

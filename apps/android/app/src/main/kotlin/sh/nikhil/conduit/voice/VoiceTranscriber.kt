@@ -4,12 +4,15 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import sh.nikhil.conduit.Telemetry
 import java.util.Locale
 
 /**
@@ -19,6 +22,16 @@ import java.util.Locale
  * §2.3: push-to-talk, one-shot transcription, prefers offline recognition
  * when supported (API 31+ via `EXTRA_PREFER_OFFLINE`). Output is intended
  * to be fed to `SessionStore.sendChat`.
+ *
+ * **Continuous across pauses.** Android's `SpeechRecognizer` is one-shot: it
+ * delivers `onResults` (or `onError(NO_MATCH/SPEECH_TIMEOUT)`) the moment it
+ * detects end-of-speech — i.e. a natural pause — and then stops. Treating that
+ * first result as "the user is done" was the cause of the device-reported "we
+ * lose what was spoken when the user pauses": everything after the first pause
+ * was dropped. We instead *commit* each segment to an accumulated buffer and
+ * immediately `startListening` again, so a single dictation spans any number of
+ * pauses. We only emit the final transcript when the user explicitly stops
+ * (`stop()`), e.g. taps send or releases the mic.
  *
  * Permissions:
  * - `android.permission.RECORD_AUDIO` (manifest + runtime).
@@ -37,6 +50,10 @@ class VoiceTranscriber(private val context: Context) {
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
 
+    /**
+     * Everything recognized so far this session: the committed transcript of
+     * past (paused) segments plus the live partial of the current segment.
+     */
     private val _partial = MutableStateFlow("")
     val partial: StateFlow<String> = _partial.asStateFlow()
 
@@ -51,6 +68,31 @@ class VoiceTranscriber(private val context: Context) {
 
     private var recognizer: SpeechRecognizer? = null
     private var onFinal: ((String) -> Unit)? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Recognizer intent, retained so segment restarts reuse the same config. */
+    private var intent: Intent? = null
+
+    /** Committed transcript of finalized (paused) segments. */
+    private var accumulated = ""
+
+    /** The current segment's latest partial, folded into [accumulated] on end. */
+    private var segmentPartial = ""
+
+    /** Set by [stop]/[cancel]. While false, a segment end restarts listening. */
+    private var manualStop = false
+
+    /** Guards against double-emitting the final transcript. */
+    private var finished = false
+
+    /** True while a `startListening` session is in flight (between start and
+     *  the next onResults/onError). Lets [stop] know whether to wait for a
+     *  callback or finalize immediately (e.g. in the restart gap). */
+    private var recognizing = false
+
+    /** Consecutive empty restarts, reset whenever real text arrives. Bounds a
+     *  pathological hot-restart loop (e.g. recognizer errors out instantly). */
+    private var restartCount = 0
 
     fun start(locale: Locale = Locale.getDefault(), onFinal: (String) -> Unit) {
         if (_state.value is State.Listening || _state.value is State.Finalizing) return
@@ -59,13 +101,54 @@ class VoiceTranscriber(private val context: Context) {
             return
         }
         this.onFinal = onFinal
+        manualStop = false
+        finished = false
+        accumulated = ""
+        segmentPartial = ""
+        restartCount = 0
         _partial.value = ""
+
+        intent = buildIntent(locale)
+        Telemetry.breadcrumb("voice", "start", mapOf("locale" to locale.toLanguageTag()))
 
         val sr = SpeechRecognizer.createSpeechRecognizer(context)
         recognizer = sr
         sr.setRecognitionListener(listener)
+        startSegment()
+    }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+    fun stop() {
+        if (_state.value !is State.Listening) return
+        manualStop = true
+        _state.value = State.Finalizing
+        if (recognizing) {
+            // A session is in flight — stopListening triggers onResults/onError,
+            // which commits the segment and finalizes (manualStop is set).
+            recognizer?.stopListening()
+            // Safety net: some recognizer implementations don't reliably call
+            // back from stopListening. Finalize anyway if nothing fires.
+            mainHandler.postDelayed({ if (!finished) finalizeSuccess() }, 1_500)
+        } else {
+            // In the gap between segment restarts — nothing in flight.
+            finalizeSuccess()
+        }
+    }
+
+    fun cancel() {
+        manualStop = true
+        finished = true
+        mainHandler.removeCallbacksAndMessages(null)
+        recognizer?.cancel()
+        tearDown()
+        accumulated = ""
+        segmentPartial = ""
+        _partial.value = ""
+        onFinal = null
+        _state.value = State.Idle
+    }
+
+    private fun buildIntent(locale: Locale): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale.toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
@@ -74,8 +157,14 @@ class VoiceTranscriber(private val context: Context) {
                 putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             }
         }
+
+    /** Begin (or resume after a pause) a single recognition session. */
+    private fun startSegment() {
+        val sr = recognizer ?: return
+        val i = intent ?: return
         try {
-            sr.startListening(intent)
+            sr.startListening(i)
+            recognizing = true
             _state.value = State.Listening
         } catch (e: SecurityException) {
             _state.value = State.Error(e.message ?: "Microphone permission denied")
@@ -83,23 +172,67 @@ class VoiceTranscriber(private val context: Context) {
         }
     }
 
-    fun stop() {
-        if (_state.value !is State.Listening) return
-        _state.value = State.Finalizing
-        recognizer?.stopListening()
+    /** Fold the current segment's text into the accumulated transcript. */
+    private fun commitSegment() {
+        val seg = segmentPartial.trim()
+        if (seg.isNotEmpty()) accumulated = combine(accumulated, seg)
+        segmentPartial = ""
+        _partial.value = accumulated
     }
 
-    fun cancel() {
-        recognizer?.cancel()
+    /** A segment ended (pause or manual stop): restart to keep listening, or
+     *  finalize if the user asked to stop. */
+    private fun onSegmentEnded() {
+        recognizing = false
+        if (manualStop) {
+            finalizeSuccess()
+            return
+        }
+        if (restartCount++ > MAX_RESTARTS) {
+            Telemetry.breadcrumb("voice", "restart cap", mapOf("chars" to accumulated.length.toString()))
+            finalizeSuccess()
+            return
+        }
+        // Reuse the same recognizer; post (with a small delay) so we're outside
+        // the callback before re-arming — calling startListening synchronously
+        // from within onResults/onError trips ERROR_RECOGNIZER_BUSY on some
+        // OEMs. State stays Listening across the gap so the UI doesn't flash.
+        mainHandler.postDelayed({
+            if (!manualStop && !finished) startSegment()
+        }, RESTART_DELAY_MS)
+    }
+
+    private fun finalizeSuccess() {
+        if (finished) return
+        finished = true
+        mainHandler.removeCallbacksAndMessages(null)
+        val final = accumulated.trim()
         tearDown()
-        _partial.value = ""
         _state.value = State.Idle
+        Telemetry.breadcrumb("voice", "finalize", mapOf("chars" to final.length.toString()))
+        val cb = onFinal
+        onFinal = null
+        accumulated = ""
+        segmentPartial = ""
+        if (final.isNotEmpty()) cb?.invoke(final)
     }
 
     private fun tearDown() {
+        recognizing = false
         recognizer?.destroy()
         recognizer = null
         _level.value = 0f
+    }
+
+    /** Join two transcript fragments with a single separating space. */
+    private fun combine(head: String, tail: String): String {
+        val h = head.trim()
+        val t = tail.trim()
+        return when {
+            h.isEmpty() -> t
+            t.isEmpty() -> h
+            else -> "$h $t"
+        }
     }
 
     private val listener = object : RecognitionListener {
@@ -121,7 +254,9 @@ class VoiceTranscriber(private val context: Context) {
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
                 ?: return
-            _partial.value = txt
+            if (txt.isNotBlank()) restartCount = 0
+            segmentPartial = txt
+            _partial.value = combine(accumulated, segmentPartial)
         }
 
         override fun onResults(results: Bundle?) {
@@ -130,37 +265,65 @@ class VoiceTranscriber(private val context: Context) {
                 ?.firstOrNull()
                 ?.trim()
                 .orEmpty()
-            tearDown()
-            _state.value = State.Idle
             if (txt.isNotEmpty()) {
-                onFinal?.invoke(txt)
+                restartCount = 0
+                segmentPartial = txt
             }
-            onFinal = null
+            commitSegment()
+            onSegmentEnded()
         }
 
         override fun onError(error: Int) {
-            // Some errors are expected when the user releases the mic with
-            // no clear speech detected; emit the best partial we collected.
-            val partial = _partial.value.trim()
-            tearDown()
-            if (partial.isNotEmpty()) {
-                _state.value = State.Idle
-                onFinal?.invoke(partial)
-                onFinal = null
-                return
-            }
-            _state.value = when (error) {
-                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> State.Error("Microphone permission denied")
-                SpeechRecognizer.ERROR_NETWORK,
-                SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> State.Error("Speech recognition needs network for this locale")
+            when (error) {
+                // End of a quiet segment / brief client hiccup — commit what we
+                // have and keep listening (unless the user asked to stop). These
+                // fire on every natural pause, so ending here is exactly the
+                // lost-speech bug we're fixing.
                 SpeechRecognizer.ERROR_NO_MATCH,
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> State.Idle
-                else -> State.Error("Speech recognition failed (code $error)")
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+                SpeechRecognizer.ERROR_CLIENT -> {
+                    commitSegment()
+                    onSegmentEnded()
+                }
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                    failWith("Microphone permission denied", error)
+                SpeechRecognizer.ERROR_NETWORK,
+                SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> {
+                    // Offline model unavailable for this locale. Keep whatever
+                    // we already captured rather than dropping it.
+                    commitSegment()
+                    if (accumulated.isNotBlank()) finalizeSuccess()
+                    else failWith("Speech recognition needs network for this locale", error)
+                }
+                else -> {
+                    commitSegment()
+                    if (accumulated.isNotBlank()) finalizeSuccess()
+                    else failWith("Speech recognition failed (code $error)", error)
+                }
             }
-            onFinal = null
         }
 
         override fun onEndOfSpeech() {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    private fun failWith(message: String, code: Int) {
+        if (finished) return
+        finished = true
+        mainHandler.removeCallbacksAndMessages(null)
+        Telemetry.breadcrumb("voice", "error", mapOf("code" to code.toString(), "chars" to accumulated.length.toString()))
+        tearDown()
+        _state.value = State.Error(message)
+        onFinal = null
+        accumulated = ""
+        segmentPartial = ""
+    }
+
+    private companion object {
+        /** Small delay before re-arming so we're outside the recognizer callback. */
+        const val RESTART_DELAY_MS = 120L
+        /** Cap on consecutive empty restarts (resets on any recognized text). */
+        const val MAX_RESTARTS = 40
     }
 }
