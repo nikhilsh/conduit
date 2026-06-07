@@ -61,8 +61,15 @@ extension ConduitUI {
         /// were laggy because every row (markdown / tool parse) was laid out
         /// each render; we cap to the tail and let "Load earlier" widen it.
         @State private var visibleRowWindow = ConduitUI.ChatView.rowWindowStep
-        /// Step for the initial window and each "Load earlier" tap.
+        /// Step for the initial window and each infinite-scroll widen.
         static let rowWindowStep = 80
+        /// Rows from the top of the window that count as "nearing the
+        /// top" — appearing one of these eagerly widens the window so
+        /// older history is usually in place before the user hits it.
+        static let eagerPrefetchRows = 8
+        /// True while an infinite-scroll widen is in flight (spinner
+        /// visible, repeated onAppear triggers coalesce).
+        @State private var isWideningWindow = false
         // Composer attachments (#240 cross-surface): files picked via the
         // "+" menu sit here as removable chips until send. On send each
         // is uploaded via core `send_file` (0x01 frame → broker writes
@@ -146,16 +153,16 @@ extension ConduitUI {
             )
         }
 
-        /// `events` folded into rows, collapsing contiguous runs of
-        /// non-command tool cards (reads/greps/edits) into one group.
-        /// Command (shell) cards stay standalone so they remain prominent.
+        /// `events` folded into rows, collapsing contiguous runs of tool
+        /// cards (commands included — round-3 §1) into one quiet bundle.
+        /// A run is "adjacent tool calls with no assistant prose between
+        /// them": any non-tool event (a text block, a pending-input card,
+        /// a handoff…) closes the current bundle.
         private var chatRows: [ConduitUI.ChatRow] {
-            ConduitUI.ChatViewModel.groupedRows(events) { ev in
+            ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
                 ev.role.lowercased() == "tool"
-                    && !NeonToolClassifier.isCommand(
-                        toolName: ev.toolName,
-                        command: ConversationRenderer.extractCommand(from: ev)
-                    )
+                    && ev.status.lowercased() != "swapping"
+                    && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
             }
         }
 
@@ -233,6 +240,32 @@ extension ConduitUI {
             DispatchQueue.main.async { jump() }
         }
 
+        /// Widen the visible row window for infinite scroll. Guarded so
+        /// (a) the LazyVStack's initial top-down layout pass on open
+        /// (before the jump-to-bottom lands) can't trigger a widen — the
+        /// user must actually have scrolled up; (b) repeated onAppear
+        /// bursts coalesce into one widen. After the new rows land, the
+        /// previous top row is pinned back to the viewport top so the
+        /// user's place is kept (content inserted above would otherwise
+        /// shove the transcript down).
+        private func widenRowWindow(proxy: ScrollViewProxy, anchorRowID: String?) {
+            guard !isWideningWindow else { return }
+            guard autoScroll.userScrolledUp else { return }
+            guard chatRows.count > visibleRowWindow else { return }
+            isWideningWindow = true
+            // Brief defer so the spinner paints before the main-thread
+            // row parse/layout burst.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                visibleRowWindow += Self.rowWindowStep
+                DispatchQueue.main.async {
+                    if let anchorRowID {
+                        proxy.scrollTo(anchorRowID, anchor: .top)
+                    }
+                    isWideningWindow = false
+                }
+            }
+        }
+
         private var messagesList: some View {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -246,39 +279,56 @@ extension ConduitUI {
                         let rows = allRows.count > visibleRowWindow
                             ? Array(allRows.suffix(visibleRowWindow))
                             : allRows
+                        // Infinite scroll (round-3 §6): a spinner sentinel
+                        // replaces the old "Load earlier" button. Nearing
+                        // the top eagerly widens the window; if the user
+                        // outruns the prefetch they land on this spinner,
+                        // which widens on appear — then they can keep
+                        // scrolling into the loaded history.
                         if rows.count < allRows.count {
-                            Button {
-                                visibleRowWindow += Self.rowWindowStep
-                            } label: {
-                                Text("Load earlier messages")
-                                    .font(neon.sans(13).weight(.medium))
-                                    .foregroundStyle(neon.accent)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(neon.accent)
+                                Text("Loading earlier messages…")
+                                    .font(neon.sans(12).weight(.medium))
+                                    .foregroundStyle(neon.textDim)
                             }
-                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .onAppear {
+                                widenRowWindow(proxy: proxy, anchorRowID: rows.first?.id)
+                            }
                         }
                         ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
-                            switch row {
-                            case .single(let event):
-                                ConduitEventRow(
-                                    event: event,
-                                    isContinuation: continuation(in: rows, at: idx, role: event.role),
-                                    sessionID: session.id,
-                                    onQuickReply: { reply in
-                                        store.sendChat(sessionID: session.id, message: reply)
-                                    }
-                                )
-                                .id(event.id)
-                                .padding(.horizontal, 16)
-                            case .toolGroup(let items):
-                                ConduitToolGroupCard(
-                                    items: items,
-                                    sessionID: session.id,
-                                    collapseDefault: appearance.collapseTurns
-                                )
-                                .id(row.id)
-                                .padding(.horizontal, 16)
+                            Group {
+                                switch row {
+                                case .single(let event):
+                                    ConduitEventRow(
+                                        event: event,
+                                        isContinuation: continuation(in: rows, at: idx, role: event.role),
+                                        sessionID: session.id,
+                                        onQuickReply: { reply in
+                                            store.sendChat(sessionID: session.id, message: reply)
+                                        }
+                                    )
+                                    .id(event.id)
+                                    .padding(.horizontal, 16)
+                                case .toolGroup(let items):
+                                    ConduitToolBundleCard(items: items, sessionID: session.id)
+                                        .id(row.id)
+                                        .padding(.horizontal, 16)
+                                }
+                            }
+                            // Eager prefetch: materializing a row near the
+                            // window top means the user is approaching it.
+                            // Anchor on THIS row (it's entering at the
+                            // viewport's top edge) so the restore after the
+                            // widen barely moves the user's place.
+                            .onAppear {
+                                if idx < Self.eagerPrefetchRows, rows.count < allRows.count {
+                                    widenRowWindow(proxy: proxy, anchorRowID: row.id)
+                                }
                             }
                         }
                         // BUG 3: "agent is typing" indicator lives inside
@@ -1714,75 +1764,384 @@ extension NeonTheme {
     }
 }
 
-// MARK: - Tool group card (#4)
+// MARK: - Tool bundle card (round-3 §1)
 
-/// A collapsed run of consecutive tool cards (e.g. several "Read files"
-/// in a row). Starts collapsed; expanding reveals each underlying
-/// `ConduitToolCard`. Keeps long read/grep/edit sequences from flooding
-/// the transcript.
-private struct ConduitToolGroupCard: View {
+/// The failure tint the round-3 design assigns to bundles containing a
+/// non-zero exit (`#FF7847`) — warmer than `neon.red` so a failed sweep
+/// reads as "needs a look", not "crash".
+private enum ConduitBundleTint {
+    static let fail = Color(hex: "#ff7847")
+}
+
+/// A consecutive run of tool calls collapsed into ONE quiet row: icon,
+/// a human verb ("Explored the codebase"), a mono kind sub-line
+/// ("grep · find · 12 more"), and an aggregate status pill ("14 runs" /
+/// "1 failed"). Tap to expand → every call is a single line; tap a line
+/// to focus it → only then its output + actions appear. A non-zero exit
+/// auto-expands the bundle, tints it orange, and floats the failing
+/// rows up — failures never hide inside a collapsed bundle.
+private struct ConduitToolBundleCard: View {
     let items: [ConversationItem]
     var sessionID: String
-    var collapseDefault: Bool
-    @State private var expanded = false
+
+    @State private var expanded: Bool
+    @State private var focusedID: String?
     @Environment(\.neonTheme) private var neon
 
-    init(items: [ConversationItem], sessionID: String = "", collapseDefault: Bool = false) {
+    init(items: [ConversationItem], sessionID: String = "") {
         self.items = items
         self.sessionID = sessionID
-        self.collapseDefault = collapseDefault
+        // Failures auto-surface: open expanded with the first failing
+        // row focused. (The row identity includes the item count, so a
+        // failure that lands mid-stream re-creates the card and this
+        // initial state re-evaluates.)
+        let firstFail = Self.displayOrder(items).first(where: { Self.isFailure($0) })
+        _expanded = State(initialValue: firstFail != nil)
+        _focusedID = State(initialValue: firstFail?.id)
     }
 
-    /// "Read files · 4" when the run is homogeneous, else "4 tool steps".
-    private var headerLabel: String {
-        let labels = Set(items.map {
-            NeonToolClassifier.humanLabel(toolName: $0.toolName, fileCount: $0.files.count)
-        })
-        if labels.count == 1, let only = labels.first {
-            return "\(only) · \(items.count)"
+    private static func isFailure(_ item: ConversationItem) -> Bool {
+        NeonCardState(status: item.status, exitCode: item.exitCode) == .fail
+    }
+
+    /// Failing rows float to the top so their output is the first thing
+    /// visible; otherwise chronological.
+    private static func displayOrder(_ items: [ConversationItem]) -> [ConversationItem] {
+        let fails = items.filter { isFailure($0) }
+        guard !fails.isEmpty else { return items }
+        return fails + items.filter { !isFailure($0) }
+    }
+
+    private var failCount: Int { items.filter { Self.isFailure($0) }.count }
+    private var anyRunning: Bool {
+        items.contains { NeonCardState(status: $0.status, exitCode: $0.exitCode) == .running }
+    }
+    private var tint: Color {
+        failCount > 0
+            ? ConduitBundleTint.fail
+            : neon.color(for: NeonToolClassifier.tintRole(forToolName: dominantToolName))
+    }
+
+    /// Most frequent tool kind in the run — drives the icon + verb.
+    private var dominantToolName: String? {
+        var counts: [String: Int] = [:]
+        for item in items { counts[Self.kindWord(for: item), default: 0] += 1 }
+        return counts.max { $0.value < $1.value }?.key
+    }
+
+    /// Human verb for the header. Majority kind wins; mixed runs read
+    /// as exploration.
+    private var verb: String {
+        let roles = Set(items.map { NeonToolClassifier.tintRole(forToolName: Self.kindWord(for: $0)) })
+        if roles.count > 1 { return "Explored the codebase" }
+        switch roles.first ?? .accent {
+        case .purple: return "Explored the codebase"
+        case .blue:   return "Read files"
+        case .claude: return "Edited files"
+        case .green:  return "Ran commands"
+        case .red:    return "Tool errors"
+        case .accent: return "Used tools"
         }
-        return "\(items.count) tool steps"
+    }
+
+    /// Short mono word for one item — the command's first token
+    /// (`grep`, `find`) or the tool name.
+    private static func kindWord(for item: ConversationItem) -> String {
+        if let cmd = ConversationRenderer.extractCommand(from: item),
+           let first = cmd.split(separator: " ").first, !first.isEmpty {
+            // Strip a path prefix so "/usr/bin/grep" reads "grep".
+            return String(first.split(separator: "/").last ?? first)
+        }
+        return (item.toolName ?? "tool").lowercased()
+    }
+
+    /// "grep · find · 12 more" — first two distinct kinds + remainder.
+    private var subline: String {
+        var seen: [String] = []
+        for item in items {
+            let word = Self.kindWord(for: item)
+            if !seen.contains(word) { seen.append(word) }
+            if seen.count == 2 { break }
+        }
+        var parts = seen
+        if items.count > 2 { parts.append("\(items.count - 2) more") }
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Image(systemName: "square.stack.3d.up.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(neon.textDim)
-                    .frame(width: 22, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(neon.textDim.opacity(0.14))
-                    )
-                Text(headerLabel)
-                    .font(neon.sans(13).weight(.semibold))
-                    .foregroundStyle(neon.text)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(neon.textDim)
-                    .rotationEffect(.degrees(expanded ? 180 : 0))
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
+            header
             if expanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                        ConduitToolCard(event: item, sessionID: sessionID, collapseDefault: collapseDefault)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Self.displayOrder(items), id: \.id) { item in
+                        ConduitBundleRow(
+                            item: item,
+                            sessionID: sessionID,
+                            focused: focusedID == item.id,
+                            onTap: {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    focusedID = focusedID == item.id ? nil : item.id
+                                }
+                            }
+                        )
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 10)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .neonCardSurface(neon, fill: neon.surface, cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, glowTint: nil)
+        .neonCardSurface(
+            neon,
+            fill: neon.surface,
+            cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius,
+            border: failCount > 0 ? ConduitBundleTint.fail.opacity(0.55) : nil,
+            glowTint: failCount > 0 ? ConduitBundleTint.fail : nil
+        )
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: failCount > 0
+                  ? "exclamationmark.triangle"
+                  : NeonToolClassifier.icon(forToolName: dominantToolName))
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(tint.opacity(0.16))
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verb)
+                    .font(neon.sans(13.5).weight(.semibold))
+                    .foregroundStyle(neon.text)
+                    .lineLimit(1)
+                Text(subline)
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(neon.textFaint)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            statusPill
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(neon.textDim)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        // ≥44pt row height + full-width hit area (round-3 §4).
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(verb), \(items.count) tool runs\(failCount > 0 ? ", \(failCount) failed" : "")")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        if failCount > 0 {
+            pill("\(failCount) failed", color: ConduitBundleTint.fail)
+        } else if anyRunning {
+            pill("running", color: neon.accent2)
+        } else {
+            pill(items.count == 1 ? "1 run" : "\(items.count) runs", color: neon.green)
+        }
+    }
+
+    private func pill(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(neon.mono(10.5).weight(.bold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(color.opacity(0.16)))
+            .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
+    }
+}
+
+/// One call inside an expanded bundle: a single mono line (`$ cmd …` or
+/// `toolname · file`), a pass/fail dot, and a chevron. Tapping focuses
+/// the row — only then its output (clipped short) and the Copy /
+/// Re-run / Open-in-terminal actions appear, scoped to this row.
+private struct ConduitBundleRow: View {
+    let item: ConversationItem
+    var sessionID: String
+    let focused: Bool
+    let onTap: () -> Void
+
+    @Environment(\.neonTheme) private var neon
+    @Environment(SessionStore.self) private var store
+    @Environment(\.openTerminalAction) private var openTerminalAction
+
+    private var state: NeonCardState { NeonCardState(status: item.status, exitCode: item.exitCode) }
+    private var command: String? { ConversationRenderer.extractCommand(from: item) }
+    private var sections: [ToolSection] { ConversationRenderer.toolSections(for: item) }
+
+    private var dotColor: Color {
+        switch state {
+        case .ok:               return neon.green
+        case .fail:             return ConduitBundleTint.fail
+        case .running, .pending: return neon.accent2
+        }
+    }
+
+    /// The single-line body: `$ cmd` for commands, `tool · file` else.
+    private var line: String {
+        if let command { return command }
+        let label = (item.toolName ?? "tool").lowercased()
+        if let file = item.files.first {
+            let name = file.path.split(separator: "/").last.map(String.init) ?? file.path
+            return "\(label) · \(name)"
+        }
+        return label
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("$")
+                    .font(neon.mono(12).weight(.bold))
+                    .foregroundStyle(command != nil ? dotColor : neon.textFaint)
+                Text(line)
+                    .font(neon.mono(12))
+                    .foregroundStyle(state == .fail ? ConduitBundleTint.fail : neon.codeText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 6, height: 6)
+                Image(systemName: focused ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(neon.textFaint)
+            }
+            .padding(.horizontal, 8)
+            // ≥44pt tappable row, single-line visual (round-3 §4).
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(line), \(state == .fail ? "failed" : "ok")")
+            .accessibilityAddTraits(.isButton)
+
+            if focused {
+                focusedDetail
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(focused ? neon.codeBg : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(focused ? (state == .fail ? ConduitBundleTint.fail.opacity(0.45) : neon.border) : Color.clear,
+                        lineWidth: 1)
+        )
+    }
+
+    // Output (clipped to a few lines) + per-row actions.
+    private var focusedDetail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                    sectionView(section)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: 96, alignment: .topLeading)
+            .clipped()
+            if let meta = metaLine {
+                Text(meta)
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(state == .fail ? ConduitBundleTint.fail : neon.textFaint)
+            }
+            actionRow
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    private var metaLine: String? {
+        var parts: [String] = []
+        if let code = item.exitCode, code != 0 { parts.append("exit \(code)") }
+        if let duration = ConversationRenderer.extractMetadata(from: item).duration,
+           !duration.isEmpty { parts.append(duration) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func sectionView(_ section: ToolSection) -> some View {
+        switch section {
+        case .stdout(let text), .text(let text):
+            outputText(text, color: neon.codeText)
+        case .stderr(let text):
+            outputText(text, color: ConduitBundleTint.fail)
+        case .code(let language, let content):
+            ConduitCodeBlock(language: language, content: content)
+        case .diff(let diff):
+            ConduitDiffBlock(content: diff, diffSummary: item.diffSummary)
+        case .files(let files):
+            ConduitFileStrip(files: files)
+        case .meta, .command:
+            EmptyView()  // command is the row line; meta is the meta line
+        }
+    }
+
+    private func outputText(_ text: String, color: Color) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(text)
+                .font(neon.mono(11))
+                .foregroundStyle(color)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // Copy · Re-run · Open in terminal — scoped to the focused row.
+    // Re-run / terminal only make sense for shell commands.
+    private var actionRow: some View {
+        HStack(spacing: 8) {
+            rowAction("Copy", icon: "doc.on.doc") {
+                UIPasteboard.general.string = command ?? item.content
+            }
+            if let command {
+                rowAction("Re-run", icon: "arrow.clockwise", disabled: sessionID.isEmpty) {
+                    guard !sessionID.isEmpty else { return }
+                    store.sendChat(sessionID: sessionID, message: command)
+                }
+                rowAction("Open in terminal", icon: "terminal", disabled: openTerminalAction == nil) {
+                    openTerminalAction?()
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func rowAction(
+        _ title: String, icon: String, disabled: Bool = false, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(title).font(neon.mono(11).weight(.medium))
+            }
+            .foregroundStyle(neon.textDim)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(neon.border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
     }
 }
 
@@ -1954,8 +2313,10 @@ private struct ConduitNeonCommandCard: View {
         self.event = event
         self.sessionID = sessionID
         // "Collapse Turns" (Settings) starts command cards collapsed;
-        // otherwise they open expanded as before.
-        _expanded = State(initialValue: !collapseDefault)
+        // otherwise they open expanded as before. A non-zero exit always
+        // opens expanded — failures never hide (round-3 §1).
+        let failed = NeonCardState(status: event.status, exitCode: event.exitCode) == .fail
+        _expanded = State(initialValue: !collapseDefault || failed)
     }
 
     private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
@@ -1975,8 +2336,13 @@ private struct ConduitNeonCommandCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 metaStrip
-                if expanded { output }
-                actionBar
+                // Round-3 §1: no permanent action bar — Copy / Re-run /
+                // Open-in-terminal appear only when the card is expanded
+                // (the standalone-card equivalent of "the focused row").
+                if expanded {
+                    output
+                    actionBar
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
