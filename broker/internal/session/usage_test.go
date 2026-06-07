@@ -1,6 +1,9 @@
 package session
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +148,50 @@ func TestAccumulateUsage(t *testing.T) {
 	}
 	if u.ContextWindowTokens != 200000 || !u.HasUsage {
 		t.Fatalf("window=%d hasUsage=%v", u.ContextWindowTokens, u.HasUsage)
+	}
+}
+
+// Usage must survive a broker restart: accumulateUsage persists the
+// totals + context gauge into meta.json and recovery restores them
+// (post-v0.0.117 — a redeploy used to blank the Session Info usage
+// card until the next turn).
+func TestUsagePersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{}
+	s.metaPath = filepath.Join(dir, "meta.json")
+	s.accumulateUsage(usageDelta{
+		input: 100, output: 200, cached: 4000, costUSD: 1.25,
+		contextUsed: 4100, contextWindow: 1_000_000,
+	})
+
+	raw, err := os.ReadFile(s.metaPath)
+	if err != nil {
+		t.Fatalf("meta.json not written: %v", err)
+	}
+	var meta sessionMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("meta.json unmarshal: %v", err)
+	}
+	if meta.TotalInputTokens != 100 || meta.TotalOutputTokens != 200 ||
+		meta.TotalCachedTokens != 4000 || meta.TotalCostUSD != 1.25 ||
+		meta.ContextUsedTokens != 4100 || meta.ContextWindowTokens != 1_000_000 {
+		t.Fatalf("persisted usage mismatch: %+v", meta)
+	}
+
+	// The recovery side is a plain field copy (recovery.go); pin the
+	// hasUsage derivation contract here: any restored tokens mean the
+	// usage card shows.
+	restored := &Session{}
+	restored.totalInputTokens = meta.TotalInputTokens
+	restored.totalOutputTokens = meta.TotalOutputTokens
+	restored.totalCachedTokens = meta.TotalCachedTokens
+	restored.totalCostUSD = meta.TotalCostUSD
+	restored.contextUsedTokens = meta.ContextUsedTokens
+	restored.contextWindowTokens = meta.ContextWindowTokens
+	restored.hasUsage = meta.TotalInputTokens > 0 || meta.TotalOutputTokens > 0 ||
+		meta.ContextUsedTokens > 0
+	u := restored.Usage()
+	if !u.HasUsage || u.ContextUsedTokens != 4100 || u.ContextWindowTokens != 1_000_000 {
+		t.Fatalf("restored usage mismatch: %+v", u)
 	}
 }
