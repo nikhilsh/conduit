@@ -1927,8 +1927,11 @@ final class SessionStore {
                 sessionLifecycle[s.id] = .exited(Self.exitCode(fromPhase: phase) ?? 0)
             }
         }
+        // Fan out the per-session conversation pulls OFF the main thread:
+        // doing N blocking FFI clones on the @MainActor every status delta
+        // was the App Hang source. Results apply back on the main actor.
         for s in self.sessions {
-            refreshConversation(sessionID: s.id)
+            refreshConversationOffMain(sessionID: s.id)
         }
     }
 
@@ -1998,32 +2001,69 @@ final class SessionStore {
         }
     }
 
+    /// Synchronous refresh — used where the caller reads `conversationLog`
+    /// right after (e.g. `ingestChat` resolves the streaming item id against
+    /// the freshly-merged log). Single-session and low-frequency (once per
+    /// turn), so the blocking FFI here isn't the hang source.
     fileprivate func refreshConversation(sessionID: String) {
         guard let client else { return }
-        if let items = try? client.listConversationItems(sessionId: sessionID) {
-            // Preserve locally-echoed `local-*` items not yet reflected by
-            // the server (matched by role+content). Once the harness mirrors
-            // the same text back under a server id, the local copy drops.
-            //
-            // Bug #3 nuance: the broker doesn't loop user messages back as
-            // `on_chat_event`, so the user's `local-*` echo lives forever
-            // in `stillPending`. Appending it *after* `items` would render
-            // the assistant's reply above the user's prompt — confusing.
-            // Splice by timestamp so order stays chronological.
-            let existing = conversationLog[sessionID] ?? []
-            let serverFingerprints = Set(items.map { "\($0.role)|\($0.content)" })
-            let stillPending = existing.filter {
-                $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
-            }
-            // Merge under any restored-from-disk past chat (a reattached
-            // session — the broker doesn't replay chat over the WS, so the
-            // Rust core's live `items` only cover turns since reattach).
-            conversationLog[sessionID] = Self.mergeConversation(
-                past: hydratedChat[sessionID] ?? [],
-                live: items,
-                pending: stillPending
-            )
+        guard let items = try? client.listConversationItems(sessionId: sessionID) else { return }
+        applyRefreshedConversation(sessionID: sessionID, items: items)
+    }
+
+    /// Off-main refresh for the `refreshSessions` fan-out. `listConversationItems`
+    /// is a BLOCKING FFI call (locks the core session mutex, deep-clones the
+    /// whole conversation, marshals every record across UniFFI). Doing it for
+    /// EVERY session on each status delta on the @MainActor froze the UI on long
+    /// transcripts / under ingest-lock contention past Sentry's 2s App Hang
+    /// threshold (CONDUIT-IOS App Hanging). Pull off the main thread; apply the
+    /// merge back on it. The UniFFI client is thread-safe (Arc+Mutex in Rust)
+    /// but isn't `Sendable`, hence the explicit unsafe capture; the result rides
+    /// back across the actor hop inside a `@unchecked Sendable` box.
+    private func refreshConversationOffMain(sessionID: String) {
+        guard let client else { return }
+        nonisolated(unsafe) let capturedClient = client
+        Task.detached(priority: .utility) { [weak self] in
+            guard let items = try? capturedClient.listConversationItems(sessionId: sessionID) else { return }
+            await self?.applyRefreshedConversation(sessionID: sessionID, box: SendableConvItems(items: items))
         }
+    }
+
+    /// Box that carries the (value-type, effectively-immutable) conversation
+    /// items across the off-main → main-actor hop under strict concurrency.
+    private struct SendableConvItems: @unchecked Sendable {
+        let items: [ConversationItem]
+    }
+
+    /// Main-actor entry for the off-main path — unwraps the box on the main
+    /// actor, then merges.
+    private func applyRefreshedConversation(sessionID: String, box: SendableConvItems) {
+        applyRefreshedConversation(sessionID: sessionID, items: box.items)
+    }
+
+    /// Merge freshly-pulled live items into `conversationLog` on the main
+    /// actor (shared by the sync + off-main refresh paths).
+    private func applyRefreshedConversation(sessionID: String, items: [ConversationItem]) {
+        // Preserve locally-echoed `local-*` items not yet reflected by the
+        // server (matched by role+content). Once the harness mirrors the same
+        // text back under a server id, the local copy drops.
+        //
+        // Bug #3 nuance: the broker doesn't loop user messages back as
+        // `on_chat_event`, so the user's `local-*` echo lives forever in
+        // `stillPending`. Splicing by timestamp keeps order chronological.
+        let existing = conversationLog[sessionID] ?? []
+        let serverFingerprints = Set(items.map { "\($0.role)|\($0.content)" })
+        let stillPending = existing.filter {
+            $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
+        }
+        // Merge under any restored-from-disk past chat (a reattached session —
+        // the broker doesn't replay chat over the WS, so the Rust core's live
+        // `items` only cover turns since reattach).
+        conversationLog[sessionID] = Self.mergeConversation(
+            past: hydratedChat[sessionID] ?? [],
+            live: items,
+            pending: stillPending
+        )
     }
 
     /// Splice restored-from-disk past chat (`past`) under the live Rust-core
