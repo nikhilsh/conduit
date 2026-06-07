@@ -323,15 +323,25 @@ public enum TurnLiveActivityMapping {
     /// Parse the ISO-8601 timestamps the Rust core emits. Falls back to
     /// `nil` so the controller can default to `Date()` rather than
     /// blocking the lifecycle on a malformed string.
+    // Cached formatters — `ISO8601DateFormatter()` is expensive to allocate and
+    // this parses every conversation item; building two formatters per call
+    // showed up as a CFDateFormatter CPU hang in Sentry (CONDUIT-IOS-15). Reuse
+    // shared instances (ISO8601 date parsing is thread-safe once configured).
+    private static let isoWithFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoPlain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     static func parseTimestamp(_ raw: String) -> Date? {
-        // ISO8601DateFormatter doesn't accept fractional seconds without
-        // an explicit option, and the harness emits both shapes.
-        let withFractional = ISO8601DateFormatter()
-        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = withFractional.date(from: raw) { return d }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
+        // The harness emits timestamps both with and without fractional seconds.
+        if let d = isoWithFractional.date(from: raw) { return d }
+        return isoPlain.date(from: raw)
     }
 }
 
