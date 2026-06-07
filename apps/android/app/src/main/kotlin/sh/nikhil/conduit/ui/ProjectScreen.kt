@@ -63,7 +63,24 @@ fun ProjectScreen(
     // Info live in the sibling NeonTabletRightPane. Phone/default = tabs.
     chatOnly: Boolean = false,
 ) {
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { ProjectTab.entries.size })
+    val previews by store.previews.collectAsState()
+    val endpoint by store.endpoint.collectAsState()
+    // Browser tab is offered only when there's something real to show: a
+    // resolvable live-preview URL, or the user explicitly switched into the
+    // session-memory view (per the user's ask: no valid website -> no tab).
+    var browserMode by remember { mutableStateOf(BrowserMode.Preview) }
+    val showBrowser by remember {
+        derivedStateOf {
+            browserMode == BrowserMode.Memory ||
+                previews[session.id]?.url?.let { resolvePreviewUrl(endpoint.httpBaseUrl, it) } != null
+        }
+    }
+    val visibleTabs = if (showBrowser) ProjectTab.entries.toList()
+    else ProjectTab.entries.filter { it != ProjectTab.Browser }
+    val pagerState = rememberPagerState(
+        initialPage = 0,
+        pageCount = { if (showBrowser) ProjectTab.entries.size else ProjectTab.entries.size - 1 },
+    )
     val statuses by store.statusBySession.collectAsState()
     val lifecycleMap by store.sessionLifecycle.collectAsState()
     val status = statuses[session.id]
@@ -89,7 +106,6 @@ fun ProjectScreen(
         store.isReadOnly(session.id)
     }
     var menuExpanded by remember { mutableStateOf(false) }
-    var browserMode by remember { mutableStateOf(BrowserMode.Preview) }
     var showInfo by remember { mutableStateOf(false) }
     var showDiff by remember { mutableStateOf(false) }
     var showThreadSwitcher by remember { mutableStateOf(false) }
@@ -139,7 +155,7 @@ fun ProjectScreen(
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     // Map the active tab → InSessionContext so the dock knows whether
     // the centre mic FAB should route to voice or surface a toast.
-    val activeContext = if (chatOnly) InSessionContext.Chat else InSessionContext.fromTab(ProjectTab.entries[pagerState.currentPage])
+    val activeContext = if (chatOnly) InSessionContext.Chat else InSessionContext.fromTab(visibleTabs.getOrNull(pagerState.currentPage) ?: ProjectTab.Chat)
 
     // Device feedback v0.0.49 #3 (Android parity): clear focus + hide the
     // soft keyboard on every tab change. Without this, swiping/tapping
@@ -152,6 +168,14 @@ fun ProjectScreen(
     LaunchedEffect(pagerState.currentPage) {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
+    }
+    // If the Browser tab disappears (preview withdrawn, memory toggled off)
+    // while it's the current page, fall back to the first tab so the pager
+    // never sits on an out-of-range index.
+    LaunchedEffect(showBrowser) {
+        if (!showBrowser && pagerState.currentPage >= visibleTabs.size) {
+            pagerState.scrollToPage(0)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 10.dp).padding(top = 8.dp)) {
@@ -207,6 +231,7 @@ fun ProjectScreen(
 
             if (!isReadOnly && !chatOnly) {
                 TabPickerRow(
+                    tabs = visibleTabs,
                     selected = pagerState.currentPage,
                     onSelect = { i -> scope.launch { pagerState.animateScrollToPage(i) } },
                 )
@@ -232,7 +257,7 @@ fun ProjectScreen(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
-                    when (ProjectTab.entries[page]) {
+                    when (visibleTabs.getOrNull(page) ?: ProjectTab.Chat) {
                         ProjectTab.Terminal -> {
                             // Stage 0 of the Android terminal-renderer
                             // rewrite: flag-on = Termux native View
@@ -602,6 +627,7 @@ private fun IdentityBlock(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TabPickerRow(
+    tabs: List<ProjectTab>,
     selected: Int,
     onSelect: (Int) -> Unit,
 ) {
@@ -633,7 +659,7 @@ private fun TabPickerRow(
             androidx.compose.material3.HorizontalDivider(color = neon.border, thickness = 1.dp)
         },
     ) {
-        ProjectTab.entries.forEachIndexed { i, t ->
+        tabs.forEachIndexed { i, t ->
             val active = selected == i
             Tab(
                 selected = active,

@@ -33,8 +33,8 @@ fun BrowserPage(store: SessionStore, session: ProjectSession, mode: BrowserMode 
     val neon = LocalNeonTheme.current
 
     val resolved: String? = when (mode) {
-        BrowserMode.Preview -> previews[session.id]?.url?.let { resolve(base, it) }
-        BrowserMode.Memory  -> resolve(base, "/memory/sessions/${session.id}.html")
+        BrowserMode.Preview -> previews[session.id]?.url?.let { resolvePreviewUrl(base, it) }
+        BrowserMode.Memory  -> resolvePreviewUrl(base, "/memory/sessions/${session.id}.html")
     }
 
     if (resolved == null) {
@@ -100,7 +100,7 @@ fun BrowserPage(store: SessionStore, session: ProjectSession, mode: BrowserMode 
     }
 }
 
-private fun resolve(base: String?, pathOrUrl: String): String? {
+internal fun resolvePreviewUrl(base: String?, pathOrUrl: String): String? {
     val lower = pathOrUrl.lowercase()
     if (lower.startsWith("http://") || lower.startsWith("https://")) return pathOrUrl
     if (base.isNullOrBlank()) return null
