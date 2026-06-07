@@ -61,8 +61,14 @@ extension ConduitUI {
         /// were laggy because every row (markdown / tool parse) was laid out
         /// each render; we cap to the tail and let "Load earlier" widen it.
         @State private var visibleRowWindow = ConduitUI.ChatView.rowWindowStep
-        /// Step for the initial window and each infinite-scroll widen.
+        /// Initial window size.
         static let rowWindowStep = 80
+        /// Rows added per infinite-scroll widen. Half the initial window:
+        /// an 80-row burst blocked the main thread long enough to read as
+        /// scroll jank (perf investigation, post-v0.0.116); 40 keeps the
+        /// eager prefetch comfortably ahead of the finger at half the
+        /// per-widen cost.
+        static let rowWidenStep = 40
         /// Rows from the top of the window that count as "nearing the
         /// top" — appearing one of these eagerly widens the window so
         /// older history is usually in place before the user hits it.
@@ -141,36 +147,90 @@ extension ConduitUI {
 
         // MARK: Messages
 
-        private var events: [ConversationItem] {
+        /// Reference-typed memo for the transcript pipeline. `events` /
+        /// `chatRows` are computed properties, so without this the FULL
+        /// merge (fingerprint set + O(N log N) ts-sort) and grouping
+        /// (with a per-tool `extractCommand` classification) re-ran on
+        /// EVERY body evaluation — i.e. on every keyboard inset change,
+        /// autoscroll flip, and every near-top row's `onAppear` guard.
+        /// That recompute tax was the top cause of scroll jank (perf
+        /// investigation, post-v0.0.116). A class (not @State value) so
+        /// refreshing the memo never invalidates the view.
+        private final class TranscriptMemo {
+            var fingerprint: Int?
+            var events: [ConversationItem] = []
+            var rows: [ConduitUI.ChatRow] = []
+        }
+        @State private var transcriptMemo = TranscriptMemo()
+
+        /// Cheap O(N) change detector over the memo's inputs — id /
+        /// status / content length per item (no full-content hashing).
+        /// Orders of magnitude cheaper than the merge+sort+classify it
+        /// guards; any mutation the pipeline could surface (new item,
+        /// status flip, exit code, streamed content growth) moves it.
+        private static func transcriptFingerprint(
+            conversation: [ConversationItem],
+            chatLog: [ChatEvent],
+            readOnly: Bool
+        ) -> Int {
+            var hasher = Hasher()
+            hasher.combine(readOnly)
+            hasher.combine(conversation.count)
+            hasher.combine(chatLog.count)
+            for item in conversation {
+                hasher.combine(item.id)
+                hasher.combine(item.status)
+                hasher.combine(item.content.count)
+                hasher.combine(item.exitCode)
+            }
+            for ev in chatLog {
+                hasher.combine(ev.ts)
+                hasher.combine(ev.content.count)
+            }
+            return hasher.finalize()
+        }
+
+        /// Single memoized entry point for the transcript pipeline.
+        private var transcript: (events: [ConversationItem], rows: [ConduitUI.ChatRow]) {
+            let conversation = readOnlyItems ?? store.conversationLog[session.id] ?? []
+            let chatLog = readOnlyItems == nil ? (store.chatLog[session.id] ?? []) : []
+            let key = Self.transcriptFingerprint(
+                conversation: conversation, chatLog: chatLog, readOnly: readOnlyItems != nil
+            )
+            if transcriptMemo.fingerprint == key {
+                return (transcriptMemo.events, transcriptMemo.rows)
+            }
             // Read-only mode (exited session): render the injected
             // persisted transcript verbatim — nothing in the live store
             // to merge.
-            if let readOnlyItems { return readOnlyItems }
-            // PR #111 + legacy ChatTab parity: prefer the typed
-            // `conversationLog`, but fall back to the broker's raw
+            //
+            // Live mode (PR #111 + legacy ChatTab parity): prefer the
+            // typed `conversationLog`, but fall back to the broker's raw
             // `chatLog` for events that haven't surfaced through the
             // structured `view_event` stream yet. Without this, codex
             // assistant replies (delivered via `on_chat_event`) showed
             // up in the Terminal tab but never reached the chat tab —
             // the #119 cutover dropped the legacy mapIndexed fallback.
-            return ConduitUI.ChatViewModel.mergedEvents(
-                conversation: store.conversationLog[session.id] ?? [],
-                chatLog: store.chatLog[session.id] ?? []
-            )
-        }
-
-        /// `events` folded into rows, collapsing contiguous runs of tool
-        /// cards (commands included — round-3 §1) into one quiet bundle.
-        /// A run is "adjacent tool calls with no assistant prose between
-        /// them": any non-tool event (a text block, a pending-input card,
-        /// a handoff…) closes the current bundle.
-        private var chatRows: [ConduitUI.ChatRow] {
-            ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
+            let events = readOnlyItems
+                ?? ConduitUI.ChatViewModel.mergedEvents(conversation: conversation, chatLog: chatLog)
+            // Fold into rows, collapsing contiguous runs of tool cards
+            // (commands included — round-3 §1) into one quiet bundle. A
+            // run is "adjacent tool calls with no assistant prose between
+            // them": any non-tool event closes the current bundle.
+            let rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
                 ev.role.lowercased() == "tool"
                     && ev.status.lowercased() != "swapping"
                     && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
             }
+            transcriptMemo.fingerprint = key
+            transcriptMemo.events = events
+            transcriptMemo.rows = rows
+            return (events, rows)
         }
+
+        private var events: [ConversationItem] { transcript.events }
+
+        private var chatRows: [ConduitUI.ChatRow] { transcript.rows }
 
         /// Continuation = the previous row is a single message of the same
         /// role (used to suppress a repeated sender label). A tool group
@@ -262,12 +322,21 @@ extension ConduitUI {
             // Brief defer so the spinner paints before the main-thread
             // row parse/layout burst.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                visibleRowWindow += Self.rowWindowStep
+                visibleRowWindow += Self.rowWidenStep
                 DispatchQueue.main.async {
                     if let anchorRowID {
                         proxy.scrollTo(anchorRowID, anchor: .top)
                     }
                     isWideningWindow = false
+                    // LazyVStack resolves the inserted rows' heights
+                    // lazily, so the first pin can land while content
+                    // above is still growing; re-pin once more after
+                    // layout settles (same trick as scrollToBottomOnOpen).
+                    if let anchorRowID {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            proxy.scrollTo(anchorRowID, anchor: .top)
+                        }
+                    }
                 }
             }
         }
@@ -1815,6 +1884,21 @@ private struct ConduitToolBundleCard: View {
     let items: [ConversationItem]
     var sessionID: String
 
+    // Derived ONCE at init (perf, post-v0.0.116): these were computed
+    // properties, so every body render re-ran `kindWord` —
+    // `extractCommand` string-scans included — over the whole run,
+    // three times over (dominant kind, verb, subline). A 20-item
+    // bundle cost ~40 extract calls per frame while scrolling. The
+    // struct re-inits only when the parent's (memoized) rows change,
+    // so stored lets make the header render O(1).
+    private let displayItems: [ConversationItem]
+    private let failCount: Int
+    private let anyRunning: Bool
+    private let dominantRole: NeonToolTint
+    private let iconName: String
+    private let verb: String
+    private let subline: String
+
     @State private var expanded: Bool
     @State private var focusedID: String?
     @Environment(\.neonTheme) private var neon
@@ -1822,57 +1906,66 @@ private struct ConduitToolBundleCard: View {
     init(items: [ConversationItem], sessionID: String = "") {
         self.items = items
         self.sessionID = sessionID
+
+        // One pass over the run: kind words, failure split, running flag.
+        var kindWords: [String] = []
+        kindWords.reserveCapacity(items.count)
+        var fails: [ConversationItem] = []
+        var rest: [ConversationItem] = []
+        var running = false
+        for item in items {
+            kindWords.append(Self.kindWord(for: item))
+            switch NeonCardState(status: item.status, exitCode: item.exitCode) {
+            case .fail:    fails.append(item)
+            case .running: running = true; rest.append(item)
+            default:       rest.append(item)
+            }
+        }
+        // Failing rows float to the top so their output is the first
+        // thing visible; otherwise chronological.
+        self.displayItems = fails.isEmpty ? items : fails + rest
+        self.failCount = fails.count
+        self.anyRunning = running
+
+        // Most frequent kind drives icon + tint; mixed roles read as
+        // exploration.
+        var counts: [String: Int] = [:]
+        for word in kindWords { counts[word, default: 0] += 1 }
+        let dominant = counts.max { $0.value < $1.value }?.key
+        self.dominantRole = NeonToolClassifier.tintRole(forToolName: dominant)
+        self.iconName = NeonToolClassifier.icon(forToolName: dominant)
+        let roles = Set(kindWords.map { NeonToolClassifier.tintRole(forToolName: $0) })
+        if roles.count > 1 {
+            self.verb = "Explored the codebase"
+        } else {
+            switch roles.first ?? .accent {
+            case .purple: self.verb = "Explored the codebase"
+            case .blue:   self.verb = "Read files"
+            case .claude: self.verb = "Edited files"
+            case .green:  self.verb = "Ran commands"
+            case .red:    self.verb = "Tool errors"
+            case .accent: self.verb = "Used tools"
+            }
+        }
+        // "grep · find · 12 more" — first two distinct kinds + remainder.
+        var seen: [String] = []
+        for word in kindWords where !seen.contains(word) {
+            seen.append(word)
+            if seen.count == 2 { break }
+        }
+        if items.count > 2 { seen.append("\(items.count - 2) more") }
+        self.subline = seen.joined(separator: " · ")
+
         // Failures auto-surface: open expanded with the first failing
         // row focused. (The row identity includes the item count, so a
         // failure that lands mid-stream re-creates the card and this
         // initial state re-evaluates.)
-        let firstFail = Self.displayOrder(items).first(where: { Self.isFailure($0) })
-        _expanded = State(initialValue: firstFail != nil)
-        _focusedID = State(initialValue: firstFail?.id)
+        _expanded = State(initialValue: !fails.isEmpty)
+        _focusedID = State(initialValue: fails.first?.id)
     }
 
-    private static func isFailure(_ item: ConversationItem) -> Bool {
-        NeonCardState(status: item.status, exitCode: item.exitCode) == .fail
-    }
-
-    /// Failing rows float to the top so their output is the first thing
-    /// visible; otherwise chronological.
-    private static func displayOrder(_ items: [ConversationItem]) -> [ConversationItem] {
-        let fails = items.filter { isFailure($0) }
-        guard !fails.isEmpty else { return items }
-        return fails + items.filter { !isFailure($0) }
-    }
-
-    private var failCount: Int { items.filter { Self.isFailure($0) }.count }
-    private var anyRunning: Bool {
-        items.contains { NeonCardState(status: $0.status, exitCode: $0.exitCode) == .running }
-    }
     private var tint: Color {
-        failCount > 0
-            ? ConduitBundleTint.fail
-            : neon.color(for: NeonToolClassifier.tintRole(forToolName: dominantToolName))
-    }
-
-    /// Most frequent tool kind in the run — drives the icon + verb.
-    private var dominantToolName: String? {
-        var counts: [String: Int] = [:]
-        for item in items { counts[Self.kindWord(for: item), default: 0] += 1 }
-        return counts.max { $0.value < $1.value }?.key
-    }
-
-    /// Human verb for the header. Majority kind wins; mixed runs read
-    /// as exploration.
-    private var verb: String {
-        let roles = Set(items.map { NeonToolClassifier.tintRole(forToolName: Self.kindWord(for: $0)) })
-        if roles.count > 1 { return "Explored the codebase" }
-        switch roles.first ?? .accent {
-        case .purple: return "Explored the codebase"
-        case .blue:   return "Read files"
-        case .claude: return "Edited files"
-        case .green:  return "Ran commands"
-        case .red:    return "Tool errors"
-        case .accent: return "Used tools"
-        }
+        failCount > 0 ? ConduitBundleTint.fail : neon.color(for: dominantRole)
     }
 
     /// Short mono word for one item — the command's first token
@@ -1886,25 +1979,12 @@ private struct ConduitToolBundleCard: View {
         return (item.toolName ?? "tool").lowercased()
     }
 
-    /// "grep · find · 12 more" — first two distinct kinds + remainder.
-    private var subline: String {
-        var seen: [String] = []
-        for item in items {
-            let word = Self.kindWord(for: item)
-            if !seen.contains(word) { seen.append(word) }
-            if seen.count == 2 { break }
-        }
-        var parts = seen
-        if items.count > 2 { parts.append("\(items.count - 2) more") }
-        return parts.joined(separator: " · ")
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if expanded {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Self.displayOrder(items), id: \.id) { item in
+                    ForEach(displayItems, id: \.id) { item in
                         ConduitBundleRow(
                             item: item,
                             sessionID: sessionID,
@@ -1934,9 +2014,7 @@ private struct ConduitToolBundleCard: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: failCount > 0
-                  ? "exclamationmark.triangle"
-                  : NeonToolClassifier.icon(forToolName: dominantToolName))
+            Image(systemName: failCount > 0 ? "exclamationmark.triangle" : iconName)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(tint)
                 .frame(width: 26, height: 26)
@@ -2005,12 +2083,40 @@ private struct ConduitBundleRow: View {
     let focused: Bool
     let onTap: () -> Void
 
+    // Derived once at init (perf, post-v0.0.116): `command`/`line` were
+    // computed properties calling `extractCommand` (a content string
+    // scan for PTY-scraped items) on every render of every visible row.
+    private let state: NeonCardState
+    private let command: String?
+    private let line: String
+
     @Environment(\.neonTheme) private var neon
     @Environment(SessionStore.self) private var store
     @Environment(\.openTerminalAction) private var openTerminalAction
 
-    private var state: NeonCardState { NeonCardState(status: item.status, exitCode: item.exitCode) }
-    private var command: String? { ConversationRenderer.extractCommand(from: item) }
+    init(item: ConversationItem, sessionID: String, focused: Bool, onTap: @escaping () -> Void) {
+        self.item = item
+        self.sessionID = sessionID
+        self.focused = focused
+        self.onTap = onTap
+        self.state = NeonCardState(status: item.status, exitCode: item.exitCode)
+        let command = ConversationRenderer.extractCommand(from: item)
+        self.command = command
+        // The single-line body: `$ cmd` for commands, `tool · file` else.
+        if let command {
+            self.line = command
+        } else {
+            let label = (item.toolName ?? "tool").lowercased()
+            if let file = item.files.first {
+                let name = file.path.split(separator: "/").last.map(String.init) ?? file.path
+                self.line = "\(label) · \(name)"
+            } else {
+                self.line = label
+            }
+        }
+    }
+
+    /// Output sections stay lazy — only the focused row pays for them.
     private var sections: [ToolSection] { ConversationRenderer.toolSections(for: item) }
 
     private var dotColor: Color {
@@ -2019,17 +2125,6 @@ private struct ConduitBundleRow: View {
         case .fail:             return ConduitBundleTint.fail
         case .running, .pending: return neon.accent2
         }
-    }
-
-    /// The single-line body: `$ cmd` for commands, `tool · file` else.
-    private var line: String {
-        if let command { return command }
-        let label = (item.toolName ?? "tool").lowercased()
-        if let file = item.files.first {
-            let name = file.path.split(separator: "/").last.map(String.init) ?? file.path
-            return "\(label) · \(name)"
-        }
-        return label
     }
 
     var body: some View {
