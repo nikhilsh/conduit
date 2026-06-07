@@ -62,6 +62,10 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		// per-session work/ dir. Falls back to adapter/worktreeDir
 		// for pre-feature sessions that have no workspace_dir field.
 		requestedCWD: meta.WorkspaceDir,
+		// Resume the claude CLI's own conversation so the recovered
+		// agent keeps its memory of the session (the conversation files
+		// live in the persistent per-session agent-home).
+		resumeChatSessionID: meta.ClaudeChatSessionID,
 	})
 	if err != nil {
 		return nil, err

@@ -176,3 +176,17 @@ func (s *Session) expirePendingAsk(requestID string) {
 	s.mu.Unlock()
 	_ = ask.cp.SendRaw(encodeControlAllow(ask.requestID, ask.input))
 }
+
+// latchChatSessionID records the claude CLI's announced conversation id
+// (stream-json init line) and persists it so respawns/recovery can
+// `--resume` the agent's memory. Lives here with the other chat-control
+// session plumbing.
+func (s *Session) latchChatSessionID(id string) {
+	s.mu.Lock()
+	changed := s.chatSessionID != id
+	s.chatSessionID = id
+	s.mu.Unlock()
+	if changed && s.metaPath != "" {
+		_ = s.persistMetadata()
+	}
+}

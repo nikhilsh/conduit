@@ -187,6 +187,11 @@ type Session struct {
 	// pendingAsk is a blocked AskUserQuestion control request waiting
 	// for the user's answer (askcontrol.go). Guarded by mu.
 	pendingAsk *pendingAsk
+	// chatSessionID is the claude CLI's OWN conversation id, latched
+	// from the stream-json init line and persisted (meta.json) so a
+	// respawned agent --resumes the conversation instead of starting
+	// amnesiac. Guarded by mu.
+	chatSessionID string
 
 	// recorder writes PTY bytes + view_events to a per-session
 	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
@@ -473,9 +478,12 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.firstPrompt,
 			s.applyAITitle,
 		)
+		// Recovery hands us the prior conversation id — seed it so the
+		// FIRST spawn resumes, and persistMetadata keeps carrying it.
+		s.chatSessionID = opts.resumeChatSessionID
 		chat, cerr := startChatProcess(
 			context.Background(),
-			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)),
+			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), opts.resumeChatSessionID),
 			s.commandEnv(nil),
 			s.workspaceDir,
 			s.PublishText,
@@ -483,6 +491,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.titleGen,
 			s.accumulateUsage,
 			s.handleAskControl,
+			s.latchChatSessionID,
 		)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
@@ -493,9 +502,16 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		// captured generators are per-session, not per-process, so the
 		// fresh agent keeps quick replies + titling.
 		s.chatRespawn = func() (chatBackend, error) {
+			// Resume the conversation the dead agent was holding — the
+			// latched id is the whole point of the respawn not being
+			// amnesiac. Falls back to a fresh conversation when no init
+			// line was ever captured.
+			s.mu.Lock()
+			resume := s.chatSessionID
+			s.mu.Unlock()
 			return startChatProcess(
 				context.Background(),
-				claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)),
+				claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), resume),
 				s.commandEnv(nil),
 				s.workspaceDir,
 				s.PublishText,
@@ -503,6 +519,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 				s.titleGen,
 				s.accumulateUsage,
 				s.handleAskControl,
+				s.latchChatSessionID,
 			)
 		}
 	case "codex":
@@ -1560,6 +1577,10 @@ type sessionOptions struct {
 	// applied to the spawned agent's argv. Zero value = adapter
 	// defaults unchanged (the normal start path).
 	override SpawnOverride
+	// resumeChatSessionID, when non-empty (recovery path), makes the
+	// claude chat agent `--resume` this CLI conversation id so a broker
+	// restart doesn't reset the agent's memory of the session.
+	resumeChatSessionID string
 }
 
 type sessionMetadata struct {
@@ -1611,6 +1632,9 @@ type sessionMetadata struct {
 	TotalCostUSD        float64 `json:"total_cost_usd,omitempty"`
 	ContextUsedTokens   uint64  `json:"context_used_tokens,omitempty"`
 	ContextWindowTokens uint64  `json:"context_window_tokens,omitempty"`
+	// ClaudeChatSessionID is the claude CLI's own conversation id —
+	// persisted so post-restart recovery resumes the agent's memory.
+	ClaudeChatSessionID string `json:"claude_chat_session_id,omitempty"`
 }
 
 // UploadBaseDir is the durable root under which chat file-uploads are
@@ -1688,6 +1712,7 @@ func (s *Session) persistMetadata() error {
 		TotalCostUSD:        s.totalCostUSD,
 		ContextUsedTokens:   s.contextUsedTokens,
 		ContextWindowTokens: s.contextWindowTokens,
+		ClaudeChatSessionID: s.chatSessionID,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

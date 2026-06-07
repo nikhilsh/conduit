@@ -101,7 +101,7 @@ func TestProcessClaudeStreamOutputContextIsLastCall(t *testing.T) {
 	err := processClaudeStreamOutput(strings.NewReader(stream), func([]byte) {}, nil, nil, func(u usageDelta) {
 		got = u
 		calls++
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
