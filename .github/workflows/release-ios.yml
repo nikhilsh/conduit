@@ -46,10 +46,16 @@ jobs:
         env:
           IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_WIDGET_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_WIDGET_PROVISIONING_PROFILE_BASE64 }}
         run: |
           mkdir -p "$RUNNER_TEMP/signing"
           echo "$IOS_CERTIFICATE_P12_BASE64"     | base64 --decode > "$RUNNER_TEMP/signing/cert.p12"
           echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/profile.mobileprovision"
+          if [ -z "$IOS_WIDGET_PROVISIONING_PROFILE_BASE64" ]; then
+            echo "::error title=Missing widget profile::Set IOS_WIDGET_PROVISIONING_PROFILE_BASE64 (an IOS_APP_ADHOC profile for sh.nikhil.conduit.widgets)." >&2
+            exit 1
+          fi
+          echo "$IOS_WIDGET_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/widget_profile.mobileprovision"
 
       - name: Install provisioning profile (by UUID)
         run: |
@@ -61,6 +67,14 @@ jobs:
           echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROFILE_SRC" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          # Widget extension profile (own bundle id → own profile).
+          WIDGET_SRC="$RUNNER_TEMP/signing/widget_profile.mobileprovision"
+          security cms -D -i "$WIDGET_SRC" > "$RUNNER_TEMP/signing/widget_profile.plist"
+          WIDGET_PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/signing/widget_profile.plist")
+          WIDGET_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/signing/widget_profile.plist")
+          echo "WIDGET_PROFILE_UUID=$WIDGET_PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "WIDGET_PROFILE_NAME=$WIDGET_PROFILE_NAME" >> "$GITHUB_ENV"
+          cp "$WIDGET_SRC" "$HOME/Library/MobileDevice/Provisioning Profiles/$WIDGET_PROFILE_UUID.mobileprovision"
 
       - name: Create temp keychain + import cert
         env:
@@ -83,26 +97,9 @@ jobs:
         working-directory: apps/ios
         run: ./build-rust.sh
 
-      - name: Inject signing settings into app target
+      - name: Inject signing settings into app + widget targets
         working-directory: apps/ios
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("project.yml")
-          text = path.read_text()
-          marker = "        ENABLE_MODULE_VERIFIER: NO\n"
-          replacement = (
-              "        ENABLE_MODULE_VERIFIER: NO\n"
-              "        CODE_SIGN_STYLE: Manual\n"
-              "        CODE_SIGN_IDENTITY: Apple Distribution\n"
-              "        DEVELOPMENT_TEAM: ${TEAM_ID}\n"
-              "        PROVISIONING_PROFILE_SPECIFIER: ${PROFILE_NAME}\n"
-          )
-          if marker not in text:
-              raise SystemExit("expected project.yml target settings marker not found")
-          path.write_text(text.replace(marker, replacement, 1))
-          PY
+        run: python3 scripts/inject-release-signing.py
 
       # Stamp the IPA with the commit + release tag so users in
       # Settings → About can read "Build 3f1a9c2 · manual-2026-…"
@@ -211,6 +208,8 @@ jobs:
             <dict>
               <key>${BUNDLE_ID}</key>
               <string>${PROFILE_NAME}</string>
+              <key>sh.nikhil.conduit.widgets</key>
+              <string>${WIDGET_PROFILE_NAME}</string>
             </dict>
             <key>stripSwiftSymbols</key>
             <true/>
