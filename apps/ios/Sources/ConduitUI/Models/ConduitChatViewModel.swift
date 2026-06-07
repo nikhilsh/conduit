@@ -123,6 +123,55 @@ extension ConduitUI {
             return (conversation + synthetic).sortedByConversationTs { $0.ts }
         }
 
+        /// A renderable row in the transcript: either a standalone event or
+        /// a collapsed run of consecutive tool cards (#4 — keeps long
+        /// read/grep/edit sequences from flooding the screen).
+        enum ChatRow: Identifiable {
+            case single(ConversationItem)
+            case toolGroup([ConversationItem])
+
+            var id: String {
+                switch self {
+                case .single(let item): return item.id
+                case .toolGroup(let items): return "toolgroup-\(items.first?.id ?? "")-\(items.count)"
+                }
+            }
+        }
+
+        /// Fold an event list into rows, collapsing a contiguous run of
+        /// `minRun`+ groupable tool events into one `.toolGroup`. Runs are
+        /// broken by any non-groupable event, preserving interleaving. Pure
+        /// (the "is this a groupable tool?" decision is injected) so it's
+        /// unit-testable without the SwiftUI tool classifier.
+        static func groupedRows(
+            _ events: [ConversationItem],
+            minRun: Int = 3,
+            isGroupableTool: (ConversationItem) -> Bool
+        ) -> [ChatRow] {
+            var rows: [ChatRow] = []
+            var run: [ConversationItem] = []
+
+            func flush() {
+                if run.count >= minRun {
+                    rows.append(.toolGroup(run))
+                } else {
+                    rows.append(contentsOf: run.map { .single($0) })
+                }
+                run.removeAll(keepingCapacity: true)
+            }
+
+            for event in events {
+                if isGroupableTool(event) {
+                    run.append(event)
+                } else {
+                    flush()
+                    rows.append(.single(event))
+                }
+            }
+            flush()
+            return rows
+        }
+
         /// Placeholder text shown in the composer when the draft is
         /// empty. Mirrors upstream's "Message upstream…" prompt.
         static func composerPlaceholder(forAgent assistant: String?) -> String {

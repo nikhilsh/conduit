@@ -140,6 +140,27 @@ extension ConduitUI {
             )
         }
 
+        /// `events` folded into rows, collapsing contiguous runs of
+        /// non-command tool cards (reads/greps/edits) into one group.
+        /// Command (shell) cards stay standalone so they remain prominent.
+        private var chatRows: [ConduitUI.ChatRow] {
+            ConduitUI.ChatViewModel.groupedRows(events) { ev in
+                ev.role.lowercased() == "tool"
+                    && !NeonToolClassifier.isCommand(
+                        toolName: ev.toolName,
+                        command: ConversationRenderer.extractCommand(from: ev)
+                    )
+            }
+        }
+
+        /// Continuation = the previous row is a single message of the same
+        /// role (used to suppress a repeated sender label). A tool group
+        /// always breaks the run.
+        private func continuation(in rows: [ConduitUI.ChatRow], at idx: Int, role: String) -> Bool {
+            guard idx > 0, case .single(let prev) = rows[idx - 1] else { return false }
+            return prev.role.lowercased() == role.lowercased()
+        }
+
         /// Total length of all currently-streaming buffers. Changes on
         /// every token while the agent streams, so observing it drives
         /// "follow the stream" without re-reading the whole event list.
@@ -210,19 +231,29 @@ extension ConduitUI {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(Array(events.enumerated()), id: \.offset) { idx, event in
-                            let previousRole = idx > 0 ? events[idx - 1].role : nil
-                            let isContinuation = previousRole?.lowercased() == event.role.lowercased()
-                            ConduitEventRow(
-                                event: event,
-                                isContinuation: isContinuation,
-                                sessionID: session.id,
-                                onQuickReply: { reply in
-                                    store.sendChat(sessionID: session.id, message: reply)
-                                }
-                            )
-                            .id(event.id)
-                            .padding(.horizontal, 16)
+                        let rows = chatRows
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                            switch row {
+                            case .single(let event):
+                                ConduitEventRow(
+                                    event: event,
+                                    isContinuation: continuation(in: rows, at: idx, role: event.role),
+                                    sessionID: session.id,
+                                    onQuickReply: { reply in
+                                        store.sendChat(sessionID: session.id, message: reply)
+                                    }
+                                )
+                                .id(event.id)
+                                .padding(.horizontal, 16)
+                            case .toolGroup(let items):
+                                ConduitToolGroupCard(
+                                    items: items,
+                                    sessionID: session.id,
+                                    collapseDefault: appearance.collapseTurns
+                                )
+                                .id(row.id)
+                                .padding(.horizontal, 16)
+                            }
                         }
                         // BUG 3: "agent is typing" indicator lives inside
                         // the scroll content so it follows autoscroll like
@@ -1642,6 +1673,78 @@ extension NeonTheme {
         case .accent: return accent
         case .red:    return red
         }
+    }
+}
+
+// MARK: - Tool group card (#4)
+
+/// A collapsed run of consecutive tool cards (e.g. several "Read files"
+/// in a row). Starts collapsed; expanding reveals each underlying
+/// `ConduitToolCard`. Keeps long read/grep/edit sequences from flooding
+/// the transcript.
+private struct ConduitToolGroupCard: View {
+    let items: [ConversationItem]
+    var sessionID: String
+    var collapseDefault: Bool
+    @State private var expanded = false
+    @Environment(\.neonTheme) private var neon
+
+    init(items: [ConversationItem], sessionID: String = "", collapseDefault: Bool = false) {
+        self.items = items
+        self.sessionID = sessionID
+        self.collapseDefault = collapseDefault
+    }
+
+    /// "Read files · 4" when the run is homogeneous, else "4 tool steps".
+    private var headerLabel: String {
+        let labels = Set(items.map {
+            NeonToolClassifier.humanLabel(toolName: $0.toolName, fileCount: $0.files.count)
+        })
+        if labels.count == 1, let only = labels.first {
+            return "\(only) · \(items.count)"
+        }
+        return "\(items.count) tool steps"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(neon.textDim)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(neon.textDim.opacity(0.14))
+                    )
+                Text(headerLabel)
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.text)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(neon.textDim)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+            }
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                        ConduitToolCard(event: item, sessionID: sessionID, collapseDefault: collapseDefault)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .neonCardSurface(neon, fill: neon.surface, cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, glowTint: nil)
     }
 }
 
