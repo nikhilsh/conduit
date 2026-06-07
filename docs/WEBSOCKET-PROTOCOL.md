@@ -241,7 +241,7 @@ Unknown `type` values are logged and ignored — never close the socket for them
 3. After last chunk, server resumes live PTY forwarding.
 
 ### 4.3 Heartbeat
-Either side may send `{"type":"ping"}`; the peer replies `{"type":"pong"}`. Default cadence 30s. If a client misses two consecutive pings, server marks the connection idle but keeps the session running.
+Either side may send `{"type":"ping"}`; the peer replies `{"type":"pong"}`. Default cadence 30s. The broker also sends a protocol-level WebSocket Ping on the same cadence; the peer's automatic Pong — and any other inbound frame — re-arms the broker's 90s read deadline. A socket is closed only after 90s of total inbound silence; an alive connection is never reaped, and the session itself keeps running either way (§4.4).
 
 ### 4.4 Disconnect
 Closing the socket does NOT stop the session. Sessions live until an explicit `{"type":"exit"}` from a client or until the broker is told to drop them.

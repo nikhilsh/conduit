@@ -2344,6 +2344,13 @@ final class SessionStore {
         }
     }
 
+    /// True once the current offline spell has been captured to Sentry.
+    /// The core's parked reconnect worker re-exhausts every ~25s while
+    /// the broker/network is away, and each exhaustion lands here — only
+    /// the EDGE into disconnected is an event; repeats are breadcrumbs.
+    /// Reset when a connection comes back (`.connected` health).
+    private var disconnectCaptured = false
+
     fileprivate func ingestDisconnected(_ reason: String) {
         // If we already knew this pairing was expired (e.g. createSession just
         // failed with Auth), don't clobber that diagnosis with the raw
@@ -2359,6 +2366,14 @@ final class SessionStore {
         } else {
             harness = .failed("Disconnected: \(reason)")
         }
+        guard !disconnectCaptured else {
+            Telemetry.breadcrumb(
+                "connect", "still disconnected",
+                data: ["reason": Self.connectionReasonCode(from: reason)]
+            )
+            return
+        }
+        disconnectCaptured = true
         Telemetry.capture(
             error: NSError(domain: "SessionStore", code: 0, userInfo: [NSLocalizedDescriptionKey: reason]),
             message: "iOS disconnected from harness",
@@ -2382,6 +2397,9 @@ final class SessionStore {
         switch health {
         case .connected:
             connectionHealthBySession[sessionID] = health
+            // A live socket ends the offline spell — the next genuine
+            // disconnect edge should capture to Sentry again.
+            disconnectCaptured = false
             if !sessionLifecycle.isEmpty {
                 harness = .live
             } else if harness == .disconnected {

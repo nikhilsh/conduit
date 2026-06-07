@@ -203,11 +203,18 @@ func runUp(args []string) int {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	exitCode := 0
 	select {
 	case <-stop:
 		log.Println("shutdown: signal received")
 	case err := <-errCh:
+		// A fatal server error (e.g. the port is already held by a
+		// manually-launched broker) must exit NON-zero. Returning 0
+		// here once made systemd's Restart=always spin a silent
+		// ~3s crash-loop for a day (64k restarts) — an invisible
+		// failure instead of a red `systemctl status`.
 		log.Printf("shutdown: server error: %v", err)
+		exitCode = 1
 	}
 	if mdnsShutdown != nil {
 		mdnsShutdown()
@@ -220,7 +227,7 @@ func runUp(args []string) int {
 	// register — never leave a CLI listening on a loopback port after
 	// broker shutdown). No-op when no logins were ever started.
 	oauthMgr.Close()
-	return 0
+	return exitCode
 }
 
 func resolveHostURL(addr string, local bool, publicURL string) string {

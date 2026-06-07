@@ -328,14 +328,20 @@ async fn session_worker(mut args: WorkerArgs) {
             DriveOutcome::ClientClose => {
                 return;
             }
-            DriveOutcome::Disconnected(reason) => {
-                args.delegate.on_connection_health(
-                    args.session_id.clone(),
-                    ConnectionHealth::Disconnected {
-                        reason: reason.clone(),
-                        auth: false,
-                    },
-                );
+            DriveOutcome::Disconnected(_reason) => {
+                // A socket drop is a ROUTINE rotation, not a user-facing
+                // failure: loop straight back into reconnect(), whose
+                // first act is emitting Connecting{1/5}. Previously we
+                // announced Disconnected here FIRST — so every deliberate
+                // network-change nudge (each app foreground!) and every
+                // transient drop flashed "Disconnected" in the UI and
+                // logged a Sentry ERROR (631 events) before the redial
+                // even started. Disconnected is now reserved for the
+                // outcomes that actually need the user: AuthExpired and
+                // a fully Exhausted reconnect burst (both above). Mirrors
+                // the reference app, which treats foreground/network
+                // rotations as silent recovery.
+                //
                 // Loop back to reconnect.
             }
         }
