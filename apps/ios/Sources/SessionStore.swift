@@ -2018,14 +2018,27 @@ final class SessionStore {
     /// transcripts / under ingest-lock contention past Sentry's 2s App Hang
     /// threshold (CONDUIT-IOS App Hanging). Pull off the main thread; apply the
     /// merge back on it. The UniFFI client is thread-safe (Arc+Mutex in Rust)
-    /// but isn't `Sendable`, hence the explicit unsafe capture.
+    /// but isn't `Sendable`, hence the explicit unsafe capture; the result rides
+    /// back across the actor hop inside a `@unchecked Sendable` box.
     private func refreshConversationOffMain(sessionID: String) {
         guard let client else { return }
-        nonisolated(unsafe) let client = client
+        nonisolated(unsafe) let capturedClient = client
         Task.detached(priority: .utility) { [weak self] in
-            guard let items = try? client.listConversationItems(sessionId: sessionID) else { return }
-            await self?.applyRefreshedConversation(sessionID: sessionID, items: items)
+            guard let items = try? capturedClient.listConversationItems(sessionId: sessionID) else { return }
+            await self?.applyRefreshedConversation(sessionID: sessionID, box: SendableConvItems(items: items))
         }
+    }
+
+    /// Box that carries the (value-type, effectively-immutable) conversation
+    /// items across the off-main → main-actor hop under strict concurrency.
+    private struct SendableConvItems: @unchecked Sendable {
+        let items: [ConversationItem]
+    }
+
+    /// Main-actor entry for the off-main path — unwraps the box on the main
+    /// actor, then merges.
+    private func applyRefreshedConversation(sessionID: String, box: SendableConvItems) {
+        applyRefreshedConversation(sessionID: sessionID, items: box.items)
     }
 
     /// Merge freshly-pulled live items into `conversationLog` on the main
