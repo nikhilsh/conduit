@@ -125,9 +125,13 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 	// Preview dev-server port (AGENT-ADAPTERS.md §2.3): the agent binds $PORT
 	// and the broker reverse-proxies `/preview/<id>/` to it; $AGENT_CHAT_PORT
 	// (=PORT+1000) is the optional MCP view_event bridge. Only set when a port
-	// was successfully allocated.
+	// was successfully allocated. CONDUIT_PREVIEW_PORT is an explicit alias of
+	// $PORT — the nudge: bind it and the Browser tab gets a stable proxied URL.
+	// (If the agent binds something else, the broker auto-detects it anyway by
+	// scanning the session's own process tree; see preview.go.)
 	if s.previewPort > 0 {
 		pairs["PORT"] = strconv.Itoa(s.previewPort)
+		pairs["CONDUIT_PREVIEW_PORT"] = strconv.Itoa(s.previewPort)
 		pairs["AGENT_CHAT_PORT"] = strconv.Itoa(s.previewPort + 1000)
 	}
 	for k, v := range extra {

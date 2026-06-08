@@ -79,15 +79,26 @@ type Session struct {
 	// 0 when the pool was exhausted at create time (the session simply has no
 	// preview). Set once under Manager.mu before the session is shared, then
 	// read-only — safe to read without s.mu.
-	previewPort    int
-	reasonCode     string
-	exitCode       int
-	hooks          agents.Hooks
-	phase          string
-	health         string
-	lastOutput     time.Time
-	lastCheckpoint time.Time
-	startedAt      time.Time
+	previewPort int
+	// previewCfg caches the parsed `.conduit/preview.json` override (see
+	// preview.go); previewCfgMod/Path key the cache so it's re-read only when
+	// the file changes. Guarded by s.mu.
+	previewCfg     previewConfig
+	previewCfgMod  time.Time
+	previewCfgPath string
+	// previewDetectedPort caches the last auto-detected dev-server port (the
+	// port the session's process tree was found listening on). Refreshed on
+	// the status-frame cadence so the proxy hot path needn't rescan /proc.
+	// Guarded by s.mu.
+	previewDetectedPort int
+	reasonCode          string
+	exitCode            int
+	hooks               agents.Hooks
+	phase               string
+	health              string
+	lastOutput          time.Time
+	lastCheckpoint      time.Time
+	startedAt           time.Time
 	// spawnedAt is when THIS agent process started. Unlike startedAt it
 	// is never restored from metadata on recovery — it anchors the
 	// fast-exit detection in restartbudget.go.
@@ -273,6 +284,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		textSubs:     make(map[chan []byte]struct{}),
 		repoRoot:     opts.repoRoot,
 		kittyRoot:    opts.kittyRoot,
+		previewPort:  opts.previewPort,
 		requestedCWD: strings.TrimSpace(opts.requestedCWD),
 		checkpointEvery: durationFromEnv(
 			"KITTY_SESSION_CHECKPOINT_INTERVAL_MS",
@@ -1417,6 +1429,11 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 			return nil, false, fmt.Errorf("invalid cwd %q: directory does not exist", requestedCWD)
 		}
 	}
+	// Allocate the preview $PORT up front so newSession can hand it to the
+	// agent's chat backend env (the claude stream backend spawns INSIDE
+	// newSession — allocating after would mean the agent never sees $PORT and
+	// binds a framework default the broker can't predict).
+	previewPort := m.allocatePreviewPortLocked()
 	s, err := newSession(id, adapter, sessionOptions{
 		repoRoot:      m.repoRoot,
 		kittyRoot:     m.kittyRoot,
@@ -1425,6 +1442,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		replayBaseDir: m.replayBaseDir,
 		credStore:     m.credStore,
 		override:      opts.Override,
+		previewPort:   previewPort,
 	})
 	if err != nil {
 		return nil, false, err
@@ -1436,7 +1454,6 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		}
 		return s.Switch(nextAdapter)
 	}
-	s.previewPort = m.allocatePreviewPortLocked()
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)
 	go func() {
@@ -1540,6 +1557,11 @@ type sessionOptions struct {
 	// applied to the spawned agent's argv. Zero value = adapter
 	// defaults unchanged (the normal start path).
 	override SpawnOverride
+	// previewPort is the pooled dev-server port ($PORT) for this session,
+	// allocated by the Manager BEFORE newSession so the agent's chat backend
+	// — spawned inside newSession — actually receives $PORT in its env. 0 when
+	// the pool was exhausted (or in tests that don't allocate one).
+	previewPort int
 }
 
 type sessionMetadata struct {

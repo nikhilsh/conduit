@@ -76,6 +76,13 @@ Text frames are UTF-8 JSON objects with a `type` field.
 ```
 
 Field notes (post-#16 additions; all optional, older clients ignore unknown keys):
+- `preview` — the per-session dev-server surface. `port` is the loopback port; `url` is **populated only while the preview is actually reachable**, and an empty `url` is the client's signal to **withdraw the Browser tab** (no live site → no tab). Resolution, in precedence order:
+  - **Auto-detect (default):** the broker scans the session's **own process tree** (`/proc`) for whatever loopback ports it's LISTENing on, and advertises one — preferring the pooled `$PORT` it handed the agent, else the lowest non-`$AGENT_CHAT_PORT` port. The project does **not** have to honor `$PORT`: bind 5173, 8080, anything, and the tab finds it. Scoping to the session's tree is also the safety guarantee — a stranger squatting a loopback port is never in the tree, so it can't pin a phantom tab.
+  - **Nudge:** to make the proxied URL stable, the broker exports `$PORT` **and** `$CONDUIT_PREVIEW_PORT` (= the pooled port, 3000–3019) into the agent's env; binding it yields an exact-match pick. (Detection still works if the agent ignores it.)
+  - **Override — `.conduit/preview.json`** in the session's working directory, for dev servers that detach from the broker's process tree (tmux/docker/systemd) or live off-box:
+    - `{ "port": 5173 }` — probe **and** reverse-proxy this port. Trusted on liveness alone (skips the tree scan).
+    - `{ "url": "https://my-tunnel.dev" }` — advertised verbatim; the app's WebView loads it directly (proxy bypassed), so it can point off-box.
+  - The override file is re-read (mtime-cached) on each status frame. Detection runs on the status-frame cadence and caches its pick for the `/preview/<uuid>/` proxy hot path. **`GET /debug/previews`** (authenticated) dumps every session's pooled/detected/declared/effective ports + the full set of listening ports, for diagnosing the tab.
 - `reasoning_effort` — per-agent label read from `agents/<name>.toml`'s `reasoning_effort` field. Falls back to `"medium"` when the toml didn't specify.
 - `cwd` — absolute path of the agent's working directory (the broker's `workspaceDir`).
 - `started_at` — RFC3339Nano timestamp of session construction (broker stamps once at `newSession`).

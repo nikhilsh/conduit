@@ -33,7 +33,11 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
-	port := sess.PreviewPort()
+	// EffectivePreviewPort honors a `.conduit/preview.json` port override (a
+	// project that binds something other than $PORT) and falls back to the
+	// allocated pool port. It's 0 when the session declared an absolute URL —
+	// the app loads that directly, so the proxy is never the right target.
+	port := sess.EffectivePreviewPort()
 	if port <= 0 {
 		http.Error(w, "no preview port for session", http.StatusServiceUnavailable)
 		return
@@ -59,6 +63,18 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "preview backend unavailable: "+err.Error(), http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// serveDebugPreviews lists each live session's preview resolution — pooled
+// $PORT, the ports its process tree is actually listening on, what
+// auto-detection chose, any `.conduit/preview.json` override, and the proxy
+// target. Authenticated (it leaks workspace paths + PIDs); a debugging aid for
+// phantom/missing Browser-tab cases (see WEBSOCKET-PROTOCOL.md §3.2).
+func (s *Server) serveDebugPreviews(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Sessions.PreviewDebug())
 }
 
 // isWebSocketUpgrade reports whether r is a WebSocket handshake request.

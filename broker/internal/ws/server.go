@@ -145,6 +145,10 @@ func (s *Server) Handler() http.Handler {
 	// /preview/<session-id>/… reverse-proxies the session's dev server
 	// ($PORT) so the in-app Browser tab can load it. See preview.go.
 	mux.HandleFunc("/preview/", s.servePreview)
+	// GET /debug/previews — per-session preview resolution (pooled/detected/
+	// declared/effective ports + listening ports) for diagnosing the Browser
+	// tab. Authenticated. See preview.go / WEBSOCKET-PROTOCOL.md §3.2.
+	mux.HandleFunc("/debug/previews", s.serveDebugPreviews)
 	// Trailing slash: path-prefix match so the session id is the tail.
 	mux.HandleFunc("/api/session/conversation/", s.serveSessionConversation)
 	// DELETE /api/session/<id> — terminate + archive a session. The more
