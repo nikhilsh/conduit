@@ -253,6 +253,32 @@ extension ConduitUI {
             return prev.role.lowercased() == role.lowercased()
         }
 
+        /// Per-row streaming buffer length (0 when the event isn't
+        /// streaming). Feeds the row's Equatable digest so a streaming
+        /// message rebuilds per token while settled rows are skipped.
+        private func streamRevision(for itemID: String) -> Int {
+            if case .streaming(let buffer) = coordinator.renderState(for: itemID) {
+                return buffer.count
+            }
+            return 0
+        }
+
+        /// Revision over every appearance/theme input that changes how a
+        /// row renders (see `ChatViewModel.appearanceRenderRevision`).
+        /// Folded into each row's Equatable digest so a theme / font /
+        /// glow / palette / collapse / light-dark change re-renders all
+        /// rows, while leaving them skippable otherwise.
+        private var appearanceRevision: Int {
+            ConduitUI.ChatViewModel.appearanceRenderRevision(
+                fontFamily: appearance.fontFamily.rawValue,
+                bodyPointSize: appearance.bodyPointSize,
+                palette: appearance.neonPalette.rawValue,
+                glow: appearance.neonGlow,
+                dark: neon.dark,
+                collapseTurns: appearance.collapseTurns
+            )
+        }
+
         /// Total length of all currently-streaming buffers. Changes on
         /// every token while the agent streams, so observing it drives
         /// "follow the stream" without re-reading the whole event list.
@@ -332,6 +358,16 @@ extension ConduitUI {
             guard autoScroll.userScrolledUp else { return }
             guard chatRows.count > visibleRowWindow else { return }
             isWideningWindow = true
+            // Perf telemetry (CLAUDE.md standing order): long-chat
+            // hang/overheat is invisible without a device, so record the
+            // scale of each widen — visible-window size + total rows — so
+            // a hitch/ANR in Sentry carries the context to explain it.
+            Telemetry.breadcrumb("chat_perf", "widen window", data: [
+                "visible": String(visibleRowWindow),
+                "next": String(visibleRowWindow + Self.rowWidenStep),
+                "total_rows": String(chatRows.count),
+                "events": String(events.count),
+            ])
             // Brief defer so the spinner paints before the main-thread
             // row parse/layout burst.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -362,6 +398,15 @@ extension ConduitUI {
         private func scrollToBottomOnOpen(_ proxy: ScrollViewProxy) {
             guard !didInitialScroll, !events.isEmpty else { return }
             didInitialScroll = true
+            // Record the scale of the transcript on open so a subsequent
+            // scroll-hang/overheat event in Sentry shows how big the chat
+            // was (the perf problem only bites long chats). Breadcrumb is
+            // ring-buffered — one per session open, negligible cost.
+            Telemetry.breadcrumb("chat_perf", "open transcript", data: [
+                "events": String(events.count),
+                "rows": String(chatRows.count),
+                "windowed": String(min(chatRows.count, visibleRowWindow)),
+            ])
             Task { @MainActor in
                 for delayMs: UInt64 in [0, 60, 200, 500] {
                     if delayMs > 0 { try? await Task.sleep(nanoseconds: delayMs * 1_000_000) }
@@ -413,6 +458,8 @@ extension ConduitUI {
                                         isContinuation: continuation(in: rows, at: idx, role: event.role),
                                         sessionID: session.id,
                                         pendingAnswered: answeredPendingIDs.contains(event.id),
+                                        streamRevision: streamRevision(for: event.id),
+                                        appearanceRevision: appearanceRevision,
                                         onQuickReply: { reply in
                                             store.sendChat(sessionID: session.id, message: reply)
                                         },
@@ -420,6 +467,11 @@ extension ConduitUI {
                                             answeredPendingIDs.insert(event.id)
                                         }
                                     )
+                                    // Perf (litter-parity): skip re-rendering a
+                                    // row whose render-determining inputs didn't
+                                    // change. The digest above keeps streaming +
+                                    // theme correct.
+                                    .equatable()
                                     .id(event.id)
                                     .padding(.horizontal, 16)
                                 case .toolGroup(let items):
@@ -1107,7 +1159,7 @@ private final class ScrollProximityGate {
     var lastBand: Int = -1
 }
 
-private struct ConduitEventRow: View {
+private struct ConduitEventRow: View, Equatable {
     let event: ConversationItem
     /// True when the immediately preceding event had the same role —
     /// used to suppress the redundant sender label on grouped runs.
@@ -1118,9 +1170,33 @@ private struct ConduitEventRow: View {
     /// Durable "already answered" flag for a pending-input card, owned by
     /// the ChatView so it survives this row being recreated.
     var pendingAnswered: Bool = false
+    /// Length of this event's live streaming buffer (0 when not
+    /// streaming). In the Equatable digest so a streaming row rebuilds on
+    /// each token while a settled row is skipped — without it,
+    /// EquatableView would freeze a streaming message (its content
+    /// arrives via the @Observable coordinator, not `event`).
+    var streamRevision: Int = 0
+    /// Revision over all appearance/theme inputs (see
+    /// `appearanceRenderRevision`). In the digest so a theme/font change
+    /// re-renders every row.
+    var appearanceRevision: Int = 0
     let onQuickReply: (String) -> Void
     var onPendingAnswered: () -> Void = {}
     @Environment(AppearanceStore.self) private var appearance
+
+    /// Skip re-rendering a row whose render-determining inputs are
+    /// unchanged (perf: litter-parity). Closures are intentionally
+    /// excluded — behaviorally stable and not Equatable. Every input that
+    /// AFFECTS the output is compared: the event, layout flags, the
+    /// streaming buffer length, and the appearance revision.
+    static func == (lhs: ConduitEventRow, rhs: ConduitEventRow) -> Bool {
+        lhs.event == rhs.event
+            && lhs.isContinuation == rhs.isContinuation
+            && lhs.sessionID == rhs.sessionID
+            && lhs.pendingAnswered == rhs.pendingAnswered
+            && lhs.streamRevision == rhs.streamRevision
+            && lhs.appearanceRevision == rhs.appearanceRevision
+    }
 
     var body: some View {
         if event.status.lowercased() == "swapping" {

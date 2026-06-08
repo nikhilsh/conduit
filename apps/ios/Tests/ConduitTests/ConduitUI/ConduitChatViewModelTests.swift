@@ -159,4 +159,39 @@ struct ConduitChatViewModelTests {
             lastRole: nil, lastStatus: nil, lastContentEmpty: true, isStreaming: false
         ))
     }
+
+    // MARK: - appearanceRenderRevision (per-row Equatable digest)
+
+    @Test func appearanceRevisionStableForSameInputs() {
+        let a = ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 15, palette: "ice",
+            glow: true, dark: true, collapseTurns: false
+        )
+        let b = ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 15, palette: "ice",
+            glow: true, dark: true, collapseTurns: false
+        )
+        #expect(a == b)
+    }
+
+    @Test func appearanceRevisionChangesWhenAnyInputChanges() {
+        let base = ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 15, palette: "ice",
+            glow: true, dark: true, collapseTurns: false
+        )
+        // Each render-affecting input must move the revision, or an
+        // equatable row would stale-out when that setting changes.
+        #expect(base != ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "mono", bodyPointSize: 15, palette: "ice", glow: true, dark: true, collapseTurns: false))
+        #expect(base != ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 17, palette: "ice", glow: true, dark: true, collapseTurns: false))
+        #expect(base != ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 15, palette: "amber", glow: true, dark: true, collapseTurns: false))
+        #expect(base != ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 15, palette: "ice", glow: false, dark: true, collapseTurns: false))
+        #expect(base != ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 15, palette: "ice", glow: true, dark: false, collapseTurns: false))
+        #expect(base != ConduitUI.ChatViewModel.appearanceRenderRevision(
+            fontFamily: "system", bodyPointSize: 15, palette: "ice", glow: true, dark: true, collapseTurns: true))
+    }
 }

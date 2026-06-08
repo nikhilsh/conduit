@@ -74,6 +74,33 @@ extension ConduitUI {
             !snap.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
+        /// A stable revision over every APPEARANCE input that changes how
+        /// a chat row renders. Fed into the per-row Equatable digest so a
+        /// theme / font / glow / palette / collapse-turns / light-dark
+        /// change re-renders ALL rows (the digest differs), while leaving
+        /// rows untouched when only scroll position or an unrelated row
+        /// changes. Rare-to-change, so recomputing it per parent body is
+        /// free. Pure + unit-tested. Must be EXHAUSTIVE over
+        /// render-affecting appearance state — a missed input would
+        /// stale-out equatable rows when that input changes.
+        static func appearanceRenderRevision(
+            fontFamily: String,
+            bodyPointSize: CGFloat,
+            palette: String,
+            glow: Bool,
+            dark: Bool,
+            collapseTurns: Bool
+        ) -> Int {
+            var hasher = Hasher()
+            hasher.combine(fontFamily)
+            hasher.combine(bodyPointSize)
+            hasher.combine(palette)
+            hasher.combine(glow)
+            hasher.combine(dark)
+            hasher.combine(collapseTurns)
+            return hasher.finalize()
+        }
+
         /// Resolve the events stream the chat surface should render.
         ///
         /// Pre-#119 the legacy `ChatTab` preferred the typed
