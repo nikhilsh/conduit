@@ -361,6 +361,14 @@ fn looks_like_pending_input(text: &str) -> bool {
     if lower.contains("select") && (lower.contains("option") || lower.contains("choice")) {
         return true;
     }
+    // A multi-select question carries the broker's explicit marker
+    // ("… (select all that apply)", askcontrol.go). Trust it outright so the
+    // card classifies even when its option labels are longer than the
+    // numbered-menu heuristic's 48-char cap — otherwise a multi-select with
+    // descriptive labels rendered as plain prose with no tappable options.
+    if lower.contains("select all that apply") {
+        return true;
+    }
     // Approval prompts: "[A]pprove [E]dit [R]eject" (Codex), "Yes/No" (Claude)
     if lower.contains("[a]pprove") || lower.contains("approve / edit / reject") {
         return true;
@@ -694,6 +702,25 @@ mod tests {
         );
         assert_eq!(item.kind, "pending_input");
         assert_eq!(item.pending_options, vec!["Merge now", "Hold off"]);
+    }
+
+    /// A multi-select question with descriptive labels longer than the
+    /// numbered-menu 48-char cap still classifies as pending_input via the
+    /// broker's "(select all that apply)" marker — and its options are
+    /// extracted as tappable choices rather than rendered as plain prose.
+    #[test]
+    fn pending_input_multiselect_marker_long_labels() {
+        let item = item_from_chat_event(
+            &ev(
+                "assistant",
+                "Which fixes should I implement next? (select all that apply)\n\
+                 1. Fix the non-destructive working-tree checkpoint snapshot mechanism\n\
+                 2. Garbage-collect the accumulated dead checkpoint stashes from the repo",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "pending_input");
+        assert_eq!(item.pending_options.len(), 2);
     }
 
     #[test]
