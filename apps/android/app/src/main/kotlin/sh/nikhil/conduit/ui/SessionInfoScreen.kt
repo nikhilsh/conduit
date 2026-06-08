@@ -62,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.ProjectSession
