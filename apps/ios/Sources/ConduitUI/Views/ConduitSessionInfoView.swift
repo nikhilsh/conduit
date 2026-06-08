@@ -297,12 +297,16 @@ extension ConduitUI {
                             }
                         }
                         .font(neon.mono(12.5).weight(.medium))
-                        // Compact: free up context without leaving the
-                        // session. `/compact` is a claude pass-through —
-                        // the broker surfaces "Compacting context…" then
-                        // "✓ Context compacted." and the gauge drops on the
-                        // next turn. Claude + live sessions only.
-                        if liveAssistant.lowercased().contains("claude"), sessionIsLive {
+                        // Context management. Claude exposes a user-
+                        // triggered `/compact` (a pass-through; the broker
+                        // surfaces progress and the gauge drops next turn).
+                        // Codex has NO manual compact in `exec` mode — it
+                        // compacts AUTOMATICALLY at its token limit (verified:
+                        // `codex exec "/compact"` is treated as a literal
+                        // message). So we show the button for claude and an
+                        // honest auto-compact note for codex.
+                        let agentLower = liveAssistant.lowercased()
+                        if agentLower.contains("claude"), sessionIsLive {
                             Rectangle().fill(neon.border).frame(height: 1)
                             Button {
                                 store.sendChat(sessionID: session.id, message: "/compact")
@@ -322,6 +326,16 @@ extension ConduitUI {
                             .buttonStyle(.plain)
                             .disabled(compactRequested)
                             .opacity(compactRequested ? 0.5 : 1)
+                        } else if agentLower.contains("codex") {
+                            Rectangle().fill(neon.border).frame(height: 1)
+                            HStack(spacing: 6) {
+                                Image(systemName: "wand.and.stars")
+                                    .font(.system(size: 11))
+                                Text("Codex compacts context automatically")
+                                    .font(neon.mono(11))
+                            }
+                            .foregroundStyle(neon.textFaint)
+                            .frame(maxWidth: .infinity, minHeight: 32, alignment: .center)
                         }
                     }
                     .padding(16)

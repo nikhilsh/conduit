@@ -280,14 +280,18 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                 }
                             }
                             // Compact: free up context in place (parity with
-                            // iOS). `/compact` is a claude pass-through; the
-                            // broker surfaces progress and the gauge drops on
-                            // the next turn. Claude + live sessions only.
+                            // iOS). Claude exposes a user-triggered
+                            // `/compact` (pass-through; broker surfaces
+                            // progress, gauge drops next turn). Codex has NO
+                            // manual compact in `exec` mode — it compacts
+                            // AUTOMATICALLY at its token limit — so it shows an
+                            // honest auto-compact note instead.
                             val lifecycle = store.sessionLifecycle.collectAsState().value[session.id]
                             val sessionLive = lifecycle !is SessionLifecycle.Exited &&
                                 lifecycle !is SessionLifecycle.FailedToStart &&
                                 store.harness.collectAsState().value.canIssueCommands
-                            if (agent.lowercase().contains("claude") && sessionLive) {
+                            val agentLower = agent.lowercase()
+                            if (agentLower.contains("claude") && sessionLive) {
                                 Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
                                 var compacted by remember { mutableStateOf(false) }
                                 TextButton(
@@ -308,6 +312,15 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                         color = neon.accent,
                                     )
                                 }
+                            } else if (agentLower.contains("codex")) {
+                                Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
+                                Text(
+                                    "Codex compacts context automatically",
+                                    fontFamily = neon.mono,
+                                    color = neon.textFaint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
                         }
                     }
