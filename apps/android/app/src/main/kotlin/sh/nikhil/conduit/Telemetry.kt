@@ -45,8 +45,11 @@ object Telemetry {
             // image. The replay that reaches Sentry is redacted rectangles +
             // layout only — no readable user content. Hard requirement: the
             // operator must never see chat logs, terminal commands, or secrets.
-            options.sessionReplay.maskAllText = true
-            options.sessionReplay.maskAllImages = true
+            // Setter-only in sentry-android 8.x (no getter → no synthesized
+            // Kotlin property), and already the SDK default — pinned explicitly
+            // so a default change can never un-mask.
+            options.sessionReplay.setMaskAllText(true)
+            options.sessionReplay.setMaskAllImages(true)
             // Replay network-body capture is opt-in (empty networkDetailAllowUrls
             // by default = nothing captured) and relies on the Sentry OkHttp
             // interceptor, which we don't install. Bodies — which carry code,
