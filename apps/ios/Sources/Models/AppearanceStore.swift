@@ -13,17 +13,89 @@ import GhosttyVT
 /// monospaced body font, `SettingsSheet`/`AppearanceSheet` for the UI).
 @Observable
 final class AppearanceStore {
+    /// Chat / reading body font (handoff Part A "Chat font"). This is the
+    /// conversation font, NOT the terminal-native one — the terminal keeps
+    /// its own `GhosttyFont`. The pre-redesign enum was serif/system/mono;
+    /// the type-forward redesign replaces it with four curated faces. Old
+    /// persisted `serif`/`monospaced` values are migrated on load (see
+    /// `decodeFontFamily`).
     enum FontFamily: String, CaseIterable, Identifiable {
-        case serif
         case system
-        case monospaced
+        case spaceGrotesk
+        case ibmPlexSans
+        case newsreader
 
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .serif:      return "Serif"
-            case .system:     return "System"
-            case .monospaced: return "Monospaced"
+            case .system:       return "System"
+            case .spaceGrotesk: return "Space Grotesk"
+            case .ibmPlexSans:  return "IBM Plex Sans"
+            case .newsreader:   return "Newsreader"
+            }
+        }
+
+        /// Short qualifier shown beneath the name on the picker card.
+        var note: String {
+            switch self {
+            case .system:       return "native"
+            case .spaceGrotesk: return "brand"
+            case .ibmPlexSans:  return "humanist"
+            case .newsreader:   return "serif · easy read"
+            }
+        }
+
+        /// Registered CoreText family name for the bundled face, or `nil`
+        /// when the family is the system face (resolved via `.system(...)`).
+        var customFontName: String? {
+            switch self {
+            case .system:       return nil
+            case .spaceGrotesk: return "Space Grotesk"
+            case .ibmPlexSans:  return "IBM Plex Sans"
+            case .newsreader:   return "Newsreader"
+            }
+        }
+
+        /// Resolve a SwiftUI `Font` for this family at an explicit point
+        /// size. Custom families fall back to the system face when the
+        /// bundled TTF isn't registered (mirrors `NeonTheme.sans(_:)`'s
+        /// defensive probe) so a bad `UIAppFonts` edit degrades to system
+        /// rather than silently mis-rendering.
+        func font(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+            guard let name = customFontName, FontFamilyAvailability.isAvailable(self) else {
+                return .system(size: size, weight: weight)
+            }
+            return .custom(name, fixedSize: size).weight(weight)
+        }
+
+        /// Resolve a `Font` against a Dynamic Type text style (caption /
+        /// footnote / etc.) for the secondary ramps that scale with the
+        /// OS text-size setting rather than the body-size slider.
+        func font(textStyle: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
+            guard let name = customFontName, FontFamilyAvailability.isAvailable(self) else {
+                return .system(textStyle).weight(weight)
+            }
+            return .custom(name, size: Self.pointSize(for: textStyle), relativeTo: textStyle)
+                .weight(weight)
+        }
+
+        /// Nominal point size per text style — used only to seed
+        /// `.custom(_:size:relativeTo:)` for the custom faces; the
+        /// `relativeTo:` argument keeps it scaling with Dynamic Type.
+        private static func pointSize(for style: Font.TextStyle) -> CGFloat {
+            switch style {
+            case .largeTitle: return 34
+            case .title:      return 28
+            case .title2:     return 22
+            case .title3:     return 20
+            case .headline:   return 17
+            case .body:       return 17
+            case .callout:    return 16
+            case .subheadline: return 15
+            case .footnote:   return 13
+            case .caption:    return 12
+            case .caption2:   return 11
+            @unknown default: return 17
             }
         }
     }
@@ -107,10 +179,11 @@ final class AppearanceStore {
     /// Clamp range for [bodyPointSize]. Lower bound keeps captions
     /// readable; upper bound prevents headings from blowing out the
     /// composer / list rows.
-    static let bodyPointSizeRange: ClosedRange<CGFloat> = 12...18
-    /// Default chosen to match upstream's `ConduitFont.conversationBodyPointSize`
-    /// starting value at the centre of the slider's range.
-    static let defaultBodyPointSize: CGFloat = 14
+    static let bodyPointSizeRange: ClosedRange<CGFloat> = 12...20
+    /// New default bumped to **18pt** (handoff Part A): the shipped 14pt
+    /// read small on device. 18 sits ~¾ up the 12…20 slider — visible
+    /// headroom on either side, not pinned to an end.
+    static let defaultBodyPointSize: CGFloat = 18
 
     var fontFamily: FontFamily {
         didSet { defaults.set(fontFamily.rawValue, forKey: Keys.font) }
@@ -182,11 +255,10 @@ final class AppearanceStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // New default is serif (matches the Claude iOS chat reference);
-        // existing installs that explicitly chose monospaced/system keep
-        // their preference because the persisted rawValue still resolves.
-        self.fontFamily = (defaults.string(forKey: Keys.font)
-            .flatMap(FontFamily.init(rawValue:))) ?? .serif
+        // Default is now System (matches the redesigned Chat-font strip,
+        // which leads with System selected). Legacy `serif`/`monospaced`
+        // rawValues from before the redesign are migrated rather than reset.
+        self.fontFamily = Self.decodeFontFamily(defaults.string(forKey: Keys.font))
         self.themeMode = (defaults.string(forKey: Keys.theme)
             .flatMap(ThemeMode.init(rawValue:))) ?? .system
         self.collapseTurns = defaults.object(forKey: Keys.collapseTurns) as? Bool ?? false
@@ -200,6 +272,14 @@ final class AppearanceStore {
         // cutover has soaked.
         self.experimentalConduitUI =
             defaults.object(forKey: Keys.experimentalConduitUI) as? Bool ?? true
+        // Revert-bug fix (handoff Part A): the PERSISTED value must win on
+        // launch. We read it back here and only fall back to the default
+        // when nothing is stored — we never re-seed from the default on an
+        // install that already has a value. (Assigning in `init` does not
+        // fire the `didSet` observer, so this read-back is authoritative and
+        // isn't immediately overwritten.) The clamp only guards a corrupted
+        // / out-of-range stored value; an in-range stored value passes
+        // through untouched.
         let storedBody = defaults.object(forKey: Keys.bodyPointSize) as? Double
         self.bodyPointSize = CGFloat(storedBody ?? Double(Self.defaultBodyPointSize))
             .clamped(to: Self.bodyPointSizeRange)
@@ -214,10 +294,21 @@ final class AppearanceStore {
 
     /// SwiftUI `.font` value to use for chat body text.
     func bodyFont() -> Font {
-        switch fontFamily {
-        case .serif:      return .system(.body, design: .serif)
-        case .system:     return .system(.body)
-        case .monospaced: return .system(.body, design: .monospaced)
+        fontFamily.font(textStyle: .body)
+    }
+
+    /// Decode the persisted chat-font rawValue, migrating the pre-redesign
+    /// `serif` / `monospaced` values so existing installs don't snap to an
+    /// unrelated face. Serif maps to Newsreader (the new easy-read serif);
+    /// monospaced has no chat equivalent (mono is terminal-only now) so it
+    /// lands on System.
+    private static func decodeFontFamily(_ raw: String?) -> FontFamily {
+        guard let raw else { return .system }
+        if let family = FontFamily(rawValue: raw) { return family }
+        switch raw {
+        case "serif":      return .newsreader
+        case "monospaced": return .system
+        default:           return .system
         }
     }
 
@@ -264,5 +355,30 @@ final class AppearanceStore {
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {
         min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+/// One-time availability probe for the bundled chat-font faces. Probes by
+/// the SAME CoreText family name that `FontFamily.customFontName` (and
+/// hence `.custom(_:size:)`) resolves against — so a registered face is
+/// never a false negative, and a dropped `UIAppFonts` entry degrades to
+/// the system face instead of silently mis-rendering. Cached statically so
+/// the check costs one lookup per launch.
+enum FontFamilyAvailability {
+    private static func registered(_ family: String) -> Bool {
+        !UIFont.fontNames(forFamilyName: family).isEmpty
+    }
+
+    private static let spaceGrotesk = registered("Space Grotesk")
+    private static let ibmPlexSans = registered("IBM Plex Sans")
+    private static let newsreader = registered("Newsreader")
+
+    static func isAvailable(_ family: AppearanceStore.FontFamily) -> Bool {
+        switch family {
+        case .system:       return true
+        case .spaceGrotesk: return spaceGrotesk
+        case .ibmPlexSans:  return ibmPlexSans
+        case .newsreader:   return newsreader
+        }
     }
 }

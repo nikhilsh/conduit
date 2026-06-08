@@ -1513,10 +1513,10 @@ private struct ConduitMarkdownBlock: View {
             pieces: visiblePieces,
             role: role,
             basePointSize: appearance.bodyPointSize,
-            // §2: prose renders in the sans family (NOT mono). The user's
-            // family preference still applies for serif; otherwise the
-            // neon sans intent (system sans / Space Grotesk) governs.
-            design: appearance.fontFamily == .serif ? .serif : .default
+            // Transcript prose renders in the user's chosen Chat font
+            // (handoff Part A): System / Space Grotesk / IBM Plex Sans /
+            // Newsreader. The renderer resolves the concrete face.
+            fontFamily: appearance.fontFamily
         )
         .frame(maxWidth: role == .user ? nil : .infinity, alignment: role == .user ? .trailing : .leading)
         // No per-token layout animation: interpolating piece layout on every
@@ -1567,7 +1567,7 @@ private struct ConduitStructuredMarkdownView: View {
     let pieces: [ConduitMarkdownPiece]
     let role: ConduitRole
     let basePointSize: CGFloat
-    let design: Font.Design
+    let fontFamily: AppearanceStore.FontFamily
     @Environment(\.neonTheme) private var neon
 
     /// Vertical gap between top-level blocks (BUG 1: blocks were bunched
@@ -1575,16 +1575,12 @@ private struct ConduitStructuredMarkdownView: View {
     /// looking double-spaced.
     private let blockSpacing: CGFloat = 10
 
-    /// Prose font for transcript text. The composer types in
-    /// `neon.sans` (Space Grotesk), but these blocks rendered in
-    /// `.system(design:)` — SF Pro — so what you typed and what the
-    /// chat showed were visibly different faces (device feedback,
-    /// round 3). Route through the brand sans, honoring the user's
-    /// explicit serif preference when set.
+    /// Prose font for transcript text — the user's selected Chat font
+    /// (handoff Part A). `FontFamily.font(size:weight:)` resolves the
+    /// concrete face (System / Space Grotesk / IBM Plex Sans / Newsreader)
+    /// and falls back to the system face if a bundled TTF is missing.
     private func proseFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        design == .serif
-            ? .system(size: size, weight: weight, design: .serif)
-            : neon.sans(size).weight(weight)
+        fontFamily.font(size: size, weight: weight)
     }
 
     var body: some View {

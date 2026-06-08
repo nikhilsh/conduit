@@ -93,9 +93,10 @@ struct ConduitApp: App {
                         // this process; hand it the store-backed approval.
                         let store = store
                         let liveActivity = liveActivity
-                        ConduitApprovalBridge.handler = { sessionID in
-                            await Self.approvePendingInput(
-                                store: store, controller: liveActivity, sessionID: sessionID
+                        ConduitApprovalBridge.handler = { sessionID, decision in
+                            await Self.respondPendingInput(
+                                store: store, controller: liveActivity,
+                                sessionID: sessionID, decision: decision
                             )
                         }
                     }
@@ -176,19 +177,28 @@ struct ConduitApp: App {
         )
     }
 
-    /// Approve the latest pending-input card of a session from the lock
-    /// screen (round-3 §2 follow-up). Mirrors the in-app card: the reply
-    /// is the FIRST option's text (option 1 is the affirmative by
-    /// convention — same numbering the card shows). Runs headless via
-    /// `ApproveSessionIntent`, possibly in a cold background launch, so
-    /// it bounded-waits for the transport before sending.
+    /// Answer a session's pending PERMISSION gate from the lock screen
+    /// (handoff Part B). Headless via `ApproveSessionIntent` /
+    /// `RejectSessionIntent` — possibly in a cold background launch — so it
+    /// bounded-waits for the transport before sending. Only a binary
+    /// permission gate routes here; an n-way choice opens the app instead.
+    ///
+    /// The reply text is picked from the pending item's `pendingOptions` to
+    /// match what the in-app card would send: the affirmative option for
+    /// Approve (option 1 by convention), the negative option for Reject
+    /// (the first option whose text reads as a "no"), falling back to the
+    /// literal "yes" / "no".
     @MainActor
-    static func approvePendingInput(
+    static func respondPendingInput(
         store: SessionStore,
         controller: TurnLiveActivityController,
-        sessionID: String
+        sessionID: String,
+        decision: ConduitApprovalBridge.Decision
     ) async {
-        Telemetry.breadcrumb("live_activity", "approve intent", data: ["session": sessionID])
+        Telemetry.breadcrumb(
+            "live_activity", "permission intent",
+            data: ["session": sessionID, "decision": decision.rawValue]
+        )
         if !store.harness.canIssueCommands {
             // Cold/background launch: dial in first. Bounded so the
             // intent never hangs the system's intent runner.
@@ -202,22 +212,45 @@ struct ConduitApp: App {
         }
         guard store.harness.canIssueCommands else {
             Telemetry.breadcrumb(
-                "live_activity", "approve failed: no transport",
+                "live_activity", "permission failed: no transport",
                 data: ["session": sessionID, "state": store.harness.badgeLabel]
             )
             return
         }
         let pending = (store.conversationLog[sessionID] ?? [])
             .last(where: { $0.kind == "pending_input" })
-        let reply = pending?.pendingOptions.first ?? "yes"
+        let options = pending?.pendingOptions ?? []
+        let reply = Self.permissionReply(decision: decision, options: options)
         store.sendChat(sessionID: sessionID, message: reply)
         Telemetry.breadcrumb(
-            "live_activity", "approve sent",
-            data: ["session": sessionID, "reply": reply]
+            "live_activity", "permission sent",
+            data: ["session": sessionID, "decision": decision.rawValue, "reply": reply]
         )
         // Re-stamp the card; the status flips to running once the
         // agent's next item flows through the normal pipeline.
         controller.refreshAll()
+    }
+
+    /// Map an Approve / Reject decision onto the pending item's options.
+    /// Approve → the first option (the affirmative by convention).
+    /// Reject  → the first option whose text reads as a negative; if none
+    /// matches, the literal "no".
+    static func permissionReply(
+        decision: ConduitApprovalBridge.Decision, options: [String]
+    ) -> String {
+        switch decision {
+        case .approve:
+            return options.first ?? "yes"
+        case .reject:
+            let negatives = ["reject", "deny", "no", "skip", "cancel", "disallow"]
+            if let match = options.first(where: { opt in
+                let lower = opt.lowercased()
+                return negatives.contains(where: { lower == $0 || lower.hasPrefix($0 + " ") })
+            }) {
+                return match
+            }
+            return "no"
+        }
     }
 
     /// Handle the Live Activity's `conduit://session/<id>[?action=…]`
@@ -227,10 +260,13 @@ struct ConduitApp: App {
     /// Actions:
     ///   - `refresh` — the stale card's "Tap to refresh": opening the app
     ///     IS the refresh (execution time → `refreshAll()` re-stamps).
+    ///   - `choose` — the choice card's "Open to choose": focus the session
+    ///     so the user lands on the pending-input picker (an n-way question
+    ///     needs real UI; the lock screen can't answer it in place).
     ///   - `reply` / `diff` — focus the session so the user lands on the
-    ///     pending-input card to PICK the answer (a question is usually
-    ///     multiple-choice, not a yes/no, so the lock screen can't answer
-    ///     it in place) / can open the diff from there.
+    ///     pending-input card to PICK the answer / open the diff from there.
+    /// (A permission gate's Approve / Reject never deep-links — it runs in
+    /// the background via `ApproveSessionIntent` / `RejectSessionIntent`.)
     private func applySessionURL(_ url: URL) -> Bool {
         guard url.scheme == "conduit", url.host == "session" else { return false }
         let sessionID = url.lastPathComponent

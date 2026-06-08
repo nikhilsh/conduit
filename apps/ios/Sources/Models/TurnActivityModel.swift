@@ -29,6 +29,19 @@ public struct TurnActivityAttributesData: Equatable, Hashable, Codable, Sendable
     }
 }
 
+/// Which kind of "needs you" interrupt the agent raised (handoff Part B).
+/// A pending turn is one of two honest shapes — they get different
+/// lock-screen CTAs:
+///   - `.choice`     — an n-way question; the answer UI lives in the app,
+///                     so the only honest CTA is "Open to choose".
+///   - `.permission` — a binary tool gate (e.g. `git push --force`); a
+///                     simple yes/no the lock screen CAN answer in the
+///                     background via a non-opening App Intent.
+public enum TurnInterruptKind: String, Codable, Hashable, Sendable {
+    case choice
+    case permission
+}
+
 /// The mutable per-turn state mirrored into the lock-screen card.
 public struct TurnActivityContentState: Equatable, Hashable, Codable, Sendable {
     public var currentTool: String?
@@ -47,6 +60,15 @@ public struct TurnActivityContentState: Equatable, Hashable, Codable, Sendable {
     public var syncedAt: Date
     /// Short closing line for the done state ("exit 0"). Nil until end.
     public var summary: String?
+    /// For a `pending` turn: which interrupt shape it is (drives the CTA).
+    /// Nil while running / done.
+    public var interruptKind: TurnInterruptKind?
+    /// For a `pending` turn: the question / permission prompt to surface on
+    /// the card. Nil while running / done.
+    public var prompt: String?
+    /// For a `pending` `.choice` turn: how many options the question has,
+    /// shown as the "N options" pill. 0 when unknown / not a choice.
+    public var optionCount: Int
 
     public init(
         currentTool: String? = nil,
@@ -56,7 +78,10 @@ public struct TurnActivityContentState: Equatable, Hashable, Codable, Sendable {
         tokensOut: Int = 0,
         status: String = "running",
         syncedAt: Date? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        interruptKind: TurnInterruptKind? = nil,
+        prompt: String? = nil,
+        optionCount: Int = 0
     ) {
         self.currentTool = currentTool
         self.currentCommand = currentCommand
@@ -66,6 +91,9 @@ public struct TurnActivityContentState: Equatable, Hashable, Codable, Sendable {
         self.status = status
         self.syncedAt = syncedAt ?? startedAt
         self.summary = summary
+        self.interruptKind = interruptKind
+        self.prompt = prompt
+        self.optionCount = optionCount
     }
 }
 
@@ -91,6 +119,14 @@ public struct TurnActivityItem: Equatable, Hashable, Sendable {
     public var status: String
     public var exitCode: Int32?
     public var timestamp: Date
+    /// For a `.pendingInput` item: the classified interrupt shape (choice
+    /// vs permission). Nil for every other kind.
+    public var interruptKind: TurnInterruptKind?
+    /// For a `.pendingInput` item: the question / permission prompt text.
+    public var prompt: String?
+    /// For a `.pendingInput` item: number of answer options (drives the
+    /// "N options" pill on a choice). 0 when unknown.
+    public var optionCount: Int
 
     public init(
         id: String,
@@ -99,7 +135,10 @@ public struct TurnActivityItem: Equatable, Hashable, Sendable {
         command: String? = nil,
         status: String = "running",
         exitCode: Int32? = nil,
-        timestamp: Date
+        timestamp: Date,
+        interruptKind: TurnInterruptKind? = nil,
+        prompt: String? = nil,
+        optionCount: Int = 0
     ) {
         self.id = id
         self.kind = kind
@@ -108,6 +147,9 @@ public struct TurnActivityItem: Equatable, Hashable, Sendable {
         self.status = status
         self.exitCode = exitCode
         self.timestamp = timestamp
+        self.interruptKind = interruptKind
+        self.prompt = prompt
+        self.optionCount = optionCount
     }
 }
 
@@ -207,7 +249,10 @@ public struct TurnActivityModel: Equatable, Sendable {
                 startedAt: item.timestamp,
                 tokensIn: 0,
                 tokensOut: 0,
-                status: isPending ? "pending" : "running"
+                status: isPending ? "pending" : "running",
+                interruptKind: isPending ? item.interruptKind : nil,
+                prompt: isPending ? item.prompt : nil,
+                optionCount: isPending ? item.optionCount : 0
             )
             attributes = attrs
             contentState = state
@@ -219,6 +264,17 @@ public struct TurnActivityModel: Equatable, Sendable {
         next.currentTool = item.toolName ?? next.currentTool
         next.currentCommand = item.command ?? next.currentCommand
         next.status = isPending ? "pending" : "running"
+        // Carry the interrupt payload only while pending; a resuming
+        // tool/command clears it so the card drops back to "running".
+        if isPending {
+            next.interruptKind = item.interruptKind
+            next.prompt = item.prompt
+            next.optionCount = item.optionCount
+        } else {
+            next.interruptKind = nil
+            next.prompt = nil
+            next.optionCount = 0
+        }
         contentState = next
         return .update(state: next)
     }

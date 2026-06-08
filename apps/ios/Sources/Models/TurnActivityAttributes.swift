@@ -31,6 +31,12 @@ public struct TurnActivityAttributes: ActivityAttributes {
         public var syncedAt: Date
         /// Done-state closing line ("exit 0"), nil while running.
         public var summary: String?
+        /// Pending interrupt shape (choice / permission), nil otherwise.
+        public var interruptKind: TurnInterruptKind?
+        /// Pending question / permission prompt, nil otherwise.
+        public var prompt: String?
+        /// Pending `.choice` option count for the "N options" pill.
+        public var optionCount: Int
 
         public init(from state: TurnActivityContentState) {
             self.currentTool = state.currentTool
@@ -41,6 +47,9 @@ public struct TurnActivityAttributes: ActivityAttributes {
             self.status = state.status
             self.syncedAt = state.syncedAt
             self.summary = state.summary
+            self.interruptKind = state.interruptKind
+            self.prompt = state.prompt
+            self.optionCount = state.optionCount
         }
 
         public init(
@@ -51,7 +60,10 @@ public struct TurnActivityAttributes: ActivityAttributes {
             tokensOut: Int = 0,
             status: String = "running",
             syncedAt: Date? = nil,
-            summary: String? = nil
+            summary: String? = nil,
+            interruptKind: TurnInterruptKind? = nil,
+            prompt: String? = nil,
+            optionCount: Int = 0
         ) {
             self.currentTool = currentTool
             self.currentCommand = currentCommand
@@ -61,6 +73,9 @@ public struct TurnActivityAttributes: ActivityAttributes {
             self.status = status
             self.syncedAt = syncedAt ?? startedAt
             self.summary = summary
+            self.interruptKind = interruptKind
+            self.prompt = prompt
+            self.optionCount = optionCount
         }
     }
 

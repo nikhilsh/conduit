@@ -23,18 +23,6 @@ import SwiftUI
 /// see `docs/PLAN-CONDUIT-VISUAL-PARITY.md` §B.2.
 enum ConduitTypography {
 
-    /// Maps `AppearanceStore.fontFamily` to the SwiftUI design enum.
-    /// `system` resolves to `.default` so callers that want
-    /// monospaced/serif regardless of preference (paths, branches)
-    /// should reach for `monoFootnote()` / `monoCaption()` directly.
-    static func design(for family: AppearanceStore.FontFamily) -> Font.Design {
-        switch family {
-        case .serif:      return .serif
-        case .system:     return .default
-        case .monospaced: return .monospaced
-        }
-    }
-
     // MARK: Body
 
     /// Body text — chat content, list-row titles. Scales with
@@ -42,46 +30,46 @@ enum ConduitTypography {
     /// family. Use this rather than `.system(.body)` so the user's
     /// preference + scale slider both take effect.
     static func body(_ appearance: AppearanceStore, weight: Font.Weight = .regular) -> Font {
-        .system(size: appearance.bodyPointSize, weight: weight, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(size: appearance.bodyPointSize, weight: weight)
     }
 
     // MARK: Headings (1.07× / 1.15× / 1.30× / 1.43× of body)
 
     /// h1 — page hero / screen title.
     static func heading1(_ appearance: AppearanceStore) -> Font {
-        .system(size: appearance.bodyPointSize * 1.43, weight: .bold, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(size: appearance.bodyPointSize * 1.43, weight: .bold)
     }
 
     /// h2 — section title inside a screen.
     static func heading2(_ appearance: AppearanceStore) -> Font {
-        .system(size: appearance.bodyPointSize * 1.30, weight: .semibold, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(size: appearance.bodyPointSize * 1.30, weight: .semibold)
     }
 
     /// h3 — subsection / list-section header.
     static func heading3(_ appearance: AppearanceStore) -> Font {
-        .system(size: appearance.bodyPointSize * 1.15, weight: .semibold, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(size: appearance.bodyPointSize * 1.15, weight: .semibold)
     }
 
     /// h4 — emphasis above a small block (settings row title).
     static func heading4(_ appearance: AppearanceStore) -> Font {
-        .system(size: appearance.bodyPointSize * 1.07, weight: .semibold, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(size: appearance.bodyPointSize * 1.07, weight: .semibold)
     }
 
     // MARK: Captions
 
     /// Caption — labels above body content.
     static func caption(_ appearance: AppearanceStore) -> Font {
-        .system(.caption, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(textStyle: .caption)
     }
 
     /// Footnote — meta text under body content (timestamps, hints).
     static func footnote(_ appearance: AppearanceStore) -> Font {
-        .system(.footnote, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(textStyle: .footnote)
     }
 
     /// Subheadline — between body and footnote.
     static func subheadline(_ appearance: AppearanceStore) -> Font {
-        .system(.subheadline, design: design(for: appearance.fontFamily))
+        appearance.fontFamily.font(textStyle: .subheadline)
     }
 
     // MARK: Always-mono

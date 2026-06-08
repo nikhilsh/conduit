@@ -344,6 +344,24 @@ public enum TurnLiveActivityMapping {
         default:              kind = .other
         }
         let timestamp = TurnLiveActivityMapping.parseTimestamp(item.ts) ?? Date()
+        var interruptKind: TurnInterruptKind?
+        var prompt: String?
+        var optionCount = 0
+        if kind == .pendingInput {
+            // Handoff Part B: distinguish an n-way question (choice) from a
+            // binary tool gate (permission) so the lock screen can show the
+            // honest CTA. The data is heuristic — the core surfaces the same
+            // `pending_input` kind for both — but `content` + `pendingOptions`
+            // carry enough to classify.
+            let classified = classifyPending(
+                content: item.content,
+                options: item.pendingOptions,
+                command: item.command
+            )
+            interruptKind = classified.kind
+            prompt = classified.prompt
+            optionCount = item.pendingOptions.count
+        }
         return TurnActivityItem(
             id: item.id,
             kind: kind,
@@ -351,8 +369,72 @@ public enum TurnLiveActivityMapping {
             command: item.command,
             status: item.status,
             exitCode: item.exitCode,
-            timestamp: timestamp
+            timestamp: timestamp,
+            interruptKind: interruptKind,
+            prompt: prompt,
+            optionCount: optionCount
         )
+    }
+
+    /// Sentinel the Rust core prepends to a pending-input message
+    /// (`core/src/conversation.rs`); stripped before display.
+    private static let pendingSentinel = "[[conduit:needs-input]]"
+
+    /// Classify a `pending_input` item as a binary permission gate or an
+    /// n-way choice, and extract a concise prompt. Heuristic, biased toward
+    /// `.choice` (the safe default — choice always opens the app to answer,
+    /// so a mis-classified permission still resolves correctly; the inverse
+    /// would offer a background Approve on a multiple-choice question, the
+    /// exact bug Part B fixes).
+    static func classifyPending(
+        content: String, options: [String], command: String?
+    ) -> (kind: TurnInterruptKind, prompt: String) {
+        let prompt = pendingPrompt(content: content, command: command)
+        let lower = content.lowercased()
+
+        // Codex tool-approval prompts ("[A]pprove / [E]dit / [R]eject").
+        if lower.contains("[a]pprove") || lower.contains("approve / edit / reject") {
+            return (.permission, prompt)
+        }
+
+        // A small option set that reads as a yes/no decision is a
+        // permission gate; user-authored options (named choices) are not.
+        let gateWords: Set<String> = [
+            "approve", "approved", "deny", "denied", "yes", "no", "allow",
+            "disallow", "reject", "run", "skip", "cancel", "confirm", "ok",
+        ]
+        let normalized = options.map {
+            $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if !options.isEmpty, options.count <= 3,
+           normalized.allSatisfy({ opt in gateWords.contains(where: { opt == $0 || opt.hasPrefix($0 + " ") }) }) {
+            return (.permission, prompt)
+        }
+
+        // No explicit options + a yes/no-shaped ask ("Run …?", "Allow …?",
+        // "… permission …?") is a permission gate.
+        if options.count <= 2, lower.contains("?"),
+           lower.contains("run ") || lower.contains("allow ") || lower.contains("permission") {
+            return (.permission, prompt)
+        }
+
+        return (.choice, prompt)
+    }
+
+    /// Concise one-line prompt for the card: sentinel stripped, first
+    /// non-empty line, capped. Falls back to the command, then a generic
+    /// label.
+    static func pendingPrompt(content: String, command: String?) -> String {
+        let stripped = content.replacingOccurrences(of: pendingSentinel, with: "")
+        let firstLine = stripped
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first(where: { !$0.isEmpty })
+        if let firstLine, !firstLine.isEmpty {
+            return String(firstLine.prefix(140))
+        }
+        if let command, !command.isEmpty { return command }
+        return "Needs your input"
     }
 
     /// Parse the ISO-8601 timestamps the Rust core emits. Falls back to

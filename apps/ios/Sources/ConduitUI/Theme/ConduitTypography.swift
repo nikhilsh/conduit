@@ -20,40 +20,31 @@ extension ConduitUI {
     /// is honoured when the family is `.system`; otherwise the user
     /// override wins (monospaced / serif body settings are global).
     enum Typography {
-        /// Maps the appearance store's choice to a SwiftUI design.
-        static func bodyDesign(for family: AppearanceStore.FontFamily) -> Font.Design {
-            switch family {
-            case .serif:      return .serif
-            case .system:     return .default
-            case .monospaced: return .monospaced
-            }
-        }
-
         // MARK: Ramp
 
         /// Large hero / screen title.
         static func hero(_ family: AppearanceStore.FontFamily) -> Font {
-            .system(size: 28, weight: .bold, design: bodyDesign(for: family))
+            family.font(size: 28, weight: .bold)
         }
 
         /// Section header — sentence-case, bold.
         static func sectionHeader(_ family: AppearanceStore.FontFamily) -> Font {
-            .system(size: 17, weight: .semibold, design: bodyDesign(for: family))
+            family.font(size: 17, weight: .semibold)
         }
 
         /// Body text (chat messages, list-row titles).
         static func body(_ family: AppearanceStore.FontFamily) -> Font {
-            .system(size: 16, weight: .regular, design: bodyDesign(for: family))
+            family.font(size: 16, weight: .regular)
         }
 
         /// Strong body emphasis — list-row titles, message senders.
         static func bodyEmphasis(_ family: AppearanceStore.FontFamily) -> Font {
-            .system(size: 16, weight: .semibold, design: bodyDesign(for: family))
+            family.font(size: 16, weight: .semibold)
         }
 
         /// Caption / subtitle line under a list row.
         static func caption(_ family: AppearanceStore.FontFamily) -> Font {
-            .system(size: 12, weight: .regular, design: bodyDesign(for: family))
+            family.font(size: 12, weight: .regular)
         }
 
         /// Tiny mono meta (timestamps, host IPs). Always mono regardless

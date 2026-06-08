@@ -32,4 +32,10 @@ public enum GhosttyFont: String, CaseIterable, Identifiable, Sendable {
         case .ibmPlexMono:   return "IBM Plex Mono"
         }
     }
+
+    /// Public CoreText family name for rendering a SwiftUI preview of this
+    /// terminal font (e.g. the type-forward picker card). `nil` means use
+    /// the system monospaced face. Mirrors `familyName` but exposed so the
+    /// app's SwiftUI layer can build `Font.custom(...)`.
+    public var previewFontName: String? { familyName }
 }

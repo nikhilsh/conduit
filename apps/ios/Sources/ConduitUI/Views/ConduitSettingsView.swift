@@ -1,26 +1,27 @@
 import SwiftUI
+import UIKit
 import GhosttyVT
 
 // MARK: - ConduitSettingsView
 //
-// Conduit redesign Settings screen (handoff §A.2, image 03). The shipped
-// build had ~11 stacked sections with appearance shattered across six of
-// them. This collapses the IA to exactly eight, top to bottom:
+// Conduit redesign Settings screen (handoff Part A). The shipped build
+// had eight stacked sections with the server appearing TWICE (Account +
+// Servers) and Terminal floating on its own. This collapses the IA to
+// five labelled groups, top to bottom:
 //
-//   identity · Account · Usage & limits · Appearance · Terminal ·
-//   Conversation · Servers · About
+//   Connection · Usage & limits · Appearance · Conversation · About
 //
-//   • identity      — a `>conduit` wordmark card (mono, the `>` cyan-
-//                     tinted) + version/build line + a live/offline badge.
-//   • Account       — pairing row + "Sign in to agent" (sheets unchanged).
+//   • Connection    — ONE home: active server row (tap → switch/manage),
+//                     the agents on it (Claude / Codex), Add account, and
+//                     Add server. Merges the old Account + Agent Accounts +
+//                     Servers sections; the server has exactly one home now.
 //   • Usage & limits— account-wide, BOTH agents (claude + codex), each with
 //                     a 5-hour AND a weekly window (bar / % / reset).
-//   • Appearance    — ONE grouped card: Theme segmented, accent palette
-//                     swatches, App font drill-in, Text size slider, Glow &
-//                     scanlines toggle, + the `conduit --theme ice` chip.
-//   • Terminal      — Color theme / Font as drill-in rows (picker sub-views).
+//   • Appearance    — ONE grouped card with Terminal folded IN: Theme
+//                     segmented, accent palette, the type-forward Chat font
+//                     + Terminal font strips, Terminal colors, Text size,
+//                     Glow & scanlines, + the `conduit --theme <id>` chip.
 //   • Conversation  — collapse-turns toggle.
-//   • Servers       — saved servers + Add Server (swipe-to-forget).
 //   • About         — version + licenses.
 //
 // Presentation + IA only: every store/AppearanceStore binding, sheet, and
@@ -42,14 +43,11 @@ extension ConduitUI {
 
         @State private var showAddServer = false
         @State private var showAgentLogin = false
-        /// Per-agent signed-in + plan snapshot for the Accounts group
-        /// (fix 3). Refreshed on appear and whenever the login sheet closes.
+        /// Per-agent signed-in + plan snapshot for the Connection group.
+        /// Refreshed on appear and whenever the login sheet closes.
         @State private var agentAccounts: [AgentAccountStatus] = AgentAccountStatus.current()
         /// Account whose Manage dialog (re-auth / sign out) is open.
         @State private var manageTarget: AgentAccountStatus?
-        /// Saved-server pending deletion (drives the confirmation alert
-        /// for the Settings → Servers swipe-to-delete affordance).
-        @State private var pendingServerDelete: PendingServerDelete?
 
         var body: some View {
             @Bindable var appearance = appearance
@@ -60,13 +58,10 @@ extension ConduitUI {
 
                     ScrollView {
                         VStack(spacing: 18) {
-                            identityCard
-                            accountSection
+                            connectionSection
                             usageLimitsSection
                             appearanceSection
-                            terminalSection
                             conversationSection
-                            serversSection
                             aboutSection
                         }
                         .padding(.horizontal, 16)
@@ -80,13 +75,6 @@ extension ConduitUI {
                 .toolbar {
                     if !embedded {
                         ToolbarItem(placement: .confirmationAction) {
-                            // Plain Button (no copper-tint overlay) per
-                            // PLAN-CONDUIT-VISUAL-PARITY audit §A.3.5 — upstream
-                            // uses a flat `.confirmationAction` link, not a
-                            // tinted capsule. The surrounding NavigationStack
-                            // `.tint(neon.accent)` still
-                            // picks up the accent colour on the link itself,
-                            // we just stop double-painting it.
                             Button("Done") { dismiss() }
                         }
                     }
@@ -96,231 +84,178 @@ extension ConduitUI {
                 }
                 .sheet(isPresented: $showAgentLogin, onDismiss: {
                     // Re-read the Keychain so a fresh sign-in flips the
-                    // Accounts rows to `● signed in` immediately.
+                    // agent rows to `● signed in` immediately.
                     agentAccounts = AgentAccountStatus.current()
                 }) {
                     ConduitUI.AgentLoginSheet()
                 }
-                .alert(
-                    "Forget server?",
+                .confirmationDialog(
+                    manageTarget.map { "\($0.displayName) account" } ?? "Account",
                     isPresented: Binding(
-                        get: { pendingServerDelete != nil },
-                        set: { if !$0 { pendingServerDelete = nil } }
+                        get: { manageTarget != nil },
+                        set: { if !$0 { manageTarget = nil } }
                     ),
-                    presenting: pendingServerDelete
-                ) { target in
-                    Button("Forget", role: .destructive) {
-                        store.forgetServer(target.id)
-                        pendingServerDelete = nil
+                    titleVisibility: .visible,
+                    presenting: manageTarget
+                ) { account in
+                    Button("Sign in again") {
+                        manageTarget = nil
+                        showAgentLogin = true
                     }
-                    Button("Cancel", role: .cancel) {
-                        pendingServerDelete = nil
+                    Button("Sign out", role: .destructive) {
+                        OAuthCredentialStore.clear(provider: account.provider)
+                        agentAccounts = AgentAccountStatus.current()
+                        manageTarget = nil
                     }
-                } message: { target in
-                    Text("Drops the saved pairing for \(target.name). Sessions already running on this server keep running until you delete them.")
+                    Button("Cancel", role: .cancel) { manageTarget = nil }
+                } message: { account in
+                    Text(account.signedIn
+                        ? "Signing out clears the \(account.displayName) credential on this device. Sessions already running keep their credentials."
+                        : "Sign in to use \(account.displayName) through Conduit.")
                 }
             }
             // Re-bind \.colorScheme to the AppearanceStore so a runtime
             // theme swap from Settings → Appearance updates THIS sheet
-            // live, not just the underlying RootView (see
-            // `AppearanceColorScheme.swift`).
+            // live, not just the underlying RootView.
             .appearanceColorScheme()
         }
 
-        // MARK: identity
+        // MARK: Connection (server + agents + add, one home)
 
-        /// `>conduit` wordmark card (BRAND.md §1: lowercase JetBrains Mono,
-        /// the `>` tinted with the cyan accent) + the daemon mark, the
-        /// version/build line, and a live/offline status badge.
-        private var identityCard: some View {
-            HStack(spacing: 12) {
-                ConduitUI.ConduitMark(size: 30, glow: neon.glow)
-                    .frame(width: 46, height: 46)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(neon.surface)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(neon.border, lineWidth: 1)
-                    )
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 0) {
-                        Text(">")
-                            .font(neon.mono(18).weight(.bold))
-                            .foregroundStyle(neon.accent)
-                            .neonTextGlow(neon.textGlow)
-                        Text("conduit")
-                            .font(neon.mono(18).weight(.bold))
-                            .foregroundStyle(neon.text)
-                            .tracking(1)
-                    }
-                    Text(aboutVersion)
-                        .font(neon.mono(11))
-                        .foregroundStyle(neon.textFaint)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 8)
-                identityBadge
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
-        }
-
-        private var identityBadge: some View {
-            let reachable = store.harness.isReachable
-            let color = reachable ? neon.green : neon.textDim
-            return HStack(spacing: 5) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 6, height: 6)
-                    .neonGlowBox(neon.glow && reachable ? neon.glowBox?.tinted(color) : nil)
-                Text(store.harness.badgeLabel)
-                    .font(neon.mono(10.5).weight(.semibold))
-                    .foregroundStyle(color)
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(
-                Capsule()
-                    .fill(color.opacity(0.12))
-                    .overlay(Capsule().strokeBorder(color.opacity(0.3), lineWidth: 1))
-            )
-        }
-
-        // MARK: Account (Round-2 fix 3 — per-agent Accounts group)
-
-        /// Accounts group (handoff images 05→06): the paired-box row stays on
-        /// top, then an AGENT ACCOUNTS list — one row per agent with a plan
-        /// badge, a live `● signed in` status, and a per-agent Manage
-        /// affordance (re-auth / sign out) — plus an "Add another account"
-        /// row. The old single opaque "Sign in to agent" row read as signed-
-        /// out even when both agents were authenticated.
-        private var accountSection: some View {
-            VStack(alignment: .leading, spacing: 18) {
-                sectionCard(title: "Account") {
-                    ConduitUI.navRow(
-                        icon: "person.crop.circle.fill",
-                        title: store.endpoint.isComplete ? store.endpoint.displayHost : "Not paired",
-                        subtitle: store.harness.badgeLabel
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("AGENT ACCOUNTS")
-                            .font(neon.mono(11).weight(.bold))
-                            .foregroundStyle(neon.textFaint)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                        Spacer(minLength: 8)
-                        agentAccountsStatus
-                    }
+        /// The big de-dupe (handoff §A.1, render 01): one card holding the
+        /// active server row, the agents on it, and the two add affordances.
+        /// Removes the standalone Account row + Servers section — the server
+        /// has exactly one home now.
+        private var connectionSection: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Connection")
+                    .font(neon.mono(11.5).weight(.bold))
+                    .foregroundStyle(neon.textFaint)
+                    .tracking(1.6)
+                    .textCase(.uppercase)
                     .padding(.horizontal, 4)
 
-                    VStack(spacing: 0) {
-                        ForEach(agentAccounts) { account in
-                            agentAccountRow(account)
-                            Divider()
-                                .background(neon.border)
-                                .padding(.leading, 60)
-                        }
-                        Button {
-                            showAgentLogin = true
-                        } label: {
-                            HStack(spacing: 12) {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .strokeBorder(neon.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                                    .frame(width: 38, height: 38)
-                                    .overlay(
-                                        Image(systemName: "plus")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(neon.textDim)
-                                    )
-                                Text("Add another account")
-                                    .font(neon.sans(14.5).weight(.medium))
-                                    .foregroundStyle(neon.textDim)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 11)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+                VStack(spacing: 0) {
+                    activeServerRow
 
-                    Text("Re-auth, switch plan, or sign out per agent — no more guessing whether you're connected.")
-                        .font(neon.mono(10))
+                    Divider().background(neon.border)
+
+                    Text("AGENTS ON THIS SERVER")
+                        .font(neon.mono(11).weight(.bold))
+                        .tracking(1.2)
                         .foregroundStyle(neon.textFaint)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 11)
+                        .padding(.bottom, 2)
+
+                    ForEach(agentAccounts) { account in
+                        agentAccountRow(account)
+                        Divider().background(neon.border).padding(.leading, 60)
+                    }
+
+                    addAccountRow
+
+                    Divider().background(neon.border)
+
+                    Button {
+                        showAddServer = true
+                    } label: {
+                        ConduitUI.ListRow(
+                            icon: "externaldrive.connected.to.line.below",
+                            title: "Add server",
+                            subtitle: nil,
+                            iconTint: neon.accent
+                        ) {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
+                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
             }
             .onAppear { agentAccounts = AgentAccountStatus.current() }
-            .confirmationDialog(
-                manageTarget.map { "\($0.displayName) account" } ?? "Account",
-                isPresented: Binding(
-                    get: { manageTarget != nil },
-                    set: { if !$0 { manageTarget = nil } }
-                ),
-                titleVisibility: .visible,
-                presenting: manageTarget
-            ) { account in
-                Button("Sign in again") {
-                    manageTarget = nil
-                    showAgentLogin = true
-                }
-                Button("Sign out", role: .destructive) {
-                    OAuthCredentialStore.clear(provider: account.provider)
-                    agentAccounts = AgentAccountStatus.current()
-                    manageTarget = nil
-                }
-                Button("Cancel", role: .cancel) { manageTarget = nil }
-            } message: { account in
-                Text(account.signedIn
-                    ? "Signing out clears the \(account.displayName) credential on this device. Sessions already running keep their credentials."
-                    : "Sign in to use \(account.displayName) through Conduit.")
-            }
         }
 
-        /// `● both connected` / `● claude connected` / `● not signed in` —
-        /// the at-a-glance answer the old row never gave.
-        private var agentAccountsStatus: some View {
-            // "Connected" means usable — an EXPIRED credential doesn't
-            // count (the broker won't use it for new sessions).
-            let usable = agentAccounts.filter(\.usable)
-            let (label, color): (String, Color) = {
-                if usable.count == agentAccounts.count, !agentAccounts.isEmpty {
-                    return ("both connected", neon.green)
+        /// Active server row — `103.107.51.48:1977` · `Live · default
+        /// server`, trailing `Switch` + chevron. Tapping pushes the server
+        /// switcher (saved servers, switch / forget).
+        private var activeServerRow: some View {
+            NavigationLink {
+                ServerSwitcherView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .font(.body)
+                        .frame(width: 20)
+                        .foregroundStyle(neon.accent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(store.endpoint.isComplete ? store.endpoint.displayHost : "Not paired")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(activeServerSubtitle)
+                            .font(neon.mono(12.5))
+                            .foregroundStyle(neon.textDim)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Text("Switch")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(neon.textDim)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(neon.textFaint)
                 }
-                if let only = usable.first, usable.count == 1 {
-                    return ("\(only.agent) connected", neon.green)
-                }
-                if agentAccounts.contains(where: { $0.expired }) {
-                    return ("sign-in expired", neon.yellow)
-                }
-                return ("not signed in", neon.textFaint)
-            }()
-            return HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 5, height: 5)
-                Text(label)
-                    .font(neon.mono(10.5).weight(.semibold))
-                    .foregroundStyle(color)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
 
-        /// One agent's account row: tinted daemon avatar, name + plan badge,
-        /// `● signed in` status, and the Manage / Sign in affordance.
+        /// "Live · default server" / "<state> · server" — honest about
+        /// reachability and whether the active endpoint is the default.
+        private var activeServerSubtitle: String {
+            let state = store.harness.isReachable ? "Live" : store.harness.badgeLabel
+            let isDefault = store.savedServers.first(where: { $0.isDefault })?.endpoint == store.endpoint
+            return "\(state) · \(isDefault ? "default server" : "server")"
+        }
+
+        /// "Add account" row (dashed plus tile) — opens the agent login flow.
+        private var addAccountRow: some View {
+            Button {
+                showAgentLogin = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus.circle")
+                        .font(.body)
+                        .frame(width: 20)
+                        .foregroundStyle(neon.textDim)
+                    Text("Add account")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(neon.textDim)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+
+        /// One agent's row: tinted daemon avatar, name + plan badge, status
+        /// dot, and the Manage / Sign in affordance (the latter tinted to
+        /// pull attention when the credential needs the user).
         private func agentAccountRow(_ account: AgentAccountStatus) -> some View {
             let tint = neon.agentTint(forAgent: account.agent)
             return Button {
                 if account.usable {
                     manageTarget = account
                 } else {
-                    // Signed out OR expired — both need the login flow.
                     showAgentLogin = true
                 }
             } label: {
@@ -366,7 +301,7 @@ extension ConduitUI {
                     HStack(spacing: 4) {
                         Text(account.usable ? "Manage" : "Sign in")
                             .font(neon.sans(13).weight(.semibold))
-                            .foregroundStyle(account.usable ? neon.textDim : neon.accent)
+                            .foregroundStyle(account.usable ? neon.textDim : neon.green)
                         Image(systemName: "chevron.right")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(neon.textFaint)
@@ -382,11 +317,8 @@ extension ConduitUI {
         // MARK: Usage & limits (account-wide, BOTH agents)
 
         /// Account-level plan limits for BOTH agents (claude + codex), each
-        /// with its 5-hour AND weekly window (handoff §A.2 / data-model). The
-        /// numbers are per-account, not per-session, so we read the freshest
-        /// values off any session of that agent. When an agent has no data
-        /// yet (no session, or never fetched) the card shows honest "—" /
-        /// "tap refresh" rather than fabricating a percentage.
+        /// with its 5-hour AND weekly window (handoff §A.2). Reads the
+        /// freshest account-usage values off any session of that agent.
         private var usageLimitsSection: some View {
             sectionCard(title: "Usage & limits") {
                 VStack(spacing: 0) {
@@ -400,19 +332,19 @@ extension ConduitUI {
             }
         }
 
-        // MARK: Appearance (one grouped card)
+        // MARK: Appearance (one grouped card, Terminal folded in)
 
-        /// ONE grouped Appearance card (handoff §A.2): Theme segmented control,
-        /// accent-palette swatches, App font drill-in row, Text size slider,
-        /// Glow & scanlines toggle — plus the live `conduit --theme <id>`
-        /// preview chip beneath. Merges the old Theme + Neon + Font + Font
-        /// Size + preview-chip sections.
+        /// ONE grouped Appearance card (handoff §A.3, renders 03/04): Theme
+        /// segmented, accent-palette swatches, the type-forward Chat font +
+        /// Terminal font strips, the Terminal colors row, Text size slider,
+        /// and Glow & scanlines — plus the live `conduit --theme <id>` chip.
         private var appearanceSection: some View {
             @Bindable var appearance = appearance
             return VStack(alignment: .leading, spacing: 10) {
                 Text("Appearance")
-                    .font(neon.mono(11).weight(.bold))
+                    .font(neon.mono(11.5).weight(.bold))
                     .foregroundStyle(neon.textFaint)
+                    .tracking(1.6)
                     .textCase(.uppercase)
                     .padding(.horizontal, 4)
 
@@ -420,7 +352,7 @@ extension ConduitUI {
                     // Theme — segmented System / Light / Dark.
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Theme")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(neon.text)
                         Picker("Theme", selection: $appearance.themeMode) {
                             ForEach(AppearanceStore.ThemeMode.allCases) { mode in
@@ -438,11 +370,11 @@ extension ConduitUI {
                     VStack(alignment: .leading, spacing: 11) {
                         HStack(alignment: .firstTextBaseline) {
                             Text("Accent palette")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(neon.text)
                             Spacer(minLength: 6)
                             Text(appearance.neonPalette.label)
-                                .font(neon.mono(11.5))
+                                .font(neon.mono(13))
                                 .foregroundStyle(neon.accent)
                         }
                         HStack(spacing: 9) {
@@ -456,29 +388,30 @@ extension ConduitUI {
 
                     Divider().background(neon.border)
 
-                    // App font — drill-in row (current value + chevron).
+                    // Chat font — type-forward preview-card strip.
+                    chatFontRow
+
+                    // Terminal font — type-forward preview-card strip.
+                    terminalFontRow
+
+                    Divider().background(neon.border)
+
+                    // Terminal colors — drill-in to the libghostty theme picker.
                     NavigationLink {
-                        AppFontPicker()
+                        TerminalThemePicker()
                     } label: {
                         ConduitUI.ListRow(
-                            icon: "textformat",
-                            title: "App font",
+                            icon: "paintpalette.fill",
+                            title: "Terminal colors",
                             subtitle: nil,
                             iconTint: neon.accent
                         ) {
-                            HStack(spacing: 6) {
-                                Text(appearance.fontFamily.label)
-                                    .font(neon.mono(12.5))
-                                    .foregroundStyle(neon.textFaint)
-                                Image(systemName: "chevron.right")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(neon.textFaint)
-                            }
+                            drillValue(appearance.terminalTheme.label)
                         }
                     }
                     .buttonStyle(.plain)
 
-                    Divider().background(neon.border).padding(.leading, 46)
+                    Divider().background(neon.border)
 
                     // Text size — slider over the typography ramp base.
                     VStack(alignment: .leading, spacing: 10) {
@@ -488,12 +421,12 @@ extension ConduitUI {
                                 .frame(width: 20)
                                 .foregroundStyle(neon.accent)
                             Text("Text size")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(neon.text)
                             Spacer(minLength: 6)
                             Text("\(Int(appearance.bodyPointSize))pt")
-                                .font(neon.mono(12).weight(.semibold))
-                                .foregroundStyle(neon.textFaint)
+                                .font(neon.mono(14.5).weight(.bold))
+                                .foregroundStyle(neon.accent)
                         }
                         Slider(
                             value: $appearance.bodyPointSize,
@@ -517,62 +450,139 @@ extension ConduitUI {
                 }
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
 
-                // Live preview chip (terminal-styled `conduit --theme ice`).
+                // Live preview chip (terminal-styled `conduit --theme <id>`).
                 ConduitUI.NeonThemePreviewChip()
             }
         }
 
-        // MARK: Terminal (drill-in rows)
-
-        /// The two long radio lists (color theme, font) collapse to single
-        /// drill-in rows that open a picker sub-view (handoff §A.2).
-        private var terminalSection: some View {
-            @Bindable var appearance = appearance
-            return sectionCard(title: "Terminal") {
-                VStack(spacing: 0) {
-                    NavigationLink {
-                        TerminalThemePicker()
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "paintpalette.fill",
-                            title: "Color theme",
-                            subtitle: nil,
-                            iconTint: neon.accent
-                        ) {
-                            drillValue(appearance.terminalTheme.label)
+        /// Chat-font row: header (title + current value) over a horizontal
+        /// strip of live preview cards, each "Ag" rendered in its own face.
+        private var chatFontRow: some View {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Chat font")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(neon.text)
+                    Spacer(minLength: 6)
+                    Text(appearance.fontFamily.label)
+                        .font(neon.mono(13))
+                        .foregroundStyle(neon.textFaint)
+                }
+                fontStripScroll {
+                    ForEach(AppearanceStore.FontFamily.allCases) { family in
+                        Button {
+                            appearance.fontFamily = family
+                        } label: {
+                            fontCard(
+                                sample: "Ag",
+                                name: family.label,
+                                selected: appearance.fontFamily == family,
+                                sampleFont: family.font(size: 30)
+                            )
                         }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-
-                    Divider().background(neon.border).padding(.leading, 46)
-
-                    NavigationLink {
-                        TerminalFontPicker()
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "textformat",
-                            title: "Font",
-                            subtitle: nil,
-                            iconTint: neon.accent
-                        ) {
-                            drillValue(appearance.terminalFont.label)
-                        }
-                    }
-                    .buttonStyle(.plain)
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 6)
         }
 
-        private func drillValue(_ value: String) -> some View {
-            HStack(spacing: 6) {
-                Text(value)
-                    .font(neon.mono(12.5))
-                    .foregroundStyle(neon.textFaint)
-                    .lineLimit(1)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(neon.textFaint)
+        /// Terminal-font row: same type-forward strip, each card a mono `x>`
+        /// sample in the terminal face. The terminal fonts are left as-is.
+        private var terminalFontRow: some View {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Terminal font")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(neon.text)
+                    Spacer(minLength: 6)
+                    Text(appearance.terminalFont.label)
+                        .font(neon.mono(13))
+                        .foregroundStyle(neon.textFaint)
+                }
+                fontStripScroll {
+                    ForEach(GhosttyFont.allCases) { font in
+                        Button {
+                            appearance.terminalFont = font
+                        } label: {
+                            fontCard(
+                                sample: "x>",
+                                name: font.label,
+                                selected: appearance.terminalFont == font,
+                                sampleFont: terminalSampleFont(font, size: 26)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 6)
+            .padding(.bottom, 14)
+        }
+
+        /// SwiftUI font that renders a terminal face for the preview card,
+        /// falling back to the system monospaced face for `system` / any
+        /// unregistered family.
+        private func terminalSampleFont(_ font: GhosttyFont, size: CGFloat) -> Font {
+            if let name = font.previewFontName, !UIFont.fontNames(forFamilyName: name).isEmpty {
+                return .custom(name, fixedSize: size)
+            }
+            return .system(size: size, weight: .regular, design: .monospaced)
+        }
+
+        /// One preview card in a font strip: a big glyph sample in the face,
+        /// the name beneath. Selected card gets the accent border + glow.
+        private func fontCard(sample: String, name: String, selected: Bool, sampleFont: Font) -> some View {
+            VStack(alignment: .leading, spacing: 9) {
+                Text(sample)
+                    .font(sampleFont)
+                    .foregroundStyle(neon.text)
+                    .lineLimit(1)
+                    .frame(height: 34, alignment: .center)
+                Text(name)
+                    .font(neon.mono(11).weight(selected ? .bold : .regular))
+                    .foregroundStyle(selected ? neon.accent : neon.textFaint)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(width: 128, alignment: .leading)
+            .padding(EdgeInsets(top: 13, leading: 13, bottom: 11, trailing: 13))
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(selected ? neon.accent.opacity(0.08) : neon.surface2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(selected ? neon.accent : neon.border, lineWidth: selected ? 1.6 : 1)
+            )
+            .neonGlowBox(selected && neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+            .contentShape(Rectangle())
+        }
+
+        /// Horizontal strip with a soft right-edge fade hinting it scrolls.
+        @ViewBuilder
+        private func fontStripScroll<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 11) {
+                    content()
+                }
+                .padding(.vertical, 3)
+                .padding(.trailing, 8)
+            }
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.9),
+                        .init(color: .clear, location: 1.0),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
         }
 
         // MARK: Conversation
@@ -586,88 +596,6 @@ extension ConduitUI {
                     subtitle: "Start command cards collapsed by default",
                     isOn: $appearance.collapseTurns
                 )
-            }
-        }
-
-        // MARK: Servers
-
-        private var serversSection: some View {
-            sectionCard(title: "Servers") {
-                VStack(spacing: 0) {
-                    // Saved-server rows live inside an embedded `List` so
-                    // each carries `.swipeActions` for the Forget gesture —
-                    // SwiftUI only honours trailing-swipe on List rows. The
-                    // list takes a fixed height (row count × estimated row
-                    // height) so the surrounding scroll view continues to
-                    // own vertical layout; the inner list itself never
-                    // scrolls. `listStyle(.plain)` + clear backgrounds keep
-                    // the upstream glass-card look from the prior VStack.
-                    if !store.savedServers.isEmpty {
-                        List {
-                            ForEach(store.savedServers) { server in
-                                savedServerRow(server)
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparator(.hidden)
-                                    .listRowInsets(EdgeInsets())
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        Button(role: .destructive) {
-                                            pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
-                                        } label: {
-                                            Label("Forget", systemImage: "trash")
-                                        }
-                                    }
-                                    .contextMenu {
-                                        Button(role: .destructive) {
-                                            pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
-                                        } label: {
-                                            Label("Forget", systemImage: "trash")
-                                        }
-                                    }
-                            }
-                        }
-                        .listStyle(.plain)
-                        .scrollContentBackground(.hidden)
-                        .scrollDisabled(true)
-                        .frame(height: CGFloat(store.savedServers.count) * 56)
-                        Divider()
-                            .background(neon.border)
-                            .padding(.leading, 46)
-                    }
-                    Button {
-                        showAddServer = true
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "plus.circle.fill",
-                            title: "Add Server",
-                            subtitle: nil,
-                            iconTint: neon.accent
-                        ) {
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-
-        @ViewBuilder
-        private func savedServerRow(_ server: SavedServer) -> some View {
-            ConduitUI.ListRow(
-                icon: "server.rack",
-                title: server.name,
-                subtitle: server.endpoint.displayHost,
-                iconTint: neon.accent
-            ) {
-                if server.isDefault {
-                    Text("Default")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(neon.accent.opacity(0.22)))
-                        .overlay(Capsule().stroke(neon.accent.opacity(0.5), lineWidth: 1))
-                }
             }
         }
 
@@ -705,11 +633,6 @@ extension ConduitUI {
         }
 
         private var aboutVersion: String {
-            // Show the release tag the IPA was actually published under
-            // (stamped into BuildInfo by release-ios.yml), not the static
-            // MARKETING_VERSION — that was hardcoded "0.0.1", so Settings
-            // never matched the release (device bug #7, v0.0.30). Dev/CI
-            // builds aren't stamped, so fall back to the marketing version.
             BuildInfo.isStamped
                 ? "\(BuildInfo.releaseTag) (\(BuildInfo.gitSHA))"
                 : "\(BuildInfo.marketingVersion) (dev)"
@@ -717,18 +640,29 @@ extension ConduitUI {
 
         // MARK: Layout helpers
 
+        private func drillValue(_ value: String) -> some View {
+            HStack(spacing: 6) {
+                Text(value)
+                    .font(neon.mono(12.5))
+                    .foregroundStyle(neon.textFaint)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(neon.textFaint)
+            }
+        }
+
         @ViewBuilder
         private func sectionCard<C: View>(title: String, @ViewBuilder content: () -> C) -> some View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(title)
-                    .font(neon.mono(11).weight(.bold))
+                    .font(neon.mono(11.5).weight(.bold))
                     .foregroundStyle(neon.textFaint)
+                    .tracking(1.6)
                     .textCase(.uppercase)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 4)
-                // Neon section surface: hairline border + glow (or light-
-                // mode elevation) via the shared card-surface rule.
                 content()
                     .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
             }
@@ -738,11 +672,10 @@ extension ConduitUI {
     // MARK: - Usage & limits · per-agent window rows
 
     /// Account-wide plan limits for one agent (claude or codex): the 5-hour
-    /// and weekly windows side by side, with a refresh affordance. Reads the
-    /// freshest account-usage values off any session of `agent` (the numbers
-    /// are per-account, not per-session, so any of that agent's sessions
-    /// carries the latest fetched values). Shows honest "—"/"tap refresh"
-    /// when no data has arrived — never a fabricated percentage.
+    /// and weekly windows, with a refresh affordance. Reads the freshest
+    /// account-usage values off any session of `agent` (the numbers are
+    /// per-account, not per-session). Shows honest "—"/"tap refresh" when no
+    /// data has arrived — never a fabricated percentage.
     struct AgentUsageRows: View {
         let agent: String
         let tint: Color
@@ -791,8 +724,6 @@ extension ConduitUI {
         @ViewBuilder
         private func window(label: String, pct: Double?, resetsAt: String?) -> some View {
             let frac = CGFloat(max(0, min(1, (pct ?? 0) / 100)))
-            // Bar fill follows this agent's tint (claude=orange, codex=cyan),
-            // per the design — not green/yellow/red headroom.
             let barTint = tint
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
@@ -821,10 +752,7 @@ extension ConduitUI {
         }
 
         /// Freshest account-usage values across this agent's sessions (live
-        /// status frame preferred, session snapshot as fallback). Mirrors
-        /// `SessionStore.accountUsage` but parameterised on the agent, so the
-        /// Settings card can show both claude and codex rather than the
-        /// Claude-only ambient strip.
+        /// status frame preferred, session snapshot as fallback).
         private func agentUsage() -> SessionStore.AccountUsageSnapshot {
             for s in store.sessions where s.assistant == agent {
                 let st = store.statusBySession[s.id]
@@ -846,49 +774,137 @@ extension ConduitUI {
         }
     }
 
-    // MARK: - Drill-in pickers
+    // MARK: - Server switcher (drill-in from the active server row)
 
-    /// App font drill-in target — the chat/UI body font family, opened from
-    /// the Appearance card's "App font" row. Same single-select semantics as
-    /// the prior inline `fontSection`, just hosted on its own screen.
-    struct AppFontPicker: View {
-        @Environment(AppearanceStore.self) private var appearance
+    /// Saved-server list reached from Connection's active-server row. Tap a
+    /// row to switch the active server (and dial in); swipe to forget.
+    /// Carries the Add Server affordance too so every server action lives in
+    /// one place.
+    struct ServerSwitcherView: View {
+        @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
+        @State private var showAddServer = false
+        @State private var pendingServerDelete: PendingServerDelete?
 
         var body: some View {
-            @Bindable var appearance = appearance
-            return pickerList(title: "App font") {
-                ForEach(AppearanceStore.FontFamily.allCases) { family in
-                    Button {
-                        appearance.fontFamily = family
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: fontIcon(family),
-                            title: family.label,
-                            subtitle: "The quick brown fox",
-                            iconTint: neon.accent
-                        ) {
-                            if appearance.fontFamily == family {
-                                Image(systemName: "checkmark")
-                                    .font(.footnote.weight(.bold))
-                                    .foregroundStyle(neon.accent)
+            ZStack {
+                GlassAppBackground()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        if !store.savedServers.isEmpty {
+                            List {
+                                ForEach(store.savedServers) { server in
+                                    savedServerRow(server)
+                                        .listRowBackground(Color.clear)
+                                        .listRowSeparator(.hidden)
+                                        .listRowInsets(EdgeInsets())
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                            Button(role: .destructive) {
+                                                pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
+                                            } label: {
+                                                Label("Forget", systemImage: "trash")
+                                            }
+                                        }
+                                        .contextMenu {
+                                            Button(role: .destructive) {
+                                                pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
+                                            } label: {
+                                                Label("Forget", systemImage: "trash")
+                                            }
+                                        }
+                                }
+                            }
+                            .listStyle(.plain)
+                            .scrollContentBackground(.hidden)
+                            .scrollDisabled(true)
+                            .frame(height: CGFloat(store.savedServers.count) * 60)
+
+                            Divider().background(neon.border).padding(.leading, 46)
+                        }
+
+                        Button {
+                            showAddServer = true
+                        } label: {
+                            ConduitUI.ListRow(
+                                icon: "plus.circle.fill",
+                                title: "Add Server",
+                                subtitle: nil,
+                                iconTint: neon.accent
+                            ) {
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(neon.textFaint)
                             }
                         }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                    pickerDivider(after: family, in: AppearanceStore.FontFamily.allCases, neon: neon)
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 18)
                 }
+                .scrollIndicators(.hidden)
+            }
+            .navigationTitle("Servers")
+            .navigationBarTitleDisplayMode(.inline)
+            .tint(neon.accent)
+            .appearanceColorScheme()
+            .sheet(isPresented: $showAddServer) {
+                ConduitUI.AddServerSheet()
+            }
+            .alert(
+                "Forget server?",
+                isPresented: Binding(
+                    get: { pendingServerDelete != nil },
+                    set: { if !$0 { pendingServerDelete = nil } }
+                ),
+                presenting: pendingServerDelete
+            ) { target in
+                Button("Forget", role: .destructive) {
+                    store.forgetServer(target.id)
+                    pendingServerDelete = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingServerDelete = nil
+                }
+            } message: { target in
+                Text("Drops the saved pairing for \(target.name). Sessions already running on this server keep running until you delete them.")
             }
         }
 
-        private func fontIcon(_ family: AppearanceStore.FontFamily) -> String {
-            switch family {
-            case .serif:      return "textformat.alt"
-            case .system:     return "textformat"
-            case .monospaced: return "chevron.left.forwardslash.chevron.right"
+        @ViewBuilder
+        private func savedServerRow(_ server: SavedServer) -> some View {
+            let isActive = server.endpoint == store.endpoint
+            Button {
+                store.selectSavedServer(server.id, autoConnect: true)
+            } label: {
+                ConduitUI.ListRow(
+                    icon: "server.rack",
+                    title: server.name,
+                    subtitle: server.endpoint.displayHost,
+                    iconTint: isActive ? neon.green : neon.accent
+                ) {
+                    HStack(spacing: 8) {
+                        if server.isDefault {
+                            Text("Default")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(neon.accent.opacity(0.22)))
+                                .overlay(Capsule().stroke(neon.accent.opacity(0.5), lineWidth: 1))
+                        }
+                        if isActive {
+                            Image(systemName: "checkmark")
+                                .font(.footnote.weight(.bold))
+                                .foregroundStyle(neon.green)
+                        }
+                    }
+                }
             }
+            .buttonStyle(.plain)
         }
     }
+
+    // MARK: - Drill-in pickers
 
     /// Terminal color-theme drill-in target — the native (libghostty) terminal
     /// color theme. Applies live via `AppearanceStore.terminalTheme`.
@@ -898,7 +914,7 @@ extension ConduitUI {
 
         var body: some View {
             @Bindable var appearance = appearance
-            return pickerList(title: "Color theme") {
+            return pickerList(title: "Terminal colors") {
                 ForEach(GhosttyTheme.allCases) { theme in
                     Button {
                         appearance.terminalTheme = theme
@@ -922,45 +938,12 @@ extension ConduitUI {
             }
         }
     }
-
-    /// Terminal font drill-in target — the native (libghostty) terminal font.
-    struct TerminalFontPicker: View {
-        @Environment(AppearanceStore.self) private var appearance
-        @Environment(\.neonTheme) private var neon
-
-        var body: some View {
-            @Bindable var appearance = appearance
-            return pickerList(title: "Font") {
-                ForEach(GhosttyFont.allCases) { font in
-                    Button {
-                        appearance.terminalFont = font
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "textformat",
-                            title: font.label,
-                            subtitle: nil,
-                            iconTint: neon.accent
-                        ) {
-                            if appearance.terminalFont == font {
-                                Image(systemName: "checkmark")
-                                    .font(.footnote.weight(.bold))
-                                    .foregroundStyle(neon.accent)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    pickerDivider(after: font, in: GhosttyFont.allCases, neon: neon)
-                }
-            }
-        }
-    }
 }
 
 // MARK: - Shared picker chrome (free helpers, used by the drill-in screens)
 
 /// A drill-in picker screen: the same neon-card list the Settings sections
-/// use, hosted full-screen with a nav title. Kept as a free helper so the
-/// three picker `struct`s above stay tiny.
+/// use, hosted full-screen with a nav title.
 @ViewBuilder
 private func pickerList<C: View>(title: String, @ViewBuilder content: @escaping () -> C) -> some View {
     PickerListShell(title: title, content: content)
@@ -1001,10 +984,7 @@ private func pickerDivider<T: Equatable>(after element: T, in collection: [T], n
     }
 }
 
-/// Carrier for the Settings → Servers Forget confirmation alert. Same
-/// `Identifiable` pattern as `PendingSessionDelete` in `ConduitHomeView`
-/// — keys the alert presentation off the pending target and prevents a
-/// stale id from leaking into the next prompt.
+/// Carrier for the Servers Forget confirmation alert.
 private struct PendingServerDelete: Identifiable, Equatable {
     let id: String
     let name: String
