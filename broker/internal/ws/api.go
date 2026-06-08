@@ -258,6 +258,12 @@ func (s *Server) serveRecentProjects(w http.ResponseWriter, r *http.Request) {
 // everything else it had saved as live has died and drops to History.
 type sessionsResponse struct {
 	Sessions []session.LiveSessionInfo `json:"sessions"`
+	// Recoverable lists cold on-disk sessions that are not live right now
+	// but would respawn cleanly on open (the "dead now, resumable" set).
+	// Kept SEPARATE from Sessions so listing never resurrects a process and
+	// the live set keeps its strict "alive right now" meaning — the client
+	// uses this purely to offer Resume on otherwise read-only rows.
+	Recoverable []session.LiveSessionInfo `json:"recoverable,omitempty"`
 }
 
 // serveSessions returns the broker's in-memory live-session set. It never
@@ -269,7 +275,8 @@ func (s *Server) serveSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionsResponse{
-		Sessions: s.Sessions.LiveSessions(),
+		Sessions:    s.Sessions.LiveSessions(),
+		Recoverable: s.Sessions.RecoverableSessions(),
 	})
 }
 

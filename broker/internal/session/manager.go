@@ -1351,11 +1351,20 @@ func (m *Manager) Get(id string) (*Session, bool) {
 // reconnecting client uses to decide which sessions are still ACTIVE
 // (process genuinely running) vs which have died and belong in History.
 type LiveSessionInfo struct {
-	ID             string `json:"id"`
-	Assistant      string `json:"assistant"`
-	Phase          string `json:"phase"`
-	Health         string `json:"health"`
-	Running        bool   `json:"running"`
+	ID        string `json:"id"`
+	Assistant string `json:"assistant"`
+	Phase     string `json:"phase"`
+	Health    string `json:"health"`
+	Running   bool   `json:"running"`
+	// Recoverable is true when opening the session yields an interactive
+	// agent — either it is already live (LiveSessions) or it is a cold
+	// on-disk session that would respawn cleanly on the next /ws/<id> open
+	// (RecoverableSessions). It is the "dead now, resumable" signal the app
+	// needs to offer Resume instead of failing closed to a read-only
+	// transcript. A session that can NEVER come back (missing scrollback,
+	// exhausted restart budget) is omitted from the recoverable list, so
+	// this is never true for an unrecoverable row.
+	Recoverable    bool   `json:"recoverable,omitempty"`
 	Rows           uint16 `json:"rows"`
 	Cols           uint16 `json:"cols"`
 	Viewers        int    `json:"viewers"`
@@ -1390,11 +1399,14 @@ func (m *Manager) LiveSessions() []LiveSessionInfo {
 			Phase:     st.Phase,
 			Health:    st.Health,
 			Running:   s.processAlive(),
-			Rows:      rows,
-			Cols:      cols,
-			Viewers:   s.SubscriberCount(),
-			Title:     s.DisplayName(),
-			CWD:       s.WorkspaceDir(),
+			// A held-in-memory session is trivially resumable: it already
+			// has (or re-spawns on open) a live agent.
+			Recoverable: true,
+			Rows:        rows,
+			Cols:        cols,
+			Viewers:     s.SubscriberCount(),
+			Title:       s.DisplayName(),
+			CWD:         s.WorkspaceDir(),
 		}
 		if !st.StartedAt.IsZero() {
 			info.StartedAt = st.StartedAt.UTC().Format(time.RFC3339Nano)
