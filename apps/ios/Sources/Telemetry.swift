@@ -28,7 +28,7 @@ enum Telemetry {
             // default) means Sentry does NOT collect the device IP address or
             // other personally-identifying server-side data. Set explicitly so
             // a future SDK default-flip can't silently start capturing it.
-            options.sendDefaultPII = false
+            options.sendDefaultPii = false
 
             // --- Session Replay, buffer mode (privacy-masked) ---------------
             // We want a short visual replay of the seconds BEFORE a crash/error
