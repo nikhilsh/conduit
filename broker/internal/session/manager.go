@@ -325,7 +325,10 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.recorder = rec
 		}
 	}
-	s.workspaceDir = s.commandDir(adapter)
+	// Optionally run the session in its own per-session git worktree (off by
+	// default; see worktree.go). Fail-safe: returns the original dir on any
+	// problem, so a worktree issue never blocks a session from starting.
+	s.workspaceDir = s.maybeRemapToWorktree(s.commandDir(adapter))
 	cmd.Dir = s.workspaceDir
 	// Capture the workspace git HEAD now so OutcomeChips diffs measure only
 	// what this session changes (see outcome.go). Cheap; no-op when the cwd

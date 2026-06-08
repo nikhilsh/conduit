@@ -75,6 +75,12 @@ func (m *Manager) DeleteSession(id string) error {
 	}
 	deleteWIPCheckpointRef(workspaceDir, id)
 
+	// 2.6 Tear down the per-session git worktree (if this session ran in one)
+	//     BEFORE archiving — otherwise the rename orphans the worktree
+	//     registration in the parent repo. Existence-gated, so a no-op for
+	//     sessions that ran in the shared checkout.
+	removeSessionWorktree(filepath.Join(m.kittyRoot, "sessions", id, "worktree"))
+
 	// 3. Archive the on-disk session directory out of the active set.
 	//    Rename is atomic on the same filesystem and preserves
 	//    conversation.jsonl + work/ verbatim. A missing source dir (never
