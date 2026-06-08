@@ -18,6 +18,63 @@ type SpawnOverride struct {
 	// flag (e.g. "opus", "sonnet", "claude-sonnet-4-6", "gpt-5-codex").
 	// Empty = no override.
 	Model string
+	// PermissionMode selects the agent's permission posture (claude):
+	// "" / "auto" = the adapter default (full-auto, bypassPermissions via
+	// --dangerously-skip-permissions); "plan" = read-only planning. See
+	// applyClaudePermissionMode for the verified flag mapping.
+	PermissionMode string
+}
+
+// applyClaudePermissionMode rewrites a claude argv for the chosen
+// permission mode.
+//
+// Verified live (claude-code 2.1.168): --dangerously-skip-permissions
+// OVERRIDES --permission-mode — pass both and the CLI's init reports
+// `permissionMode: bypassPermissions`, silently ignoring the requested
+// mode. So plan mode only engages when the dangerous flag is REMOVED.
+//
+//	"" / "auto" / "default" → unchanged (adapter default: full-auto bypass)
+//	"plan"                  → drop --dangerously-skip-permissions, add
+//	                          --permission-mode plan (read-only planning)
+//
+// An unrecognized mode is treated as the default (no change), so a bad
+// value never breaks the spawn.
+func applyClaudePermissionMode(args []string, mode string) []string {
+	if strings.TrimSpace(mode) != "plan" {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	for _, a := range args {
+		if a == "--dangerously-skip-permissions" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return append(out, "--permission-mode", "plan")
+}
+
+// applyCodexPermissionMode rewrites codex `exec` args for the chosen mode
+// (parity with the claude path).
+//
+//	"" / "auto" / "default" → unchanged (adapter default: full access via
+//	                          --dangerously-bypass-approvals-and-sandbox)
+//	"plan"                  → drop the bypass flag, add --sandbox read-only
+//	                          (codex's read-only posture = planning)
+//
+// codex's sandbox values are read-only / workspace-write /
+// danger-full-access (verified via `codex exec --help`).
+func applyCodexPermissionMode(args []string, mode string) []string {
+	if strings.TrimSpace(mode) != "plan" {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	for _, a := range args {
+		if a == "--dangerously-bypass-approvals-and-sandbox" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return append(out, "--sandbox", "read-only")
 }
 
 // claudeEfforts are the reasoning-effort levels the claude CLI's --effort
@@ -43,7 +100,9 @@ var codexEfforts = map[string]bool{
 // IsZero reports whether the override carries nothing (the common
 // non-fork start path). Callers use it to skip all override plumbing.
 func (o SpawnOverride) IsZero() bool {
-	return strings.TrimSpace(o.ReasoningEffort) == "" && strings.TrimSpace(o.Model) == ""
+	return strings.TrimSpace(o.ReasoningEffort) == "" &&
+		strings.TrimSpace(o.Model) == "" &&
+		strings.TrimSpace(o.PermissionMode) == ""
 }
 
 // extraArgsFor returns the additional CLI args that apply the override for

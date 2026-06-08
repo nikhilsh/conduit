@@ -521,11 +521,12 @@ func (s *Session) startChatBackend(
 		s.chatSessionID = resumeChatSessionID
 		s.mu.Unlock()
 		argsFor := func(resume string, continueLatest bool) []string {
-			return claudeStreamCommand(
-				adapter.Command,
-				append(append([]string{}, adapter.Args...), s.override.extraArgsFor(adapter.Name)...),
-				resume, continueLatest,
-			)
+			baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsFor(adapter.Name)...)
+			// Apply the chosen permission mode (e.g. plan): for claude this
+			// may drop --dangerously-skip-permissions, so it must wrap the
+			// adapter args before the stream-json flags are appended.
+			baseArgs = applyClaudePermissionMode(baseArgs, s.override.PermissionMode)
+			return claudeStreamCommand(adapter.Command, baseArgs, resume, continueLatest)
 		}
 		chat, cerr := startChatProcess(
 			context.Background(),
@@ -579,7 +580,7 @@ func (s *Session) startChatBackend(
 		s.mu.Lock()
 		s.codexThreadID = resumeCodexThreadID
 		s.chatRespawn = nil // per-turn exec model has no long-lived process
-		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID)
+		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
 		s.mu.Unlock()
 	default:
 		// Legacy TUI-scrape path (no shipped adapter uses it). If a
