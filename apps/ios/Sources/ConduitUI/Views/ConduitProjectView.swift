@@ -541,13 +541,17 @@ extension ConduitUI {
         // MARK: Tab strip — floating neon segmented pill
 
         private var tabStrip: some View {
-            HStack {
-                // Chat · Terminal · Browser order (the enum's declaration
-                // order is terminal/chat/browser; the pill presents Chat
-                // first as the default landing tab).
-                // Browser is offered only once the agent reports a live
-                // preview URL — no valid website → no Browser tab.
-                let tabs: [ProjectTab] = hasBrowserPreview ? [.chat, .terminal, .browser] : [.chat, .terminal]
+            // Chat · Terminal · Browser order (the enum's declaration
+            // order is terminal/chat/browser; the pill presents Chat
+            // first as the default landing tab).
+            // Browser is offered only once the agent reports a live
+            // preview URL — no valid website → no Browser tab.
+            let tabs: [ProjectTab] = hasBrowserPreview ? [.chat, .terminal, .browser] : [.chat, .terminal]
+            // Centered under the header (device feedback): flanking
+            // spacers keep the pill in the middle of the strip rather
+            // than pinned to the leading edge.
+            return HStack {
+                Spacer(minLength: 0)
                 NeonSegmentedPill(
                     segments: tabs.map {
                         NeonSegmentedPill<ProjectTab>.Segment(id: $0, label: $0.label, systemImage: $0.systemImage)
