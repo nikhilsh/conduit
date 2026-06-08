@@ -22,7 +22,7 @@ struct TurnLiveActivityModelTests {
             toolName: "Bash",
             command: nil,
             status: "running",
-            timestamp: Date(timeIntervalSince1970: 100)
+            timestamp: Date() // recent: stale items deliberately can't START
         )
 
         let effect = model.apply(item: item, sessionID: "s1", agentName: "claude")
@@ -172,7 +172,7 @@ struct TurnLiveActivityModelTests {
 
     @Test func idleTickAfterTimeoutEndsActivity() {
         var model = TurnActivityModel(idleTimeout: 5)
-        let start = Date(timeIntervalSince1970: 1000)
+        let start = Date() // recent: stale items deliberately can't START
         _ = model.apply(
             item: TurnActivityItem(id: "i1", kind: .tool, toolName: "Bash", timestamp: start),
             sessionID: "s1",
