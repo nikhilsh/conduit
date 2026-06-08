@@ -100,6 +100,14 @@ extension ConduitUI {
         /// the `.keyboard` safe area, this inset is the single source of truth,
         /// so the composer lands exactly on the keyboard top every time.
         @State private var keyboardInset: CGFloat = 0
+        /// Pending-input event ids the user has already answered. Held at
+        /// the ChatView level (not in the card's @State) so the locked /
+        /// "Sent" state SURVIVES the card being recreated when new events
+        /// stream in — otherwise the lock reset and a second tap fired the
+        /// option as a brand-new message, confusing the agent (device
+        /// feedback, round 4: "I tap a reply, it doesn't seem to send, I
+        /// tap another and it sends again").
+        @State private var answeredPendingIDs: Set<String> = []
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
@@ -399,8 +407,12 @@ extension ConduitUI {
                                         event: event,
                                         isContinuation: continuation(in: rows, at: idx, role: event.role),
                                         sessionID: session.id,
+                                        pendingAnswered: answeredPendingIDs.contains(event.id),
                                         onQuickReply: { reply in
                                             store.sendChat(sessionID: session.id, message: reply)
+                                        },
+                                        onPendingAnswered: {
+                                            answeredPendingIDs.insert(event.id)
                                         }
                                     )
                                     .id(event.id)
@@ -1070,7 +1082,11 @@ private struct ConduitEventRow: View {
     /// Live session id — threaded so the CommandCard's Re-run action can
     /// resend the command to the right session.
     var sessionID: String = ""
+    /// Durable "already answered" flag for a pending-input card, owned by
+    /// the ChatView so it survives this row being recreated.
+    var pendingAnswered: Bool = false
     let onQuickReply: (String) -> Void
+    var onPendingAnswered: () -> Void = {}
     @Environment(AppearanceStore.self) private var appearance
 
     var body: some View {
@@ -1079,7 +1095,12 @@ private struct ConduitEventRow: View {
             // instead of a full row (it's a transition, not a message).
             ConduitSwapNotice(from: event.sourceAgent ?? "", to: event.targetAgent ?? "")
         } else if event.kind == "pending_input" {
-            ConduitPendingInputCard(event: event, onQuickReply: onQuickReply)
+            ConduitPendingInputCard(
+                event: event,
+                alreadyAnswered: pendingAnswered,
+                onQuickReply: onQuickReply,
+                onAnswered: onPendingAnswered
+            )
         } else if event.kind == "handoff" {
             ConduitHandoffCard(event: event)
         } else if event.kind == "plan" {
@@ -2937,7 +2958,14 @@ private struct ConduitDiffBlock: View {
 
 private struct ConduitPendingInputCard: View {
     let event: ConversationItem
+    /// Durable lock from the ChatView (survives this card being recreated
+    /// when new events stream in). Once true the card stays settled and
+    /// no further tap can fire — closes the double-send bug.
+    var alreadyAnswered: Bool = false
     let onQuickReply: (String) -> Void
+    /// Called the instant the user submits so the ChatView records this
+    /// event as answered.
+    var onAnswered: () -> Void = {}
     @Environment(\.neonTheme) private var neon
 
     /// Chosen option per single-select question index. Drives the
@@ -2946,9 +2974,16 @@ private struct ConduitPendingInputCard: View {
     /// Chosen options per MULTI-select question index (round-4 device
     /// feedback: multiSelect questions previously rendered single-choice).
     @State private var multiSelections: [Int: Set<String>] = [:]
-    /// Once answered, the card locks: the choice is marked and the rest
-    /// dimmed/disabled so it reads as a settled decision.
-    @State private var submitted = false
+    /// Local submit flag. The card is locked when EITHER this or the
+    /// durable `alreadyAnswered` is set.
+    @State private var localSubmitted = false
+    /// The chosen answer text, kept so the locked card can echo it.
+    @State private var sentAnswer: String?
+
+    /// The card is settled once submitted locally OR recorded answered
+    /// upstream — the second source is what makes the lock survive a
+    /// re-render.
+    private var submitted: Bool { localSubmitted || alreadyAnswered }
 
     /// Per-question groups recovered from the prompt body (#7). Falls back
     /// to the flat `pendingOptions` as a single unlabeled question.
@@ -2996,12 +3031,16 @@ private struct ConduitPendingInputCard: View {
             }
             if submitted {
                 // Round-4 device feedback: a tap had no visible "delivered"
-                // affordance, so a sent answer read as nothing happening.
+                // affordance, so a sent answer read as nothing happening
+                // and the user tapped again. Echo the chosen answer next to
+                // a "Sent" check so the tap is unmistakably registered.
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 12, weight: .bold))
-                    Text("Sent")
+                    Text(sentAnswer.map { "Sent · \($0)" } ?? "Sent")
                         .font(neon.mono(11).weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 .foregroundStyle(neon.green)
             }
@@ -3111,10 +3150,18 @@ private struct ConduitPendingInputCard: View {
     }
 
     /// Lock the card and send the chosen answer(s). Multiple answers are
-    /// newline-joined into one chat message.
+    /// newline-joined into one chat message. Guarded against a double
+    /// submit (the bug): once locked, further taps are ignored, and the
+    /// lock is recorded upstream so it survives a card re-render.
     private func submit(_ answers: [String]) {
-        submitted = true
-        onQuickReply(answers.joined(separator: "\n"))
+        guard !submitted else { return }
+        let joined = answers.joined(separator: "\n")
+        // Lock OPTIMISTICALLY and immediately — before the send — so the
+        // card visibly settles the instant the user taps.
+        localSubmitted = true
+        sentAnswer = joined
+        onAnswered()
+        onQuickReply(joined)
     }
 }
 
