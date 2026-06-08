@@ -91,3 +91,57 @@ func TestSpawnOverrideEffectiveEffort(t *testing.T) {
 		t.Fatalf("codex xhigh fallback = %q", got)
 	}
 }
+
+// Permission-mode mapping (mode selector, task #16). Verified live against
+// claude-code 2.1.168: --dangerously-skip-permissions overrides
+// --permission-mode, so plan mode requires DROPPING the dangerous flag.
+func TestApplyClaudePermissionMode(t *testing.T) {
+	base := []string{"claude", "--dangerously-skip-permissions"}
+
+	// Default / auto / empty: unchanged (full-auto bypass).
+	for _, mode := range []string{"", "auto", "default", "bogus"} {
+		got := applyClaudePermissionMode(base, mode)
+		if len(got) != 2 || got[1] != "--dangerously-skip-permissions" {
+			t.Fatalf("mode %q: expected unchanged, got %v", mode, got)
+		}
+	}
+
+	// Plan: drop the dangerous flag, add --permission-mode plan.
+	got := applyClaudePermissionMode(base, "plan")
+	joined := strings.Join(got, " ")
+	if strings.Contains(joined, "--dangerously-skip-permissions") {
+		t.Fatalf("plan mode must drop the dangerous flag: %v", got)
+	}
+	if !strings.Contains(joined, "--permission-mode plan") {
+		t.Fatalf("plan mode must add --permission-mode plan: %v", got)
+	}
+	// The base binary arg is preserved.
+	if got[0] != "claude" {
+		t.Fatalf("plan mode dropped the binary arg: %v", got)
+	}
+}
+
+func TestApplyCodexPermissionMode(t *testing.T) {
+	base := []string{"codex", "exec", "--json"}
+	// Default: unchanged.
+	if got := applyCodexPermissionMode(base, "auto"); len(got) != 3 {
+		t.Fatalf("auto should be unchanged: %v", got)
+	}
+	// Plan: add --sandbox read-only.
+	got := strings.Join(applyCodexPermissionMode(base, "plan"), " ")
+	if !strings.Contains(got, "--sandbox read-only") {
+		t.Fatalf("plan must add read-only sandbox: %v", got)
+	}
+}
+
+// codex plan applies --sandbox ONLY on the first-turn exec; resume rejects it.
+func TestCodexTurnArgvPlanFirstTurnOnly(t *testing.T) {
+	first := strings.Join(codexTurnArgv("codex", "/w", "", nil, "plan", "go"), " ")
+	if !strings.Contains(first, "--sandbox read-only") {
+		t.Fatalf("first turn must carry the sandbox flag: %v", first)
+	}
+	resume := strings.Join(codexTurnArgv("codex", "/w", "t-1", nil, "plan", "go"), " ")
+	if strings.Contains(resume, "--sandbox") {
+		t.Fatalf("resume must NOT carry --sandbox (codex rejects it): %v", resume)
+	}
+}

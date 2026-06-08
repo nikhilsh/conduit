@@ -26,12 +26,17 @@ var ansiStripRe = regexp.MustCompile(`\x1b\[[0-9;]*[mKHJABCDsuGfnr]`)
 //
 // This is codex slice 2 of task #24. See docs/PLAN-CHAT-CHANNEL.md.
 type codexChatProcess struct {
-	binary  string   // adapter.Command[0], e.g. "codex"
-	dir     string   // session worktree (first turn's -C)
-	env     []string // commandEnv
-	extra   []string // reasoning-effort / model override flags (may be nil)
-	publish func([]byte)
-	onUsage func(usageDelta) // folds each turn.completed's token usage
+	binary string // adapter.Command[0], e.g. "codex"
+	dir    string // session worktree (first turn's -C)
+	env    []string
+	extra  []string // reasoning-effort / model override flags (may be nil)
+	// permissionMode selects the sandbox posture ("plan" → read-only).
+	// Applied ONLY on the first-turn `exec` — `exec resume` rejects
+	// --sandbox and reuses the recorded posture (verified via
+	// `codex exec resume --help`).
+	permissionMode string
+	publish        func([]byte)
+	onUsage        func(usageDelta) // folds each turn.completed's token usage
 	// onThread fires once when the first turn's thread.started reveals
 	// the codex thread id — the session persists it (meta.json) so a
 	// broker restart resumes the SAME thread instead of starting an
@@ -46,10 +51,11 @@ type codexChatProcess struct {
 
 // `seedThreadID`, when non-empty (recovery path), makes the FIRST turn
 // run `exec resume <id>` so a broker restart doesn't reset the thread.
-func newCodexChatProcess(binary, dir string, env, extra []string, publish func([]byte), onUsage func(usageDelta), seedThreadID string, onThread func(string)) *codexChatProcess {
+func newCodexChatProcess(binary, dir string, env, extra []string, publish func([]byte), onUsage func(usageDelta), seedThreadID string, onThread func(string), permissionMode string) *codexChatProcess {
 	return &codexChatProcess{
 		binary: binary, dir: dir, env: env, extra: extra,
-		publish: publish, onUsage: onUsage,
+		permissionMode: permissionMode,
+		publish:        publish, onUsage: onUsage,
 		onThread: onThread, threadID: seedThreadID,
 	}
 }
@@ -58,11 +64,14 @@ func newCodexChatProcess(binary, dir string, env, extra []string, publish func([
 // threadID) runs `exec` with `-C <dir>`; later turns `exec resume
 // <threadID>` (resume reuses the recorded cwd and rejects -C). `extra`
 // carries the optional reasoning-effort / model override flags, inserted
-// after the `exec`/`resume` subcommand and before the message. Pure, so the
-// branch is unit-testable without spawning codex.
-func codexTurnArgv(binary, dir, threadID string, extra []string, msg string) []string {
+// after the `exec`/`resume` subcommand and before the message. `mode` is
+// the permission mode, applied ONLY to the first-turn `exec` (resume
+// rejects --sandbox and reuses the recorded posture). Pure, so the
+// branches are unit-testable without spawning codex.
+func codexTurnArgv(binary, dir, threadID string, extra []string, mode, msg string) []string {
 	if threadID == "" {
 		argv := []string{binary, "exec", "--json", "--skip-git-repo-check", "-C", dir}
+		argv = applyCodexPermissionMode(argv, mode)
 		argv = append(argv, extra...)
 		return append(argv, msg)
 	}
@@ -82,7 +91,7 @@ func (c *codexChatProcess) Send(text string) error {
 	}
 	tid := c.threadID
 	c.mu.Unlock()
-	go c.runTurn(codexTurnArgv(c.binary, c.dir, tid, c.extra, text))
+	go c.runTurn(codexTurnArgv(c.binary, c.dir, tid, c.extra, c.permissionMode, text))
 	return nil
 }
 
