@@ -190,3 +190,16 @@ func (s *Session) latchChatSessionID(id string) {
 		_ = s.persistMetadata()
 	}
 }
+
+// latchCodexThreadID records codex's thread id (thread.started) and
+// persists it so recovery can `exec resume` it — the codex twin of
+// latchChatSessionID.
+func (s *Session) latchCodexThreadID(id string) {
+	s.mu.Lock()
+	changed := s.codexThreadID != id
+	s.codexThreadID = id
+	s.mu.Unlock()
+	if changed && s.metaPath != "" {
+		_ = s.persistMetadata()
+	}
+}

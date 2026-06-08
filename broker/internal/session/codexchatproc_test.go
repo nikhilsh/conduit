@@ -47,7 +47,7 @@ func TestCodexChatProcessRoundTrip(t *testing.T) {
 	}
 
 	events := make(chan []byte, 8)
-	cp := newCodexChatProcess(fake, dir, nil, nil, func(p []byte) { events <- p }, nil)
+	cp := newCodexChatProcess(fake, dir, nil, nil, func(p []byte) { events <- p }, nil, "", nil)
 	defer cp.Close()
 
 	if err := cp.Send("hi"); err != nil {
@@ -89,7 +89,7 @@ func TestCodexChatProcessRoundTrip(t *testing.T) {
 }
 
 func TestCodexChatProcessSendAfterClose(t *testing.T) {
-	cp := newCodexChatProcess("true", t.TempDir(), nil, nil, func([]byte) {}, nil)
+	cp := newCodexChatProcess("true", t.TempDir(), nil, nil, func([]byte) {}, nil, "", nil)
 	if err := cp.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

@@ -192,6 +192,9 @@ type Session struct {
 	// respawned agent --resumes the conversation instead of starting
 	// amnesiac. Guarded by mu.
 	chatSessionID string
+	// codexThreadID is codex's equivalent (thread.started id), persisted
+	// so recovery seeds `exec resume <id>`. Guarded by mu.
+	codexThreadID string
 
 	// recorder writes PTY bytes + view_events to a per-session
 	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
@@ -483,7 +486,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		s.chatSessionID = opts.resumeChatSessionID
 		chat, cerr := startChatProcess(
 			context.Background(),
-			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), opts.resumeChatSessionID),
+			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), opts.resumeChatSessionID, opts.continueLatestChat),
 			s.commandEnv(nil),
 			s.workspaceDir,
 			s.PublishText,
@@ -511,7 +514,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.mu.Unlock()
 			return startChatProcess(
 				context.Background(),
-				claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), resume),
+				claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), resume, false),
 				s.commandEnv(nil),
 				s.workspaceDir,
 				s.PublishText,
@@ -525,7 +528,11 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	case "codex":
 		// codex via per-turn exec/resume; constructed lazily (spawns on
 		// first Send). Same publish path; PTY is a shell.
-		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), opts.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage)
+		// Seed the recovered thread id (if any) so the first post-restart
+		// turn resumes codex's own conversation — the codex twin of the
+		// claude --resume fix.
+		s.codexThreadID = opts.resumeCodexThreadID
+		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), opts.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, opts.resumeCodexThreadID, s.latchCodexThreadID)
 	default:
 		s.scraper = newChatScraper(s.PublishText)
 		go s.scraper.run(s.closed)
@@ -1581,6 +1588,14 @@ type sessionOptions struct {
 	// claude chat agent `--resume` this CLI conversation id so a broker
 	// restart doesn't reset the agent's memory of the session.
 	resumeChatSessionID string
+	// continueLatestChat (recovery of a PRE-latch session: conversation
+	// files exist in agent-home but no id was ever persisted) makes the
+	// claude chat agent start with `--continue` — resolving this
+	// session's own most recent conversation.
+	continueLatestChat bool
+	// resumeCodexThreadID seeds the codex chat backend's thread id on
+	// recovery so its first post-restart turn runs `exec resume <id>`.
+	resumeCodexThreadID string
 }
 
 type sessionMetadata struct {
@@ -1635,6 +1650,8 @@ type sessionMetadata struct {
 	// ClaudeChatSessionID is the claude CLI's own conversation id —
 	// persisted so post-restart recovery resumes the agent's memory.
 	ClaudeChatSessionID string `json:"claude_chat_session_id,omitempty"`
+	// CodexThreadID is codex's equivalent (thread.started id).
+	CodexThreadID string `json:"codex_thread_id,omitempty"`
 }
 
 // UploadBaseDir is the durable root under which chat file-uploads are
@@ -1713,6 +1730,7 @@ func (s *Session) persistMetadata() error {
 		ContextUsedTokens:   s.contextUsedTokens,
 		ContextWindowTokens: s.contextWindowTokens,
 		ClaudeChatSessionID: s.chatSessionID,
+		CodexThreadID:       s.codexThreadID,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

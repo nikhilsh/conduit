@@ -37,7 +37,7 @@ func TestEncodeClaudeUserMessage(t *testing.T) {
 }
 
 func TestClaudeStreamCommand(t *testing.T) {
-	argv := claudeStreamCommand([]string{"claude"}, []string{"--dangerously-skip-permissions"}, "")
+	argv := claudeStreamCommand([]string{"claude"}, []string{"--dangerously-skip-permissions"}, "", false)
 	want := []string{
 		"claude", "--dangerously-skip-permissions",
 		"-p",
