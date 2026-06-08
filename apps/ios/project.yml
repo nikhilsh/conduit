@@ -25,7 +25,15 @@ settings:
 packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa
-    from: 8.55.0
+    # Pinned EXACT (not `from:`) to dodge a broken upstream release:
+    # getsentry/sentry-cocoa 8.58.3's xcframework GitHub-release assets
+    # return 504 (verified from CI and the dev box; 8.58.0 / 8.57.0 /
+    # 9.16.x all serve fine), and `from: 8.55.0` re-resolves to that
+    # 8.58.3 on every build with no committed Package.resolved to lock
+    # it — so every iOS build (CI + release) failed at package resolve.
+    # 8.58.0 is the same minor line (API-compatible) with healthy assets.
+    # Revisit when 8.58.3's assets recover or we bump to 9.x.
+    exactVersion: 8.58.0
   SnapshotTesting:
     # Point-Free's swift-snapshot-testing. De facto standard for
     # iOS visual regression — image + accessibility + text snapshots.
