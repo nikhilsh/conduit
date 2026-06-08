@@ -1553,13 +1553,9 @@ private fun MarkdownBlock(text: String, role: ConversationRole) {
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
     val fontChoice by appearance.fontFamily.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
-    // §2: PROSE renders in neon.sans (NOT mono) unless the user has
-    // explicitly forced a monospaced reading font in Appearance.
-    val resolvedFont = if (fontChoice == sh.nikhil.conduit.AppearanceStore.FontFamily.Monospaced) {
-        neon.mono
-    } else {
-        neon.sans
-    }
+    // Prose renders in the user's chosen Chat font (handoff Part A):
+    // System / Space Grotesk / IBM Plex Sans / Newsreader.
+    val resolvedFont = neonChatFontFamily(fontChoice)
     val onColor = if (role == ConversationRole.System) {
         neon.textDim
     } else {

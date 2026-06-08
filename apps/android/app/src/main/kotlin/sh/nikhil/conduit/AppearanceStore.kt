@@ -19,9 +19,29 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class AppearanceStore : ViewModel() {
 
-    enum class FontFamily(val label: String) {
-        Monospaced("Monospaced"),
-        System("System"),
+    /**
+     * Chat / reading body font (handoff Part A "Chat font"). The
+     * conversation font, NOT the terminal-native one. The pre-redesign
+     * enum was {Monospaced, System}; the type-forward redesign replaces it
+     * with four curated faces. Legacy persisted `Monospaced` (and an iOS
+     * `Serif`) decode through [fromPersisted] so existing installs migrate
+     * instead of resetting.
+     */
+    enum class FontFamily(val label: String, val note: String) {
+        System("System", "native"),
+        SpaceGrotesk("Space Grotesk", "brand"),
+        IbmPlexSans("IBM Plex Sans", "humanist"),
+        Newsreader("Newsreader", "serif · easy read");
+
+        companion object {
+            /** Decode a persisted name, migrating pre-redesign values. */
+            fun fromPersisted(raw: String?): FontFamily = when (raw) {
+                null -> System
+                "Monospaced" -> System          // mono is terminal-only now
+                "Serif" -> Newsreader            // closest easy-read serif
+                else -> runCatching { valueOf(raw) }.getOrNull() ?: System
+            }
+        }
     }
 
     enum class ThemeMode(val label: String) {
@@ -67,7 +87,7 @@ class AppearanceStore : ViewModel() {
         GruvboxDark("Gruvbox Dark"),
     }
 
-    private val _fontFamily = MutableStateFlow(FontFamily.Monospaced)
+    private val _fontFamily = MutableStateFlow(FontFamily.System)
     val fontFamily: StateFlow<FontFamily> = _fontFamily.asStateFlow()
 
     private val _themeMode = MutableStateFlow(ThemeMode.System)
@@ -137,9 +157,7 @@ class AppearanceStore : ViewModel() {
     fun hydrate(ctx: Context) {
         val p = ctx.getSharedPreferences("conduit.appearance", Context.MODE_PRIVATE)
         prefs = p
-        _fontFamily.value = p.getString(KEY_FONT, null)
-            ?.let { runCatching { FontFamily.valueOf(it) }.getOrNull() }
-            ?: FontFamily.Monospaced
+        _fontFamily.value = FontFamily.fromPersisted(p.getString(KEY_FONT, null))
         _themeMode.value = p.getString(KEY_THEME, null)
             ?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
             ?: ThemeMode.System
@@ -214,10 +232,12 @@ class AppearanceStore : ViewModel() {
     }
 
     companion object {
-        /** Clamp range for [bodyPointSize] (matches iOS). */
-        val BODY_POINT_SIZE_RANGE: ClosedFloatingPointRange<Float> = 12f..18f
-        /** Default body point size on a fresh install (matches iOS). */
-        const val DEFAULT_BODY_POINT_SIZE: Float = 14f
+        /** Clamp range for [bodyPointSize] (matches iOS 12...20). */
+        val BODY_POINT_SIZE_RANGE: ClosedFloatingPointRange<Float> = 12f..20f
+        /** Default body point size on a fresh install — bumped to 18
+         *  (handoff Part A; matches iOS). Persisted values still win on
+         *  hydrate via [getFloat] (no re-seed). */
+        const val DEFAULT_BODY_POINT_SIZE: Float = 18f
 
         /** Clamp range for [terminalFontSize] (matches iOS
          *  `ghosttyFontSizeRange` 8...24). */

@@ -375,4 +375,33 @@ object NeonBrandFonts {
         androidx.compose.ui.text.font.Font(R.font.jetbrains_mono_semibold, androidx.compose.ui.text.font.FontWeight.SemiBold),
         androidx.compose.ui.text.font.Font(R.font.jetbrains_mono_bold, androidx.compose.ui.text.font.FontWeight.Bold),
     )
+
+    // Chat-font options added for the type-forward picker (handoff Part A).
+    // IBM Plex Sans ships static R/M/B; Newsreader R/M/B (opsz pinned 16).
+    val ibmPlexSans = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.ibm_plex_sans_regular, androidx.compose.ui.text.font.FontWeight.Normal),
+        androidx.compose.ui.text.font.Font(R.font.ibm_plex_sans_medium, androidx.compose.ui.text.font.FontWeight.Medium),
+        androidx.compose.ui.text.font.Font(R.font.ibm_plex_sans_medium, androidx.compose.ui.text.font.FontWeight.SemiBold),
+        androidx.compose.ui.text.font.Font(R.font.ibm_plex_sans_bold, androidx.compose.ui.text.font.FontWeight.Bold),
+    )
+    val newsreader = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.newsreader_regular, androidx.compose.ui.text.font.FontWeight.Normal),
+        androidx.compose.ui.text.font.Font(R.font.newsreader_medium, androidx.compose.ui.text.font.FontWeight.Medium),
+        androidx.compose.ui.text.font.Font(R.font.newsreader_medium, androidx.compose.ui.text.font.FontWeight.SemiBold),
+        androidx.compose.ui.text.font.Font(R.font.newsreader_bold, androidx.compose.ui.text.font.FontWeight.Bold),
+    )
+}
+
+/**
+ * Resolve the user's chat-font choice to a Compose [FontFamily]. `System`
+ * uses the platform default; the other three map to their bundled face.
+ * Mirrors iOS `AppearanceStore.FontFamily.font(size:weight:)`.
+ */
+fun neonChatFontFamily(
+    choice: sh.nikhil.conduit.AppearanceStore.FontFamily,
+): androidx.compose.ui.text.font.FontFamily = when (choice) {
+    sh.nikhil.conduit.AppearanceStore.FontFamily.System -> androidx.compose.ui.text.font.FontFamily.Default
+    sh.nikhil.conduit.AppearanceStore.FontFamily.SpaceGrotesk -> NeonBrandFonts.sans
+    sh.nikhil.conduit.AppearanceStore.FontFamily.IbmPlexSans -> NeonBrandFonts.ibmPlexSans
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Newsreader -> NeonBrandFonts.newsreader
 }

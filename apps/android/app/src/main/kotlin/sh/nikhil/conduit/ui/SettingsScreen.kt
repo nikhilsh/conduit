@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -52,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -67,29 +70,30 @@ import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Endpoint
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
 
 /**
- * Settings — Conduit redesign IA (handoff §A.2, image 03), mirror of iOS
- * `ConduitUI.SettingsView`. The shipped build had ~11 stacked sections with
- * appearance shattered across six of them; this collapses to exactly eight:
+ * Settings — Conduit redesign IA (handoff Part A), mirror of iOS
+ * `ConduitUI.SettingsView`. The shipped build had eight stacked sections
+ * with the server appearing TWICE (Account + Servers) and Terminal floating
+ * on its own. This collapses to five labelled groups, top to bottom:
  *
- *   identity · Account · Usage & limits · Appearance · Terminal ·
- *   Conversation · Servers · About
+ *   Connection · Usage & limits · Appearance · Conversation · About
  *
- *   • identity      — `>conduit` wordmark card (mono, the `>` cyan-tinted) +
- *                     version/build line + a live/offline badge.
- *   • Account       — pairing row + "Sign in to agent" (sheets unchanged).
- *   • Usage & limits— account-wide, BOTH agents (claude + codex), each with a
- *                     5-hour AND a weekly window (bar / % / reset).
- *   • Appearance    — ONE grouped card: Theme segmented, accent-palette
- *                     swatches, App font drill-in, Text size slider, Glow &
- *                     scanlines toggle, + the `conduit --theme ice` chip.
- *   • Terminal      — Color theme drill-in row, font-size slider, native
- *                     terminal toggle.
+ *   • Connection    — ONE home: active server row (tap → switch/manage),
+ *                     the agents on it (Claude / Codex), Add account, and
+ *                     Add server. Merges the old Account + Agent accounts +
+ *                     Servers sections; the server has one home now.
+ *   • Usage & limits— account-wide, BOTH agents (claude + codex), each with
+ *                     a 5-hour AND a weekly window.
+ *   • Appearance    — ONE grouped card with Terminal folded IN: Theme,
+ *                     accent palette, the type-forward Chat font strip,
+ *                     Terminal colors, Text size, Terminal font size, the
+ *                     native-terminal toggle, Glow & scanlines, + the
+ *                     `conduit --theme <id>` chip.
  *   • Conversation  — collapse-turns toggle.
- *   • Servers       — saved servers + Add server.
  *   • About         — version + licenses.
  *
  * Presentation + IA only: every store/AppearanceStore binding and sheet is
@@ -123,10 +127,10 @@ fun SettingsScreen(
     val neonGlow by appearance.neonGlow.collectAsState()
 
     var showAddServer by remember { mutableStateOf(false) }
-    var showAppFont by remember { mutableStateOf(false) }
+    var showServerSwitcher by remember { mutableStateOf(false) }
     var showTerminalTheme by remember { mutableStateOf(false) }
     var showAgentLogin by remember { mutableStateOf(false) }
-    // Per-agent signed-in + plan snapshot for the Accounts group (fix 3).
+    // Per-agent signed-in + plan snapshot for the Connection group (fix 3).
     // Re-read whenever the login sheet closes so a fresh sign-in flips the
     // rows to `● signed in` immediately.
     val context = LocalContext.current
@@ -137,12 +141,7 @@ fun SettingsScreen(
     var manageTarget by remember {
         mutableStateOf<sh.nikhil.conduit.auth.AgentAccountStatus?>(null)
     }
-    // Saved-server pending deletion. Mirror of iOS PR #128's
-    // `pendingServerDelete`: gating the destructive sweep behind an
-    // explicit confirm lets us call `forgetServer` (which also drops
-    // the per-id displayName override) instead of the legacy
-    // `removeSavedServer`, and gives the prompt somewhere to explain
-    // what's being cleared.
+    // Saved-server pending deletion (drives the Forget confirmation alert).
     var pendingForget by remember { mutableStateOf<SavedServer?>(null) }
 
     val neon = LocalNeonTheme.current
@@ -160,34 +159,23 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            // identity — `>conduit` wordmark + version + live/offline badge.
-            IdentityCard(neon = neon, version = versionLabel, harness = harness)
-
-            // Account — pairing row, then the per-agent Accounts group
-            // (Round-2 fix 3, handoff images 05→06): one row per agent with
-            // plan badge + `● signed in` + Manage, plus Add-another. The old
-            // single "Sign in to agent" row read as signed-out even when
-            // both agents were authenticated.
-            SettingsSection("Account") {
-                SettingsRow(
-                    icon = Icons.Filled.Person,
-                    title = if (endpoint.isComplete) endpoint.displayHost else "Not paired",
-                    subtitle = harness.badgeLabel,
-                    onClick = { showAgentLogin = true },
-                )
-            }
-
-            AgentAccountsSection(
+            // Connection — one home: active server (→ switch), the agents on
+            // it, Add account, Add server. Merges the old Account + Agent
+            // accounts + Servers sections (handoff Part A).
+            ConnectionSection(
+                endpoint = endpoint,
+                harness = harness,
+                savedServers = savedServers,
                 accounts = agentAccounts,
+                onSwitchServer = { showServerSwitcher = true },
                 onManage = { manageTarget = it },
                 onSignIn = { showAgentLogin = true },
                 onAddAccount = { showAgentLogin = true },
+                onAddServer = { showAddServer = true },
             )
 
             // Usage & limits — account-wide, BOTH agents (claude + codex),
-            // each with a 5-hour AND a weekly window. Numbers are per-account,
-            // not per-session; read off any session of that agent. Honest
-            // empty state when an agent has no data yet.
+            // each with a 5-hour AND a weekly window.
             SettingsSection("Usage & limits") {
                 AgentUsageRows(
                     store = store,
@@ -206,8 +194,7 @@ fun SettingsScreen(
                 )
             }
 
-            // Appearance — ONE grouped card: Theme segmented, accent palette,
-            // App font drill-in, Text size slider, Glow & scanlines.
+            // Appearance — ONE grouped card with Terminal folded in.
             Column(modifier = Modifier.fillMaxWidth()) {
                 SectionEyebrow("Appearance")
                 Column(
@@ -255,14 +242,36 @@ fun SettingsScreen(
 
                     SettingsDivider()
 
-                    // App font — drill-in row.
+                    // Chat font — type-forward preview-card strip.
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
+                        verticalArrangement = Arrangement.spacedBy(11.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Chat font",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.SemiBold,
+                                color = neon.text,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(fontFamily.label, fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint)
+                        }
+                        ChatFontStrip(current = fontFamily, onSelect = { appearance.setFontFamily(it) })
+                    }
+
+                    SettingsDivider()
+
+                    // Terminal colors — drill-in to the terminal theme picker
+                    // (folded in from the old Terminal section).
                     ListItem(
-                        modifier = Modifier.clickable { showAppFont = true },
-                        leadingContent = { Icon(Icons.Filled.TextFields, contentDescription = null, tint = neon.accent) },
-                        headlineContent = { Text("App font", color = neon.text, fontFamily = neon.sans) },
+                        modifier = Modifier.clickable { showTerminalTheme = true },
+                        leadingContent = { Icon(Icons.Filled.Palette, contentDescription = null, tint = neon.accent) },
+                        headlineContent = { Text("Terminal colors", color = neon.text, fontFamily = neon.sans) },
                         trailingContent = {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(fontFamily.label, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
+                                Text(terminalTheme.label, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
                                 Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint)
                             }
                         },
@@ -281,7 +290,7 @@ fun SettingsScreen(
                             Spacer(Modifier.width(16.dp))
                             Text("Text size", style = MaterialTheme.typography.bodyLarge, fontFamily = neon.sans, color = neon.text)
                             Spacer(Modifier.weight(1f))
-                            Text("${bodyPointSize.toInt()}pt", fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
+                            Text("${bodyPointSize.toInt()}pt", fontFamily = neon.mono, fontSize = 12.sp, color = neon.accent, fontWeight = FontWeight.Bold)
                         }
                         Slider(
                             value = bodyPointSize,
@@ -295,6 +304,44 @@ fun SettingsScreen(
                             ),
                         )
                     }
+
+                    SettingsDivider()
+
+                    // Terminal font size slider (folded in from Terminal).
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.FormatSize, contentDescription = null, tint = neon.accent, modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.width(16.dp))
+                            Text("Terminal font size", style = MaterialTheme.typography.bodyLarge, fontFamily = neon.sans, color = neon.text)
+                            Spacer(Modifier.weight(1f))
+                            Text("${terminalFontSize.toInt()}pt", fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
+                        }
+                        Slider(
+                            value = terminalFontSize,
+                            onValueChange = { appearance.setTerminalFontSize(it) },
+                            valueRange = AppearanceStore.TERMINAL_FONT_SIZE_RANGE,
+                            steps = (AppearanceStore.TERMINAL_FONT_SIZE_RANGE.endInclusive
+                                - AppearanceStore.TERMINAL_FONT_SIZE_RANGE.start).toInt() - 1,
+                            colors = SliderDefaults.colors(
+                                thumbColor = neon.accent,
+                                activeTrackColor = neon.accent,
+                            ),
+                        )
+                    }
+
+                    SettingsDivider()
+
+                    // Native terminal toggle (folded in from Terminal).
+                    ToggleRow(
+                        icon = Icons.Filled.Science,
+                        title = "Native terminal",
+                        subtitle = "On by default. Turn off to use the legacy web terminal.",
+                        isOn = experimentalNativeTerminal,
+                        onChange = { appearance.setExperimentalNativeTerminal(it) },
+                    )
 
                     SettingsDivider()
 
@@ -313,57 +360,6 @@ fun SettingsScreen(
                 NeonThemePreviewChip(appearance)
             }
 
-            // Terminal — color theme drill-in row + font-size slider + the
-            // native-terminal toggle. (Android's terminal font is fixed —
-            // there's no per-font setting like iOS's libghostty path — so the
-            // section surfaces the real terminal knobs rather than a dead row.)
-            SettingsSection("Terminal") {
-                ListItem(
-                    modifier = Modifier.clickable { showTerminalTheme = true },
-                    leadingContent = { Icon(Icons.Filled.Palette, contentDescription = null, tint = neon.accent) },
-                    headlineContent = { Text("Color theme", color = neon.text, fontFamily = neon.sans) },
-                    trailingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(terminalTheme.label, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
-                            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint)
-                        }
-                    },
-                    colors = transparentListItemColors(),
-                )
-                SettingsDivider()
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.FormatSize, contentDescription = null, tint = neon.accent, modifier = Modifier.size(24.dp))
-                        Spacer(Modifier.width(16.dp))
-                        Text("Font size", style = MaterialTheme.typography.bodyLarge, fontFamily = neon.sans, color = neon.text)
-                        Spacer(Modifier.weight(1f))
-                        Text("${terminalFontSize.toInt()}pt", fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
-                    }
-                    Slider(
-                        value = terminalFontSize,
-                        onValueChange = { appearance.setTerminalFontSize(it) },
-                        valueRange = AppearanceStore.TERMINAL_FONT_SIZE_RANGE,
-                        steps = (AppearanceStore.TERMINAL_FONT_SIZE_RANGE.endInclusive
-                            - AppearanceStore.TERMINAL_FONT_SIZE_RANGE.start).toInt() - 1,
-                        colors = SliderDefaults.colors(
-                            thumbColor = neon.accent,
-                            activeTrackColor = neon.accent,
-                        ),
-                    )
-                }
-                SettingsDivider()
-                ToggleRow(
-                    icon = Icons.Filled.Science,
-                    title = "Native terminal",
-                    subtitle = "On by default. Turn off to use the legacy web terminal.",
-                    isOn = experimentalNativeTerminal,
-                    onChange = { appearance.setExperimentalNativeTerminal(it) },
-                )
-            }
-
             // Conversation.
             SettingsSection("Conversation") {
                 ToggleRow(
@@ -372,64 +368,6 @@ fun SettingsScreen(
                     subtitle = "Show only summaries; tap to expand",
                     isOn = collapseTurns,
                     onChange = { appearance.setCollapseTurns(it) },
-                )
-            }
-
-            // Servers.
-            SettingsSection("Servers") {
-                savedServers.forEachIndexed { idx, server ->
-                    ListItem(
-                        leadingContent = {
-                            Icon(
-                                Icons.Filled.Apps,
-                                contentDescription = null,
-                                tint = neon.accent,
-                            )
-                        },
-                        headlineContent = { Text(server.name, color = neon.text, fontFamily = neon.sans) },
-                        supportingContent = {
-                            Text(
-                                server.endpoint.displayHost,
-                                fontFamily = neon.sans,
-                                color = neon.textDim,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        trailingContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (server.isDefault) {
-                                    Surface(
-                                        shape = RoundedCornerShape(50),
-                                        color = neon.accent.copy(alpha = 0.22f),
-                                    ) {
-                                        Text(
-                                            "Default",
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                            fontFamily = neon.mono,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = neon.accent,
-                                        )
-                                    }
-                                }
-                                TextButton(onClick = { store.selectSavedServer(server.id, autoConnect = true) }) {
-                                    Text("Use", color = neon.accent)
-                                }
-                                IconButton(onClick = { pendingForget = server }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = "Forget", tint = neon.textDim)
-                                }
-                            }
-                        },
-                        colors = transparentListItemColors(),
-                    )
-                    SettingsDivider()
-                }
-                SettingsRow(
-                    icon = Icons.Filled.AddCircle,
-                    title = "Add server",
-                    subtitle = "QR · LAN discover · SSH · paste URL+token",
-                    onClick = { showAddServer = true },
                 )
             }
 
@@ -468,8 +406,15 @@ fun SettingsScreen(
     if (showAddServer) {
         AddServerSheet(store = store, onDismiss = { showAddServer = false })
     }
-    if (showAppFont) {
-        AppFontPickerSheet(appearance = appearance, current = fontFamily, onDismiss = { showAppFont = false })
+    if (showServerSwitcher) {
+        ServerSwitcherSheet(
+            savedServers = savedServers,
+            activeEndpoint = endpoint,
+            onUse = { store.selectSavedServer(it.id, autoConnect = true); showServerSwitcher = false },
+            onForget = { pendingForget = it },
+            onAddServer = { showServerSwitcher = false; showAddServer = true },
+            onDismiss = { showServerSwitcher = false },
+        )
     }
     if (showTerminalTheme) {
         TerminalThemePickerSheet(appearance = appearance, current = terminalTheme, onDismiss = { showTerminalTheme = false })
@@ -478,7 +423,7 @@ fun SettingsScreen(
         AgentLoginSheet(store = store, onDismiss = {
             showAgentLogin = false
             // Re-read the credential store so a fresh sign-in flips the
-            // Accounts rows to `● signed in` immediately.
+            // agent rows to `● signed in` immediately.
             agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
         })
     }
@@ -541,55 +486,239 @@ fun SettingsScreen(
 }
 
 /**
- * identity card — the `>conduit` wordmark (BRAND.md §1: lowercase JetBrains
- * Mono, the `>` cyan-tinted) beside the daemon mark, the version/build line,
- * and a live/offline status badge.
+ * Connection card (handoff Part A, render 01) — the big de-dupe. One card:
+ * the active server row (tap → switch/manage), an AGENTS ON THIS SERVER
+ * list (Claude / Codex), then Add account + Add server. Removes the old
+ * standalone Account row and Servers section — the server has one home now.
  */
 @Composable
-private fun IdentityCard(neon: NeonTheme, version: String, harness: HarnessState) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface)
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
+private fun ConnectionSection(
+    endpoint: Endpoint,
+    harness: HarnessState,
+    savedServers: List<SavedServer>,
+    accounts: List<sh.nikhil.conduit.auth.AgentAccountStatus>,
+    onSwitchServer: () -> Unit,
+    onManage: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
+    onSignIn: () -> Unit,
+    onAddAccount: () -> Unit,
+    onAddServer: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    val isDefault = savedServers.firstOrNull { it.isDefault }?.endpoint == endpoint
+    val subtitle = "${if (harness.isReachable) "Live" else harness.badgeLabel} · " +
+        if (isDefault) "default server" else "server"
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SectionEyebrow("Connection")
+        Column(
             modifier = Modifier
-                .size(46.dp)
-                .background(neon.surface, RoundedCornerShape(12.dp))
-                .border(1.dp, neon.border, RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) { ConduitMark(size = 30.dp) }
-        Spacer(Modifier.width(12.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row {
-                Text(">", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = neon.accent)
-                Text("conduit", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = neon.text)
-            }
+                .fillMaxWidth()
+                .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
+        ) {
+            // Active server row.
+            ListItem(
+                modifier = Modifier.clickable(onClick = onSwitchServer),
+                leadingContent = { Icon(Icons.Filled.Apps, contentDescription = null, tint = neon.accent) },
+                headlineContent = {
+                    Text(
+                        if (endpoint.isComplete) endpoint.displayHost else "Not paired",
+                        color = neon.text,
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                supportingContent = {
+                    Text(subtitle, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textDim, maxLines = 1)
+                },
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Switch", color = neon.textDim, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
+                        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint)
+                    }
+                },
+                colors = transparentListItemColors(),
+            )
+
+            SettingsDivider()
+
             Text(
-                version,
+                "AGENTS ON THIS SERVER",
                 fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
                 fontSize = 11.sp,
+                letterSpacing = 1.2.sp,
                 color = neon.textFaint,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                softWrap = false,
+                modifier = Modifier.padding(start = 16.dp, top = 11.dp, bottom = 2.dp),
+            )
+
+            accounts.forEach { account ->
+                AgentAccountRow(
+                    account = account,
+                    onClick = { if (account.signedIn) onManage(account) else onSignIn() },
+                )
+                HorizontalDivider(modifier = Modifier.padding(start = 60.dp), color = neon.border)
+            }
+
+            // Add account.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onAddAccount)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .border(1.dp, neon.border, RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("+", fontFamily = neon.mono, fontSize = 16.sp, color = neon.textDim)
+                }
+                Text(
+                    "Add account",
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    color = neon.textDim,
+                )
+            }
+
+            SettingsDivider()
+
+            // Add server.
+            SettingsRow(
+                icon = Icons.Filled.AddCircle,
+                title = "Add server",
+                subtitle = null,
+                onClick = onAddServer,
             )
         }
-        Spacer(Modifier.weight(1f))
-        val reachable = harness.isReachable
-        val color = if (reachable) neon.green else neon.textDim
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            modifier = Modifier
-                .background(color.copy(alpha = 0.12f), RoundedCornerShape(50))
-                .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(50))
-                .padding(horizontal = 9.dp, vertical = 5.dp),
-        ) {
-            Box(Modifier.size(6.dp).background(color, CircleShape))
-            Text(harness.badgeLabel, fontFamily = neon.mono, fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp, color = color)
+    }
+}
+
+/**
+ * Type-forward Chat-font strip (handoff Part A): a horizontal row of preview
+ * cards, each rendering an `Ag` glyph in its own face with the name beneath.
+ * One tap selects; the selected card gets the accent border + tint. Mirrors
+ * iOS `fontCard` / `fontStripScroll`.
+ */
+@Composable
+internal fun ChatFontStrip(
+    current: AppearanceStore.FontFamily,
+    onSelect: (AppearanceStore.FontFamily) -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+        contentPadding = PaddingValues(vertical = 3.dp),
+    ) {
+        items(AppearanceStore.FontFamily.values().toList()) { family ->
+            val selected = family == current
+            Column(
+                modifier = Modifier
+                    .width(128.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (selected) neon.accent.copy(alpha = 0.08f) else neon.surface2,
+                        RoundedCornerShape(14.dp),
+                    )
+                    .border(
+                        if (selected) 1.6.dp else 1.dp,
+                        if (selected) neon.accent else neon.border,
+                        RoundedCornerShape(14.dp),
+                    )
+                    .clickable { onSelect(family) }
+                    .padding(start = 13.dp, end = 13.dp, top = 13.dp, bottom = 11.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text(
+                    "Ag",
+                    fontFamily = neonChatFontFamily(family),
+                    fontSize = 30.sp,
+                    color = neon.text,
+                    maxLines = 1,
+                )
+                Text(
+                    family.label,
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    color = if (selected) neon.accent else neon.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
+    }
+}
+
+/**
+ * Server switcher — reached from Connection's active-server row. Lists saved
+ * servers (Use to switch, trash to forget, Default badge + active check) plus
+ * the Add Server affordance. Mirrors iOS `ServerSwitcherView`.
+ */
+@Composable
+private fun ServerSwitcherSheet(
+    savedServers: List<SavedServer>,
+    activeEndpoint: Endpoint,
+    onUse: (SavedServer) -> Unit,
+    onForget: (SavedServer) -> Unit,
+    onAddServer: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    PickerSheet(title = "Servers", onDismiss = onDismiss) {
+        savedServers.forEach { server ->
+            val active = server.endpoint == activeEndpoint
+            ListItem(
+                modifier = Modifier.clickable { onUse(server) },
+                leadingContent = {
+                    Icon(Icons.Filled.Apps, contentDescription = null, tint = if (active) neon.green else neon.accent)
+                },
+                headlineContent = { Text(server.name, color = neon.text, fontFamily = neon.sans) },
+                supportingContent = {
+                    Text(
+                        server.endpoint.displayHost,
+                        fontFamily = neon.sans,
+                        color = neon.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (server.isDefault) {
+                            Surface(shape = RoundedCornerShape(50), color = neon.accent.copy(alpha = 0.22f)) {
+                                Text(
+                                    "Default",
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    fontFamily = neon.mono,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = neon.accent,
+                                )
+                            }
+                        }
+                        IconButton(onClick = { onForget(server) }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Forget", tint = neon.textDim)
+                        }
+                    }
+                },
+                colors = transparentListItemColors(),
+            )
+            SettingsDivider()
+        }
+        SettingsRow(
+            icon = Icons.Filled.AddCircle,
+            title = "Add Server",
+            subtitle = "QR · LAN discover · SSH · paste URL+token",
+            onClick = onAddServer,
+        )
     }
 }
 
@@ -627,8 +756,6 @@ private fun AgentUsageRows(
                 color = neon.textFaint,
             )
         } else {
-            // NeonAccountUsageCard renders both 5h + weekly window rows + a
-            // refresh button; the agent dot above already labels the block.
             NeonAccountUsageCard(
                 fivePct = snap.fivePct,
                 fiveResetsAt = snap.fiveResetsAt,
@@ -671,26 +798,6 @@ private fun agentAccountUsage(
     return AccountUsageSnapshot(sourceSessionId = sessions.firstOrNull { it.assistant == agent }?.id)
 }
 
-/** App font drill-in target. Single-select over the chat/UI body font. */
-@Composable
-private fun AppFontPickerSheet(
-    appearance: AppearanceStore,
-    current: AppearanceStore.FontFamily,
-    onDismiss: () -> Unit,
-) {
-    PickerSheet(title = "App font", onDismiss = onDismiss) {
-        AppearanceStore.FontFamily.values().forEachIndexed { idx, choice ->
-            PickerRow(
-                icon = Icons.Filled.TextFields,
-                title = choice.label,
-                isSelected = current == choice,
-                onClick = { appearance.setFontFamily(choice); onDismiss() },
-            )
-            if (idx < AppearanceStore.FontFamily.values().lastIndex) SettingsDivider()
-        }
-    }
-}
-
 /** Terminal color-theme drill-in target. Single-select over [AppearanceStore.TerminalTheme]. */
 @Composable
 private fun TerminalThemePickerSheet(
@@ -698,7 +805,7 @@ private fun TerminalThemePickerSheet(
     current: AppearanceStore.TerminalTheme,
     onDismiss: () -> Unit,
 ) {
-    PickerSheet(title = "Color theme", onDismiss = onDismiss) {
+    PickerSheet(title = "Terminal colors", onDismiss = onDismiss) {
         AppearanceStore.TerminalTheme.values().forEachIndexed { idx, choice ->
             PickerRow(
                 icon = Icons.Filled.Palette,
@@ -755,107 +862,7 @@ private fun SectionEyebrow(title: String) {
     )
 }
 
-/**
- * AGENT ACCOUNTS group (Round-2 fix 3, handoff images 05→06): an eyebrow
- * with a live `● both connected` status, one row per agent (daemon avatar,
- * name + plan badge, `● signed in`, Manage › / Sign in ›), an Add-another
- * row, and the per-agent management caption.
- */
-@Composable
-private fun AgentAccountsSection(
-    accounts: List<sh.nikhil.conduit.auth.AgentAccountStatus>,
-    onManage: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
-    onSignIn: () -> Unit,
-    onAddAccount: () -> Unit,
-) {
-    val neon = LocalNeonTheme.current
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
-        ) {
-            Text(
-                "AGENT ACCOUNTS",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Bold,
-                color = neon.textDim,
-                maxLines = 1,
-                softWrap = false,
-            )
-            Spacer(Modifier.weight(1f))
-            // `● both connected` / `● claude connected` / `● not signed in`.
-            val signedIn = accounts.filter { it.signedIn }
-            val (statusLabel, statusColor) = when {
-                accounts.isNotEmpty() && signedIn.size == accounts.size -> "both connected" to neon.green
-                signedIn.size == 1 -> "${signedIn.first().agent} connected" to neon.green
-                else -> "not signed in" to neon.textFaint
-            }
-            Box(Modifier.size(5.dp).background(statusColor, CircleShape))
-            Spacer(Modifier.width(5.dp))
-            Text(
-                statusLabel,
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 10.5.sp,
-                color = statusColor,
-            )
-        }
-
-        val shape = RoundedCornerShape(14.dp)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .neonCardSurface(neon = neon, shape = shape, fill = neon.surface),
-        ) {
-            accounts.forEach { account ->
-                AgentAccountRow(
-                    account = account,
-                    onClick = { if (account.signedIn) onManage(account) else onSignIn() },
-                )
-                HorizontalDivider(
-                    modifier = Modifier.padding(start = 60.dp),
-                    color = neon.border,
-                )
-            }
-            // `+ Add another account`.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onAddAccount)
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .border(1.dp, neon.border, RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("+", fontFamily = neon.mono, fontSize = 16.sp, color = neon.textDim)
-                }
-                Text(
-                    "Add another account",
-                    fontFamily = neon.sans,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 14.5.sp,
-                    color = neon.textDim,
-                )
-            }
-        }
-
-        Text(
-            "Re-auth, switch plan, or sign out per agent — no more guessing whether you're connected.",
-            fontFamily = neon.mono,
-            fontSize = 10.sp,
-            color = neon.textFaint,
-            modifier = Modifier.padding(start = 4.dp, top = 8.dp),
-        )
-    }
-}
-
-/** One agent's account row inside [AgentAccountsSection]. */
+/** One agent's account row inside [ConnectionSection]. */
 @Composable
 private fun AgentAccountRow(
     account: sh.nikhil.conduit.auth.AgentAccountStatus,

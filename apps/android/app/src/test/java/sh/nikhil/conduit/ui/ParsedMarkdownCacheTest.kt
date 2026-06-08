@@ -160,7 +160,7 @@ class ParsedMarkdownCacheTest {
 
     @Test fun revisionVariesWithFontChoice() {
         val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
-        val b = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Monospaced)
+        val b = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Newsreader)
         assertTrue(a != b)
     }
 }
