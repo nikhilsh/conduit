@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.UnfoldLess
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -60,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.ProjectSession
@@ -276,6 +279,49 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                 if (cost != null && cost > 0) {
                                     Text("$%.2f".format(cost), fontFamily = neon.mono, color = neon.textDim, style = MaterialTheme.typography.bodyMedium)
                                 }
+                            }
+                            // Compact: free up context in place (parity with
+                            // iOS). Claude exposes a user-triggered
+                            // `/compact` (pass-through; broker surfaces
+                            // progress, gauge drops next turn). Codex has NO
+                            // manual compact in `exec` mode — it compacts
+                            // AUTOMATICALLY at its token limit — so it shows an
+                            // honest auto-compact note instead.
+                            val lifecycle = store.sessionLifecycle.collectAsState().value[session.id]
+                            val sessionLive = lifecycle !is SessionLifecycle.Exited &&
+                                lifecycle !is SessionLifecycle.FailedToStart &&
+                                store.harness.collectAsState().value.canIssueCommands
+                            val agentLower = agent.lowercase()
+                            if (agentLower.contains("claude") && sessionLive) {
+                                Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
+                                var compacted by remember { mutableStateOf(false) }
+                                TextButton(
+                                    onClick = {
+                                        store.sendChat(session.id, "/compact")
+                                        compacted = true
+                                        onDismiss()
+                                    },
+                                    enabled = !compacted,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+                                ) {
+                                    Icon(Icons.Outlined.UnfoldLess, null, tint = neon.accent, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(
+                                        if (compacted) "Compacting…" else "Compact context",
+                                        fontFamily = neon.sans,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = neon.accent,
+                                    )
+                                }
+                            } else if (agentLower.contains("codex")) {
+                                Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
+                                Text(
+                                    "Codex compacts context automatically",
+                                    fontFamily = neon.mono,
+                                    color = neon.textFaint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
                         }
                     }

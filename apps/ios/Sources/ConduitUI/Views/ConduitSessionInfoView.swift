@@ -35,6 +35,7 @@ extension ConduitUI {
         @State private var showRename = false
         @State private var showFork = false
         @State private var showEndConfirm = false
+        @State private var compactRequested = false
 
         var body: some View {
             if embedded {
@@ -128,6 +129,16 @@ extension ConduitUI {
 
         private var liveAssistant: String {
             store.statusBySession[session.id]?.assistant ?? session.assistant
+        }
+
+        /// True when the session is still live (not exited/failed) and the
+        /// harness can carry a command — gates the in-session Compact
+        /// action, which needs a running agent to act on.
+        private var sessionIsLive: Bool {
+            switch store.sessionLifecycle[session.id] {
+            case .exited, .failed: return false
+            default: return store.harness.canIssueCommands
+            }
         }
 
         private var snapshot: SessionInfoSnapshot {
@@ -286,6 +297,46 @@ extension ConduitUI {
                             }
                         }
                         .font(neon.mono(12.5).weight(.medium))
+                        // Context management. Claude exposes a user-
+                        // triggered `/compact` (a pass-through; the broker
+                        // surfaces progress and the gauge drops next turn).
+                        // Codex has NO manual compact in `exec` mode — it
+                        // compacts AUTOMATICALLY at its token limit (verified:
+                        // `codex exec "/compact"` is treated as a literal
+                        // message). So we show the button for claude and an
+                        // honest auto-compact note for codex.
+                        let agentLower = liveAssistant.lowercased()
+                        if agentLower.contains("claude"), sessionIsLive {
+                            Rectangle().fill(neon.border).frame(height: 1)
+                            Button {
+                                store.sendChat(sessionID: session.id, message: "/compact")
+                                compactRequested = true
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 7) {
+                                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                        .font(.system(size: 12, weight: .semibold))
+                                    Text(compactRequested ? "Compacting…" : "Compact context")
+                                        .font(neon.sans(13).weight(.semibold))
+                                }
+                                .foregroundStyle(neon.accent)
+                                .frame(maxWidth: .infinity, minHeight: 40)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(compactRequested)
+                            .opacity(compactRequested ? 0.5 : 1)
+                        } else if agentLower.contains("codex") {
+                            Rectangle().fill(neon.border).frame(height: 1)
+                            HStack(spacing: 6) {
+                                Image(systemName: "wand.and.stars")
+                                    .font(.system(size: 11))
+                                Text("Codex compacts context automatically")
+                                    .font(neon.mono(11))
+                            }
+                            .foregroundStyle(neon.textFaint)
+                            .frame(maxWidth: .infinity, minHeight: 32, alignment: .center)
+                        }
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
