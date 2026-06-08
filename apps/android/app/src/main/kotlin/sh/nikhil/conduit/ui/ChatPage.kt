@@ -22,6 +22,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Stop
@@ -57,6 +58,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -383,6 +385,10 @@ fun ChatPage(
         }
     }
     var draft by remember { mutableStateOf("") }
+    // Durable lock for answered pending-input cards: survives the card being
+    // recreated as new events stream in, so a settled card can't re-fire.
+    // Mirror of iOS `ConduitChatView.answeredPendingIDs`.
+    var answeredPendingIds by remember { mutableStateOf(setOf<String>()) }
     val listState = rememberLazyListState()
     val pinnedContextsMap by store.pinnedContexts.collectAsState()
     val pinnedContexts = pinnedContextsMap[session.id] ?: emptyList()
@@ -610,13 +616,20 @@ fun ChatPage(
                 } else {
                     items(events.size) { index ->
                         val previousRole = if (index > 0) events[index - 1].role else null
+                        val ev = events[index]
                         ConversationEventRow(
-                            ev = events[index],
+                            ev = ev,
                             agentAccent = agentAccent,
-                            isContinuation = previousRole?.lowercase() == events[index].role.lowercase(),
-                        ) { reply ->
-                            draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
-                        }
+                            isContinuation = previousRole?.lowercase() == ev.role.lowercase(),
+                            pendingAnswered = ev.id in answeredPendingIds,
+                            // A pending-input answer is delivered as the user's
+                            // next chat message — the broker matches it to the
+                            // blocked AskUserQuestion control request. Mirror of
+                            // iOS (`store.sendChat`), not the draft-fill path the
+                            // composer's quick-reply chips use.
+                            onAnswerPending = { msg -> store.sendChat(session.id, msg) },
+                            onPendingAnswered = { answeredPendingIds = answeredPendingIds + ev.id },
+                        )
                     }
                 }
                 // "Agent is typing…" — last content row (before the
@@ -914,7 +927,12 @@ private fun ConversationEventRow(
     agentAccent: Color,
     /** True when the immediately preceding event had the same role. */
     isContinuation: Boolean = false,
-    onQuickReply: (String) -> Unit,
+    /** Durable lock: this pending-input card was already answered. */
+    pendingAnswered: Boolean = false,
+    /** Deliver a pending-input answer (sends as the user's chat message). */
+    onAnswerPending: (String) -> Unit = {},
+    /** Record this pending-input card as answered (durable upstream lock). */
+    onPendingAnswered: () -> Unit = {},
 ) {
     if (ev.status.lowercase() == "swapping") {
         // Transient agent-swap marker — inline divider, not a full row.
@@ -922,7 +940,13 @@ private fun ConversationEventRow(
         return
     }
     if (ev.kind == "pending_input") {
-        PendingInputCard(ev, agentAccent, onQuickReply)
+        PendingInputCard(
+            ev = ev,
+            agentAccent = agentAccent,
+            alreadyAnswered = pendingAnswered,
+            onAnswer = onAnswerPending,
+            onAnswered = onPendingAnswered,
+        )
         return
     }
     if (ev.kind == "handoff") {
@@ -1032,18 +1056,65 @@ private fun NeonStatusDot(color: Color, pulsing: Boolean, size: Dp = 8.dp) {
 private fun PendingInputCard(
     ev: ConversationItem,
     @Suppress("UNUSED_PARAMETER") agentAccent: Color,
-    onQuickReply: (String) -> Unit,
+    alreadyAnswered: Boolean,
+    onAnswer: (String) -> Unit,
+    onAnswered: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
-    // Defensively strip the broker pending-input sentinel (core normally
-    // removes it on the typed path; this covers the raw-chatLog fallback).
-    val promptText = remember(ev.content) {
-        ev.content.lines().filter { it.trim() != PENDING_INPUT_SENTINEL }.joinToString("\n")
+    // Recover per-question groups (prompt + its own options + multi-select
+    // marker) from the rendered content. Falls back to the flat option list
+    // as one unlabeled question. Mirror of iOS ConduitPendingInputCard.
+    val questions = remember(ev.id, ev.content, ev.pendingOptions) {
+        val parsed = PendingQuestions.parse(ev.content)
+        if (parsed.isNotEmpty()) {
+            parsed
+        } else {
+            val stripped = ev.content.lines()
+                .filter { it.trim() != PENDING_INPUT_SENTINEL }.joinToString("\n")
+            val flat = ev.pendingOptions.takeIf { it.isNotEmpty() }
+                ?: ConversationRenderer.extractPendingOptions(stripped)
+            listOf(PendingQuestion(prompt = "", options = flat))
+        }
     }
-    val options = remember(ev) {
-        ev.pendingOptions.takeIf { it.isNotEmpty() }
-            ?: ConversationRenderer.extractPendingOptions(promptText)
+    // The explicit Send appears for multiple questions OR any multi-select
+    // question — only a lone single-select question keeps tap-to-send.
+    val needsSend = questions.size > 1 || questions.any { it.multiSelect }
+
+    // Chosen option per single-select question; chosen set per multi-select
+    // question. Keyed on ev.id so the selection survives recomposition as new
+    // events stream in.
+    val selections = remember(ev.id) { mutableStateMapOf<Int, String>() }
+    val multiSelections = remember(ev.id) { mutableStateMapOf<Int, Set<String>>() }
+    var localSubmitted by remember(ev.id) { mutableStateOf(false) }
+    var sentAnswer by remember(ev.id) { mutableStateOf<String?>(null) }
+    // Settled once submitted locally OR recorded answered upstream — the
+    // second source is what makes the lock survive a card re-render.
+    val submitted = localSubmitted || alreadyAnswered
+
+    // One question's answer: multi-select joins the chosen labels (in option
+    // order) with ", " — the broker passes that comma-joined string through
+    // verbatim to the agent; single-select is the chosen label.
+    fun answerFor(qIdx: Int, q: PendingQuestion): String? =
+        if (q.multiSelect) {
+            val set = multiSelections[qIdx]
+            if (set.isNullOrEmpty()) null else q.options.filter { it in set }.joinToString(", ")
+        } else {
+            selections[qIdx]
+        }
+
+    // Lock the card and deliver the answer(s); multiple questions newline-
+    // joined into one message. Guarded against a double submit.
+    fun submit(answers: List<String>) {
+        if (localSubmitted || alreadyAnswered) return
+        val joined = answers.joinToString("\n")
+        // Lock optimistically and immediately — before the send — so the card
+        // visibly settles the instant the user taps.
+        localSubmitted = true
+        sentAnswer = joined
+        onAnswered()
+        onAnswer(joined)
     }
+
     val shape = RoundedCornerShape(neon.radiusDp.dp)
     Column(
         modifier = Modifier
@@ -1067,34 +1138,96 @@ private fun PendingInputCard(
             Spacer(Modifier.width(6.dp))
             NeonStatusChip(ev.status, neon)
         }
-        // Prompt prose in sans.
-        MarkdownBlock(promptText, ConversationRole.Assistant)
-        if (options.isNotEmpty()) {
+        questions.forEachIndexed { qIdx, question ->
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                options.forEachIndexed { idx, option ->
-                    NeonPendingOptionRow(
-                        text = option,
-                        index = idx,
-                        primary = idx == 0,
-                        neon = neon,
-                        onClick = { onQuickReply(option) },
+                if (question.prompt.isNotEmpty()) {
+                    MarkdownBlock(question.prompt, ConversationRole.Assistant)
+                }
+                if (question.multiSelect) {
+                    Text(
+                        "select all that apply",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
                     )
                 }
+                question.options.forEachIndexed { oIdx, option ->
+                    val selected = if (question.multiSelect) {
+                        multiSelections[qIdx]?.contains(option) == true
+                    } else {
+                        selections[qIdx] == option
+                    }
+                    NeonPendingOptionRow(
+                        text = option,
+                        index = oIdx,
+                        selected = selected,
+                        dimmed = submitted && !selected,
+                        enabled = !submitted,
+                        neon = neon,
+                        onClick = {
+                            if (question.multiSelect) {
+                                // Checkbox semantics: toggle membership; Send delivers.
+                                val cur = multiSelections[qIdx] ?: emptySet()
+                                multiSelections[qIdx] =
+                                    if (option in cur) cur - option else cur + option
+                            } else {
+                                selections[qIdx] = option
+                                // A lone single-select question sends on tap
+                                // (tap == answer); anything needing Send waits.
+                                if (!needsSend) submit(listOf(option))
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        if (needsSend && !submitted) {
+            // Only questions that actually offer options need an answer.
+            val answerable = questions.withIndex().filter { it.value.options.isNotEmpty() }
+            val answers = answerable.mapNotNull { answerFor(it.index, it.value) }
+            val allAnswered = answers.size == answerable.size
+            NeonSendAnswerButton(
+                enabled = allAnswered,
+                neon = neon,
+                onClick = { if (allAnswered) submit(answers) },
+            )
+        }
+        if (submitted) {
+            // A tap had no visible "delivered" affordance, so a sent answer
+            // read as nothing happening and the user tapped again. Echo the
+            // chosen answer next to a "Sent" check. Mirror of iOS.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Icon(Icons.Filled.CheckCircle, null, tint = neon.green, modifier = Modifier.size(14.dp))
+                Text(
+                    sentAnswer?.let { "Sent · $it" } ?: "Sent",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.green,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
 }
 
 /**
- * A big tappable pending-option row (§4.6). The first option is filled
- * claude + a check; the rest are bordered with a trailing index. Min 44dp
- * touch target.
+ * A big tappable pending-option row (§4.6). A selected option is filled
+ * claude + a check; the rest are bordered with a trailing index. Multi-
+ * select rows toggle; single-select rows highlight the choice. Min 44dp
+ * touch target; dimmed + non-interactive once the card is answered.
  */
 @Composable
 private fun NeonPendingOptionRow(
     text: String,
     index: Int,
-    primary: Boolean,
+    selected: Boolean,
+    dimmed: Boolean,
+    enabled: Boolean,
     neon: NeonTheme,
     onClick: () -> Unit,
 ) {
@@ -1103,16 +1236,17 @@ private fun NeonPendingOptionRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 44.dp)
+            .graphicsLayer { this.alpha = if (dimmed) 0.45f else 1f }
             .clip(shape)
             .then(
-                if (primary) Modifier.background(neon.claude)
+                if (selected) Modifier.background(neon.claude)
                 else Modifier.border(1.dp, neon.claude.copy(alpha = 0.55f), shape),
             )
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (primary) {
+        if (selected) {
             Icon(Icons.Filled.Check, null, tint = neon.accentText, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
         }
@@ -1121,9 +1255,10 @@ private fun NeonPendingOptionRow(
             modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = neon.sans,
-            color = if (primary) neon.accentText else neon.text,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = if (selected) neon.accentText else neon.text,
         )
-        if (!primary) {
+        if (!selected) {
             Text(
                 "${index + 1}",
                 style = MaterialTheme.typography.labelSmall,
@@ -1131,6 +1266,34 @@ private fun NeonPendingOptionRow(
                 color = neon.textFaint,
             )
         }
+    }
+}
+
+/** The explicit "Send" CTA shown for multi-select / multi-question cards. */
+@Composable
+private fun NeonSendAnswerButton(
+    enabled: Boolean,
+    neon: NeonTheme,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .graphicsLayer { this.alpha = if (enabled) 1f else 0.5f }
+            .clip(shape)
+            .background(neon.claude)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "Send",
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = neon.sans,
+            fontWeight = FontWeight.SemiBold,
+            color = neon.accentText,
+        )
     }
 }
 

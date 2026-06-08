@@ -2104,8 +2104,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // tombstone set is the guarantee that delete stays terminal.
         val deleted = _deletedIds.value.toSet()
         val list = c.listSessions().filterNot { it.id in deleted }
-        _sessions.value = list
-        for (s in list) {
+        // A fresh client returns [] until the first SessionStatus delta lands,
+        // so blindly assigning `_sessions.value = list` blanks the visible list
+        // on every reconnect — most visibly on the always-on tablet rail, which
+        // goes empty when the app is reopened (onResume calls refreshSessions
+        // while the socket is still reconnecting). The phone hides this behind a
+        // closed drawer. Replace only when we have at least one entry; otherwise
+        // keep the prior list and let status frames refresh it incrementally.
+        // Mirror of iOS `SessionStore.refreshSessions`.
+        if (list.isNotEmpty()) {
+            _sessions.value = list
+        }
+        for (s in _sessions.value) {
             // Do NOT blanket-default listed sessions to `Live`.
             // `listSessions` can include recovered / exited /
             // not-currently-running rows, and a default of `Live` made

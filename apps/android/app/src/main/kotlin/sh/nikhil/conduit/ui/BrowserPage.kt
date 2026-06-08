@@ -101,6 +101,13 @@ fun BrowserPage(store: SessionStore, session: ProjectSession, mode: BrowserMode 
 }
 
 internal fun resolvePreviewUrl(base: String?, pathOrUrl: String): String? {
+    // The broker emits `preview: {port, url: ""}` while a port is allocated
+    // but no dev server is listening yet (e.g. on launch, before the server
+    // starts). An empty path is NOT a previewable URL — return null so the
+    // Browser tab stays hidden until there's a real server, matching iOS
+    // (`BrowserTab.previewURL` guards `!p.url.isEmpty`). Without this,
+    // `"$base/"` resolved non-null and the tab appeared with no server.
+    if (pathOrUrl.isBlank()) return null
     val lower = pathOrUrl.lowercase()
     if (lower.startsWith("http://") || lower.startsWith("https://")) return pathOrUrl
     if (base.isNullOrBlank()) return null
