@@ -125,13 +125,12 @@ struct SyntaxHighlightedCodeBlock: View {
     let content: String
 
     var body: some View {
-        if SyntaxLanguage.normalize(language ?? "") != nil {
-            CodeText(content)
-                .codeTextStyle(.card)
-                .codeTextColors(.theme(.atomOne))
-                .font(.system(.footnote, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        if let lang = SyntaxLanguage.normalize(language ?? "") {
+            // Highlightable: route through the content-keyed cache so we
+            // don't re-run highlight.js every time this row recycles back
+            // into the LazyVStack (scroll away/back) or the theme/font
+            // changes. See `SyntaxHighlightCache`.
+            CachedHighlightedCodeBlock(language: lang, content: content)
         } else {
             Text(content)
                 .font(.system(.footnote, design: .monospaced))
@@ -139,6 +138,122 @@ struct SyntaxHighlightedCodeBlock: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Cached highlighter for a single highlightable fence. Replaces the live
+/// `CodeText(content).codeTextStyle(.card).codeTextColors(.theme(.atomOne))`
+/// path with a cache lookup keyed by `(content, normalized language id,
+/// isDark)`:
+///
+///   - HIT: render the precomputed `AttributedString` + card background via
+///     a plain `Text`, rebuilding the `.card` chrome (padding 12×8, a
+///     `RoundedRectangle(cornerRadius: 10, style: .continuous)` filled with
+///     the engine's `HighlightResult.backgroundColor` + a `0.333`pt
+///     `.separator` stroke) so the result is visually identical to
+///     HighlightSwift's own `CodeTextCardView`.
+///   - MISS: render plain monospaced `Text(content)` (no blank flash) while
+///     a `.task` runs `Highlight().request(_:colors:)` once, then store the
+///     result and swap to the cached card.
+///
+/// `.codeTextColors(.theme(.atomOne))` is a `CodeText`-modifier convenience
+/// that auto-picks atomOne light vs dark from the environment; the engine's
+/// `HighlightColors` only exposes `.light(_)/.dark(_)`, so we resolve the
+/// same choice ourselves from `@Environment(\.colorScheme)`.
+///
+/// Needs on-device visual verification: the cached card chrome is rebuilt by
+/// hand from HighlightSwift's documented `.card` style constants, so any
+/// upstream tweak to those constants would silently diverge from the live
+/// `CodeText` path until checked on a device.
+private struct CachedHighlightedCodeBlock: View {
+    /// Already-normalized highlight.js language id (non-nil by construction
+    /// — the caller gated on `SyntaxLanguage.normalize`).
+    let language: String
+    let content: String
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// The resolved highlight for the current `(content, language, scheme)`.
+    /// `nil` until the cache hit or the async highlight lands.
+    @State private var entry: SyntaxHighlightCache.Entry?
+
+    // §card: HighlightSwift's `.card` style constants, mirrored so the
+    // cached path reproduces `CodeTextCardView` exactly.
+    private static let cardCornerRadius: CGFloat = 10
+    private static let cardStrokeWidth: CGFloat = 0.333
+    private static let cardVerticalPadding: CGFloat = 8
+    private static let cardHorizontalPadding: CGFloat = 12
+
+    var body: some View {
+        Group {
+            if let entry {
+                card(text: Text(entry.text), background: entry.background)
+            } else {
+                // First-time miss: plain monospaced text (no blank flash)
+                // until the async highlight resolves.
+                Text(content)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(ConduitTheme.textPrimary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .task(id: TaskKey(content: content, language: language, isDark: isDark)) {
+            await resolve()
+        }
+    }
+
+    private var isDark: Bool { colorScheme == .dark }
+
+    /// Cache lookup, then async highlight on miss. Idempotent: re-running for
+    /// the same `(content, language, scheme)` is a cache hit.
+    private func resolve() async {
+        let cache = SyntaxHighlightCache.shared
+        if let hit = cache.get(content: content, language: language, isDark: isDark) {
+            entry = hit
+            return
+        }
+        let colors: HighlightColors = isDark ? .dark(.atomOne) : .light(.atomOne)
+        guard let result = try? await Highlight().request(content, colors: colors) else {
+            // Highlight failed (e.g. cancellation): leave the plain-text
+            // fallback in place; a later pass can retry.
+            return
+        }
+        let value = SyntaxHighlightCache.Entry(
+            text: result.attributedText,
+            background: result.backgroundColor
+        )
+        cache.set(content: content, language: language, isDark: isDark, value: value)
+        entry = value
+    }
+
+    /// Rebuild HighlightSwift's `.card` chrome around a highlighted `Text`.
+    /// Matches `CodeTextView` + `CodeTextCardView`: monospaced footnote
+    /// font, 12×8 padding, a filled+stroked rounded rectangle behind it.
+    private func card(text: Text, background: Color) -> some View {
+        text
+            .font(.system(.footnote, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, Self.cardVerticalPadding)
+            .padding(.horizontal, Self.cardHorizontalPadding)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                        .fill(background)
+                    RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                        .stroke(.separator, lineWidth: Self.cardStrokeWidth)
+                }
+            }
+    }
+
+    /// Equatable identity for `.task(id:)` so the highlight re-runs when any
+    /// keyed input changes (content edit, language reclassification, or a
+    /// light/dark toggle) but NOT on every body re-eval.
+    private struct TaskKey: Hashable {
+        let content: String
+        let language: String
+        let isDark: Bool
     }
 }
 
