@@ -902,6 +902,24 @@ func (s *Session) SendChat(msg string) bool {
 	return true
 }
 
+// InterruptTurn stops the agent's current turn (the composer Stop button)
+// without ending the session: claude gets a stream-json interrupt
+// control_request, codex app-server a turn/interrupt, codex-exec a process
+// kill. A no-op when there's no structured chat backend or no turn in flight.
+// Returns false only when there's no backend to talk to.
+func (s *Session) InterruptTurn() bool {
+	s.mu.Lock()
+	chat := s.chat
+	s.mu.Unlock()
+	if chat == nil {
+		return false
+	}
+	if err := chat.Interrupt(); err != nil {
+		fmt.Fprintf(os.Stderr, "session %s: chat interrupt: %v\n", s.ID, err)
+	}
+	return true
+}
+
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		// Flag the teardown FIRST: killing the PTY below wakes drain()

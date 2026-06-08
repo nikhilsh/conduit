@@ -222,6 +222,21 @@ func codexStartedThreadID(params json.RawMessage) string {
 	return p.Thread.ID
 }
 
+// codexStartedTurnID lifts the turn id from a turn/started notification's
+// params ({"threadId":"…","turn":{"id":"…"}}). "" when absent/malformed. Used
+// to target turn/interrupt (the Stop button).
+func codexStartedTurnID(params json.RawMessage) string {
+	var p struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return ""
+	}
+	return p.Turn.ID
+}
+
 // waitCodexResult extracts the result from the next response on the channel,
 // returning an error for a JSON-RPC error response. The reader goroutine only
 // forwards correlated responses, so reading one is correct here (the handshake

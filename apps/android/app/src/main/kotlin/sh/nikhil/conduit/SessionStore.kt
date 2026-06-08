@@ -1603,6 +1603,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
         viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.refreshAccountUsage(sessionId) } } }
     }
 
+    /**
+     * Stop the agent's current turn (the composer Stop button) without ending
+     * the session. Fire-and-forget: the broker interrupts the running turn
+     * (claude stream-json interrupt / codex turn-interrupt / codex-exec kill)
+     * and the turn winding down arrives on the normal chat/status stream, which
+     * clears the typing indicator. A no-op broker-side when nothing is running.
+     */
+    fun stopTurn(sessionId: String) {
+        val c = client ?: return
+        Telemetry.breadcrumb("chat", "stop turn requested", mapOf("session" to sessionId))
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.stopTurn(sessionId) } } }
+    }
+
     // Session-independent refresh for the ambient usage surfaces (Home strip /
     // Settings card, design handoff §3b) — drives the broker fetch via any
     // Claude session. No-op when none is connected. Usage is per-account and

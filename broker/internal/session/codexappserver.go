@@ -68,6 +68,10 @@ type codexAppServerProcess struct {
 	// never produce a turn/completed notification, so without this the turn
 	// would wedge turnActive forever.
 	turnReqID int
+	// turnID is the codex turn id (turn.id) of the active turn, latched from the
+	// turn/started notification. Required (with threadID) to target turn/interrupt
+	// — the Stop button. Empty until turn/started arrives and after the turn ends.
+	turnID string
 	// turnGen increments on every turn start/end so a stale watchdog timer from
 	// a prior turn can detect it no longer owns the current turn and bow out.
 	turnGen int
@@ -305,6 +309,7 @@ func (c *codexAppServerProcess) finishTurn() (active, published, intentional boo
 		return false, false, false
 	}
 	c.turnActive = false
+	c.turnID = ""
 	c.stopTurnWatchdogLocked()
 	return true, c.published, c.closed
 }
@@ -469,6 +474,17 @@ func (c *codexAppServerProcess) handleNotification(method string, params json.Ra
 		if tid := codexStartedThreadID(params); tid != "" {
 			c.latchThread(tid)
 		}
+	case "turn/started":
+		// Latch the turn id so Interrupt() (the Stop button) can target
+		// turn/interrupt {threadId, turnId}. Only meaningful while the turn
+		// is active; finishTurn clears it.
+		if id := codexStartedTurnID(params); id != "" {
+			c.mu.Lock()
+			if c.turnActive {
+				c.turnID = id
+			}
+			c.mu.Unlock()
+		}
 	case "thread/tokenUsage/updated":
 		if c.onUsage != nil {
 			if u, ok := codexUsageFromNotification(params); ok {
@@ -585,6 +601,26 @@ func (c *codexAppServerProcess) emit(ev codexAppEvent) {
 	c.published = true
 	c.mu.Unlock()
 	c.publish(payload)
+}
+
+// Interrupt aborts the active turn via `turn/interrupt {threadId, turnId}` (the
+// Stop button) without closing the app-server. codex replies with an empty
+// result and emits `turn/completed` with status "interrupted", which endTurnQuiet
+// clears. A no-op when no turn is in flight, the session is closed, or the turn
+// id hasn't been latched yet (turn/started not seen) — the watchdog still backs
+// that rare gap.
+func (c *codexAppServerProcess) Interrupt() error {
+	c.mu.Lock()
+	if c.closed || !c.turnActive || c.turnID == "" {
+		c.mu.Unlock()
+		return nil
+	}
+	tid := c.threadID
+	turnID := c.turnID
+	id := c.allocIDLocked()
+	c.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "codex app-server: turn interrupt (thread %s, turn %s, id %d)\n", tid, turnID, id)
+	return c.writeRequest(id, "turn/interrupt", map[string]any{"threadId": tid, "turnId": turnID})
 }
 
 // Close stops the app-server: refuse further Sends, close stdin, kill the

@@ -124,6 +124,7 @@ func TestSendChatAnswersPendingAsk(t *testing.T) {
 type fakeChatBackend struct{ sent []string }
 
 func (f *fakeChatBackend) Send(text string) error { f.sent = append(f.sent, text); return nil }
+func (f *fakeChatBackend) Interrupt() error       { return nil }
 func (f *fakeChatBackend) Close() error           { return nil }
 
 // The multi-select marker rides inside the rendered card text.

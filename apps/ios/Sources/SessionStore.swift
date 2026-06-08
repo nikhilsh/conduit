@@ -1436,6 +1436,17 @@ final class SessionStore {
         Task { try? await client.refreshAccountUsage(sessionId: sessionID) }
     }
 
+    /// Stop the agent's current turn (the composer Stop button) without ending
+    /// the session. Fire-and-forget: the broker interrupts the running turn
+    /// (claude stream-json interrupt / codex turn-interrupt / codex-exec kill)
+    /// and the turn winding down arrives on the normal chat/status stream, which
+    /// clears the typing indicator. A no-op broker-side when nothing is running.
+    func stopTurn(sessionID: String) {
+        guard let client else { return }
+        Telemetry.breadcrumb("chat", "stop turn requested", data: ["session": sessionID])
+        Task { try? await client.stopTurn(sessionId: sessionID) }
+    }
+
     /// Account-level Claude subscription usage, surfaced ambiently on Home and
     /// in Settings (design handoff §3b). The numbers are per-account, not
     /// per-session, so we just need any Claude session carrying the latest
