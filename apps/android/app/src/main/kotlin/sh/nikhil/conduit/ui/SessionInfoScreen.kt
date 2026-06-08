@@ -115,6 +115,9 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     val modelOptions = remember(session.assistant) { forkModelOptions(session.assistant) }
     var forkModel by remember(showFork) { mutableStateOf(forkModelInherit) }
     var modelMenuExpanded by remember(showFork) { mutableStateOf(false) }
+    // Permission mode for the fork. "" = Auto (full-auto default); "plan" =
+    // read-only planning. The sentinel "" maps to null into forkSession.
+    var forkMode by remember(showFork) { mutableStateOf("") }
 
     val agent = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant
     val tint = neonAgentColor(agent, neon)
@@ -486,6 +489,29 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         }
                     }
                     Text(
+                        "MODE",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = forkMode == "",
+                            onClick = { forkMode = "" },
+                            label = { Text("Auto") },
+                        )
+                        FilterChip(
+                            selected = forkMode == "plan",
+                            onClick = { forkMode = "plan" },
+                            label = { Text("Plan") },
+                        )
+                    }
+                    Text(
+                        "Plan = read-only; agent explores and proposes without editing.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
                         "MODEL (OPTIONAL)",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
@@ -541,7 +567,8 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             confirmButton = {
                 TextButton(onClick = {
                     val model = forkModel.trim().ifEmpty { null }
-                    store.forkSession(session.id, reasoningEffort = forkEffort, model = model)
+                    val mode = forkMode.trim().ifEmpty { null }
+                    store.forkSession(session.id, reasoningEffort = forkEffort, model = model, permissionMode = mode)
                     showFork = false
                     onDismiss()
                 }) { Text("Fork") }

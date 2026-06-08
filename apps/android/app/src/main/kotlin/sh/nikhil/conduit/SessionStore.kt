@@ -655,13 +655,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * (the broker falls back to the adapter default). Effort can't change
      * mid-session — that's why forking is the path, not a live switch.
      */
-    fun forkSession(sessionId: String, reasoningEffort: String? = null, model: String? = null) {
+    fun forkSession(sessionId: String, reasoningEffort: String? = null, model: String? = null, permissionMode: String? = null) {
         val c = client ?: return
         val original = _sessions.value.firstOrNull { it.id == sessionId } ?: return
+        val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
         viewModelScope.launch {
             try {
                 val newId = withContext(Dispatchers.IO) {
-                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null)
+                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode)
                 }
                 val seed = "Forked from ${original.name} (id $sessionId). Pick up where the previous session left off."
                 runCatching { withContext(Dispatchers.IO) { c.sendChat(newId, seed) } }
@@ -857,6 +858,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         cwd: String?,
         reasoningEffort: String? = null,
         model: String? = null,
+        permissionMode: String? = null,
     ) {
         Telemetry.breadcrumb(
             "session",
@@ -869,7 +871,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 harness.first { it.canIssueCommands }
             }
             if (ready != null) {
-                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model)
+                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model, permissionMode = permissionMode)
             } else {
                 Telemetry.capture(
                     IllegalStateException("connect+start timed out"),
@@ -1310,6 +1312,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         startupCwd: String? = null,
         reasoningEffort: String? = null,
         model: String? = null,
+        permissionMode: String? = null,
         initialPrompt: String? = null,
     ) {
         val c = client ?: return
@@ -1323,7 +1326,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // "inherit" = no override.
         val modelCrumb = model?.trim()?.takeIf { it.isNotEmpty() } ?: "inherit"
         val effortCrumb = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() } ?: "default"
-        Telemetry.breadcrumb("session", "create start", mapOf("assistant" to assistant, "hasCwd" to (startupCwd?.isNotBlank() == true).toString(), "model" to modelCrumb, "effort" to effortCrumb))
+        val modeCrumb = permissionMode?.trim()?.takeIf { it.isNotEmpty() } ?: "auto"
+        Telemetry.breadcrumb("session", "create start", mapOf("assistant" to assistant, "hasCwd" to (startupCwd?.isNotBlank() == true).toString(), "model" to modelCrumb, "effort" to effortCrumb, "mode" to modeCrumb))
         viewModelScope.launch {
             try {
                 // Pass the selected folder as the agent's cwd so the broker
@@ -1334,7 +1338,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val startup = startupCwd?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedModel = model?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
-                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup) }
+                val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
+                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
                 // Record the explicit --model override for the title menu's
                 // identity header (inherit stays absent on purpose).

@@ -103,7 +103,7 @@ extension ConduitUI {
                     DirectoryPicker(
                         agentKind: kind,
                         initialPrompt: initialPrompt,
-                        onCreate: { cwd, model, effort in
+                        onCreate: { cwd, model, effort, permissionMode in
                             if let target = resolvedServer, target.endpoint != store.endpoint {
                                 // Session targeted at a different box:
                                 // switch endpoint → connect → create.
@@ -113,6 +113,7 @@ extension ConduitUI {
                                     cwd: cwd,
                                     reasoningEffort: effort,
                                     model: model,
+                                    permissionMode: permissionMode,
                                     initialPrompt: initialPrompt
                                 )
                             } else {
@@ -121,6 +122,7 @@ extension ConduitUI {
                                     startupCwd: cwd,
                                     reasoningEffort: effort,
                                     model: model,
+                                    permissionMode: permissionMode,
                                     initialPrompt: initialPrompt
                                 )
                             }
@@ -312,9 +314,10 @@ extension ConduitUI {
         var initialPrompt: String?
         /// Called with the absolute path to cd into (or nil to start with no
         /// working directory), the selected model alias (nil = inherit the
-        /// agent's default model), and the chosen reasoning effort (nil =
-        /// the agent's default effort).
-        let onCreate: (String?, String?, String?) -> Void
+        /// agent's default model), the chosen reasoning effort (nil = the
+        /// agent's default effort), and the agent mode (nil = Auto / full-auto
+        /// default; "plan" = read-only planning).
+        let onCreate: (String?, String?, String?, String?) -> Void
 
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
@@ -332,11 +335,15 @@ extension ConduitUI {
         /// default ("medium" when offered) via `defaultEffort`, mirroring the
         /// Fork sheet — the new-session flow previously couldn't set effort.
         @State private var effort: String
+        /// Selected agent mode. `ForkOptions.autoMode` (empty string) means
+        /// the app's current full-auto default — sent as nil so the spawn
+        /// carries no override, identical to before this picker existed.
+        @State private var permissionMode: String = ConduitUI.ForkOptions.autoMode
 
         init(
             agentKind: String,
             initialPrompt: String? = nil,
-            onCreate: @escaping (String?, String?, String?) -> Void
+            onCreate: @escaping (String?, String?, String?, String?) -> Void
         ) {
             self.agentKind = agentKind
             self.initialPrompt = initialPrompt
@@ -360,6 +367,9 @@ extension ConduitUI {
         /// The model to hand to onCreate: the sentinel maps to nil.
         private var selectedModel: String? { model.isEmpty ? nil : model }
 
+        /// The agent mode to hand to onCreate: Auto (sentinel) maps to nil.
+        private var selectedPermissionMode: String? { permissionMode.isEmpty ? nil : permissionMode }
+
         var body: some View {
             ZStack {
                 GlassAppBackground()
@@ -367,6 +377,7 @@ extension ConduitUI {
                     VStack(alignment: .leading, spacing: 14) {
                         modelSection
                         effortSection
+                        modeSection
                         if !store.recentDirectories.isEmpty {
                             recentSection
                         }
@@ -426,13 +437,30 @@ extension ConduitUI {
             }
         }
 
+        private var modeSection: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel("Mode")
+                Picker("Mode", selection: $permissionMode) {
+                    ForEach(ConduitUI.ForkOptions.permissionModes, id: \.self) { mode in
+                        Text(ConduitUI.ForkOptions.permissionModeLabel(mode)).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .tint(neon.accent)
+                Text("Plan = read-only; agent explores and proposes without editing.")
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(neon.textFaint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+
         private var recentSection: some View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Recent")
                 VStack(spacing: 6) {
                     ForEach(store.recentDirectories, id: \.self) { path in
                         Button {
-                            onCreate(path, selectedModel, effort)
+                            onCreate(path, selectedModel, effort, selectedPermissionMode)
                         } label: {
                             ConduitUI.ListRow(
                                 icon: "clock.arrow.circlepath",
@@ -544,7 +572,7 @@ extension ConduitUI {
         private var bottomBar: some View {
             VStack(spacing: 10) {
                 Button {
-                    onCreate(listing?.path, selectedModel, effort)
+                    onCreate(listing?.path, selectedModel, effort, selectedPermissionMode)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
@@ -565,7 +593,7 @@ extension ConduitUI {
                 .opacity(listing == nil ? 0.5 : 1.0)
 
                 Button {
-                    onCreate(nil, selectedModel, effort)
+                    onCreate(nil, selectedModel, effort, selectedPermissionMode)
                 } label: {
                     Text("Start without a folder")
                         .font(neon.sans(13).weight(.medium))

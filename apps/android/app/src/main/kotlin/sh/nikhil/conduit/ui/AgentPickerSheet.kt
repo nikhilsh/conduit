@@ -100,14 +100,14 @@ fun AgentPickerSheet(
             DirectoryStep(
                 store = store,
                 assistant = agent,
-                onCreate = { cwd, model, effort ->
+                onCreate = { cwd, model, effort, permissionMode ->
                     val target = savedServers.firstOrNull { it.id == resolvedServerId }
                     if (target != null && target.endpoint != endpoint) {
                         // Session targeted at a different box: switch
                         // endpoint → connect → create.
-                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model)
+                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode)
                     } else {
-                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model)
+                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode)
                     }
                     onDismiss()
                 },
@@ -226,7 +226,7 @@ private fun AgentStep(
 private fun DirectoryStep(
     store: SessionStore,
     assistant: String,
-    onCreate: (String?, String?, String?) -> Unit,
+    onCreate: (String?, String?, String?, String?) -> Unit,
 ) {
     val recent by store.recentDirectories.collectAsState()
     var currentPath by remember { mutableStateOf<String?>(null) }
@@ -245,6 +245,11 @@ private fun DirectoryStep(
     var effort by remember(assistant) {
         mutableStateOf(if (effortOptions.contains("medium")) "medium" else effortOptions.first())
     }
+    // Permission mode. "" = Auto (full-auto default, broker spawns with
+    // --dangerously-skip-permissions); "plan" = read-only planning. The
+    // sentinel "" maps to null on the way to onCreate, mirroring model.
+    var permissionMode by remember { mutableStateOf("") }
+    val selectedMode = permissionMode.trim().ifEmpty { null }
 
     LaunchedEffect(currentPath) {
         isLoading = true
@@ -300,11 +305,33 @@ private fun DirectoryStep(
                 }
             }
 
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SectionLabel("Mode")
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = permissionMode == "",
+                        onClick = { permissionMode = "" },
+                        label = { Text("Auto") },
+                    )
+                    FilterChip(
+                        selected = permissionMode == "plan",
+                        onClick = { permissionMode = "plan" },
+                        label = { Text("Plan") },
+                    )
+                }
+                Text(
+                    "Plan = read-only; agent explores and proposes without editing.",
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = neon.textFaint,
+                )
+            }
+
             if (recent.isNotEmpty()) {
                 SectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recent.forEach { path ->
-                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, effort) })
+                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, effort, selectedMode) })
                     }
                 }
             }
@@ -354,7 +381,7 @@ private fun DirectoryStep(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Button(
-                onClick = { onCreate(listing?.path, selectedModel, effort) },
+                onClick = { onCreate(listing?.path, selectedModel, effort, selectedMode) },
                 enabled = listing != null,
                 shape = RoundedCornerShape(14.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
@@ -367,7 +394,7 @@ private fun DirectoryStep(
                 Spacer(Modifier.width(8.dp))
                 Text("Use this folder", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
             }
-            TextButton(onClick = { onCreate(null, selectedModel, effort) }) {
+            TextButton(onClick = { onCreate(null, selectedModel, effort, selectedMode) }) {
                 Text(
                     "Start without a folder",
                     fontFamily = neon.sans,
