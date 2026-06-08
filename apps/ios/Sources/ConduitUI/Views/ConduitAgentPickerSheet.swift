@@ -321,6 +321,7 @@ extension ConduitUI {
 
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
+        @Environment(\.dismiss) private var dismiss
 
         @State private var listing: RemoteDirectoryListing?
         @State private var isLoading = false
@@ -390,6 +391,27 @@ extension ConduitUI {
             }
             .navigationTitle("Working directory")
             .navigationBarTitleDisplayMode(.inline)
+            // Replace iOS 26's default circular glass back button — its
+            // translucent fill let the app's grid background show through
+            // ("the back shows under the button", device feedback) and it
+            // clashed with the plain-chevron back used everywhere else
+            // (see ConduitProjectView's header). A flat chevron pops the
+            // nav stack via the dismiss environment.
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(neon.text)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
+                }
+            }
             .safeAreaInset(edge: .bottom) { bottomBar }
             .task(id: currentPath) { await load() }
             .tint(neon.accent)
@@ -604,7 +626,20 @@ extension ConduitUI {
             .padding(.horizontal, 16)
             .padding(.top, 10)
             .padding(.bottom, 12)
-            .background(neon.surfaceSolid.opacity(0.96))
+            // Fully opaque docked bar. At 0.96 the browse list scrolled
+            // visibly THROUGH the bar ("you can see the options under
+            // 'Use this folder'", device feedback) — there's no blur
+            // behind a safe-area inset to hide it, so the bar must be
+            // solid. A hairline on top keeps it visually separated from
+            // the scrolling content above.
+            .background(
+                neon.surfaceSolid
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(neon.border)
+                            .frame(height: 1)
+                    }
+            )
         }
 
         // MARK: Helpers

@@ -641,26 +641,34 @@ fun ChatPage(
                 label = "scrollToBottomAlpha",
             )
             if (buttonAlpha > 0.01f) {
-                FilledIconButton(
-                    onClick = {
-                        autoScroll = autoScroll.onScrollToBottomRequested()
-                        scope.launch { scrollToTrueBottom(listState) }
-                    },
+                // Neon glass disc — parity with iOS's glass scroll-to-bottom
+                // and the header circle buttons. Was an off-theme Material3
+                // `secondaryContainer` FilledIconButton that didn't match the
+                // neon chrome.
+                val neon = LocalNeonTheme.current
+                Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(12.dp)
-                        .size(40.dp)
                         .graphicsLayer {
                             alpha = buttonAlpha
                             scaleX = 0.85f + 0.15f * buttonAlpha
                             scaleY = 0.85f + 0.15f * buttonAlpha
+                        }
+                        .size(40.dp)
+                        .glassCircle()
+                        .clickable {
+                            autoScroll = autoScroll.onScrollToBottomRequested()
+                            scope.launch { scrollToTrueBottom(listState) }
                         },
-                    colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    ),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Outlined.ArrowDownward, contentDescription = "Scroll to latest")
+                    Icon(
+                        Icons.Outlined.ArrowDownward,
+                        contentDescription = "Scroll to latest",
+                        modifier = Modifier.size(18.dp),
+                        tint = neon.accent,
+                    )
                 }
             }
         }

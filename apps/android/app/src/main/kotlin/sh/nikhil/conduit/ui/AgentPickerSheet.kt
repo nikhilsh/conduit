@@ -375,6 +375,11 @@ private fun DirectoryStep(
             }
         }
 
+        // Hairline separates the pinned action bar from the browse list
+        // scrolling above it (parity with iOS's opaque bottom bar + top
+        // hairline). The sheet container is already `neon.surfaceSolid`,
+        // so the bar reads as solid; the divider supplies the separation.
+        androidx.compose.material3.HorizontalDivider(color = neon.border, thickness = 1.dp)
         Column(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

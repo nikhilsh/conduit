@@ -844,9 +844,9 @@ extension ConduitUI {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(neon.accent)
                     .frame(width: 40, height: 40)
-                    .background(Circle().fill(neon.surfaceSolid))
-                    .overlay(Circle().stroke(neon.borderStrong, lineWidth: 1))
-                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
+                    // Glass disc (device feedback) — melds with the chat
+                    // instead of a flat surface + neon halo.
+                    .conduitGlassCircle()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Scroll to latest message")
@@ -895,11 +895,11 @@ extension ConduitUI {
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
                                     .foregroundStyle(neon.accent)
-                                    .background(
-                                        Capsule().fill(neon.surface)
-                                    )
-                                    .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
-                                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
+                                    // Glass capsule — the surface+border+neon
+                                    // halo read as a detached glow that didn't
+                                    // meld with the chat (device feedback);
+                                    // this matches the documented intent below.
+                                    .conduitGlassCapsule()
                             }
                             .buttonStyle(.plain)
                             .accessibilityHint("Send suggested reply")
