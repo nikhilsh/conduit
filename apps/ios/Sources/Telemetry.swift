@@ -57,6 +57,43 @@ enum Telemetry {
             // PLUS a non-empty allow list). We set NEITHER, so request/response
             // bodies — which on our WebSocket carry code, terminal commands and
             // auth tokens — are never recorded. Left off deliberately.
+
+            // --- Performance tracing + CPU profiling ------------------------
+            // The point is to diagnose the on-device problems we CAN'T see from
+            // the dev box: long-chat CPU burn / overheat / battery drain, slow
+            // & frozen frames, slow app starts, and main-thread hangs. Auto
+            // performance instrumentation (app start, slow/frozen frames,
+            // UIViewController time) is on by default; we just opt into
+            // sampling. 0.2 keeps overhead and quota modest while still giving a
+            // representative picture.
+            options.tracesSampleRate = 0.2
+            // Continuous "UI Profiling" tied to the trace lifecycle: while a
+            // sampled trace is active the profiler samples the call stacks, so
+            // we get flame graphs of what's actually pinning the CPU during a
+            // heavy chat. sessionSampleRate is RELATIVE to tracesSampleRate
+            // (the legacy profilesSampleRate was removed in 9.0). Profiles are
+            // stack samples (symbol names + timing) — never variable values or
+            // buffer contents, so no user content leaks.
+            options.configureProfiling = {
+                $0.lifecycle = .trace
+                $0.sessionSampleRate = 1.0
+            }
+            // App Hang Tracking V2 is the default (and only) implementation in
+            // 9.x — the enableAppHangTrackingV2 toggle was removed in 9.0. Pin
+            // the confirm-on flag + a 2s threshold so a frozen main thread
+            // (the long-chat "spinner stuck" reports) surfaces as an event.
+            options.enableAppHangTracking = true
+            options.appHangTimeoutInterval = 2.0
+
+            // --- Privacy: no network span/URL capture -----------------------
+            // Tracing would otherwise swizzle URLSession and attach each
+            // request's URL to a span. Our OAuth token exchange + API calls put
+            // sensitive material in URLs/endpoints, and the WS connect URL
+            // carries a `token=` secret — none of that must reach Sentry. Turn
+            // the network span instrumentation OFF; we keep the perf signal we
+            // actually want (CPU/frames/hangs) without any URL capture.
+            options.enableNetworkTracking = false
+            options.enableNetworkBreadcrumbs = false
         }
 #endif
     }
