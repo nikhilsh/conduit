@@ -928,17 +928,39 @@ func (s *Session) Close() {
 			}
 			s.recorder = nil
 		}
-		// Best-effort cleanup of the per-session ephemeral $HOME so
-		// rotated OAuth refresh tokens don't linger on disk after the
-		// agent exits. Failure is logged and ignored — the worktree GC
-		// will sweep it eventually.
-		if s.agentHomeDir != "" {
-			if err := os.RemoveAll(s.agentHomeDir); err != nil {
-				fmt.Fprintf(os.Stderr, "session %s: remove agent-home: %v\n", s.ID, err)
-			}
-		}
+		// Best-effort cleanup of the per-session ephemeral $HOME's
+		// CREDENTIALS so rotated OAuth refresh tokens don't linger on
+		// disk after the agent exits. The home itself — including
+		// .claude/projects and .codex/sessions, the CLIs' RESUMABLE
+		// conversation files — is deliberately PRESERVED: a broker
+		// shutdown Closes every live session, and the previous
+		// RemoveAll(agentHomeDir) here destroyed the conversations that
+		// recovery's --resume / exec-resume depend on before they could
+		// ever be used (the "agent lost where it was" bug — the resume
+		// id survived in meta.json but its backing file was wiped on
+		// every redeploy). Recovery re-materializes credentials into the
+		// home; session GC sweeps the directory after retention.
+		cleanupAgentHomeCredentials(s.agentHomeDir, s.ID)
 		close(s.closed)
 	})
+}
+
+// cleanupAgentHomeCredentials removes the materialized OAuth credential
+// files from a session's agent-home while leaving everything else (most
+// importantly the CLIs' conversation/rollout files) in place. Missing
+// files are fine; other failures are logged and ignored.
+func cleanupAgentHomeCredentials(homeDir, sessionID string) {
+	if homeDir == "" {
+		return
+	}
+	for _, rel := range []string{
+		filepath.Join(".claude", ".credentials.json"),
+		filepath.Join(".codex", "auth.json"),
+	} {
+		if err := os.Remove(filepath.Join(homeDir, rel)); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "session %s: remove agent credential %s: %v\n", sessionID, rel, err)
+		}
+	}
 }
 
 // Done returns a channel closed when the session ends.
