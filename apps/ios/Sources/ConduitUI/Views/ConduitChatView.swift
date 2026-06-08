@@ -116,6 +116,11 @@ extension ConduitUI {
         // drag + bottom-proximity + streaming signals and reads back
         // `shouldFollow…` / `showScrollToBottomButton`.
         @State private var autoScroll = ChatAutoScrollController()
+        /// Non-invalidating holder for the last scroll proximity band (see
+        /// the gating in `.onScrollGeometryChange`). A reference type held
+        /// in `@State` so mutating its field never re-evaluates the body —
+        /// the whole point is to NOT invalidate on every scroll frame.
+        @State private var proximityGate = ScrollProximityGate()
         // Opening a session must land on the LATEST message, not the top of
         // the history. The stream/new-message autoscroll observers only fire on
         // *changes*, so a session opened with pre-existing events never got an
@@ -557,15 +562,35 @@ extension ConduitUI {
                     geo.contentSize.height
                         - (geo.contentOffset.y + geo.bounds.height)
                 } action: { _, distance in
+                    // PERF (long-chat overheat): `.onScrollGeometryChange`
+                    // fires 60–120×/sec while scrolling. Writing the
+                    // distance into the Equatable `@State autoScroll`
+                    // every frame invalidated the WHOLE ChatView body each
+                    // frame, which re-ran the O(history) transcript
+                    // fingerprint per frame → pegged CPU → overheat/hang.
+                    // No auto-scroll decision depends on the exact
+                    // distance — only on which of three bands it's in
+                    // (near-bottom clears the follow latch; the button's
+                    // hysteresis band; far). Forward to the controller
+                    // ONLY on a band change, so a scroll gesture costs a
+                    // handful of @State writes, not thousands.
+                    let band = autoScroll.proximityBand(for: distance)
+                    if band == proximityGate.lastBand { return }
+                    proximityGate.lastBand = band
                     autoScroll.bottomProximityChanged(distance)
                 }
                 // A finger-down drag is the user taking manual control —
                 // latch `userScrolledUp` so streaming stops yanking them
                 // back. The proximity observer above clears the latch once
-                // they return near the bottom.
+                // they return near the bottom. Gated: `onChanged` also
+                // fires per frame, so only write the latch on the edge
+                // (same per-frame-invalidation hazard as the proximity
+                // observer above).
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 4)
-                        .onChanged { _ in autoScroll.userDragged() }
+                        .onChanged { _ in
+                            if !autoScroll.userScrolledUp { autoScroll.userDragged() }
+                        }
                 )
                 // Follow the stream: re-scroll on each token, but only
                 // while the user hasn't scrolled up.
@@ -1073,6 +1098,14 @@ private struct ConduitChatEmptyState: View {
 //
 // Per-message dispatch — routes `ConversationItem` to the right inline
 // card (pending input, handoff, subagent, tool, or chat message).
+
+/// Holds the last scroll-proximity band across renders WITHOUT being a
+/// SwiftUI state dependency — a reference type so mutating `lastBand`
+/// never invalidates the view (see the gating in
+/// `ConduitChatView.onScrollGeometryChange`).
+private final class ScrollProximityGate {
+    var lastBand: Int = -1
+}
 
 private struct ConduitEventRow: View {
     let event: ConversationItem
@@ -2914,10 +2947,22 @@ private struct ConduitDiffBlock: View {
         }
         .onAppear {
             if expandedFileIDs.isEmpty {
-                expandedFileIDs = Set(files.map(\.id))
+                // PERF: only auto-expand SMALL files. Each visible diff
+                // line is its own syntax-highlight pass (highlight.js in a
+                // JSContext), so a big diff auto-expanded on appearance lit
+                // up hundreds of lines at once — a CPU spike that compounds
+                // the long-chat overheat. Large diffs start collapsed; the
+                // user taps the file to expand it.
+                expandedFileIDs = Set(
+                    files.filter { $0.lines.count <= Self.autoExpandLineLimit }.map(\.id)
+                )
             }
         }
     }
+
+    /// Files longer than this stay collapsed by default (tap to expand)
+    /// so a large diff doesn't syntax-highlight every line at once.
+    private static let autoExpandLineLimit = 40
 
     /// `+N −M` badge — prefers the explicit `diffSummary` over per-file
     /// line counts (§4.4 header).
