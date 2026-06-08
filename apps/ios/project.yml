@@ -25,7 +25,20 @@ settings:
 packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa
-    from: 8.55.0
+    # Pinned to the latest major (9.x). The trigger was an INFRA break:
+    # 8.58.3's xcframework GitHub-release assets return 504 (verified from
+    # CI and the dev box; 8.58.0 and 9.16.x serve fine), and `from: 8.55.0`
+    # with no committed Package.resolved re-resolved to that broken 8.58.3
+    # on every build → every iOS build failed at package resolve.
+    # We move forward to 9.16.1 rather than back-pin: our usage is one file
+    # (Telemetry.swift — start/dsn/environment/enableMetricKit/capture/
+    # addBreadcrumb/configureScope), all present in 9.x, and the 9.0
+    # breaking changes don't touch us (no tracesSampleRate set, so the new
+    # perf/tracing defaults are inert; removed enableTracing/
+    # defaultIntegrations unused; min-iOS 15 < our target). EXACT pin so a
+    # future major bump is a deliberate, reviewed change. Needs on-device
+    # verification that a test crash + breadcrumbs still report.
+    exactVersion: 9.16.1
   SnapshotTesting:
     # Point-Free's swift-snapshot-testing. De facto standard for
     # iOS visual regression — image + accessibility + text snapshots.
