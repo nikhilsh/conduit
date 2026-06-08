@@ -296,7 +296,7 @@ struct TurnLiveActivityModelTests {
         // An approval can wait minutes — the idle timeout must not reap
         // a "needs you" card; only a fresh item or a session exit may.
         var model = TurnActivityModel(idleTimeout: 5)
-        let t0 = Date(timeIntervalSince1970: 100)
+        let t0 = Date() // recent: stale items deliberately can't START
         _ = model.apply(
             item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: t0),
             sessionID: "s1",
