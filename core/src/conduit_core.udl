@@ -287,6 +287,9 @@ interface ConduitClient {
     void send_chat(string session_id, string msg);
 
     [Async, Throws=ConduitError]
+    void stop_turn(string session_id);
+
+    [Async, Throws=ConduitError]
     void refresh_account_usage(string session_id);
 
     [Async, Throws=ConduitError]

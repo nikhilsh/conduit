@@ -1062,6 +1062,24 @@ extension ConduitUI {
                     .buttonStyle(.plain)
                     .disabled(!canSend)
                     .accessibilityLabel("Send")
+                } else if isAgentWorking {
+                    // Empty composer while the agent is producing output: the
+                    // send affordance becomes a Stop button that interrupts the
+                    // current turn (how Claude's own app / codex behave). Typing
+                    // anything flips it back to Send (the branch above) so the
+                    // user can still queue the next message. See docs / Stop-turn.
+                    Button {
+                        store.stopTurn(sessionID: session.id)
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(neon.accentText)
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(neon.accent))
+                            .neonGlowBox(neon.glow ? neon.glowBox : nil)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop")
                 } else {
                     Button {
                         showVoiceDictation = true

@@ -7,6 +7,12 @@ package session
 // chat_mode. See docs/PLAN-CHAT-CHANNEL.md (task #24).
 type chatBackend interface {
 	Send(text string) error
+	// Interrupt stops the currently-running turn WITHOUT ending the session,
+	// so the composer's Stop button can halt a streaming/working agent. A
+	// no-op (nil) when no turn is in flight. claude writes a stream-json
+	// `control_request {subtype:"interrupt"}`; codex app-server sends
+	// `turn/interrupt`; codex-exec kills the in-flight turn process.
+	Interrupt() error
 	Close() error
 }
 

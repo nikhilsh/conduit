@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ArrowDownward
@@ -724,6 +725,8 @@ fun ChatPage(
                     draft = if (draft.trim().isEmpty()) reply else "$draft\n$reply"
                 },
                 onSend = dispatchSend,
+                agentWorking = agentWorking,
+                onStop = { store.stopTurn(session.id) },
             )
         }
     }
@@ -2643,6 +2646,10 @@ private fun ConversationComposer(
     onDraftChange: (String) -> Unit,
     onQuickReply: (String) -> Unit,
     onSend: () -> Unit,
+    /** True while the agent is producing output — the trailing button becomes Stop. */
+    agentWorking: Boolean = false,
+    /** Interrupt the agent's current turn (the Stop button). */
+    onStop: () -> Unit = {},
 ) {
     val neon = LocalNeonTheme.current
     val hasDraft = draft.trim().isNotEmpty()
@@ -2792,16 +2799,8 @@ private fun ConversationComposer(
                 // start typing (device bug). The text field still grows the row
                 // for multi-line drafts via the Bottom alignment.
                 Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-                    if (!hasDraft) {
-                        InlineVoiceButton { transcript ->
-                            val trimmed = transcript.trim()
-                            if (trimmed.isNotEmpty()) {
-                                val next = if (draft.isBlank()) trimmed else "$draft $trimmed"
-                                onDraftChange(next)
-                            }
-                        }
-                    } else {
-                        FilledIconButton(
+                    when {
+                        hasDraft -> FilledIconButton(
                             onClick = onSend,
                             colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
                                 containerColor = neon.accent,
@@ -2810,6 +2809,28 @@ private fun ConversationComposer(
                             modifier = Modifier.size(36.dp),
                         ) {
                             Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Send")
+                        }
+                        // Empty composer while the agent is producing output: the
+                        // send affordance becomes a Stop button that interrupts the
+                        // current turn (how Claude's own app / codex behave). Typing
+                        // flips it back to Send so the user can still queue the next
+                        // message; idle + empty shows the voice mic.
+                        agentWorking -> FilledIconButton(
+                            onClick = onStop,
+                            colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                                containerColor = neon.accent,
+                                contentColor = neon.accentText,
+                            ),
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(Icons.Default.Stop, contentDescription = "Stop")
+                        }
+                        else -> InlineVoiceButton { transcript ->
+                            val trimmed = transcript.trim()
+                            if (trimmed.isNotEmpty()) {
+                                val next = if (draft.isBlank()) trimmed else "$draft $trimmed"
+                                onDraftChange(next)
+                            }
                         }
                     }
                 }

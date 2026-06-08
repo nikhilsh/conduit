@@ -255,6 +255,24 @@ func firstMeaningfulLine(s string) string {
 	return ""
 }
 
+// Interrupt stops the in-flight turn (the Stop button) by killing its `codex
+// exec` process — the exec path has no protocol-level cancel, and each turn is
+// its own short-lived process, so killing it ends just that turn while the
+// backend stays usable for the next Send. A no-op when no turn is running or
+// after Close. The killed process's stdout EOF lets runTurn fall through to its
+// normal turn-end path so the composer unlocks.
+func (c *codexChatProcess) Interrupt() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	if c.running != nil && c.running.Process != nil {
+		_ = c.running.Process.Kill()
+	}
+	return nil
+}
+
 // Close stops the codex backend: no persistent process, but kill any
 // in-flight turn and refuse further Sends. Idempotent.
 func (c *codexChatProcess) Close() error {

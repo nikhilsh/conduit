@@ -570,6 +570,11 @@ func (c *client) handleText(payload []byte) {
 		_ = c.writeJSON(map[string]any{"type": "pong", "ts": time.Now().UTC().Format(time.RFC3339Nano)})
 	case "exit":
 		c.sess.Close()
+	case "stop":
+		// Composer Stop button: interrupt the agent's current turn without
+		// ending the session. Backend-specific (claude interrupt control_request
+		// / codex turn-interrupt / codex-exec kill); a no-op if nothing is running.
+		c.sess.InterruptTurn()
 	case "switch_agent":
 		if env.Assistant == "" {
 			_ = c.writeJSON(map[string]any{

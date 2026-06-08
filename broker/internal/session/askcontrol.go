@@ -2,6 +2,8 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -82,6 +84,31 @@ func parseControlRequest(line []byte) (controlRequest, bool) {
 		ToolName:  ev.Request.ToolName,
 		Input:     ev.Request.Input,
 	}, true
+}
+
+// interruptReqSeq numbers interrupt control_requests so each carries a unique
+// request_id (the CLI echoes it back in the control_response). Atomic: Interrupt
+// may be called from any goroutine.
+var interruptReqSeq atomic.Uint64
+
+// encodeControlInterrupt builds the stream-json control_request that aborts the
+// agent's CURRENT turn — the Claude Agent SDK's `interrupt()` mechanism, the
+// same one Claude's own mobile app uses. Verified live against claude-code
+// 2.1.168: the CLI replies `control_response {subtype:"success"}`, emits a
+// `[Request interrupted by user]` user event, ends the turn with
+// `result/error_during_execution`, and stays alive for the next turn. Trailing
+// newline terminates the stream-json line.
+func encodeControlInterrupt() []byte {
+	id := fmt.Sprintf("interrupt-%d", interruptReqSeq.Add(1))
+	b, err := json.Marshal(map[string]any{
+		"type":       "control_request",
+		"request_id": id,
+		"request":    map[string]any{"subtype": "interrupt"},
+	})
+	if err != nil {
+		return nil
+	}
+	return append(b, '\n')
 }
 
 // encodeControlAllow builds the control_response that allows the tool

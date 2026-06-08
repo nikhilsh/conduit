@@ -134,6 +134,18 @@ func (c *chatProcess) SendRaw(line []byte) error {
 	return err
 }
 
+// Interrupt aborts the agent's current turn by writing an `interrupt`
+// control_request to stdin (the SDK / mobile mechanism — see
+// encodeControlInterrupt). The CLI stays alive for the next turn; a no-op
+// after Close. Safe for concurrent callers (shares Send's lock via SendRaw).
+func (c *chatProcess) Interrupt() error {
+	line := encodeControlInterrupt()
+	if line == nil {
+		return errors.New("chat process: encode interrupt")
+	}
+	return c.SendRaw(line)
+}
+
 // Close stops the agent: closes stdin (signals EOF to a well-behaved
 // stream-json reader) and kills the process if still running. Idempotent.
 func (c *chatProcess) Close() error {

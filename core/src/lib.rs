@@ -275,6 +275,25 @@ impl ConduitClient {
         .await
     }
 
+    /// Stop the agent's current turn (the composer Stop button) without ending
+    /// the session. The broker interrupts the running turn backend-specifically
+    /// (claude stream-json interrupt control_request / codex turn-interrupt /
+    /// codex-exec kill); a no-op there when nothing is running. Fire-and-forget
+    /// on the wire — the turn winding down arrives via the normal chat/status
+    /// stream (e.g. an interrupted turn ends and the typing indicator clears).
+    pub async fn stop_turn(&self, session_id: String) -> Result<(), ConduitError> {
+        let handle = self.inner.lookup_handle(&session_id)?;
+        run_on_core(async move {
+            handle
+                .send_json(&serde_json::json!({
+                    "type": "stop",
+                    "session": session_id,
+                }))
+                .await
+        })
+        .await
+    }
+
     /// On-demand /usage: ask the broker to re-fetch the account-level Claude
     /// subscription usage (5-hour + weekly windows) and re-broadcast it on the
     /// status frame. Backs the "refresh" button in the Session Info usage card.
