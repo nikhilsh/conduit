@@ -243,3 +243,34 @@ func TestChatConversationOnDisk(t *testing.T) {
 		t.Fatal(".codex must not match .claude files")
 	}
 }
+
+// Close must scrub only the materialized credentials — never the CLIs'
+// conversation files, which recovery's --resume depends on (a broker
+// shutdown Closes every live session; the old RemoveAll(agentHomeDir)
+// destroyed every conversation on every redeploy).
+func TestCleanupAgentHomeKeepsConversations(t *testing.T) {
+	home := t.TempDir()
+	conv := filepath.Join(home, ".claude", "projects", "-root-x", "abc.jsonl")
+	cred := filepath.Join(home, ".claude", ".credentials.json")
+	codexCred := filepath.Join(home, ".codex", "auth.json")
+	for _, f := range []string{conv, cred, codexCred} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cleanupAgentHomeCredentials(home, "test")
+
+	if _, err := os.Stat(cred); !os.IsNotExist(err) {
+		t.Fatal("claude credential must be removed")
+	}
+	if _, err := os.Stat(codexCred); !os.IsNotExist(err) {
+		t.Fatal("codex credential must be removed")
+	}
+	if _, err := os.Stat(conv); err != nil {
+		t.Fatalf("conversation file must SURVIVE Close: %v", err)
+	}
+}
