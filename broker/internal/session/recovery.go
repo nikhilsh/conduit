@@ -50,6 +50,12 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	if meta.LastCheckpoint != "" {
 		lastCheckpoint, _ = time.Parse(time.RFC3339Nano, meta.LastCheckpoint)
 	}
+	// Allocate the preview $PORT up front (same as the create path) so
+	// newSession hands it to the recovered agent's chat backend env — a
+	// recovered session has a freshly-spawned, live agent, and allocating
+	// after newSession would both deny it $PORT and race the watchdog
+	// goroutine's lock-free read of s.previewPort.
+	previewPort := m.allocatePreviewPortLocked()
 	sessionDir := filepath.Join(m.kittyRoot, "sessions", id)
 	hasClaudeConversation := chatConversationOnDisk(sessionDir, ".claude")
 	resumeID := meta.ClaudeChatSessionID
@@ -67,6 +73,7 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		lastCheckpoint: lastCheckpoint,
 		termgrid:       m.termgrid,
 		replayBaseDir:  m.replayBaseDir,
+		previewPort:    previewPort,
 		// Restore the user-chosen workspace dir so the recovered agent
 		// spawns back in the directory the user picked, not the empty
 		// per-session work/ dir. Falls back to adapter/worktreeDir
@@ -152,7 +159,6 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		}
 		return s.Switch(nextAdapter)
 	}
-	s.previewPort = m.allocatePreviewPortLocked()
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)
 	go func() {
