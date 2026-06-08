@@ -23,6 +23,40 @@ enum Telemetry {
             options.dsn = dsn
             options.environment = "ios"
             options.enableMetricKit = true
+
+            // --- Privacy: never attach PII. sendDefaultPII = false (the SDK
+            // default) means Sentry does NOT collect the device IP address or
+            // other personally-identifying server-side data. Set explicitly so
+            // a future SDK default-flip can't silently start capturing it.
+            options.sendDefaultPII = false
+
+            // --- Session Replay, buffer mode (privacy-masked) ---------------
+            // We want a short visual replay of the seconds BEFORE a crash/error
+            // to diagnose on-device UI/layout bugs we can't reproduce on the
+            // dev box — but NEVER an always-on screen recording, and never any
+            // readable content.
+            //
+            //   sessionSampleRate = 0  → no always-on full-session recording.
+            //   onErrorSampleRate = 1  → keep a rolling in-memory buffer and
+            //                            attach it only when an event is
+            //                            captured (crash/error). Nothing is
+            //                            uploaded on a normal, error-free run.
+            options.sessionReplay.sessionSampleRate = 0.0
+            options.sessionReplay.onErrorSampleRate = 1.0
+            // Mask EVERYTHING. Both default to true in 9.16.x; we pin them so a
+            // default change can never un-mask. maskAllText redacts every text
+            // node (chat messages, terminal output, prompts, tokens) to a solid
+            // block; maskAllImages redacts every image. The replay that reaches
+            // Sentry is redacted rectangles + layout only — no readable chat,
+            // terminal commands, file contents, or secrets. This is the hard
+            // requirement: the operator must never see user content.
+            options.sessionReplay.maskAllText = true
+            options.sessionReplay.maskAllImages = true
+            // Replay network-body capture is opt-in only (it requires
+            // options.experimental.enableReplayNetworkDetailsCapturing = true
+            // PLUS a non-empty allow list). We set NEITHER, so request/response
+            // bodies — which on our WebSocket carry code, terminal commands and
+            // auth tokens — are never recorded. Left off deliberately.
         }
 #endif
     }

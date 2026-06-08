@@ -21,6 +21,36 @@ object Telemetry {
             if (BuildConfig.RELEASE_TAG != "dev") {
                 options.release = "sh.nikhil.conduit@${BuildConfig.RELEASE_TAG}"
             }
+
+            // --- Privacy: never attach PII. isSendDefaultPii = false (the SDK
+            // default) keeps Sentry from collecting the device IP address or
+            // other personally-identifying data. Set explicitly so a future
+            // default-flip can't silently start capturing it.
+            options.isSendDefaultPii = false
+
+            // --- Session Replay, buffer mode (privacy-masked) — parity with
+            // iOS (Telemetry.swift). Short visual replay of the seconds BEFORE
+            // a crash/error to diagnose on-device UI bugs we can't reproduce on
+            // the dev box; never an always-on recording, never readable content.
+            //
+            //   sessionSampleRate = 0 → no always-on full-session recording.
+            //   onErrorSampleRate = 1 → keep a rolling buffer, attach it only
+            //                           when an event is captured. Nothing is
+            //                           uploaded on a normal, error-free run.
+            options.sessionReplay.sessionSampleRate = 0.0
+            options.sessionReplay.onErrorSampleRate = 1.0
+            // Mask EVERYTHING. Both default to true; pinned so a default change
+            // can never un-mask. maskAllText redacts every text node (chat,
+            // terminal output, prompts, tokens); maskAllImages redacts every
+            // image. The replay that reaches Sentry is redacted rectangles +
+            // layout only — no readable user content. Hard requirement: the
+            // operator must never see chat logs, terminal commands, or secrets.
+            options.sessionReplay.maskAllText = true
+            options.sessionReplay.maskAllImages = true
+            // Replay network-body capture is opt-in (empty networkDetailAllowUrls
+            // by default = nothing captured) and relies on the Sentry OkHttp
+            // interceptor, which we don't install. Bodies — which carry code,
+            // terminal commands and tokens — are never recorded. Left off.
         }
     }
 
