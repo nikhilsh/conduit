@@ -29,8 +29,12 @@ pub fn item_from_chat_event(event: &ChatEvent, idx: usize) -> ConversationItem {
         tool_name.as_deref(),
     );
     let status = classify_status(&event.content, exit_code);
+    // Strip the internal pending-input sentinel from the user-visible
+    // content (it's only a classification signal); the apps then never
+    // need to know about it.
+    let display_content = strip_pending_sentinel(&event.content);
     let pending_options = if kind == "pending_input" {
-        extract_pending_options(&event.content)
+        extract_pending_options(&display_content)
     } else {
         Vec::new()
     };
@@ -55,7 +59,7 @@ pub fn item_from_chat_event(event: &ChatEvent, idx: usize) -> ConversationItem {
         role,
         kind,
         status,
-        content: event.content.clone(),
+        content: display_content,
         ts: event.ts.clone(),
         files: event.files.clone(),
         tool_name,
@@ -345,50 +349,55 @@ fn summarize_diff(text: &str) -> String {
     )
 }
 
+/// The deterministic marker the broker prepends to a GENUINE interactive
+/// question (a real AskUserQuestion tool call, where the agent is actually
+/// blocked waiting). Byte-identical to the broker's `pendingInputSentinel`.
+/// The apps strip it before display.
+pub const PENDING_INPUT_SENTINEL: &str = "[[conduit:needs-input]]";
+
+/// Remove the leading pending-input sentinel line (and any stray
+/// occurrences) from content destined for display. No-op when absent.
+fn strip_pending_sentinel(text: &str) -> String {
+    if !text.contains(PENDING_INPUT_SENTINEL) {
+        return text.to_string();
+    }
+    text.lines()
+        .filter(|line| line.trim() != PENDING_INPUT_SENTINEL)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether a chat message is a genuine "needs your input" prompt — the
+/// agent is BLOCKED waiting on the user.
+///
+/// Decided ONLY by explicit, deterministic markers, never by guessing
+/// from text shape. The old heuristics (`select`+`option/choice` anywhere,
+/// or any two short numbered lines) produced both failures the user hit
+/// (device feedback, round 4): assistant prose merely *discussing* options
+/// rendered as a "NEEDS YOUR INPUT" card, and a prose numbered question
+/// implied the agent was blocked when it had ended its turn — only the
+/// AskUserQuestion *tool* blocks (via the broker's control protocol). So a
+/// card now means the agent is genuinely waiting: true iff the broker
+/// tagged it (AskUserQuestion sentinel) or it's a real codex approval
+/// prompt. Plain numbered / "select" prose renders as a normal message.
 fn looks_like_pending_input(text: &str) -> bool {
+    if text.contains(PENDING_INPUT_SENTINEL) {
+        return true;
+    }
     let lower = text.to_ascii_lowercase();
+    // Legacy explicit marker some adapters emit.
     if lower.contains("request_user_input") {
         return true;
     }
-    // Literal marker only. The previous `contains("pending") && contains("input")`
-    // matched any prose that merely mentioned both words — even as substrings of a
-    // larger identifier like `dropPendingInputEchoes` — turning ordinary assistant
-    // messages into bogus "NEEDS YOUR INPUT" option cards (device feedback: "these
-    // need-your-input cards don't make sense"). Require the contiguous marker.
-    if lower.contains("pending_input") || lower.contains("pending input") {
-        return true;
-    }
-    if lower.contains("select") && (lower.contains("option") || lower.contains("choice")) {
-        return true;
-    }
-    // A multi-select question carries the broker's explicit marker
-    // ("… (select all that apply)", askcontrol.go). Trust it outright so the
-    // card classifies even when its option labels are longer than the
-    // numbered-menu heuristic's 48-char cap — otherwise a multi-select with
-    // descriptive labels rendered as plain prose with no tappable options.
-    if lower.contains("select all that apply") {
-        return true;
-    }
-    // Approval prompts: "[A]pprove [E]dit [R]eject" (Codex), "Yes/No" (Claude)
+    // Codex approval prompts: a real blocked state with a distinctive,
+    // non-prose shape (no AskUserQuestion tool on that path). The multi-
+    // select " (select all that apply)" marker no longer needs its own
+    // rule — every AskUserQuestion (single- AND multi-select) now carries
+    // the deterministic sentinel handled above.
     if lower.contains("[a]pprove") || lower.contains("approve / edit / reject") {
         return true;
     }
-    // Numbered menu: "1. Yes\n2. No" — but only when the numbered lines look like
-    // short option *labels*. Ordinary assistant prose routinely contains two or
-    // more long "1. …/2. …" sentences; counting those as a menu was the other half
-    // of the false-positive. A real choice menu's options are terse, so cap the
-    // label length before counting it.
-    const MAX_OPTION_LABEL_CHARS: usize = 48;
-    let mut short_options = 0;
-    for line in text.lines() {
-        if let Some(rest) = strip_numbered_prefix(line.trim_start()) {
-            let label = rest.trim();
-            if !label.is_empty() && label.chars().count() <= MAX_OPTION_LABEL_CHARS {
-                short_options += 1;
-            }
-        }
-    }
-    short_options >= 2
+    false
 }
 
 fn looks_like_handoff(text: &str) -> bool {
@@ -672,13 +681,30 @@ mod tests {
         assert_eq!(item.kind, "pending_input");
     }
 
+    /// A bare numbered list in PROSE is NO LONGER a pending-input card.
+    /// The agent isn't blocked — it just wrote a list. (Deterministic
+    /// fix: cards come only from the broker sentinel / real approvals.)
     #[test]
-    fn pending_input_numbered_menu() {
+    fn bare_numbered_prose_is_a_message_not_pending() {
         let item = item_from_chat_event(
             &ev("assistant", "1. Yes\n2. Yes, don't ask again\n3. No"),
             0,
         );
-        assert_eq!(item.kind, "pending_input");
+        assert_eq!(item.kind, "message");
+    }
+
+    /// The false-positive the user hit: prose DISCUSSING options must not
+    /// render as a needs-input card.
+    #[test]
+    fn prose_mentioning_select_options_is_not_pending() {
+        let item = item_from_chat_event(
+            &ev(
+                "assistant",
+                "the multi-select options rendered as plain text instead of tappable choices",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "message");
     }
 
     #[test]
@@ -687,33 +713,41 @@ mod tests {
         assert_eq!(item.kind, "pending_input");
     }
 
-    /// Pins the exact shape the broker emits for an AskUserQuestion
-    /// tool_use (broker/internal/session/claudechat.go
-    /// askUserQuestionContent): question + numbered option menu must
-    /// classify as pending_input with the labels as tappable options.
+    /// The exact shape the broker emits for an AskUserQuestion tool_use
+    /// (broker/internal/session/claudechat.go askUserQuestionContent):
+    /// the sentinel line + question + numbered menu must classify as
+    /// pending_input, expose the labels as options, and the sentinel must
+    /// be STRIPPED from the displayed content.
     #[test]
     fn pending_input_ask_user_question_broker_shape() {
         let item = item_from_chat_event(
             &ev(
                 "assistant",
-                "Proceed with the merge?\n1. Merge now\n2. Hold off",
+                "[[conduit:needs-input]]\nProceed with the merge?\n1. Merge now\n2. Hold off",
             ),
             0,
         );
         assert_eq!(item.kind, "pending_input");
         assert_eq!(item.pending_options, vec!["Merge now", "Hold off"]);
+        assert!(
+            !item.content.contains(PENDING_INPUT_SENTINEL),
+            "sentinel must be stripped from display content: {:?}",
+            item.content
+        );
+        assert!(item.content.starts_with("Proceed with the merge?"));
     }
 
-    /// A multi-select question with descriptive labels longer than the
-    /// numbered-menu 48-char cap still classifies as pending_input via the
-    /// broker's "(select all that apply)" marker — and its options are
-    /// extracted as tappable choices rather than rendered as plain prose.
+    /// A multi-select AskUserQuestion (with descriptive labels) classifies
+    /// via the broker's deterministic sentinel — even though its labels are
+    /// long and the question merely says "(select all that apply)". The
+    /// options are extracted as tappable choices.
     #[test]
-    fn pending_input_multiselect_marker_long_labels() {
+    fn pending_input_multiselect_via_sentinel() {
         let item = item_from_chat_event(
             &ev(
                 "assistant",
-                "Which fixes should I implement next? (select all that apply)\n\
+                "[[conduit:needs-input]]\n\
+                 Which fixes should I implement next? (select all that apply)\n\
                  1. Fix the non-destructive working-tree checkpoint snapshot mechanism\n\
                  2. Garbage-collect the accumulated dead checkpoint stashes from the repo",
             ),
@@ -721,6 +755,22 @@ mod tests {
         );
         assert_eq!(item.kind, "pending_input");
         assert_eq!(item.pending_options.len(), 2);
+    }
+
+    /// The SAME multi-select question text WITHOUT the broker sentinel —
+    /// i.e. the agent wrote it as prose — is now a plain message (the
+    /// "(select all that apply)" phrase alone no longer fabricates a card).
+    #[test]
+    fn prose_select_all_that_apply_is_message() {
+        let item = item_from_chat_event(
+            &ev(
+                "assistant",
+                "Which fixes should I implement next? (select all that apply)\n\
+                 1. Fix the checkpoint mechanism\n2. GC dead stashes",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "message");
     }
 
     #[test]
@@ -768,7 +818,7 @@ mod tests {
         let item = item_from_chat_event(
             &ev(
                 "assistant",
-                "Which one?\n1. Yes\n2. Yes, don't ask again\n3. No",
+                "[[conduit:needs-input]]\nWhich one?\n1. Yes\n2. Yes, don't ask again\n3. No",
             ),
             0,
         );

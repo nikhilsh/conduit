@@ -100,4 +100,15 @@ struct ConduitPendingInputTests {
         #expect(qs.count == 1)
         #expect(!qs[0].multiSelect)
     }
+
+    @Test func stripsBrokerSentinelLine() {
+        // The deterministic sentinel must never reach the user; the parser
+        // drops it and parses the real question/options beneath.
+        let qs = ConduitUI.ChatViewModel.parsePendingQuestions(
+            "[[conduit:needs-input]]\nProceed?\n1. Yes\n2. No"
+        )
+        #expect(qs.count == 1)
+        #expect(qs[0].prompt == "Proceed?")
+        #expect(qs[0].options == ["Yes", "No"])
+    }
 }

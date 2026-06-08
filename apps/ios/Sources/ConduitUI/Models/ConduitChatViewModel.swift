@@ -137,12 +137,24 @@ extension ConduitUI {
         /// text so no broker → core → app schema change was needed.
         static let multiSelectMarker = " (select all that apply)"
 
+        /// The deterministic pending-input sentinel the broker prepends to
+        /// a genuine AskUserQuestion. Core normally strips it before the
+        /// item reaches us; this defensive strip covers the raw-chatLog
+        /// fallback path. Byte-identical to the broker constant.
+        static let pendingInputSentinel = "[[conduit:needs-input]]"
+
         /// Recover per-question groups from a pending-input `content` body.
         /// Blocks are separated by blank lines; within a block the leading
         /// prose is the question and the numbered/bulleted lines are its
         /// options. A trailing multi-select marker on the prompt is
         /// stripped into `multiSelect`. Pure + unit-tested.
         static func parsePendingQuestions(_ content: String) -> [PendingQuestion] {
+            // Defensively drop the broker sentinel line if it survived to
+            // the client (core strips it on the typed path).
+            let content = content
+                .components(separatedBy: "\n")
+                .filter { $0.trimmingCharacters(in: .whitespaces) != pendingInputSentinel }
+                .joined(separator: "\n")
             var result: [PendingQuestion] = []
             for block in content.components(separatedBy: "\n\n") {
                 var prompt: [String] = []

@@ -38,6 +38,20 @@ var askAnswerTimeout = 30 * time.Minute
 // checkbox + Send. Text-carried so no broker→core→app schema changes.
 const multiSelectMarker = " (select all that apply)"
 
+// pendingInputSentinel is a leading marker the broker prepends to the
+// rendered content of a GENUINE interactive question (the AskUserQuestion
+// tool — the agent is actually blocked waiting). It is the ONE
+// deterministic signal that a "NEEDS YOUR INPUT" card should render and
+// that the agent is waiting. The core classifier keys on it instead of
+// guessing from text shape — the prior heuristic (any prose mentioning
+// "select"+"option/choice", or any two short numbered lines) both
+// false-fired on ordinary prose discussing options AND failed to wait,
+// because prose questions don't block the agent (device feedback: a
+// message describing the multi-select bug rendered as a needs-input
+// card). The apps strip this line before display. First-line, newline-
+// terminated, distinctive enough never to occur in real prose.
+const pendingInputSentinel = "[[conduit:needs-input]]"
+
 // controlRequest is a parsed stream-json `control_request` line.
 type controlRequest struct {
 	RequestID string
