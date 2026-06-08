@@ -83,6 +83,11 @@ struct ConduitApp: App {
                             let bridge = TurnLiveActivityBridge(store: store, controller: liveActivity)
                             bridge.start()
                             liveActivityBridge = bridge
+                            // Fresh launch: any lock-screen activity left
+                            // over from the previous run is an orphan
+                            // (this process holds no handle to it) — end
+                            // them all before new turns request anew.
+                            liveActivity.reapOrphanActivities()
                         }
                         // Lock-screen Approve (LiveActivityIntent) runs in
                         // this process; hand it the store-backed approval.

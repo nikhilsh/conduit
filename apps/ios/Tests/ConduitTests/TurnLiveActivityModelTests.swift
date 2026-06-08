@@ -326,6 +326,40 @@ struct TurnLiveActivityModelTests {
         #expect(state.summary == "exit 0")
         #expect(state.status == "exited")
     }
+    // MARK: - Stale items never OPEN a card (round-4 device feedback:
+    // re-surfaced history showed "598m" timers for idle sessions)
+
+    @Test func staleToolItemDoesNotStartActivity() {
+        var model = TurnActivityModel()
+        let ancient = Date().addingTimeInterval(-3600) // 1h ago
+        let effect = model.apply(
+            item: TurnActivityItem(id: "old1", kind: .tool, toolName: "Bash", timestamp: ancient),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+        #expect(effect == .noop)
+        #expect(!model.isActive)
+    }
+
+    @Test func staleItemStillUpdatesLiveActivity() {
+        var model = TurnActivityModel()
+        _ = model.apply(
+            item: TurnActivityItem(id: "i1", kind: .tool, toolName: "Bash", timestamp: Date()),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+        // An older item arriving while live (out-of-order delivery) still
+        // updates rather than being dropped.
+        let effect = model.apply(
+            item: TurnActivityItem(id: "i2", kind: .tool, toolName: "Edit",
+                                   timestamp: Date().addingTimeInterval(-3600)),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+        if case .update = effect { } else {
+            Issue.record("expected .update for stale item on live activity, got \(effect)")
+        }
+    }
 }
 
 /// Round-3 §2 helpers around the bridge shell.
