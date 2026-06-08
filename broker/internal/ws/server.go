@@ -201,6 +201,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	override := session.SpawnOverride{
 		ReasoningEffort: strings.TrimSpace(r.URL.Query().Get("reasoning_effort")),
 		Model:           strings.TrimSpace(r.URL.Query().Get("model")),
+		PermissionMode:  strings.TrimSpace(r.URL.Query().Get("permission_mode")),
 	}
 	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{
 		CWD:      cwd,

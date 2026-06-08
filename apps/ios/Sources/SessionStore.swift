@@ -930,6 +930,7 @@ final class SessionStore {
         cwd: String?,
         reasoningEffort: String? = nil,
         model: String? = nil,
+        permissionMode: String? = nil,
         initialPrompt: String? = nil
     ) {
         if let nextEndpoint {
@@ -954,6 +955,7 @@ final class SessionStore {
                     startupCwd: cwd,
                     reasoningEffort: reasoningEffort,
                     model: model,
+                    permissionMode: permissionMode,
                     initialPrompt: initialPrompt
                 )
             } catch {
@@ -1167,6 +1169,7 @@ final class SessionStore {
         startupCwd: String? = nil,
         reasoningEffort: String? = nil,
         model: String? = nil,
+        permissionMode: String? = nil,
         initialPrompt: String? = nil
     ) {
         guard let client else { return }
@@ -1180,7 +1183,8 @@ final class SessionStore {
         // Sentry. "inherit" = no override.
         let modelCrumb = (model?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "inherit"
         let effortCrumb = (reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "default"
-        Telemetry.breadcrumb("session", "create start", data: ["assistant": assistant, "hasCwd": "\(startupCwd?.isEmpty == false)", "model": modelCrumb, "effort": effortCrumb])
+        let permissionModeCrumb = (permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "auto"
+        Telemetry.breadcrumb("session", "create start", data: ["assistant": assistant, "hasCwd": "\(startupCwd?.isEmpty == false)", "model": modelCrumb, "effort": effortCrumb, "mode": permissionModeCrumb])
         if useRustStore {
             rustStore.applyLifecycle(sessionId: pendingID, lifecycle: .creating)
         }
@@ -1197,7 +1201,9 @@ final class SessionStore {
                 let pickedModel = (trimmedModel?.isEmpty == false) ? trimmedModel : nil
                 let trimmedEffort = reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let pickedEffort = (trimmedEffort?.isEmpty == false) ? trimmedEffort : nil
-                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup)
+                let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
+                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode)
                 Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
                 // Record the explicit --model override so the title menu's
                 // identity header can show the real model (the broker never
@@ -3006,9 +3012,11 @@ final class SessionStore {
     /// (the broker falls back to the adapter default). Reasoning effort
     /// can't be changed mid-session — that's why this is a fork (new
     /// session), not a live switch.
-    func forkSession(sessionID: String, reasoningEffort: String? = nil, model: String? = nil) {
+    func forkSession(sessionID: String, reasoningEffort: String? = nil, model: String? = nil, permissionMode: String? = nil) {
         guard let original = sessions.first(where: { $0.id == sessionID }) else { return }
         guard let client else { return }
+        let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
         Task {
             do {
                 let newID = try await client.createSession(
@@ -3016,7 +3024,8 @@ final class SessionStore {
                     branch: original.branch,
                     reasoningEffort: reasoningEffort,
                     model: model,
-                    cwd: nil
+                    cwd: nil,
+                    permissionMode: pickedMode
                 )
                 let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."
                 try? await client.sendChat(sessionId: newID, msg: seed)

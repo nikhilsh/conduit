@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.connect(Box::new(StdoutDelegate)).await?;
 
     let session_id = client
-        .create_session(assistant.clone(), None, None, None, None)
+        .create_session(assistant.clone(), None, None, None, None, None)
         .await?;
     eprintln!("[create_session] {session_id} assistant={assistant}");
 

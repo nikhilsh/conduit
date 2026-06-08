@@ -154,6 +154,9 @@ type startSessionRequest struct {
 	// spawned with.
 	ReasoningEffort string `json:"reasoning_effort"`
 	Model           string `json:"model"`
+	// PermissionMode selects the agent's permission posture ("" / "auto" =
+	// full-auto default, "plan" = read-only planning). See override.go.
+	PermissionMode string `json:"permission_mode"`
 }
 
 type startSessionResponse struct {
@@ -197,6 +200,7 @@ func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
 	override := session.SpawnOverride{
 		ReasoningEffort: strings.TrimSpace(req.ReasoningEffort),
 		Model:           strings.TrimSpace(req.Model),
+		PermissionMode:  strings.TrimSpace(req.PermissionMode),
 	}
 	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{CWD: cwd, Override: override})
 	if err != nil {

@@ -29,6 +29,10 @@ extension ConduitUI {
         /// string) means "no override — keep the current model", which is
         /// what an untouched fork sends.
         @State private var model: String
+        /// Selected agent mode. `ForkOptions.autoMode` (empty string) means
+        /// the app's full-auto default — sent to forkSession as nil so the
+        /// fork carries no permission override.
+        @State private var permissionMode: String = ForkOptions.autoMode
 
         init(session: ProjectSession, currentEffort: String?) {
             self.session = session
@@ -90,6 +94,17 @@ extension ConduitUI {
                             .font(.caption2)
                             .foregroundStyle(ConduitUI.Palette.textMuted.color)
 
+                        sectionLabel("Mode")
+                        Picker("Mode", selection: $permissionMode) {
+                            ForEach(ForkOptions.permissionModes, id: \.self) { mode in
+                                Text(ForkOptions.permissionModeLabel(mode)).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Text("Plan = read-only; agent explores and proposes without editing.")
+                            .font(.caption2)
+                            .foregroundStyle(ConduitUI.Palette.textMuted.color)
+
                         Spacer()
                     }
                     .padding(.horizontal, 16)
@@ -107,7 +122,8 @@ extension ConduitUI {
                             store.forkSession(
                                 sessionID: session.id,
                                 reasoningEffort: effort,
-                                model: model.isEmpty ? nil : model
+                                model: model.isEmpty ? nil : model,
+                                permissionMode: permissionMode.isEmpty ? nil : permissionMode
                             )
                             dismiss()
                         }
@@ -133,6 +149,22 @@ extension ConduitUI {
         /// forkSession as nil so the spawn carries no --model override —
         /// byte-for-byte identical to the pre-picker untouched fork.
         static let inheritModel = ""
+
+        /// Agent permission modes. Only the two the broker actually backs:
+        ///   - Auto ("") — full-auto default; broker spawns with
+        ///     `--dangerously-skip-permissions` (codex unsandboxed).
+        ///   - Plan ("plan") — read-only planning; broker swaps to
+        ///     `--permission-mode plan` (codex `--sandbox read-only`).
+        /// Sent to createSession as nil when Auto so the spawn carries no
+        /// override — identical to today's default.
+        static let autoMode = ""
+        static let planMode = "plan"
+        static let permissionModes = [autoMode, planMode]
+
+        /// Display label for a permission-mode option.
+        static func permissionModeLabel(_ option: String) -> String {
+            option == planMode ? "Plan" : "Auto"
+        }
 
         static func efforts(forAssistant assistant: String) -> [String] {
             switch assistant {

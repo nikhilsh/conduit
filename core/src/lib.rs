@@ -193,6 +193,7 @@ impl ConduitClient {
         reasoning_effort: Option<String>,
         model: Option<String>,
         cwd: Option<String>,
+        permission_mode: Option<String>,
     ) -> Result<String, ConduitError> {
         let inner = Arc::clone(&self.inner);
         run_on_core(async move {
@@ -205,6 +206,7 @@ impl ConduitClient {
                     reasoning_effort,
                     model,
                     cwd,
+                    permission_mode,
                 )
                 .await?;
             Ok(session_id)
@@ -223,6 +225,7 @@ impl ConduitClient {
                 .open_session(
                     session_id,
                     assistant.unwrap_or_else(|| "claude".to_string()),
+                    None,
                     None,
                     None,
                     None,
@@ -479,6 +482,7 @@ impl Inner {
         reasoning_effort: Option<String>,
         model: Option<String>,
         cwd: Option<String>,
+        permission_mode: Option<String>,
     ) -> Result<(), ConduitError> {
         let delegate = self
             .delegate
@@ -494,6 +498,7 @@ impl Inner {
         let reasoning_effort = reasoning_effort.filter(|s| !s.trim().is_empty());
         let model = model.filter(|s| !s.trim().is_empty());
         let cwd = cwd.filter(|s| !s.trim().is_empty());
+        let permission_mode = permission_mode.filter(|s| !s.trim().is_empty());
 
         self.sessions.lock().insert(
             session_id.clone(),
@@ -533,6 +538,7 @@ impl Inner {
                 reasoning_effort,
                 model,
                 cwd,
+                permission_mode,
             },
             Arc::new(ClientDelegate {
                 sessions: Arc::clone(&self.sessions),
