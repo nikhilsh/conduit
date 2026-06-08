@@ -522,6 +522,28 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 		_ = oldCmd.Process.Kill()
 		_, _ = oldCmd.Process.Wait()
 	}
+	// Re-point the structured chat channel at the NEW agent. Pre-#400 a
+	// switch restarted only the PTY: s.chat kept running the OLD agent's
+	// binary (the Chat tab was answered by the wrong agent) and the
+	// respawn closure re-spawned the old adapter forever. The old
+	// backend is closed (kills its process / in-flight turn) and any
+	// AskUserQuestion blocked on it is dropped with it. Each backend's
+	// persisted conversation id is passed back in, so switching BACK to
+	// an agent resumes its own earlier thread (claude --resume / codex
+	// exec resume); the cross-agent context travels via the handoff doc
+	// as before.
+	s.mu.Lock()
+	oldChat := s.chat
+	s.chat = nil
+	s.chatRespawn = nil
+	resumeClaude := s.chatSessionID
+	resumeCodex := s.codexThreadID
+	s.mu.Unlock()
+	_ = s.takePendingAsk() // its cp dies with oldChat; nothing to answer
+	if oldChat != nil {
+		_ = oldChat.Close()
+	}
+	s.startChatBackend(adapter, resumeClaude, false, resumeCodex)
 	if err := s.persistMetadata(); err != nil {
 		return err
 	}

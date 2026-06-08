@@ -451,11 +451,30 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	if extra := opts.override.extraArgsFor(adapter.Name); len(extra) > 0 {
 		log.Printf("session %s: model override applied (%s): %v", id, adapter.Name, extra)
 	}
+	s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID)
+	go s.drain(f)
+	s.startBackgroundLoops()
+	return s, nil
+}
+
+// startChatBackend builds the structured chat backend for `adapter` and
+// installs it on the session (s.chat / s.chatRespawn / generators). Used
+// at session create AND by switchToAdapter — the chat channel must follow
+// the agent (pre-#399 a switch left the Chat tab driven by the OLD
+// agent's binary). The resume seeds carry each backend's persisted
+// conversation, so switching BACK to a previously-used agent resumes its
+// own earlier thread.
+func (s *Session) startChatBackend(
+	adapter agents.Adapter,
+	resumeChatSessionID string,
+	continueLatestChat bool,
+	resumeCodexThreadID string,
+) {
 	switch structuredChatBackend(adapter.ChatMode) {
 	case "claude":
 		// claude headless in stream-json. Publishes clean chat events via
 		// the same path the scraper used — no PTY scraping (scraper stays
-		// nil); the PTY (a shell) drains to the Terminal tab below.
+		// nil); the PTY (a shell) drains to the Terminal tab.
 		// AI quick replies (task #233): on each completed assistant turn,
 		// a best-effort one-shot `claude -p` (cheap model) suggests up to
 		// 4 tap-able user replies, emitted as a `view:"quick_replies"`
@@ -481,12 +500,21 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.firstPrompt,
 			s.applyAITitle,
 		)
-		// Recovery hands us the prior conversation id — seed it so the
-		// FIRST spawn resumes, and persistMetadata keeps carrying it.
-		s.chatSessionID = opts.resumeChatSessionID
+		// Recovery/switch hands us the prior conversation id — seed it so
+		// the FIRST spawn resumes, and persistMetadata keeps carrying it.
+		s.mu.Lock()
+		s.chatSessionID = resumeChatSessionID
+		s.mu.Unlock()
+		argsFor := func(resume string, continueLatest bool) []string {
+			return claudeStreamCommand(
+				adapter.Command,
+				append(append([]string{}, adapter.Args...), s.override.extraArgsFor(adapter.Name)...),
+				resume, continueLatest,
+			)
+		}
 		chat, cerr := startChatProcess(
 			context.Background(),
-			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), opts.resumeChatSessionID, opts.continueLatestChat),
+			argsFor(resumeChatSessionID, continueLatestChat),
 			s.commandEnv(nil),
 			s.workspaceDir,
 			s.PublishText,
@@ -499,7 +527,9 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
 		} else {
+			s.mu.Lock()
 			s.chat = chat
+			s.mu.Unlock()
 		}
 		// Same argv/env for the self-heal respawn in SendChat. The
 		// captured generators are per-session, not per-process, so the
@@ -514,7 +544,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.mu.Unlock()
 			return startChatProcess(
 				context.Background(),
-				claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...), resume, false),
+				argsFor(resume, false),
 				s.commandEnv(nil),
 				s.workspaceDir,
 				s.PublishText,
@@ -528,18 +558,23 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	case "codex":
 		// codex via per-turn exec/resume; constructed lazily (spawns on
 		// first Send). Same publish path; PTY is a shell.
-		// Seed the recovered thread id (if any) so the first post-restart
-		// turn resumes codex's own conversation — the codex twin of the
+		// Seed the recovered/prior thread id (if any) so the first turn
+		// resumes codex's own conversation — the codex twin of the
 		// claude --resume fix.
-		s.codexThreadID = opts.resumeCodexThreadID
-		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), opts.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, opts.resumeCodexThreadID, s.latchCodexThreadID)
+		s.mu.Lock()
+		s.codexThreadID = resumeCodexThreadID
+		s.chatRespawn = nil // per-turn exec model has no long-lived process
+		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID)
+		s.mu.Unlock()
 	default:
-		s.scraper = newChatScraper(s.PublishText)
-		go s.scraper.run(s.closed)
+		// Legacy TUI-scrape path (no shipped adapter uses it). If a
+		// future adapter does, restart-continuity needs a per-agent
+		// resume command (swe-swe's ShellRestartCmd pattern).
+		if s.scraper == nil {
+			s.scraper = newChatScraper(s.PublishText)
+			go s.scraper.run(s.closed)
+		}
 	}
-	go s.drain(f)
-	s.startBackgroundLoops()
-	return s, nil
 }
 
 // Write sends bytes to the PTY input (terminal keystrokes).
