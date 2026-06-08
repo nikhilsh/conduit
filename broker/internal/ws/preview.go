@@ -71,6 +71,10 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 // target. Authenticated (it leaks workspace paths + PIDs); a debugging aid for
 // phantom/missing Browser-tab cases (see WEBSOCKET-PROTOCOL.md §3.2).
 func (s *Server) serveDebugPreviews(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if !s.requireAuth(w, r) {
 		return
 	}
