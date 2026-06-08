@@ -644,15 +644,26 @@ final class OAuthClient: NSObject, ASWebAuthenticationPresentationContextProvidi
         Telemetry.breadcrumb("oauth_token", "exchange http \(http.statusCode) \(provider.rawValue)")
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            // Log the OAuth error body (NOT a success body — that has tokens).
-            // A failed token exchange returns `{"error":"..."}` which is the
-            // single most useful signal for "auth page succeeded but the app
-            // errored" (e.g. codex). Truncated; non-secret.
+            // Telemetry must NEVER carry the raw token-endpoint body — a
+            // non-2xx isn't guaranteed to be a clean `{"error":...}` (it can be
+            // an unexpected provider payload), and shipping it to Sentry could
+            // leak token material. Parse out ONLY the two standard, non-secret
+            // OAuth error fields; if the body doesn't parse, log just its
+            // length. That keeps the useful "auth page succeeded but the app
+            // errored" signal without ever uploading the body itself.
+            var errCode = ""
+            var errDesc = ""
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                errCode = (obj["error"] as? String) ?? ""
+                errDesc = (obj["error_description"] as? String) ?? ""
+            }
             Telemetry.debug("oauth_token", "exchange FAILED \(provider.rawValue)", data: [
                 "provider": provider.rawValue,
                 "status": "\(http.statusCode)",
                 "redirect": config.redirectURI.absoluteString,
-                "body": String(body.prefix(400)),
+                "error": errCode,
+                "error_desc": String(errDesc.prefix(200)),
+                "body_len": "\(body.count)",
             ])
             throw OAuthClientError.tokenExchangeFailed(status: http.statusCode, body: body)
         }

@@ -487,14 +487,27 @@ class OAuthClient(
         }
         Telemetry.breadcrumb("oauth_token", "exchange http $status ${provider.raw}")
         if (status !in 200..299) {
-            // Log the OAuth error body (a failed exchange returns
-            // `{"error":"..."}`, not tokens) — the key signal for "auth page
-            // succeeded but the app errored" (e.g. codex). Truncated.
+            // Telemetry must NEVER carry the raw token-endpoint body — a
+            // non-2xx isn't guaranteed to be a clean `{"error":...}` (it can be
+            // an unexpected provider payload), and shipping it to Sentry could
+            // leak token material. Parse out ONLY the two standard, non-secret
+            // OAuth error fields; if the body doesn't parse, log just its
+            // length. Keeps the "auth page succeeded but app errored" signal
+            // without ever uploading the body itself.
+            var errCode = ""
+            var errDesc = ""
+            runCatching {
+                val obj = JSONObject(payload)
+                errCode = obj.optString("error", "")
+                errDesc = obj.optString("error_description", "")
+            }
             Telemetry.debug("oauth_token", "exchange FAILED ${provider.raw}", mapOf(
                 "provider" to provider.raw,
                 "status" to status.toString(),
                 "redirect" to cfg.redirectUri,
-                "body" to payload.take(400),
+                "error" to errCode,
+                "error_desc" to errDesc.take(200),
+                "body_len" to payload.length.toString(),
             ))
             throw OAuthClientError.TokenExchangeFailed(status = status, body = payload)
         }

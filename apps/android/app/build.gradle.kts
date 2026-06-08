@@ -2,7 +2,10 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("io.sentry.android.gradle") version "4.11.0"
+    // Plugin 5.x pairs with sentry-android SDK 8.x (plugin 4.x is SDK-7-only
+    // and warns it may crash at runtime against an 8.x SDK). Bumped together
+    // with the SDK below to reach Session Replay GA.
+    id("io.sentry.android.gradle") version "5.8.0"
     // Roborazzi: Compose snapshot testing on the JVM. See docs/
     // TESTING-STRATEGY.md for the rationale (Paparazzi alternative).
     id("io.github.takahirom.roborazzi")
@@ -140,7 +143,13 @@ dependencies {
 
     // UniFFI Kotlin runtime.
     implementation("net.java.dev.jna:jna:5.13.0@aar")
-    implementation("io.sentry:sentry-android:7.14.0")
+    // Bumped 7.14.0 → 8.x for Session Replay GA (the `options.sessionReplay.*`
+    // masking API graduated out of `experimental` at 7.20.0; 8.x is the
+    // current stable line). 8.0 is a major bump but its breaking changes don't
+    // touch us: minSdk 21 (we're 26), enableTracing removal (unused), and the
+    // sentry-android-okhttp → sentry-okhttp rename (we don't use the Sentry
+    // OkHttp integration). Pairs with gradle plugin 5.x above.
+    implementation("io.sentry:sentry-android:8.16.0")
 
     // ZXing-embedded QR scanner. Ships its own activity + permission flow.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
