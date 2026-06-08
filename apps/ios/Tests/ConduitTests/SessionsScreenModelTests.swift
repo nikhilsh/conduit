@@ -291,7 +291,8 @@ struct SessionsScreenModelTests {
             status: .live,
             connectedToRowServer: true,
             sessionIsListed: true,
-            storeSaysReadOnly: false
+            storeSaysReadOnly: false,
+            brokerRecoverable: false
         )
         #expect(d == .attachLive)
     }
@@ -304,7 +305,8 @@ struct SessionsScreenModelTests {
             status: .live,
             connectedToRowServer: true,
             sessionIsListed: false,
-            storeSaysReadOnly: true
+            storeSaysReadOnly: true,
+            brokerRecoverable: false
         )
         #expect(d == .readOnlyTranscript)
     }
@@ -316,7 +318,8 @@ struct SessionsScreenModelTests {
             status: .live,
             connectedToRowServer: true,
             sessionIsListed: true,
-            storeSaysReadOnly: true
+            storeSaysReadOnly: true,
+            brokerRecoverable: false
         )
         #expect(d == .readOnlyTranscript)
     }
@@ -328,31 +331,73 @@ struct SessionsScreenModelTests {
             status: .live,
             connectedToRowServer: false,
             sessionIsListed: false,
-            storeSaysReadOnly: true
+            storeSaysReadOnly: true,
+            brokerRecoverable: false
         )
         #expect(d == .readOnlyTranscript)
     }
 
-    @Test func resumeExitedRowIsAlwaysReadOnly() {
-        // Even if (impossibly) listed + not-read-only, a non-live status
-        // never resumes interactive.
+    @Test func resumeExitedNonRecoverableRowIsReadOnly() {
+        // A non-live status the broker does NOT advertise as recoverable
+        // stays read-only (fail closed — the genuinely-dead case).
         let d = ResumeDecision.decide(
             status: .exited,
             connectedToRowServer: true,
             sessionIsListed: true,
-            storeSaysReadOnly: false
+            storeSaysReadOnly: false,
+            brokerRecoverable: false
         )
         #expect(d == .readOnlyTranscript)
     }
 
-    @Test func resumeUnknownRowIsAlwaysReadOnly() {
+    @Test func resumeUnknownNonRecoverableRowIsReadOnly() {
         let d = ResumeDecision.decide(
             status: .unknown,
             connectedToRowServer: true,
             sessionIsListed: true,
-            storeSaysReadOnly: false
+            storeSaysReadOnly: false,
+            brokerRecoverable: false
         )
         #expect(d == .readOnlyTranscript)
+    }
+
+    // The fix: a cold/exited row the broker advertises as recoverable
+    // attempts an interactive resume (broker respawns on /ws open) instead
+    // of failing closed to a read-only transcript.
+    @Test func resumeRecoverableColdRowAttemptsResume() {
+        let d = ResumeDecision.decide(
+            status: .exited,
+            connectedToRowServer: true,
+            sessionIsListed: false,
+            storeSaysReadOnly: true,
+            brokerRecoverable: true
+        )
+        #expect(d == .attemptResume)
+    }
+
+    @Test func resumeRecoverableButCrossServerIsReadOnly() {
+        // Recoverable, but not connected to its server → can't probe without
+        // switching, so still read-only.
+        let d = ResumeDecision.decide(
+            status: .exited,
+            connectedToRowServer: false,
+            sessionIsListed: false,
+            storeSaysReadOnly: true,
+            brokerRecoverable: true
+        )
+        #expect(d == .readOnlyTranscript)
+    }
+
+    @Test func resumeLiveWinsOverRecoverable() {
+        // A confirmed-live row attaches live even if also flagged recoverable.
+        let d = ResumeDecision.decide(
+            status: .live,
+            connectedToRowServer: true,
+            sessionIsListed: true,
+            storeSaysReadOnly: false,
+            brokerRecoverable: true
+        )
+        #expect(d == .attachLive)
     }
 
     // MARK: - Helpers
