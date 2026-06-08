@@ -143,6 +143,13 @@ public struct TurnActivityModel: Equatable, Sendable {
     /// the activity alive without flashing on/off between back-to-back tools.
     public static let defaultIdleTimeout: TimeInterval = 5
 
+    /// Items older than this can UPDATE a live activity but never START
+    /// one. After a reconnect/recovery the store re-surfaces the whole
+    /// conversation, and hours-old tool events were opening lock-screen
+    /// cards whose elapsed timers read "598m" for sessions doing nothing
+    /// (device feedback, round 4). History is not a live turn.
+    public static let maxStartAge: TimeInterval = 10 * 60
+
     public private(set) var attributes: TurnActivityAttributesData?
     public private(set) var contentState: TurnActivityContentState?
     public private(set) var lastActivityAt: Date?
@@ -185,6 +192,12 @@ public struct TurnActivityModel: Equatable, Sendable {
         lastActivityAt = item.timestamp
 
         if !isActive {
+            // Stale items are history, not a live turn — never OPEN a
+            // card for them (a re-surfaced old conversation after a
+            // reconnect would otherwise show an hours-long timer).
+            if Date().timeIntervalSince(item.timestamp) > Self.maxStartAge {
+                return .noop
+            }
             let attrs = TurnActivityAttributesData(
                 agentName: agentName, sessionID: sessionID, sessionName: sessionName
             )

@@ -145,6 +145,10 @@ public final class TurnLiveActivityController {
             guard model.isActive, let state = model.contentState else { continue }
             updateActivity(state: state, sessionID: sessionID)
         }
+        // Every refresh is also a hygiene pass: anything on the lock
+        // screen this controller doesn't own is an orphan from a prior
+        // app run and will never update again — end it.
+        reapOrphanActivities()
     }
 
     /// Periodic tick — called from a timer in the app or driven by the
@@ -247,6 +251,14 @@ public final class TurnLiveActivityController {
         #endif
     }
 
+    /// How long a finished (done) card stays on the lock screen before
+    /// auto-dismissing. The system default keeps ended activities up to
+    /// FOUR hours — which read as "Live Activities don't make sense,
+    /// that was so long ago" once a few sessions had finished (device
+    /// feedback, round 4). 15 min is long enough to glance, short
+    /// enough to never describe ancient history.
+    public static let doneLingerInterval: TimeInterval = 15 * 60
+
     private func endActivity(state: TurnActivityContentState, sessionID: String) {
         #if canImport(ActivityKit)
         guard let activityID = activeActivityIDs[sessionID] else { return }
@@ -255,12 +267,36 @@ public final class TurnLiveActivityController {
         Task {
             for activity in Activity<TurnActivityAttributes>.activities where activity.id == activityID {
                 // Final (done) content never goes stale — it's a finished
-                // fact, not a live claim. The card lingers per system
-                // policy with the green done state.
-                await activity.end(ActivityContent(state: content, staleDate: nil), dismissalPolicy: .default)
+                // fact, not a live claim — but it must not linger for
+                // hours either.
+                await activity.end(
+                    ActivityContent(state: content, staleDate: nil),
+                    dismissalPolicy: .after(Date().addingTimeInterval(Self.doneLingerInterval))
+                )
             }
         }
         Telemetry.breadcrumb("live_activity", "ended", data: ["session": sessionID])
+        #endif
+    }
+
+    /// End every system activity this controller doesn't own. After an
+    /// app relaunch the controller's `activeActivityIDs` is empty, so
+    /// activities from the previous run are ORPHANS — nothing will ever
+    /// update or end them, and they pile up on the lock screen showing
+    /// hours-old "running"/"done" states (device feedback, round 4).
+    /// Called at launch and from `refreshAll()` (every scene change);
+    /// live turns re-request their activity as events flow, so reaping
+    /// is always safe.
+    public func reapOrphanActivities() {
+        #if canImport(ActivityKit)
+        let owned = Set(activeActivityIDs.values)
+        Task {
+            for activity in Activity<TurnActivityAttributes>.activities
+            where !owned.contains(activity.id) {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+        Telemetry.breadcrumb("live_activity", "reaped orphans")
         #endif
     }
 
