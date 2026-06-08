@@ -847,6 +847,14 @@ extension ConduitUI {
                     // Glass disc (device feedback) — melds with the chat
                     // instead of a flat surface + neon halo.
                     .conduitGlassCircle()
+                    // `conduitGlassCircle` ends in `.clipShape(Circle())` plus
+                    // an interactive Liquid Glass effect, which left the button
+                    // with no reliable hit region — the arrow showed but a tap
+                    // never scrolled (device feedback). Restore an explicit
+                    // ≥44pt tap target over the disc, exactly like the back /
+                    // info glass buttons in ConduitProjectView.
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Scroll to latest message")
