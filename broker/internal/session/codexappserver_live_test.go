@@ -1,0 +1,113 @@
+package session
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// chatEventRoleContent extracts (role, content) from a marshaled chat
+// view_event payload, returning empty strings if it isn't one.
+func chatEventRoleContent(p []byte) (string, string) {
+	var ev struct {
+		View  string `json:"view"`
+		Event struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"event"`
+	}
+	if json.Unmarshal(p, &ev) != nil || ev.View != "chat" {
+		return "", ""
+	}
+	return ev.Event.Role, ev.Event.Content
+}
+
+// TestCodexAppServerLive drives the REAL `codex app-server` binary end to end:
+// handshake → a trivial turn → a manual /compact. It is skipped unless
+// CONDUIT_CODEX_LIVE=1 (CI has no codex binary or auth), so it only runs on a
+// box where `codex` is installed and signed in. This is the integration proof
+// behind the unit tests — the on-box verification for task #18.
+//
+//	CONDUIT_CODEX_LIVE=1 go test ./internal/session/ -run TestCodexAppServerLive -v
+func TestCodexAppServerLive(t *testing.T) {
+	if os.Getenv("CONDUIT_CODEX_LIVE") != "1" {
+		t.Skip("set CONDUIT_CODEX_LIVE=1 to run against the real codex binary")
+	}
+	dir := t.TempDir()
+
+	events := make(chan []byte, 64)
+	usages := make(chan usageDelta, 16)
+	threads := make(chan string, 4)
+	proc, err := newCodexAppServerProcess(
+		"codex", dir, os.Environ(), SpawnOverride{},
+		func(p []byte) { events <- p },
+		func(u usageDelta) { usages <- u },
+		"",
+		func(id string) { threads <- id },
+	)
+	if err != nil {
+		t.Fatalf("spawn/handshake failed: %v", err)
+	}
+	defer proc.Close()
+
+	select {
+	case id := <-threads:
+		t.Logf("latched thread id: %s", id)
+	case <-time.After(20 * time.Second):
+		t.Fatal("timeout waiting for thread id latch")
+	}
+
+	// --- A trivial turn ---
+	if err := proc.Send("Reply with exactly the two words: hello world"); err != nil {
+		t.Fatalf("Send turn: %v", err)
+	}
+	gotAssistant := waitForRole(t, events, "assistant", 60*time.Second)
+	t.Logf("assistant reply: %q", gotAssistant)
+	if strings.TrimSpace(gotAssistant) == "" {
+		t.Fatal("empty assistant reply")
+	}
+
+	// --- Manual compact ---
+	// The turn isn't fully done until turn/completed clears the in-flight
+	// flag (a moment after the assistant item completes). In the app the
+	// composer is locked while a turn runs, so a user can't race it; here we
+	// retry until the backend accepts the next send.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err := proc.Send("/compact")
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Send /compact never accepted: %v", err)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	sys := waitForRole(t, events, "system", 60*time.Second)
+	t.Logf("system line after /compact: %q", sys)
+	if !strings.Contains(sys, "ompact") {
+		t.Fatalf("expected a compaction system line, got %q", sys)
+	}
+}
+
+// waitForRole drains chat view_events until one with the given role arrives,
+// returning its content. Fails the test on timeout.
+func waitForRole(t *testing.T, events <-chan []byte, role string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case p := <-events:
+			r, c := chatEventRoleContent(p)
+			t.Logf("  event role=%s content=%.80q", r, c)
+			if r == role {
+				return c
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for a %q chat event", role)
+			return ""
+		}
+	}
+}
