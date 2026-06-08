@@ -46,7 +46,12 @@ func (m *Manager) DeleteSession(id string) error {
 	sess := m.sessions[id]
 	delete(m.sessions, id)
 	m.mu.Unlock()
+	workspaceDir := ""
 	if sess != nil {
+		// Capture the workspace before Close() so we can drop the WIP
+		// checkpoint ref below; a cold (never-live) delete falls back to the
+		// persisted workspace_dir.
+		workspaceDir = sess.WorkspaceDir()
 		sess.Close()
 	}
 
@@ -60,6 +65,16 @@ func (m *Manager) DeleteSession(id string) error {
 	//    exit non-zero and are ignored.
 	killTmuxSession(id)
 
+	// 2.5 Drop the per-session WIP checkpoint ref (maybeAutoWIP) so snapshot
+	//     refs don't outlive their sessions and accumulate. Best-effort; falls
+	//     back to the persisted workspace_dir for a cold delete.
+	if workspaceDir == "" {
+		if meta, err := m.readSessionMeta(id); err == nil {
+			workspaceDir = meta.WorkspaceDir
+		}
+	}
+	deleteWIPCheckpointRef(workspaceDir, id)
+
 	// 3. Archive the on-disk session directory out of the active set.
 	//    Rename is atomic on the same filesystem and preserves
 	//    conversation.jsonl + work/ verbatim. A missing source dir (never
@@ -69,6 +84,20 @@ func (m *Manager) DeleteSession(id string) error {
 		return err
 	}
 	return nil
+}
+
+// deleteWIPCheckpointRef removes the session's WIP snapshot ref (written by
+// maybeAutoWIP) from its workspace repo. Best-effort: no workspace, not a git
+// repo, or no such ref all just no-op so a delete never fails on this.
+func deleteWIPCheckpointRef(workspaceDir, id string) {
+	if workspaceDir == "" {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, ".git")); err != nil {
+		return
+	}
+	_ = exec.Command("git", "-C", workspaceDir,
+		"update-ref", "-d", wipCheckpointRefPrefix+id).Run()
 }
 
 // killTmuxSession runs `tmux kill-session -t kitty-<id>` best-effort. tmux

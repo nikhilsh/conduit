@@ -72,6 +72,34 @@ func TestMaybeAutoWIPSnapshotsWithoutTouchingTree(t *testing.T) {
 	}
 }
 
+// Deleting a session drops its WIP snapshot ref so refs don't outlive the
+// sessions that created them.
+func TestDeleteWIPCheckpointRef(t *testing.T) {
+	repo := t.TempDir()
+	gitWIP(t, repo, "init", "-q")
+	writeWIPFile(t, repo, "f.txt", "v0\n")
+	gitWIP(t, repo, "add", "-A")
+	gitWIP(t, repo, "commit", "-q", "-m", "base")
+
+	s := &Session{workspaceDir: repo, ID: "sess-del"}
+	writeWIPFile(t, repo, "f.txt", "dirty\n")
+	s.maybeAutoWIP()
+	ref := wipCheckpointRefPrefix + "sess-del"
+	if out := gitWIP(t, repo, "for-each-ref", "--format=%(refname)", ref); out == "" {
+		t.Fatalf("precondition: checkpoint ref should exist")
+	}
+
+	deleteWIPCheckpointRef(repo, "sess-del")
+
+	if out := gitWIP(t, repo, "for-each-ref", "--format=%(refname)", ref); out != "" {
+		t.Errorf("checkpoint ref should be gone after delete, got %q", out)
+	}
+	// Idempotent / safe on non-repo + missing ref.
+	deleteWIPCheckpointRef(repo, "sess-del")
+	deleteWIPCheckpointRef(t.TempDir(), "never")
+	deleteWIPCheckpointRef("", "never")
+}
+
 // A second checkpoint overwrites the per-session ref rather than accumulating,
 // so snapshots are bounded at one-per-session.
 func TestMaybeAutoWIPOverwritesRefBounded(t *testing.T) {
