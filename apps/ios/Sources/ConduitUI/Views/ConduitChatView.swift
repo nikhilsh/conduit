@@ -752,7 +752,7 @@ extension ConduitUI {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
                     let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-                    applyKeyboardInset(frame)
+                    applyKeyboardInset(frame, animation: keyboardAnimation(note))
                     logKeyboardDiag("keyboard will show", keyboardFrame: frame)
                 }
                 // willChangeFrame catches the predictive/QuickType bar resizing
@@ -760,10 +760,10 @@ extension ConduitUI {
                 // 48pt undershoot. Re-lift to the new frame each time.
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
                     let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-                    applyKeyboardInset(frame)
+                    applyKeyboardInset(frame, animation: keyboardAnimation(note))
                 }
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                    withAnimation(.easeOut(duration: 0.2)) { keyboardInset = 0 }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { note in
+                    withAnimation(keyboardAnimation(note)) { keyboardInset = 0 }
                     logKeyboardDiag("keyboard will hide")
                 }
             }
@@ -779,11 +779,33 @@ extension ConduitUI {
         /// Lift the composer cluster to sit exactly on the keyboard top. The
         /// keyboard frame is in window space; the amount above the bottom safe
         /// area (home indicator) is what the `.safeAreaInset(.bottom)` cluster
-        /// must rise by. Animated so it tracks the IME presentation.
-        private func applyKeyboardInset(_ frame: CGRect?) {
+        /// must rise by. Animated with the IME's OWN timing so the cluster
+        /// travels in lockstep with the keyboard.
+        private func applyKeyboardInset(_ frame: CGRect?, animation: Animation) {
             guard let frame, let window = keyWindow() else { return }
             let inset = max(0, window.bounds.maxY - frame.minY - window.safeAreaInsets.bottom)
-            withAnimation(.easeOut(duration: 0.2)) { keyboardInset = inset }
+            withAnimation(animation) { keyboardInset = inset }
+        }
+
+        /// The animation that matches the keyboard's own presentation, read
+        /// from the notification. We drive the composer lift with THIS instead
+        /// of a guessed `easeOut 0.2` (device feedback: on dismiss the composer
+        /// hung in place — a gap opened where the keyboard had been — and only
+        /// dropped once the keyboard was fully gone, because the lift ran on a
+        /// different duration/curve than the IME). The keyboard uses a private
+        /// curve (raw 7); we map the standard curves and fall back to
+        /// `easeInOut`, which closely tracks it.
+        private func keyboardAnimation(_ note: Notification) -> Animation {
+            let info = note.userInfo
+            let duration = (info?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+            let curveRaw = (info?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
+                ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
+            switch curveRaw {
+            case Int(UIView.AnimationCurve.easeIn.rawValue): return .easeIn(duration: duration)
+            case Int(UIView.AnimationCurve.easeOut.rawValue): return .easeOut(duration: duration)
+            case Int(UIView.AnimationCurve.linear.rawValue): return .linear(duration: duration)
+            default: return .easeInOut(duration: duration)
+            }
         }
 
         /// Emit a `diag=keyboard` Sentry breadcrumb capturing the keyboard
@@ -847,6 +869,14 @@ extension ConduitUI {
                     // Glass disc (device feedback) — melds with the chat
                     // instead of a flat surface + neon halo.
                     .conduitGlassCircle()
+                    // `conduitGlassCircle` ends in `.clipShape(Circle())` plus
+                    // an interactive Liquid Glass effect, which left the button
+                    // with no reliable hit region — the arrow showed but a tap
+                    // never scrolled (device feedback). Restore an explicit
+                    // ≥44pt tap target over the disc, exactly like the back /
+                    // info glass buttons in ConduitProjectView.
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Scroll to latest message")
