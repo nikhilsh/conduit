@@ -235,6 +235,18 @@ class VoiceTranscriber(private val context: Context) {
         }
     }
 
+    /**
+     * Fold a freshly recognized partial into the live segment without ever
+     * regressing what's already on screen. The recognizer revises its hypothesis
+     * downward (to a shorter prefix, or blank) right before a pause; taking the
+     * shorter string there is the "pausing wipes the transcript" bug. Keep
+     * whichever of [current]/[next] has more recognized characters, so the
+     * displayed segment is monotonic until it commits. Parity w/ iOS
+     * `VoiceTranscriber.longestSegment`.
+     */
+    private fun longestSegment(current: String, next: String): String =
+        if (next.trim().length >= current.trim().length) next else current
+
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
         override fun onBeginningOfSpeech() {}
@@ -254,18 +266,15 @@ class VoiceTranscriber(private val context: Context) {
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
                 ?: return
-            if (txt.isBlank()) {
-                // A pause can make the recognizer drop its current hypothesis and
-                // emit a blank partial before the next utterance starts — the
-                // on-screen text vanishes. Letting it overwrite a non-blank
-                // segmentPartial is the "I pause, the text disappears, and the next
-                // thing I say starts from the beginning" bug. Commit what we have so
-                // the next utterance appends instead of replacing it (parity w/ iOS).
-                if (segmentPartial.isNotBlank()) commitSegment()
-                return
-            }
-            restartCount = 0
-            segmentPartial = txt
+            // The recognizer revises its in-progress hypothesis as it listens, and
+            // right before a pause it tends to regress it — sometimes to blank,
+            // sometimes to a shorter prefix. Accepting that shorter string is the
+            // "I pause and the text on screen shrinks / starts over" bug. Keep the
+            // LONGEST hypothesis we've shown for this segment and ignore regressions;
+            // the retained text commits when the segment ends (parity w/ iOS). A
+            // blank partial is just the extreme case of a regression.
+            if (txt.isNotBlank()) restartCount = 0
+            segmentPartial = longestSegment(segmentPartial, txt)
             _partial.value = combine(accumulated, segmentPartial)
         }
 
@@ -275,10 +284,10 @@ class VoiceTranscriber(private val context: Context) {
                 ?.firstOrNull()
                 ?.trim()
                 .orEmpty()
-            if (txt.isNotEmpty()) {
-                restartCount = 0
-                segmentPartial = txt
-            }
+            if (txt.isNotEmpty()) restartCount = 0
+            // Don't let a shorter final overwrite the longer interim we already
+            // showed for this segment (parity w/ the partial-results guard above).
+            segmentPartial = longestSegment(segmentPartial, txt)
             commitSegment()
             onSegmentEnded()
         }

@@ -160,4 +160,23 @@ struct ChatAutoScrollControllerTests {
         _ = c.bottomProximityChanged(-10) // overscroll → clamped to 0
         #expect(!c.showScrollToBottomButton)
     }
+
+    // MARK: - Proximity banding (long-chat overheat fix)
+
+    /// The scroll observer forwards to the controller only when the
+    /// band changes. Pin that the three bands map to the thresholds, so
+    /// a scroll WITHIN a band produces no state write (no body
+    /// invalidation per frame).
+    @Test func proximityBandsMapToThresholds() {
+        let c = ChatAutoScrollController(nearBottomThreshold: 80, buttonVisibleThreshold: 160)
+        #expect(c.proximityBand(for: 0) == 0)
+        #expect(c.proximityBand(for: 80) == 0)   // inclusive near-bottom
+        #expect(c.proximityBand(for: 81) == 1)
+        #expect(c.proximityBand(for: 160) == 1)  // inclusive button band
+        #expect(c.proximityBand(for: 161) == 2)
+        #expect(c.proximityBand(for: 9999) == 2)
+        // Every distance inside a band yields the SAME band — that's what
+        // lets the view gate the per-frame @State write.
+        #expect(c.proximityBand(for: 500) == c.proximityBand(for: 5000))
+    }
 }

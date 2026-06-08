@@ -44,6 +44,8 @@ func startChatProcess(
 	gen *quickReplyGenerator,
 	titleGen *titleGenerator,
 	onUsage func(usageDelta),
+	onAsk func(controlRequest, *chatProcess),
+	onInit func(string),
 ) (*chatProcess, error) {
 	if len(command) == 0 {
 		return nil, errors.New("chat process: empty command")
@@ -65,10 +67,23 @@ func startChatProcess(
 	}
 
 	cp := &chatProcess{cmd: cmd, stdin: stdin}
+	// Control-protocol dispatch (--permission-prompt-tool stdio):
+	// AskUserQuestion goes to the session's bridge (which holds it for
+	// the user's answer); every other can_use_tool is auto-allowed with
+	// unchanged input right here, preserving the
+	// --dangerously-skip-permissions semantics the rest of the harness
+	// assumes. See askcontrol.go.
+	onControl := func(req controlRequest) {
+		if req.ToolName == "AskUserQuestion" && onAsk != nil {
+			onAsk(req, cp)
+			return
+		}
+		_ = cp.SendRaw(encodeControlAllow(req.RequestID, req.Input))
+	}
 	go func() {
 		// processClaudeStreamOutput returns at EOF (agent exit); the
 		// goroutine then ends. Reap the process so it doesn't zombie.
-		_ = processClaudeStreamOutput(stdout, publish, gen, titleGen, onUsage)
+		_ = processClaudeStreamOutput(stdout, publish, gen, titleGen, onUsage, onControl, onInit)
 		werr := cmd.Wait()
 		// Surface an *unexpected* exit in the Chat tab so a dead
 		// stream-json agent isn't just silence (the original #6
@@ -101,6 +116,21 @@ func (c *chatProcess) Send(text string) error {
 		return errChatProcessClosed
 	}
 	_, err = c.stdin.Write(line)
+	return err
+}
+
+// SendRaw writes one pre-encoded stream-json line (a control_response)
+// to the agent's stdin. Safe for concurrent callers; shares Send's lock.
+func (c *chatProcess) SendRaw(line []byte) error {
+	if len(line) == 0 {
+		return errors.New("chat process: empty control line")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errChatProcessClosed
+	}
+	_, err := c.stdin.Write(line)
 	return err
 }
 

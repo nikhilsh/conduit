@@ -46,6 +46,11 @@ extension ConduitUI {
     struct PendingQuestion: Equatable {
         let prompt: String
         let options: [String]
+        /// True when the broker marked this question multi-select (the
+        /// " (select all that apply)" marker the card strips from the
+        /// prompt). Multi-select questions render checkboxes + Send
+        /// instead of tap-to-send.
+        var multiSelect: Bool = false
     }
 
     /// A renderable row in the transcript: either a standalone event or a
@@ -67,6 +72,33 @@ extension ConduitUI {
         /// True when the composer's send button should be enabled.
         static func canSend(_ snap: ChatSnapshot) -> Bool {
             !snap.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        /// A stable revision over every APPEARANCE input that changes how
+        /// a chat row renders. Fed into the per-row Equatable digest so a
+        /// theme / font / glow / palette / collapse-turns / light-dark
+        /// change re-renders ALL rows (the digest differs), while leaving
+        /// rows untouched when only scroll position or an unrelated row
+        /// changes. Rare-to-change, so recomputing it per parent body is
+        /// free. Pure + unit-tested. Must be EXHAUSTIVE over
+        /// render-affecting appearance state — a missed input would
+        /// stale-out equatable rows when that input changes.
+        static func appearanceRenderRevision(
+            fontFamily: String,
+            bodyPointSize: CGFloat,
+            palette: String,
+            glow: Bool,
+            dark: Bool,
+            collapseTurns: Bool
+        ) -> Int {
+            var hasher = Hasher()
+            hasher.combine(fontFamily)
+            hasher.combine(bodyPointSize)
+            hasher.combine(palette)
+            hasher.combine(glow)
+            hasher.combine(dark)
+            hasher.combine(collapseTurns)
+            return hasher.finalize()
         }
 
         /// Resolve the events stream the chat surface should render.
@@ -100,10 +132,16 @@ extension ConduitUI {
                 && item.content.hasPrefix("uploaded ")
         }
 
+        /// The exact marker the broker's `askUserQuestionContent` appends
+        /// to a multi-select question's prompt line. Carried inside the
+        /// text so no broker → core → app schema change was needed.
+        static let multiSelectMarker = " (select all that apply)"
+
         /// Recover per-question groups from a pending-input `content` body.
         /// Blocks are separated by blank lines; within a block the leading
         /// prose is the question and the numbered/bulleted lines are its
-        /// options. Pure + unit-tested.
+        /// options. A trailing multi-select marker on the prompt is
+        /// stripped into `multiSelect`. Pure + unit-tested.
         static func parsePendingQuestions(_ content: String) -> [PendingQuestion] {
             var result: [PendingQuestion] = []
             for block in content.components(separatedBy: "\n\n") {
@@ -120,9 +158,17 @@ extension ConduitUI {
                     // Stray prose AFTER options started is dropped — the
                     // broker never emits it for AskUserQuestion.
                 }
-                let promptText = prompt.joined(separator: "\n")
+                var promptText = prompt.joined(separator: "\n")
+                var multi = false
+                if promptText.hasSuffix(Self.multiSelectMarker) {
+                    multi = true
+                    promptText = String(promptText.dropLast(Self.multiSelectMarker.count))
+                        .trimmingCharacters(in: .whitespaces)
+                }
                 if !options.isEmpty || !promptText.isEmpty {
-                    result.append(PendingQuestion(prompt: promptText, options: options))
+                    result.append(PendingQuestion(
+                        prompt: promptText, options: options, multiSelect: multi
+                    ))
                 }
             }
             return result

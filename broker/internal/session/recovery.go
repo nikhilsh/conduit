@@ -56,6 +56,16 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// after newSession would both deny it $PORT and race the watchdog
 	// goroutine's lock-free read of s.previewPort.
 	previewPort := m.allocatePreviewPortLocked()
+	sessionDir := filepath.Join(m.kittyRoot, "sessions", id)
+	hasClaudeConversation := chatConversationOnDisk(sessionDir, ".claude")
+	resumeID := meta.ClaudeChatSessionID
+	if !hasClaudeConversation {
+		resumeID = ""
+	}
+	codexThreadID := meta.CodexThreadID
+	if !chatConversationOnDisk(sessionDir, ".codex") {
+		codexThreadID = ""
+	}
 	s, err := newSession(id, adapter, sessionOptions{
 		repoRoot:       m.repoRoot,
 		kittyRoot:      m.kittyRoot,
@@ -69,6 +79,17 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		// per-session work/ dir. Falls back to adapter/worktreeDir
 		// for pre-feature sessions that have no workspace_dir field.
 		requestedCWD: meta.WorkspaceDir,
+		// Resume the agent's own conversation so the recovered session
+		// keeps its memory (the conversation files live in the
+		// persistent per-session agent-home). Guarded on the files
+		// actually existing — a wiped home with a stale id would make
+		// every respawn fast-exit on "No conversation found".
+		resumeChatSessionID: resumeID,
+		// Pre-latch sessions (conversation on disk, no persisted id —
+		// created before the resume fix) fall back to --continue, which
+		// resolves this session's own newest conversation.
+		continueLatestChat:  resumeID == "" && hasClaudeConversation,
+		resumeCodexThreadID: codexThreadID,
 	})
 	if err != nil {
 		return nil, err
@@ -147,4 +168,22 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		m.mu.Unlock()
 	}()
 	return s, nil
+}
+
+// chatConversationOnDisk reports whether the session's persistent
+// agent-home still holds any conversation/rollout files for the given
+// agent config dir (".claude" / ".codex"). Recovery uses it to avoid
+// seeding a resume id whose backing files are gone (wiped home → the
+// CLI fast-exits with "No conversation found" on every respawn).
+func chatConversationOnDisk(sessionDir, configDir string) bool {
+	patterns := []string{
+		filepath.Join(sessionDir, "agent-home", configDir, "projects", "*", "*.jsonl"),
+		filepath.Join(sessionDir, "agent-home", configDir, "sessions", "*", "*", "*", "*", "*.jsonl"),
+	}
+	for _, pat := range patterns {
+		if matches, _ := filepath.Glob(pat); len(matches) > 0 {
+			return true
+		}
+	}
+	return false
 }

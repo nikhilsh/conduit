@@ -1,5 +1,4 @@
 import ActivityKit
-import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -98,7 +97,7 @@ struct TurnLiveActivity: Widget {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 44)
                 case .needsYou:
-                    Text("approve")
+                    Text("reply")
                         .font(.system(.caption2, design: .monospaced).weight(.bold))
                         .foregroundStyle(ConduitBrand.cyan)
                 case .done:
@@ -394,17 +393,16 @@ private struct ActionButtons: View {
             )
         case .needsYou:
             HStack(spacing: 8) {
-                // In-place approval: a LiveActivityIntent performs in the
-                // app process WITHOUT opening the UI (round-3 §2
-                // follow-up) — the host answers the pending card with its
-                // affirmative option.
-                Button(intent: ApproveSessionIntent(sessionID: sessionID)) {
-                    ctaLabel(
-                        "Approve", icon: "checkmark",
-                        fill: ConduitBrand.cyan, foreground: .black
-                    )
-                }
-                .buttonStyle(.plain)
+                // "Reply", not "Approve" (device feedback, round 4):
+                // AskUserQuestion is usually a multiple-CHOICE question,
+                // not a yes/no — an in-place "Approve" sent an arbitrary
+                // first option and read as a misnomer. Open the session so
+                // the user picks the actual answer on the card.
+                ctaLink(
+                    "Reply", icon: "arrowshape.turn.up.left.fill",
+                    fill: ConduitBrand.cyan, foreground: .black,
+                    action: "reply"
+                )
                 ctaLink(
                     "View diff", icon: "eye",
                     fill: Color.white.opacity(0.12), foreground: .white,

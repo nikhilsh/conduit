@@ -17,10 +17,20 @@ struct AgentAccountStatus: Identifiable, Equatable {
     /// Friendly row title ("Claude" / "Codex").
     let displayName: String
     let signedIn: Bool
+    /// True when a stored credential exists but its access token is past
+    /// `expiresAt` (round-4 device feedback: the broker had logged
+    /// "stored anthropic OAuth blob expired … using host credentials"
+    /// while Settings still said "signed in" — `credential != nil` alone
+    /// is not the truth). Expired ⇒ the broker won't use this credential
+    /// for new sessions; the row asks for a re-sign-in.
+    let expired: Bool
     /// Uppercase plan badge ("MAX" / "PRO" / "PLUS" …) — nil hides the badge.
     let planLabel: String?
 
     var id: String { agent }
+
+    /// Signed in AND usable — what the green dot should actually mean.
+    var usable: Bool { signedIn && !expired }
 
     /// Current status for both agent accounts, Claude first (stable order,
     /// matches the usage surfaces).
@@ -42,8 +52,26 @@ struct AgentAccountStatus: Identifiable, Equatable {
             provider: provider,
             displayName: displayName,
             signedIn: credential != nil,
+            expired: credential.map { isExpired($0) } ?? false,
             planLabel: credential.flatMap(planLabel(for:))
         )
+    }
+
+    /// Whether a stored credential's access token is past its expiry.
+    /// Mirrors the broker's own check (`expiry < host now` → it falls
+    /// back to host credentials), so Settings tells the same story the
+    /// broker acts on.
+    ///   - anthropic: `claudeAiOauth.expiresAt` is ms-since-epoch.
+    ///   - openai: no client-side expiry check — the codex CLI refreshes
+    ///     its own token server-side from auth.json, so a stale id_token
+    ///     here does NOT mean logged out.
+    static func isExpired(_ credential: OAuthCredential, now: Date = Date()) -> Bool {
+        switch credential {
+        case .anthropic(let blob):
+            return Double(blob.claudeAiOauth.expiresAt) < now.timeIntervalSince1970 * 1000
+        case .openai:
+            return false
+        }
     }
 
     /// Plan badge text from a stored credential, uppercased for the mono

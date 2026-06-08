@@ -55,4 +55,34 @@ final class AgentAccountStatusTests: XCTestCase {
         )
         XCTAssertNil(AgentAccountStatus.planLabel(for: credential))
     }
+
+    // MARK: isExpired (round-4 — Settings must not say "signed in" for a
+    // credential the broker already refuses as expired)
+
+    private func anthropicCredential(expiresAt: Int64) -> OAuthCredential {
+        .anthropic(
+            ClaudeCredentialsJson(
+                claudeAiOauth: .init(
+                    accessToken: "a",
+                    refreshToken: "r",
+                    expiresAt: expiresAt,
+                    scopes: [],
+                    subscriptionType: nil
+                )
+            )
+        )
+    }
+
+    func testAnthropicExpiredWhenPastExpiresAt() {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        // expiresAt is ms-since-epoch; one second in the past.
+        let cred = anthropicCredential(expiresAt: Int64((2_000_000 - 1) * 1000))
+        XCTAssertTrue(AgentAccountStatus.isExpired(cred, now: now))
+    }
+
+    func testAnthropicFreshWhenBeforeExpiresAt() {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let cred = anthropicCredential(expiresAt: Int64((2_000_000 + 3600) * 1000))
+        XCTAssertFalse(AgentAccountStatus.isExpired(cred, now: now))
+    }
 }

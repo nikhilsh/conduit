@@ -83,6 +83,11 @@ struct ConduitApp: App {
                             let bridge = TurnLiveActivityBridge(store: store, controller: liveActivity)
                             bridge.start()
                             liveActivityBridge = bridge
+                            // Fresh launch: any lock-screen activity left
+                            // over from the previous run is an orphan
+                            // (this process holds no handle to it) — end
+                            // them all before new turns request anew.
+                            liveActivity.reapOrphanActivities()
                         }
                         // Lock-screen Approve (LiveActivityIntent) runs in
                         // this process; hand it the store-backed approval.
@@ -222,11 +227,10 @@ struct ConduitApp: App {
     /// Actions:
     ///   - `refresh` — the stale card's "Tap to refresh": opening the app
     ///     IS the refresh (execution time → `refreshAll()` re-stamps).
-    ///   - `approve` / `diff` — currently focus the session so the user
-    ///     lands on the pending-approval card / can open the diff from
-    ///     there. In-place approval without opening the session is a
-    ///     follow-up (needs an AppIntent + approval plumbing reachable
-    ///     from the widget process).
+    ///   - `reply` / `diff` — focus the session so the user lands on the
+    ///     pending-input card to PICK the answer (a question is usually
+    ///     multiple-choice, not a yes/no, so the lock screen can't answer
+    ///     it in place) / can open the diff from there.
     private func applySessionURL(_ url: URL) -> Bool {
         guard url.scheme == "conduit", url.host == "session" else { return false }
         let sessionID = url.lastPathComponent

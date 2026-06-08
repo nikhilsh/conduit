@@ -195,6 +195,17 @@ type Session struct {
 	// per-turn and needs no respawn. nil → no self-heal, errors surface
 	// via the system chat message in SendChat.
 	chatRespawn func() (chatBackend, error)
+	// pendingAsk is a blocked AskUserQuestion control request waiting
+	// for the user's answer (askcontrol.go). Guarded by mu.
+	pendingAsk *pendingAsk
+	// chatSessionID is the claude CLI's OWN conversation id, latched
+	// from the stream-json init line and persisted (meta.json) so a
+	// respawned agent --resumes the conversation instead of starting
+	// amnesiac. Guarded by mu.
+	chatSessionID string
+	// codexThreadID is codex's equivalent (thread.started id), persisted
+	// so recovery seeds `exec resume <id>`. Guarded by mu.
+	codexThreadID string
 
 	// recorder writes PTY bytes + view_events to a per-session
 	// `<replayBaseDir>/<sessionID>/replay.json` JSONL file so a
@@ -326,7 +337,10 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.recorder = rec
 		}
 	}
-	s.workspaceDir = s.commandDir(adapter)
+	// Optionally run the session in its own per-session git worktree (off by
+	// default; see worktree.go). Fail-safe: returns the original dir on any
+	// problem, so a worktree issue never blocks a session from starting.
+	s.workspaceDir = s.maybeRemapToWorktree(s.commandDir(adapter))
 	cmd.Dir = s.workspaceDir
 	// Capture the workspace git HEAD now so OutcomeChips diffs measure only
 	// what this session changes (see outcome.go). Cheap; no-op when the cwd
@@ -452,11 +466,30 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	if extra := opts.override.extraArgsFor(adapter.Name); len(extra) > 0 {
 		log.Printf("session %s: model override applied (%s): %v", id, adapter.Name, extra)
 	}
+	s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID)
+	go s.drain(f)
+	s.startBackgroundLoops()
+	return s, nil
+}
+
+// startChatBackend builds the structured chat backend for `adapter` and
+// installs it on the session (s.chat / s.chatRespawn / generators). Used
+// at session create AND by switchToAdapter — the chat channel must follow
+// the agent (pre-#399 a switch left the Chat tab driven by the OLD
+// agent's binary). The resume seeds carry each backend's persisted
+// conversation, so switching BACK to a previously-used agent resumes its
+// own earlier thread.
+func (s *Session) startChatBackend(
+	adapter agents.Adapter,
+	resumeChatSessionID string,
+	continueLatestChat bool,
+	resumeCodexThreadID string,
+) {
 	switch structuredChatBackend(adapter.ChatMode) {
 	case "claude":
 		// claude headless in stream-json. Publishes clean chat events via
 		// the same path the scraper used — no PTY scraping (scraper stays
-		// nil); the PTY (a shell) drains to the Terminal tab below.
+		// nil); the PTY (a shell) drains to the Terminal tab.
 		// AI quick replies (task #233): on each completed assistant turn,
 		// a best-effort one-shot `claude -p` (cheap model) suggests up to
 		// 4 tap-able user replies, emitted as a `view:"quick_replies"`
@@ -482,47 +515,81 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 			s.firstPrompt,
 			s.applyAITitle,
 		)
+		// Recovery/switch hands us the prior conversation id — seed it so
+		// the FIRST spawn resumes, and persistMetadata keeps carrying it.
+		s.mu.Lock()
+		s.chatSessionID = resumeChatSessionID
+		s.mu.Unlock()
+		argsFor := func(resume string, continueLatest bool) []string {
+			return claudeStreamCommand(
+				adapter.Command,
+				append(append([]string{}, adapter.Args...), s.override.extraArgsFor(adapter.Name)...),
+				resume, continueLatest,
+			)
+		}
 		chat, cerr := startChatProcess(
 			context.Background(),
-			claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)),
+			argsFor(resumeChatSessionID, continueLatestChat),
 			s.commandEnv(nil),
 			s.workspaceDir,
 			s.PublishText,
 			gen,
 			s.titleGen,
 			s.accumulateUsage,
+			s.handleAskControl,
+			s.latchChatSessionID,
 		)
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
 		} else {
+			s.mu.Lock()
 			s.chat = chat
+			s.mu.Unlock()
 		}
 		// Same argv/env for the self-heal respawn in SendChat. The
 		// captured generators are per-session, not per-process, so the
 		// fresh agent keeps quick replies + titling.
 		s.chatRespawn = func() (chatBackend, error) {
+			// Resume the conversation the dead agent was holding — the
+			// latched id is the whole point of the respawn not being
+			// amnesiac. Falls back to a fresh conversation when no init
+			// line was ever captured.
+			s.mu.Lock()
+			resume := s.chatSessionID
+			s.mu.Unlock()
 			return startChatProcess(
 				context.Background(),
-				claudeStreamCommand(adapter.Command, append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)),
+				argsFor(resume, false),
 				s.commandEnv(nil),
 				s.workspaceDir,
 				s.PublishText,
 				gen,
 				s.titleGen,
 				s.accumulateUsage,
+				s.handleAskControl,
+				s.latchChatSessionID,
 			)
 		}
 	case "codex":
 		// codex via per-turn exec/resume; constructed lazily (spawns on
 		// first Send). Same publish path; PTY is a shell.
-		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), opts.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage)
+		// Seed the recovered/prior thread id (if any) so the first turn
+		// resumes codex's own conversation — the codex twin of the
+		// claude --resume fix.
+		s.mu.Lock()
+		s.codexThreadID = resumeCodexThreadID
+		s.chatRespawn = nil // per-turn exec model has no long-lived process
+		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID)
+		s.mu.Unlock()
 	default:
-		s.scraper = newChatScraper(s.PublishText)
-		go s.scraper.run(s.closed)
+		// Legacy TUI-scrape path (no shipped adapter uses it). If a
+		// future adapter does, restart-continuity needs a per-agent
+		// resume command (swe-swe's ShellRestartCmd pattern).
+		if s.scraper == nil {
+			s.scraper = newChatScraper(s.PublishText)
+			go s.scraper.run(s.closed)
+		}
 	}
-	go s.drain(f)
-	s.startBackgroundLoops()
-	return s, nil
 }
 
 // Write sends bytes to the PTY input (terminal keystrokes).
@@ -761,6 +828,21 @@ func (s *Session) SendChat(msg string) bool {
 	// Rewrite relative upload refs to the absolute durable path for the
 	// AGENT only (persistence above keeps the relative form for the client).
 	agentMsg := s.RewriteUploadRefs(msg)
+	// If the agent is blocked on an AskUserQuestion control request
+	// (--permission-prompt-tool stdio, see askcontrol.go), this message
+	// IS the answer — a card tap or typed free text both count. Respond
+	// on the control channel so the agent's turn RESUMES with the real
+	// answer, instead of queueing a new user turn behind a blocked one.
+	if ask := s.takePendingAsk(); ask != nil {
+		if line, encErr := encodeAskAnswer(ask.requestID, ask.input, agentMsg); encErr == nil {
+			if err := ask.cp.SendRaw(line); err == nil {
+				return true
+			}
+			// stdin gone (agent died holding the question) — fall
+			// through to the normal send path, whose self-heal respawns
+			// a fresh agent and delivers the text as a plain user turn.
+		}
+	}
 	err := s.chat.Send(agentMsg)
 	if err != nil && s.chatRespawn != nil {
 		// The long-lived stream-json agent died underneath us (any send
@@ -861,17 +943,39 @@ func (s *Session) Close() {
 			}
 			s.recorder = nil
 		}
-		// Best-effort cleanup of the per-session ephemeral $HOME so
-		// rotated OAuth refresh tokens don't linger on disk after the
-		// agent exits. Failure is logged and ignored — the worktree GC
-		// will sweep it eventually.
-		if s.agentHomeDir != "" {
-			if err := os.RemoveAll(s.agentHomeDir); err != nil {
-				fmt.Fprintf(os.Stderr, "session %s: remove agent-home: %v\n", s.ID, err)
-			}
-		}
+		// Best-effort cleanup of the per-session ephemeral $HOME's
+		// CREDENTIALS so rotated OAuth refresh tokens don't linger on
+		// disk after the agent exits. The home itself — including
+		// .claude/projects and .codex/sessions, the CLIs' RESUMABLE
+		// conversation files — is deliberately PRESERVED: a broker
+		// shutdown Closes every live session, and the previous
+		// RemoveAll(agentHomeDir) here destroyed the conversations that
+		// recovery's --resume / exec-resume depend on before they could
+		// ever be used (the "agent lost where it was" bug — the resume
+		// id survived in meta.json but its backing file was wiped on
+		// every redeploy). Recovery re-materializes credentials into the
+		// home; session GC sweeps the directory after retention.
+		cleanupAgentHomeCredentials(s.agentHomeDir, s.ID)
 		close(s.closed)
 	})
+}
+
+// cleanupAgentHomeCredentials removes the materialized OAuth credential
+// files from a session's agent-home while leaving everything else (most
+// importantly the CLIs' conversation/rollout files) in place. Missing
+// files are fine; other failures are logged and ignored.
+func cleanupAgentHomeCredentials(homeDir, sessionID string) {
+	if homeDir == "" {
+		return
+	}
+	for _, rel := range []string{
+		filepath.Join(".claude", ".credentials.json"),
+		filepath.Join(".codex", "auth.json"),
+	} {
+		if err := os.Remove(filepath.Join(homeDir, rel)); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "session %s: remove agent credential %s: %v\n", sessionID, rel, err)
+		}
+	}
 }
 
 // Done returns a channel closed when the session ends.
@@ -1262,11 +1366,20 @@ func (m *Manager) Get(id string) (*Session, bool) {
 // reconnecting client uses to decide which sessions are still ACTIVE
 // (process genuinely running) vs which have died and belong in History.
 type LiveSessionInfo struct {
-	ID             string `json:"id"`
-	Assistant      string `json:"assistant"`
-	Phase          string `json:"phase"`
-	Health         string `json:"health"`
-	Running        bool   `json:"running"`
+	ID        string `json:"id"`
+	Assistant string `json:"assistant"`
+	Phase     string `json:"phase"`
+	Health    string `json:"health"`
+	Running   bool   `json:"running"`
+	// Recoverable is true when opening the session yields an interactive
+	// agent — either it is already live (LiveSessions) or it is a cold
+	// on-disk session that would respawn cleanly on the next /ws/<id> open
+	// (RecoverableSessions). It is the "dead now, resumable" signal the app
+	// needs to offer Resume instead of failing closed to a read-only
+	// transcript. A session that can NEVER come back (missing scrollback,
+	// exhausted restart budget) is omitted from the recoverable list, so
+	// this is never true for an unrecoverable row.
+	Recoverable    bool   `json:"recoverable,omitempty"`
 	Rows           uint16 `json:"rows"`
 	Cols           uint16 `json:"cols"`
 	Viewers        int    `json:"viewers"`
@@ -1301,11 +1414,14 @@ func (m *Manager) LiveSessions() []LiveSessionInfo {
 			Phase:     st.Phase,
 			Health:    st.Health,
 			Running:   s.processAlive(),
-			Rows:      rows,
-			Cols:      cols,
-			Viewers:   s.SubscriberCount(),
-			Title:     s.DisplayName(),
-			CWD:       s.WorkspaceDir(),
+			// A held-in-memory session is trivially resumable: it already
+			// has (or re-spawns on open) a live agent.
+			Recoverable: true,
+			Rows:        rows,
+			Cols:        cols,
+			Viewers:     s.SubscriberCount(),
+			Title:       s.DisplayName(),
+			CWD:         s.WorkspaceDir(),
 		}
 		if !st.StartedAt.IsZero() {
 			info.StartedAt = st.StartedAt.UTC().Format(time.RFC3339Nano)
@@ -1562,6 +1678,18 @@ type sessionOptions struct {
 	// — spawned inside newSession — actually receives $PORT in its env. 0 when
 	// the pool was exhausted (or in tests that don't allocate one).
 	previewPort int
+	// resumeChatSessionID, when non-empty (recovery path), makes the
+	// claude chat agent `--resume` this CLI conversation id so a broker
+	// restart doesn't reset the agent's memory of the session.
+	resumeChatSessionID string
+	// continueLatestChat (recovery of a PRE-latch session: conversation
+	// files exist in agent-home but no id was ever persisted) makes the
+	// claude chat agent start with `--continue` — resolving this
+	// session's own most recent conversation.
+	continueLatestChat bool
+	// resumeCodexThreadID seeds the codex chat backend's thread id on
+	// recovery so its first post-restart turn runs `exec resume <id>`.
+	resumeCodexThreadID string
 }
 
 type sessionMetadata struct {
@@ -1613,6 +1741,11 @@ type sessionMetadata struct {
 	TotalCostUSD        float64 `json:"total_cost_usd,omitempty"`
 	ContextUsedTokens   uint64  `json:"context_used_tokens,omitempty"`
 	ContextWindowTokens uint64  `json:"context_window_tokens,omitempty"`
+	// ClaudeChatSessionID is the claude CLI's own conversation id —
+	// persisted so post-restart recovery resumes the agent's memory.
+	ClaudeChatSessionID string `json:"claude_chat_session_id,omitempty"`
+	// CodexThreadID is codex's equivalent (thread.started id).
+	CodexThreadID string `json:"codex_thread_id,omitempty"`
 }
 
 // UploadBaseDir is the durable root under which chat file-uploads are
@@ -1690,6 +1823,8 @@ func (s *Session) persistMetadata() error {
 		TotalCostUSD:        s.totalCostUSD,
 		ContextUsedTokens:   s.contextUsedTokens,
 		ContextWindowTokens: s.contextWindowTokens,
+		ClaudeChatSessionID: s.chatSessionID,
+		CodexThreadID:       s.codexThreadID,
 	}
 	if !s.lastCheckpoint.IsZero() {
 		meta.LastCheckpoint = s.lastCheckpoint.UTC().Format(time.RFC3339Nano)

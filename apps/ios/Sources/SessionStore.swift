@@ -208,6 +208,11 @@ struct LiveSessionInfo: Codable, Equatable {
     var phase: String
     var health: String
     var running: Bool
+    // Recoverable: true when opening the session yields an interactive agent —
+    // either it is live now, or it is a cold on-disk session the broker would
+    // respawn cleanly on /ws open. Drives Resume on otherwise read-only rows.
+    // Optional for back-compat with brokers that don't send the field.
+    var recoverable: Bool?
     var rows: UInt16
     var cols: UInt16
     var viewers: Int
@@ -217,7 +222,7 @@ struct LiveSessionInfo: Codable, Equatable {
     var lastActivityAt: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, assistant, phase, health, running, rows, cols, viewers, title, cwd
+        case id, assistant, phase, health, running, recoverable, rows, cols, viewers, title, cwd
         case startedAt = "started_at"
         case lastActivityAt = "last_activity_at"
     }
@@ -225,6 +230,9 @@ struct LiveSessionInfo: Codable, Equatable {
 
 struct LiveSessionsResponse: Codable, Equatable {
     var sessions: [LiveSessionInfo]
+    // Cold on-disk sessions that are not live now but would respawn cleanly on
+    // open. Absent on older brokers (nil → no Resume offered, read-only as before).
+    var recoverable: [LiveSessionInfo]?
 }
 
 /// Raised by `fetchConversation` when the broker has no persisted
@@ -861,6 +869,18 @@ final class SessionStore {
     /// never resurrects a dead/on-disk session. Throws on an older broker
     /// that doesn't serve the endpoint (404) so the caller can fall back
     /// to "show nothing as active" rather than reattaching dead rows.
+    /// Session ids the broker reports as recoverable: not live right now but
+    /// guaranteed to respawn cleanly on open. Refreshed every `fetchLiveSessions`.
+    /// A row in here resumes interactive on tap (broker recovers it on /ws open)
+    /// rather than failing closed to a read-only transcript.
+    var recoverableSessionIDs: Set<String> = []
+
+    /// True when the broker advertised this id as recoverable in the last
+    /// `/api/sessions` fetch.
+    func isRecoverable(sessionID: String) -> Bool {
+        recoverableSessionIDs.contains(sessionID)
+    }
+
     func fetchLiveSessions() async throws -> [LiveSessionInfo] {
         guard let base = endpoint.httpBaseURL else {
             throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
@@ -877,7 +897,27 @@ final class SessionStore {
             let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
             throw NSError(domain: "SessionStore", code: 108, userInfo: [NSLocalizedDescriptionKey: "Live sessions fetch failed (\(code))"])
         }
-        return try JSONDecoder().decode(LiveSessionsResponse.self, from: data).sessions
+        let decoded = try JSONDecoder().decode(LiveSessionsResponse.self, from: data)
+        // Refresh the recoverable set as a side effect of every poll. Live rows
+        // are inherently recoverable too, so the set covers both — but the live
+        // ones are already reattached, so only the cold ones matter for Resume.
+        recoverableSessionIDs = Set((decoded.recoverable ?? []).map { $0.id })
+        return decoded.sessions
+    }
+
+    /// Resume a cold-but-recoverable session: open the live WebSocket so the
+    /// broker respawns the agent, instead of dropping to a read-only transcript.
+    /// Forces a non-terminal lifecycle first so the recovered `running` status
+    /// frame promotes the row to live rather than being swallowed by a stale
+    /// terminal `.exited`. If recovery fails the attach path settles it back to
+    /// exited and the next open is read-only — a safe fallback.
+    func resumeRecoverableSession(sessionID: String, assistant: String) {
+        Telemetry.breadcrumb("session", "resume_recoverable", data: [
+            "session": sessionID,
+            "assistant": assistant,
+        ])
+        sessionLifecycle[sessionID] = .creating
+        attachLiveSession(sessionID: sessionID, assistant: assistant)
     }
 
     /// Convenience flow: optionally switch endpoint, connect, then create a

@@ -173,6 +173,10 @@ enum ResumeDecision: Equatable {
     case readOnlyTranscript
     /// Attach to the genuinely-live session on the broker (interactive).
     case attachLive
+    /// Cold session the broker reports as recoverable: open the live socket
+    /// so the broker respawns the agent (interactive), with a read-only
+    /// fallback if it doesn't come up live. The "dead now, resumable" path.
+    case attemptResume
 }
 
 extension ResumeDecision {
@@ -193,20 +197,27 @@ extension ResumeDecision {
     /// or a `.live` the store has positively marked read-only — resolves to
     /// the read-only transcript. The user strongly prefers a read-only open
     /// over a wrong interactive one, so we fail closed.
+    /// `brokerRecoverable` is true when the broker's `/api/sessions` advertised
+    /// this id as recoverable (would respawn cleanly on open). When a row isn't
+    /// confirmed-live but the broker says it's recoverable AND we're connected
+    /// to its server, we attempt an interactive resume instead of failing
+    /// closed — the broker recovers it on the /ws open, and the attach path
+    /// falls back to read-only if it doesn't come up live. A cross-server row
+    /// still goes read-only (we can't probe it without switching).
     static func decide(
         status: SavedSessionStatus,
         connectedToRowServer: Bool,
         sessionIsListed: Bool,
-        storeSaysReadOnly: Bool
+        storeSaysReadOnly: Bool,
+        brokerRecoverable: Bool
     ) -> ResumeDecision {
-        guard status == .live,
-              connectedToRowServer,
-              sessionIsListed,
-              !storeSaysReadOnly
-        else {
-            return .readOnlyTranscript
+        if status == .live, connectedToRowServer, sessionIsListed, !storeSaysReadOnly {
+            return .attachLive
         }
-        return .attachLive
+        if brokerRecoverable, connectedToRowServer {
+            return .attemptResume
+        }
+        return .readOnlyTranscript
     }
 }
 
@@ -600,7 +611,8 @@ struct SessionsScreen: View {
             status: row.status,
             connectedToRowServer: connectedToRowServer,
             sessionIsListed: store.sessions.contains(where: { $0.id == row.id }),
-            storeSaysReadOnly: store.isReadOnly(sessionID: row.id)
+            storeSaysReadOnly: store.isReadOnly(sessionID: row.id),
+            brokerRecoverable: store.isRecoverable(sessionID: row.id)
         )
 
         switch decision {
@@ -608,6 +620,9 @@ struct SessionsScreen: View {
             transcriptTarget = TranscriptTarget(session: row)
         case .attachLive:
             store.attachLiveSession(sessionID: row.id, assistant: row.agent)
+            dismiss()
+        case .attemptResume:
+            store.resumeRecoverableSession(sessionID: row.id, assistant: row.agent)
             dismiss()
         }
     }

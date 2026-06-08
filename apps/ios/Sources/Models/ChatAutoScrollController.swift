@@ -68,6 +68,20 @@ struct ChatAutoScrollController: Equatable {
     /// `true` when the list is currently within the near-bottom band.
     var isNearBottom: Bool { distanceFromBottom <= nearBottomThreshold }
 
+    /// The coarse proximity band a distance falls into — the ONLY thing
+    /// any auto-scroll decision depends on (every derived flag thresholds
+    /// at `nearBottomThreshold` or `buttonVisibleThreshold`, never on the
+    /// exact distance). The scroll observer forwards a live distance to
+    /// the controller only when this band CHANGES, so a 60–120 Hz scroll
+    /// gesture doesn't invalidate the chat view body every frame
+    /// (long-chat overheat fix). 0 = near-bottom, 1 = button hysteresis
+    /// band, 2 = far.
+    func proximityBand(for distance: CGFloat) -> Int {
+        if distance <= nearBottomThreshold { return 0 }
+        if distance <= buttonVisibleThreshold { return 1 }
+        return 2
+    }
+
     /// `true` when the scroll-to-bottom affordance should show. BUG 2:
     /// once we have a real measurement this is driven by *distance from
     /// the bottom*, not the `userScrolledUp` latch — the button fades out

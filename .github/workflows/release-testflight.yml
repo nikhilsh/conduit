@@ -296,8 +296,13 @@ jobs:
             -configuration "$CONFIGURATION" \
             -archivePath "$ARCHIVE_PATH" \
             -destination 'generic/platform=iOS' \
-            SENTRY_DSN="$SENTRY_DSN_IOS" \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID"
+            SENTRY_DSN="$SENTRY_DSN_IOS"
+          # NO PRODUCT_BUNDLE_IDENTIFIER override here: a command-line build
+          # setting applies to EVERY target in the archive. Once the widget
+          # extension was embedded (v0.0.118), the override forced the
+          # ConduitWidgets target to the app's bundle id, which no longer
+          # matched its provisioning profile and failed the archive. The
+          # per-target ids are already pinned in project.yml.
 
       # Export + upload in one step. -allowProvisioningUpdates is NOT used
       # (manual signing); the API key authenticates the upload leg only.

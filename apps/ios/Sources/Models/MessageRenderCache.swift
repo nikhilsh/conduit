@@ -6,14 +6,19 @@ import Foundation
 /// allocator in the chat list, and re-rendering every visible row on
 /// each chunk dominated a frame budget in Instruments traces.
 ///
-/// Why bound at 200:
+/// Why bound at 1200:
 ///   - Each entry is one `AttributedString`; on a typical assistant
-///     reply that's a few KB of attribute runs. 200 × ~4 KB ≈ <1 MB
-///     resident, which is well below the SwiftUI list's own
-///     attributed-text overhead on a long thread.
-///   - Conversations rarely keep more than ~100 rendered messages on
-///     screen at once; the cap gives 2× headroom for streaming
-///     intermediate revisions of in-flight turns.
+///     reply that's a few KB of attribute runs. 1200 × ~4 KB ≈ ~5 MB
+///     resident — still small next to the SwiftUI list's own
+///     attributed-text overhead, and far cheaper than the alternative.
+///   - The cap MUST exceed the on-screen working set. The chat windows
+///     up to ~80 ROWS, and a single row holds many cache entries: each
+///     block-level markdown block PLUS every inline segment (paragraph,
+///     list item, table cell) keys its own entry. A 200-cap evicted
+///     entries that were still on screen, so scrolling back and forth
+///     re-parsed `AttributedString(markdown:)` constantly — the cap was
+///     thrashing into sustained CPU on long chats (overheat). 1200
+///     comfortably covers an 80-row window's blocks + inline segments.
 ///
 /// Eviction policy: classic LRU. Reads (`get`) move the entry to the
 /// most-recently-used position; writes (`set`) either overwrite (and
@@ -54,7 +59,7 @@ final class MessageRenderCache {
     /// construct independent instances with `init(capacity:)`.
     static let shared = MessageRenderCache()
 
-    init(capacity: Int = 200) {
+    init(capacity: Int = 1200) {
         precondition(capacity > 0, "MessageRenderCache capacity must be positive")
         self.capacity = capacity
         self.storage.reserveCapacity(capacity)

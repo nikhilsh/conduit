@@ -446,6 +446,23 @@ func (s *Session) writeMemoryHTML(snapshot []byte) error {
 	return nil
 }
 
+// wipCheckpointRefPrefix namespaces the per-session WIP snapshot ref. One
+// ref per session, overwritten in place each checkpoint — so snapshots never
+// accumulate (the old stash approach piled up one entry per checkpoint, none
+// ever read). Custom ref namespace so it never shows in branch/tag listings.
+const wipCheckpointRefPrefix = "refs/conduit/checkpoints/"
+
+// maybeAutoWIP records a snapshot of the session's workspace (tracked changes
+// + untracked files) when it is dirty — WITHOUT mutating the working tree.
+//
+// The previous implementation ran `git stash push --include-untracked`, whose
+// internal `git reset --hard` reverts the working tree. On the 60s checkpoint
+// loop that silently wiped a live agent's in-progress edits off disk every
+// minute (recoverable only by hand from the stash stack) and grew an unbounded
+// pile of checkpoint stashes that nothing ever restored. We now capture the
+// snapshot into a commit object via a throwaway index and store it under a
+// per-session ref, leaving the developer's working tree exactly as it was.
+// Best-effort throughout: any git step failing just skips this snapshot.
 func (s *Session) maybeAutoWIP() {
 	gitDir := filepath.Join(s.workspaceDir, ".git")
 	if _, err := os.Stat(gitDir); err != nil {
@@ -456,17 +473,73 @@ func (s *Session) maybeAutoWIP() {
 	if err != nil || len(bytes.TrimSpace(out)) == 0 {
 		return
 	}
-	_ = exec.Command("git", "-C", s.workspaceDir, "add", "-A").Run()
-	_ = exec.Command(
-		"git",
-		"-C",
-		s.workspaceDir,
-		"stash",
-		"push",
-		"--include-untracked",
-		"-m",
-		"checkpoint:"+time.Now().UTC().Format(time.RFC3339Nano),
-	).Run()
+	commit, ok := s.snapshotWorkspaceTree()
+	if !ok {
+		return
+	}
+	_ = exec.Command("git", "-C", s.workspaceDir,
+		"update-ref", wipCheckpointRefPrefix+s.ID, commit).Run()
+}
+
+// snapshotWorkspaceTree builds a commit object capturing the current working
+// tree — tracked modifications plus untracked, non-ignored files — without
+// touching the working tree, the real index, or any existing ref. Returns the
+// commit SHA and true on success. It stages into a throwaway GIT_INDEX_FILE
+// (so the real index is untouched; `git add` never writes the working tree),
+// writes that tree, and commit-trees it with a deterministic identity (the box
+// may have no git user configured).
+func (s *Session) snapshotWorkspaceTree() (string, bool) {
+	tmp, err := os.CreateTemp("", "conduit-wip-index-*")
+	if err != nil {
+		return "", false
+	}
+	tmpIndex := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpIndex)
+
+	env := append(os.Environ(),
+		"GIT_INDEX_FILE="+tmpIndex,
+		"GIT_AUTHOR_NAME=conduit", "GIT_AUTHOR_EMAIL=conduit@localhost",
+		"GIT_COMMITTER_NAME=conduit", "GIT_COMMITTER_EMAIL=conduit@localhost",
+	)
+	run := func(args ...string) ([]byte, error) {
+		cmd := exec.Command("git", append([]string{"-C", s.workspaceDir}, args...)...)
+		cmd.Env = env
+		return cmd.Output()
+	}
+
+	// Seed the temp index from HEAD so `add -A` records a diff against it.
+	// Ignore the error: a repo with no commits yet has no HEAD, and an empty
+	// index is the correct base there (every file reads as added).
+	_, _ = run("read-tree", "HEAD")
+	if _, err := run("add", "-A"); err != nil {
+		return "", false
+	}
+	treeOut, err := run("write-tree")
+	if err != nil {
+		return "", false
+	}
+	tree := strings.TrimSpace(string(treeOut))
+	if tree == "" {
+		return "", false
+	}
+
+	args := []string{"commit-tree", tree, "-m",
+		"checkpoint:" + time.Now().UTC().Format(time.RFC3339Nano)}
+	if head, err := run("rev-parse", "--verify", "-q", "HEAD"); err == nil {
+		if h := strings.TrimSpace(string(head)); h != "" {
+			args = append(args, "-p", h)
+		}
+	}
+	commitOut, err := run(args...)
+	if err != nil {
+		return "", false
+	}
+	commit := strings.TrimSpace(string(commitOut))
+	if commit == "" {
+		return "", false
+	}
+	return commit, true
 }
 
 func (s *Session) switchToAdapter(adapter agents.Adapter) error {
@@ -526,6 +599,28 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 		_ = oldCmd.Process.Kill()
 		_, _ = oldCmd.Process.Wait()
 	}
+	// Re-point the structured chat channel at the NEW agent. Pre-#400 a
+	// switch restarted only the PTY: s.chat kept running the OLD agent's
+	// binary (the Chat tab was answered by the wrong agent) and the
+	// respawn closure re-spawned the old adapter forever. The old
+	// backend is closed (kills its process / in-flight turn) and any
+	// AskUserQuestion blocked on it is dropped with it. Each backend's
+	// persisted conversation id is passed back in, so switching BACK to
+	// an agent resumes its own earlier thread (claude --resume / codex
+	// exec resume); the cross-agent context travels via the handoff doc
+	// as before.
+	s.mu.Lock()
+	oldChat := s.chat
+	s.chat = nil
+	s.chatRespawn = nil
+	resumeClaude := s.chatSessionID
+	resumeCodex := s.codexThreadID
+	s.mu.Unlock()
+	_ = s.takePendingAsk() // its cp dies with oldChat; nothing to answer
+	if oldChat != nil {
+		_ = oldChat.Close()
+	}
+	s.startChatBackend(adapter, resumeClaude, false, resumeCodex)
 	if err := s.persistMetadata(); err != nil {
 		return err
 	}

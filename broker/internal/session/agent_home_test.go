@@ -177,9 +177,13 @@ func TestConcurrentSessionsGetIsolatedHomes(t *testing.T) {
 	}
 }
 
-// TestSessionCloseRemovesAgentHome verifies the ephemeral HOME is
-// removed on session exit so rotated refresh tokens don't linger.
-func TestSessionCloseRemovesAgentHome(t *testing.T) {
+// TestSessionCloseScrubsCredentialsKeepsHome verifies session exit
+// removes the materialized credentials (rotated refresh tokens must not
+// linger) while PRESERVING the home itself — the CLIs' conversation
+// files inside it are what recovery's --resume depends on, and a broker
+// shutdown Closes every live session (the old full RemoveAll destroyed
+// every conversation on every redeploy).
+func TestSessionCloseScrubsCredentialsKeepsHome(t *testing.T) {
 	root := testRoot(t)
 	hostHome := t.TempDir()
 	t.Setenv("CONDUIT_HOST_HOME", hostHome)
@@ -210,11 +214,26 @@ func TestSessionCloseRemovesAgentHome(t *testing.T) {
 		t.Fatalf("agent-home not created: %v", err)
 	}
 
+	// A conversation file that must survive Close.
+	conv := filepath.Join(dir, ".claude", "projects", "-w", "c1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(conv), 0o755); err != nil {
+		t.Fatalf("mkdir projects: %v", err)
+	}
+	if err := os.WriteFile(conv, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write conv: %v", err)
+	}
+
 	s.Close()
 	<-s.Done()
 
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("agent-home not removed on Close: %v", err)
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("agent-home must SURVIVE Close (recovery resumes from it): %v", err)
+	}
+	if _, err := os.Stat(conv); err != nil {
+		t.Fatalf("conversation file must survive Close: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude", ".credentials.json")); !os.IsNotExist(err) {
+		t.Fatalf("materialized credential must be scrubbed on Close: %v", err)
 	}
 }
 

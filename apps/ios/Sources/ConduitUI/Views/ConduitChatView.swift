@@ -100,6 +100,14 @@ extension ConduitUI {
         /// the `.keyboard` safe area, this inset is the single source of truth,
         /// so the composer lands exactly on the keyboard top every time.
         @State private var keyboardInset: CGFloat = 0
+        /// Pending-input event ids the user has already answered. Held at
+        /// the ChatView level (not in the card's @State) so the locked /
+        /// "Sent" state SURVIVES the card being recreated when new events
+        /// stream in — otherwise the lock reset and a second tap fired the
+        /// option as a brand-new message, confusing the agent (device
+        /// feedback, round 4: "I tap a reply, it doesn't seem to send, I
+        /// tap another and it sends again").
+        @State private var answeredPendingIDs: Set<String> = []
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
@@ -108,6 +116,11 @@ extension ConduitUI {
         // drag + bottom-proximity + streaming signals and reads back
         // `shouldFollow…` / `showScrollToBottomButton`.
         @State private var autoScroll = ChatAutoScrollController()
+        /// Non-invalidating holder for the last scroll proximity band (see
+        /// the gating in `.onScrollGeometryChange`). A reference type held
+        /// in `@State` so mutating its field never re-evaluates the body —
+        /// the whole point is to NOT invalidate on every scroll frame.
+        @State private var proximityGate = ScrollProximityGate()
         // Opening a session must land on the LATEST message, not the top of
         // the history. The stream/new-message autoscroll observers only fire on
         // *changes*, so a session opened with pre-existing events never got an
@@ -240,6 +253,32 @@ extension ConduitUI {
             return prev.role.lowercased() == role.lowercased()
         }
 
+        /// Per-row streaming buffer length (0 when the event isn't
+        /// streaming). Feeds the row's Equatable digest so a streaming
+        /// message rebuilds per token while settled rows are skipped.
+        private func streamRevision(for itemID: String) -> Int {
+            if case .streaming(let buffer) = coordinator.renderState(for: itemID) {
+                return buffer.count
+            }
+            return 0
+        }
+
+        /// Revision over every appearance/theme input that changes how a
+        /// row renders (see `ChatViewModel.appearanceRenderRevision`).
+        /// Folded into each row's Equatable digest so a theme / font /
+        /// glow / palette / collapse / light-dark change re-renders all
+        /// rows, while leaving them skippable otherwise.
+        private var appearanceRevision: Int {
+            ConduitUI.ChatViewModel.appearanceRenderRevision(
+                fontFamily: appearance.fontFamily.rawValue,
+                bodyPointSize: appearance.bodyPointSize,
+                palette: appearance.neonPalette.rawValue,
+                glow: appearance.neonGlow,
+                dark: neon.dark,
+                collapseTurns: appearance.collapseTurns
+            )
+        }
+
         /// Total length of all currently-streaming buffers. Changes on
         /// every token while the agent streams, so observing it drives
         /// "follow the stream" without re-reading the whole event list.
@@ -319,6 +358,16 @@ extension ConduitUI {
             guard autoScroll.userScrolledUp else { return }
             guard chatRows.count > visibleRowWindow else { return }
             isWideningWindow = true
+            // Perf telemetry (CLAUDE.md standing order): long-chat
+            // hang/overheat is invisible without a device, so record the
+            // scale of each widen — visible-window size + total rows — so
+            // a hitch/ANR in Sentry carries the context to explain it.
+            Telemetry.breadcrumb("chat_perf", "widen window", data: [
+                "visible": String(visibleRowWindow),
+                "next": String(visibleRowWindow + Self.rowWidenStep),
+                "total_rows": String(chatRows.count),
+                "events": String(events.count),
+            ])
             // Brief defer so the spinner paints before the main-thread
             // row parse/layout burst.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -349,6 +398,15 @@ extension ConduitUI {
         private func scrollToBottomOnOpen(_ proxy: ScrollViewProxy) {
             guard !didInitialScroll, !events.isEmpty else { return }
             didInitialScroll = true
+            // Record the scale of the transcript on open so a subsequent
+            // scroll-hang/overheat event in Sentry shows how big the chat
+            // was (the perf problem only bites long chats). Breadcrumb is
+            // ring-buffered — one per session open, negligible cost.
+            Telemetry.breadcrumb("chat_perf", "open transcript", data: [
+                "events": String(events.count),
+                "rows": String(chatRows.count),
+                "windowed": String(min(chatRows.count, visibleRowWindow)),
+            ])
             Task { @MainActor in
                 for delayMs: UInt64 in [0, 60, 200, 500] {
                     if delayMs > 0 { try? await Task.sleep(nanoseconds: delayMs * 1_000_000) }
@@ -399,10 +457,21 @@ extension ConduitUI {
                                         event: event,
                                         isContinuation: continuation(in: rows, at: idx, role: event.role),
                                         sessionID: session.id,
+                                        pendingAnswered: answeredPendingIDs.contains(event.id),
+                                        streamRevision: streamRevision(for: event.id),
+                                        appearanceRevision: appearanceRevision,
                                         onQuickReply: { reply in
                                             store.sendChat(sessionID: session.id, message: reply)
+                                        },
+                                        onPendingAnswered: {
+                                            answeredPendingIDs.insert(event.id)
                                         }
                                     )
+                                    // Perf (litter-parity): skip re-rendering a
+                                    // row whose render-determining inputs didn't
+                                    // change. The digest above keeps streaming +
+                                    // theme correct.
+                                    .equatable()
                                     .id(event.id)
                                     .padding(.horizontal, 16)
                                 case .toolGroup(let items):
@@ -545,15 +614,35 @@ extension ConduitUI {
                     geo.contentSize.height
                         - (geo.contentOffset.y + geo.bounds.height)
                 } action: { _, distance in
+                    // PERF (long-chat overheat): `.onScrollGeometryChange`
+                    // fires 60–120×/sec while scrolling. Writing the
+                    // distance into the Equatable `@State autoScroll`
+                    // every frame invalidated the WHOLE ChatView body each
+                    // frame, which re-ran the O(history) transcript
+                    // fingerprint per frame → pegged CPU → overheat/hang.
+                    // No auto-scroll decision depends on the exact
+                    // distance — only on which of three bands it's in
+                    // (near-bottom clears the follow latch; the button's
+                    // hysteresis band; far). Forward to the controller
+                    // ONLY on a band change, so a scroll gesture costs a
+                    // handful of @State writes, not thousands.
+                    let band = autoScroll.proximityBand(for: distance)
+                    if band == proximityGate.lastBand { return }
+                    proximityGate.lastBand = band
                     autoScroll.bottomProximityChanged(distance)
                 }
                 // A finger-down drag is the user taking manual control —
                 // latch `userScrolledUp` so streaming stops yanking them
                 // back. The proximity observer above clears the latch once
-                // they return near the bottom.
+                // they return near the bottom. Gated: `onChanged` also
+                // fires per frame, so only write the latch on the edge
+                // (same per-frame-invalidation hazard as the proximity
+                // observer above).
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 4)
-                        .onChanged { _ in autoScroll.userDragged() }
+                        .onChanged { _ in
+                            if !autoScroll.userScrolledUp { autoScroll.userDragged() }
+                        }
                 )
                 // Follow the stream: re-scroll on each token, but only
                 // while the user hasn't scrolled up.
@@ -1062,7 +1151,15 @@ private struct ConduitChatEmptyState: View {
 // Per-message dispatch — routes `ConversationItem` to the right inline
 // card (pending input, handoff, subagent, tool, or chat message).
 
-private struct ConduitEventRow: View {
+/// Holds the last scroll-proximity band across renders WITHOUT being a
+/// SwiftUI state dependency — a reference type so mutating `lastBand`
+/// never invalidates the view (see the gating in
+/// `ConduitChatView.onScrollGeometryChange`).
+private final class ScrollProximityGate {
+    var lastBand: Int = -1
+}
+
+private struct ConduitEventRow: View, Equatable {
     let event: ConversationItem
     /// True when the immediately preceding event had the same role —
     /// used to suppress the redundant sender label on grouped runs.
@@ -1070,8 +1167,36 @@ private struct ConduitEventRow: View {
     /// Live session id — threaded so the CommandCard's Re-run action can
     /// resend the command to the right session.
     var sessionID: String = ""
+    /// Durable "already answered" flag for a pending-input card, owned by
+    /// the ChatView so it survives this row being recreated.
+    var pendingAnswered: Bool = false
+    /// Length of this event's live streaming buffer (0 when not
+    /// streaming). In the Equatable digest so a streaming row rebuilds on
+    /// each token while a settled row is skipped — without it,
+    /// EquatableView would freeze a streaming message (its content
+    /// arrives via the @Observable coordinator, not `event`).
+    var streamRevision: Int = 0
+    /// Revision over all appearance/theme inputs (see
+    /// `appearanceRenderRevision`). In the digest so a theme/font change
+    /// re-renders every row.
+    var appearanceRevision: Int = 0
     let onQuickReply: (String) -> Void
+    var onPendingAnswered: () -> Void = {}
     @Environment(AppearanceStore.self) private var appearance
+
+    /// Skip re-rendering a row whose render-determining inputs are
+    /// unchanged (perf: litter-parity). Closures are intentionally
+    /// excluded — behaviorally stable and not Equatable. Every input that
+    /// AFFECTS the output is compared: the event, layout flags, the
+    /// streaming buffer length, and the appearance revision.
+    static func == (lhs: ConduitEventRow, rhs: ConduitEventRow) -> Bool {
+        lhs.event == rhs.event
+            && lhs.isContinuation == rhs.isContinuation
+            && lhs.sessionID == rhs.sessionID
+            && lhs.pendingAnswered == rhs.pendingAnswered
+            && lhs.streamRevision == rhs.streamRevision
+            && lhs.appearanceRevision == rhs.appearanceRevision
+    }
 
     var body: some View {
         if event.status.lowercased() == "swapping" {
@@ -1079,7 +1204,12 @@ private struct ConduitEventRow: View {
             // instead of a full row (it's a transition, not a message).
             ConduitSwapNotice(from: event.sourceAgent ?? "", to: event.targetAgent ?? "")
         } else if event.kind == "pending_input" {
-            ConduitPendingInputCard(event: event, onQuickReply: onQuickReply)
+            ConduitPendingInputCard(
+                event: event,
+                alreadyAnswered: pendingAnswered,
+                onQuickReply: onQuickReply,
+                onAnswered: onPendingAnswered
+            )
         } else if event.kind == "handoff" {
             ConduitHandoffCard(event: event)
         } else if event.kind == "plan" {
@@ -2893,10 +3023,22 @@ private struct ConduitDiffBlock: View {
         }
         .onAppear {
             if expandedFileIDs.isEmpty {
-                expandedFileIDs = Set(files.map(\.id))
+                // PERF: only auto-expand SMALL files. Each visible diff
+                // line is its own syntax-highlight pass (highlight.js in a
+                // JSContext), so a big diff auto-expanded on appearance lit
+                // up hundreds of lines at once — a CPU spike that compounds
+                // the long-chat overheat. Large diffs start collapsed; the
+                // user taps the file to expand it.
+                expandedFileIDs = Set(
+                    files.filter { $0.lines.count <= Self.autoExpandLineLimit }.map(\.id)
+                )
             }
         }
     }
+
+    /// Files longer than this stay collapsed by default (tap to expand)
+    /// so a large diff doesn't syntax-highlight every line at once.
+    private static let autoExpandLineLimit = 40
 
     /// `+N −M` badge — prefers the explicit `diffSummary` over per-file
     /// line counts (§4.4 header).
@@ -2937,15 +3079,32 @@ private struct ConduitDiffBlock: View {
 
 private struct ConduitPendingInputCard: View {
     let event: ConversationItem
+    /// Durable lock from the ChatView (survives this card being recreated
+    /// when new events stream in). Once true the card stays settled and
+    /// no further tap can fire — closes the double-send bug.
+    var alreadyAnswered: Bool = false
     let onQuickReply: (String) -> Void
+    /// Called the instant the user submits so the ChatView records this
+    /// event as answered.
+    var onAnswered: () -> Void = {}
     @Environment(\.neonTheme) private var neon
 
-    /// Chosen option per question index. Drives the selection highlight and
-    /// gates the multi-question Send button.
+    /// Chosen option per single-select question index. Drives the
+    /// selection highlight and gates the Send button.
     @State private var selections: [Int: String] = [:]
-    /// Once answered, the card locks: the choice is marked and the rest
-    /// dimmed/disabled so it reads as a settled decision.
-    @State private var submitted = false
+    /// Chosen options per MULTI-select question index (round-4 device
+    /// feedback: multiSelect questions previously rendered single-choice).
+    @State private var multiSelections: [Int: Set<String>] = [:]
+    /// Local submit flag. The card is locked when EITHER this or the
+    /// durable `alreadyAnswered` is set.
+    @State private var localSubmitted = false
+    /// The chosen answer text, kept so the locked card can echo it.
+    @State private var sentAnswer: String?
+
+    /// The card is settled once submitted locally OR recorded answered
+    /// upstream — the second source is what makes the lock survive a
+    /// re-render.
+    private var submitted: Bool { localSubmitted || alreadyAnswered }
 
     /// Per-question groups recovered from the prompt body (#7). Falls back
     /// to the flat `pendingOptions` as a single unlabeled question.
@@ -2960,7 +3119,10 @@ private struct ConduitPendingInputCard: View {
 
     var body: some View {
         let questions = self.questions
-        let multi = questions.count > 1
+        // The explicit Send appears for multiple questions OR any
+        // multi-select question — only a lone single-select question
+        // keeps tap-to-send.
+        let needsSend = questions.count > 1 || questions.contains { $0.multiSelect }
         return VStack(alignment: .leading, spacing: 12) {
             Text("NEEDS YOUR INPUT")
                 .font(neon.mono(11).weight(.bold))
@@ -2972,13 +3134,36 @@ private struct ConduitPendingInputCard: View {
                     if !question.prompt.isEmpty {
                         ConduitMarkdownBlock(text: question.prompt, role: .assistant)
                     }
+                    if question.multiSelect {
+                        Text("select all that apply")
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(neon.textFaint)
+                    }
                     ForEach(Array(question.options.enumerated()), id: \.offset) { oIdx, option in
-                        optionRow(question: qIdx, option: option, index: oIdx, multi: multi)
+                        optionRow(
+                            question: qIdx, option: option, index: oIdx,
+                            needsSend: needsSend, multiSelect: question.multiSelect
+                        )
                     }
                 }
             }
-            if multi && !submitted {
+            if needsSend && !submitted {
                 sendButton(questions: questions)
+            }
+            if submitted {
+                // Round-4 device feedback: a tap had no visible "delivered"
+                // affordance, so a sent answer read as nothing happening
+                // and the user tapped again. Echo the chosen answer next to
+                // a "Sent" check so the tap is unmistakably registered.
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12, weight: .bold))
+                    Text(sentAnswer.map { "Sent · \($0)" } ?? "Sent")
+                        .font(neon.mono(11).weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .foregroundStyle(neon.green)
             }
         }
         .padding(14)
@@ -2994,15 +3179,27 @@ private struct ConduitPendingInputCard: View {
     }
 
     @ViewBuilder
-    private func optionRow(question qIdx: Int, option: String, index oIdx: Int, multi: Bool) -> some View {
-        let selected = selections[qIdx] == option
+    private func optionRow(
+        question qIdx: Int, option: String, index oIdx: Int,
+        needsSend: Bool, multiSelect: Bool
+    ) -> some View {
+        let selected = multiSelect
+            ? (multiSelections[qIdx]?.contains(option) ?? false)
+            : selections[qIdx] == option
         let dimmed = submitted && !selected
         Button {
             guard !submitted else { return }
+            if multiSelect {
+                // Checkbox semantics: toggle membership; Send delivers.
+                var set = multiSelections[qIdx] ?? []
+                if set.contains(option) { set.remove(option) } else { set.insert(option) }
+                multiSelections[qIdx] = set
+                return
+            }
             selections[qIdx] = option
-            // Single question → send immediately (tap == answer). Multi
-            // waits for the explicit Send once every question is answered.
-            if !multi {
+            // A lone single-select question sends immediately (tap ==
+            // answer); anything needing Send waits for the explicit tap.
+            if !needsSend {
                 submit([option])
             }
         } label: {
@@ -3037,17 +3234,28 @@ private struct ConduitPendingInputCard: View {
         .buttonStyle(.plain)
         .disabled(submitted)
         .opacity(dimmed ? 0.45 : 1)
-        .accessibilityHint(multi ? "Select this option" : "Send this reply")
+        .accessibilityHint(needsSend ? "Select this option" : "Send this reply")
+    }
+
+    /// One question's answer string: multi-select joins the chosen labels
+    /// (in option order) with ", "; single-select is the chosen label.
+    private func answer(for qIdx: Int, question: ConduitUI.PendingQuestion) -> String? {
+        if question.multiSelect {
+            guard let set = multiSelections[qIdx], !set.isEmpty else { return nil }
+            return question.options.filter { set.contains($0) }.joined(separator: ", ")
+        }
+        return selections[qIdx]
     }
 
     @ViewBuilder
     private func sendButton(questions: [ConduitUI.PendingQuestion]) -> some View {
         // Only questions that actually offer options need an answer.
         let answerable = questions.enumerated().filter { !$0.element.options.isEmpty }
-        let allAnswered = answerable.allSatisfy { selections[$0.offset] != nil }
+        let answers = answerable.compactMap { answer(for: $0.offset, question: $0.element) }
+        let allAnswered = answers.count == answerable.count
         Button {
             guard allAnswered else { return }
-            submit(answerable.compactMap { selections[$0.offset] })
+            submit(answers)
         } label: {
             Text("Send")
                 .font(neon.sans(15).weight(.semibold))
@@ -3063,10 +3271,18 @@ private struct ConduitPendingInputCard: View {
     }
 
     /// Lock the card and send the chosen answer(s). Multiple answers are
-    /// newline-joined into one chat message.
+    /// newline-joined into one chat message. Guarded against a double
+    /// submit (the bug): once locked, further taps are ignored, and the
+    /// lock is recorded upstream so it survives a card re-render.
     private func submit(_ answers: [String]) {
-        submitted = true
-        onQuickReply(answers.joined(separator: "\n"))
+        guard !submitted else { return }
+        let joined = answers.joined(separator: "\n")
+        // Lock OPTIMISTICALLY and immediately — before the send — so the
+        // card visibly settles the instant the user taps.
+        localSubmitted = true
+        sentAnswer = joined
+        onAnswered()
+        onQuickReply(joined)
     }
 }
 

@@ -22,7 +22,7 @@ struct TurnLiveActivityModelTests {
             toolName: "Bash",
             command: nil,
             status: "running",
-            timestamp: Date(timeIntervalSince1970: 100)
+            timestamp: Date() // recent: stale items deliberately can't START
         )
 
         let effect = model.apply(item: item, sessionID: "s1", agentName: "claude")
@@ -172,7 +172,7 @@ struct TurnLiveActivityModelTests {
 
     @Test func idleTickAfterTimeoutEndsActivity() {
         var model = TurnActivityModel(idleTimeout: 5)
-        let start = Date(timeIntervalSince1970: 1000)
+        let start = Date() // recent: stale items deliberately can't START
         _ = model.apply(
             item: TurnActivityItem(id: "i1", kind: .tool, toolName: "Bash", timestamp: start),
             sessionID: "s1",
@@ -296,7 +296,7 @@ struct TurnLiveActivityModelTests {
         // An approval can wait minutes — the idle timeout must not reap
         // a "needs you" card; only a fresh item or a session exit may.
         var model = TurnActivityModel(idleTimeout: 5)
-        let t0 = Date(timeIntervalSince1970: 100)
+        let t0 = Date() // recent: stale items deliberately can't START
         _ = model.apply(
             item: TurnActivityItem(id: "p1", kind: .pendingInput, timestamp: t0),
             sessionID: "s1",
@@ -325,6 +325,40 @@ struct TurnLiveActivityModelTests {
         }
         #expect(state.summary == "exit 0")
         #expect(state.status == "exited")
+    }
+    // MARK: - Stale items never OPEN a card (round-4 device feedback:
+    // re-surfaced history showed "598m" timers for idle sessions)
+
+    @Test func staleToolItemDoesNotStartActivity() {
+        var model = TurnActivityModel()
+        let ancient = Date().addingTimeInterval(-3600) // 1h ago
+        let effect = model.apply(
+            item: TurnActivityItem(id: "old1", kind: .tool, toolName: "Bash", timestamp: ancient),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+        #expect(effect == .noop)
+        #expect(!model.isActive)
+    }
+
+    @Test func staleItemStillUpdatesLiveActivity() {
+        var model = TurnActivityModel()
+        _ = model.apply(
+            item: TurnActivityItem(id: "i1", kind: .tool, toolName: "Bash", timestamp: Date()),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+        // An older item arriving while live (out-of-order delivery) still
+        // updates rather than being dropped.
+        let effect = model.apply(
+            item: TurnActivityItem(id: "i2", kind: .tool, toolName: "Edit",
+                                   timestamp: Date().addingTimeInterval(-3600)),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+        if case .update = effect { } else {
+            Issue.record("expected .update for stale item on live activity, got \(effect)")
+        }
     }
 }
 

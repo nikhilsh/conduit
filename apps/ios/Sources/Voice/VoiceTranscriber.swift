@@ -218,23 +218,17 @@ final class VoiceTranscriber: ObservableObject {
     private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
         if let result {
             let next = result.bestTranscription.formattedString
-            if next.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                // A long pause can make SFSpeech reset its hypothesis *within* the
-                // same task and emit a blank partial — the on-screen text vanishes —
-                // before it fires the `isFinal`/end-of-speech that would normally
-                // commit the segment. Letting that blank overwrite `segmentPartial`
-                // is the device-reported bug: "I pause, the text disappears, and the
-                // next thing I say starts from the beginning." Commit what we have so
-                // the pause can't wipe it; the next utterance appends onto `accumulated`.
-                if !segmentPartial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    commitSegment()
-                } else {
-                    partialTranscript = combine(accumulated, "")
-                }
-            } else {
-                segmentPartial = next
-                partialTranscript = combine(accumulated, segmentPartial)
-            }
+            // SFSpeech revises its in-progress hypothesis as it listens, and right
+            // before a pause it tends to regress that hypothesis — sometimes all the
+            // way to blank, sometimes to a shorter prefix — before it fires the
+            // `isFinal`/end-of-speech that commits the segment. Accepting that shorter
+            // string verbatim is the device-reported wipe: "I pause and the text on
+            // screen shrinks / starts over." Keep the LONGEST hypothesis we've shown
+            // for this segment and ignore any regression; legitimate growth (and
+            // same-length corrections) still apply, and the retained text commits when
+            // the segment ends. A blank partial is just the extreme case of a regression.
+            segmentPartial = Self.longestSegment(current: segmentPartial, next: next)
+            partialTranscript = combine(accumulated, segmentPartial)
             if result.isFinal {
                 commitSegment()
                 onSegmentEnded()
@@ -327,6 +321,21 @@ final class VoiceTranscriber: ObservableObject {
             audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
+    }
+
+    /// Fold a freshly recognized partial into the live segment without ever
+    /// regressing what's already on screen. SFSpeech revises its hypothesis
+    /// downward (to a shorter prefix, or blank) right before a pause; returning
+    /// the shorter string there is the "pausing wipes the transcript" bug. We
+    /// keep whichever of `current`/`next` has more recognized characters, so the
+    /// displayed segment is monotonic until it commits. Trade-off: a legitimate
+    /// shortening correction is held at the longer form until segment end — a
+    /// cosmetic redundancy we accept to never wipe mid-utterance. Pure +
+    /// unit-tested (`VoiceTranscriptAccumulatorTests`).
+    nonisolated static func longestSegment(current: String, next: String) -> String {
+        let c = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        let n = next.trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.count >= c.count ? next : current
     }
 
     /// Join two transcript fragments with a single separating space, tolerating

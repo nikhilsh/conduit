@@ -25,18 +25,58 @@ var claudeChatNow = time.Now
 // command + args, then the stream-json flags. `-p` + stream-json output
 // requires `--verbose` (verified against Claude Code 2.1.x); without it the
 // CLI refuses.
-func claudeStreamCommand(command, args []string) []string {
-	argv := make([]string, 0, len(command)+len(args)+6)
+// `resumeSessionID`, when non-empty, appends `--resume <id>` so a
+// RESPAWNED agent (broker restart, self-heal after a crash) picks the
+// conversation back up instead of starting amnesiac (device feedback:
+// "it went down and lost where it was"). The CLI's conversation files
+// live in the per-session agent-home, which persists on disk, so resume
+// works across broker restarts. An unknown id fails fast with a clean
+// error result (verified live), which lands in the normal agent-exit
+// notice path rather than hanging.
+// `continueLatest` (used only when no id is known — sessions recovered
+// from a pre-latch broker) appends `--continue`, which resolves the most
+// recent conversation in the cwd; with the per-session agent-home that
+// is unambiguously THIS session's own conversation (verified live).
+func claudeStreamCommand(command, args []string, resumeSessionID string, continueLatest bool) []string {
+	argv := make([]string, 0, len(command)+len(args)+8)
 	argv = append(argv, command...)
 	argv = append(argv, args...)
+	if resumeSessionID != "" {
+		argv = append(argv, "--resume", resumeSessionID)
+	} else if continueLatest {
+		argv = append(argv, "--continue")
+	}
 	argv = append(argv,
 		"-p",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
+		// Route interactive-tool permission asks (AskUserQuestion) to
+		// stdin/stdout control_request/control_response instead of the
+		// headless auto-DENY, so the agent genuinely WAITS for the
+		// phone's answer (see askcontrol.go). Ordinary tools still
+		// auto-allow under --dangerously-skip-permissions — verified
+		// live against claude-code 2.1.168.
+		"--permission-prompt-tool", "stdio",
 	)
 	return argv
+}
+
+// claudeStreamInitSessionID extracts the CLI's own conversation id from
+// a `system/init` stream-json line. Captured + persisted so respawns can
+// `--resume` it; ok=false for any other line.
+func claudeStreamInitSessionID(line []byte) (string, bool) {
+	var ev struct {
+		Type      string `json:"type"`
+		Subtype   string `json:"subtype"`
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(line, &ev) != nil || ev.Type != "system" ||
+		ev.Subtype != "init" || ev.SessionID == "" {
+		return "", false
+	}
+	return ev.SessionID, true
 }
 
 // encodeClaudeUserMessage builds one stream-json input line for the user's
@@ -74,7 +114,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta)) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest), onInit func(string)) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -90,6 +130,23 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	var lastContextTokens uint64
 	for sc.Scan() {
 		line := sc.Bytes()
+		// The CLI announces its conversation id on init; latch it so
+		// respawns can --resume this exact conversation.
+		if id, ok := claudeStreamInitSessionID(line); ok {
+			if onInit != nil {
+				onInit(id)
+			}
+			continue
+		}
+		// Control protocol (--permission-prompt-tool stdio): a blocked
+		// can_use_tool request. Routed to the session's bridge — never
+		// rendered as chat content.
+		if req, ok := parseControlRequest(line); ok {
+			if onControl != nil {
+				onControl(req)
+			}
+			continue
+		}
 		if claudeStreamLineIsTurnEnd(line) {
 			// Turn complete: fold the turn's token/cost usage from the
 			// `result` envelope, kick off best-effort AI quick replies for
@@ -247,8 +304,9 @@ func publishChatSystem(publish func([]byte), content string) {
 func askUserQuestionContent(input json.RawMessage) (string, bool) {
 	var payload struct {
 		Questions []struct {
-			Question string `json:"question"`
-			Options  []struct {
+			Question    string `json:"question"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
 				Label string `json:"label"`
 			} `json:"options"`
 		} `json:"questions"`
@@ -266,6 +324,13 @@ func askUserQuestionContent(input json.RawMessage) (string, bool) {
 			b.WriteString("\n\n")
 		}
 		b.WriteString(question)
+		// Multi-select travels INSIDE the text (no schema change across
+		// broker → core → apps): the apps' pending-input parser detects
+		// this exact marker and renders checkboxes + Send instead of
+		// tap-to-send. Doubles as honest prose for clients that don't.
+		if q.MultiSelect {
+			b.WriteString(multiSelectMarker)
+		}
 		n := 0
 		for _, o := range q.Options {
 			label := strings.TrimSpace(o.Label)
