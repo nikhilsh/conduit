@@ -52,7 +52,7 @@ struct NeonAgentChip: View {
 /// A floating segmented pill (iOS idiom) for the in-session tab bar.
 /// Each segment is a glyph + label; the active segment fills with
 /// `neon.accent` and (dark-only) text-glows. The whole bar floats on a
-/// neon surface capsule with a hairline border + box glow.
+/// glass capsule (iOS 26 Liquid Glass) so it melds with the chat.
 struct NeonSegmentedPill<Tab: Hashable>: View {
     struct Segment: Identifiable {
         let id: Tab
@@ -83,7 +83,10 @@ struct NeonSegmentedPill<Tab: Hashable>: View {
                     .background(
                         Capsule().fill(isActive ? neon.accent : Color.clear)
                     )
-                    .neonGlowBox(isActive && neon.glow ? neon.glowBox : nil)
+                    // Active segment keeps the accent fill + a soft text
+                    // glow, but NOT a box-glow halo: stacked over the
+                    // container glow below it read as a detached double
+                    // halo that didn't meld (device feedback).
                     .neonTextGlow(isActive ? neon.textGlow?.tinted(neon.accentText) : nil)
                     .contentShape(Capsule())
                 }
@@ -92,8 +95,9 @@ struct NeonSegmentedPill<Tab: Hashable>: View {
             }
         }
         .padding(4)
-        .background(Capsule().fill(neon.surface))
-        .overlay(Capsule().stroke(neon.borderStrong, lineWidth: 1))
-        .neonGlowBox(neon.glow ? neon.glowBox : nil)
+        // Glass capsule container (device feedback: the neon surface +
+        // border + box-glow read as a detached halo that didn't meld
+        // with the chat). iOS 26 owns the edge + ambient shadow.
+        .conduitGlassCapsule()
     }
 }

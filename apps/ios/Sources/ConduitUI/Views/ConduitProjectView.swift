@@ -249,16 +249,20 @@ extension ConduitUI {
                 // — hide them. Phone keeps both (back pops the nav stack; ⓘ
                 // is the only route to Session Info).
                 if !chatOnly {
-                    // Plain chevron, no circle (fix 1 — the circled back
-                    // button crowded the row). Round-3 §4: the glyph stays
-                    // 16pt but the tappable frame is ≥44×44 — the back
-                    // button at the screen edge was the worst offender.
+                    // Glass disc back button (device feedback: the back
+                    // and ⓘ should read as glass). Round-3 §4: the glyph
+                    // stays 16pt but the tappable frame is ≥44×44 — the
+                    // back button at the screen edge was the worst offender.
                     Button {
                         dismiss()
                     } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(neon.text)
+                            .frame(width: 36, height: 36)
+                            // Glass disc to match the trailing ⓘ and the
+                            // floating chat controls (device feedback).
+                            .conduitGlassCircle()
                             .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
@@ -366,9 +370,10 @@ extension ConduitUI {
                     .font(.system(size: 14, weight: weight))
                     .foregroundStyle(tint)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(neon.surface))
-                    .overlay(Circle().stroke(neon.borderStrong, lineWidth: 1))
-                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
+                    // Glass disc — iOS 26 owns the edge highlight + ambient
+                    // shadow, so we drop the manual fill/stroke/glow stack
+                    // (which doubled the edge and read "too heavy").
+                    .conduitGlassCircle()
                     // Round-3 §4: the 32pt circle stays as drawn; the
                     // tappable frame extends to ≥44×44 around it.
                     .frame(width: 44, height: 44)

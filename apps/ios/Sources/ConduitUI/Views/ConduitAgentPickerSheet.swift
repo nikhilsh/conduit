@@ -598,7 +598,20 @@ extension ConduitUI {
             .padding(.horizontal, 16)
             .padding(.top, 10)
             .padding(.bottom, 12)
-            .background(neon.surfaceSolid.opacity(0.96))
+            // Fully opaque docked bar. At 0.96 the browse list scrolled
+            // visibly THROUGH the bar ("you can see the options under
+            // 'Use this folder'", device feedback) — there's no blur
+            // behind a safe-area inset to hide it, so the bar must be
+            // solid. A hairline on top keeps it visually separated from
+            // the scrolling content above.
+            .background(
+                neon.surfaceSolid
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(neon.border)
+                            .frame(height: 1)
+                    }
+            )
         }
 
         // MARK: Helpers
