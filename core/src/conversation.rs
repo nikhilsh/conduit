@@ -967,3 +967,44 @@ mod tests {
         assert_eq!(item.status, "swapping");
     }
 }
+
+#[cfg(test)]
+mod device_repro_tests {
+    use super::*;
+    fn ev(role: &str, content: &str) -> ChatEvent {
+        ChatEvent {
+            role: role.into(),
+            content: content.into(),
+            ts: "t".into(),
+            files: vec![],
+        }
+    }
+
+    // Device repro (IMG_0408-0410): a `gh pr create` Bash tool call whose
+    // PR-body prose contained "Selection prefers $PORT" + "sessionOptions"
+    // tripped the OLD `select && option/choice` heuristic → a bogus
+    // "NEEDS YOUR INPUT" card on a tool call. The deterministic classifier
+    // (no sentinel present) must treat it as an ordinary tool item.
+    #[test]
+    fn gh_pr_create_body_is_not_pending_input() {
+        let content = "Bash: gh pr create --base main --head fix/x --body \"# Why\n\
+            The Browser tab showed up pointing at an unrelated process.\n\
+            Root causes:\n\
+            Phantom tab: the old rule advertised a preview.\n\
+            Selection prefers $PORT, else the lowest non-$PORT port.\n\
+            Fix $PORT delivery: pass it via sessionOptions to the agent.\"";
+        // Sanity: the old heuristic WOULD have matched (select + option).
+        let lower = content.to_ascii_lowercase();
+        assert!(
+            lower.contains("select") && lower.contains("option"),
+            "repro must contain the old trigger words"
+        );
+        // New classifier: no sentinel / approval marker → NOT pending.
+        assert!(
+            !looks_like_pending_input(content),
+            "must not be a needs-input card"
+        );
+        let item = item_from_chat_event(&ev("tool", content), 0);
+        assert_ne!(item.kind, "pending_input");
+    }
+}
