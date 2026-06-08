@@ -62,6 +62,23 @@ type codexAppServerProcess struct {
 	// handles one turn per thread, so concurrent Sends are rejected while a
 	// turn is in flight.
 	turnActive bool
+	// turnReqID is the JSON-RPC id of the active turn/compact request, so the
+	// reader can correlate a turn-rejecting error RESPONSE (e.g.
+	// activeTurnNotSteerable, badRequest) back to the turn and end it — those
+	// never produce a turn/completed notification, so without this the turn
+	// would wedge turnActive forever.
+	turnReqID int
+	// turnGen increments on every turn start/end so a stale watchdog timer from
+	// a prior turn can detect it no longer owns the current turn and bow out.
+	turnGen int
+	// lastActivity is when the app-server last produced output for the active
+	// turn; the silence watchdog measures idleness against it.
+	lastActivity time.Time
+	// watchdog force-ends a turn that has gone COMPLETELY silent (see
+	// codexTurnSilenceTimeout). nil when no turn is in flight.
+	watchdog *time.Timer
+	// silenceTimeout is the watchdog window (a field so tests can shorten it).
+	silenceTimeout time.Duration
 	// published records whether the active turn has emitted any chat event, so
 	// Close/EOF can surface a "no reply" notice (mirrors codexchatproc.go's
 	// safety net) rather than leave the typing indicator spinning.
@@ -72,6 +89,15 @@ type codexAppServerProcess struct {
 // codexAppServerClientVersion is the clientInfo.version reported on
 // initialize. Informational only (codex echoes it back in its userAgent).
 const codexAppServerClientVersion = "0.0.1"
+
+// codexTurnSilenceTimeout bounds how long a turn may go COMPLETELY silent — no
+// notifications, no response, no thread-status change — before the backend
+// force-ends it so the session self-heals instead of wedging forever. It is a
+// last-resort backstop: every normal terminus (turn/completed, the `error`
+// notification, a turn-rejecting error response, a thread `idle` status) ends
+// the turn instantly, and ANY server output resets this window — so only a
+// genuinely hung codex (sending nothing at all) trips it.
+const codexTurnSilenceTimeout = 10 * time.Minute
 
 // newCodexAppServerProcess spawns the codex app-server and runs the initialize
 // handshake + thread start/resume synchronously, mirroring
@@ -97,7 +123,12 @@ func newCodexAppServerProcess(binary, dir string, env []string, override SpawnOv
 		onUsage:  onUsage,
 		onThread: onThread,
 		threadID: seedThreadID,
-		nextID:   1,
+		// initialize=1, thread start/resume=2 are sent literally during the
+		// handshake; allocIDLocked hands turns/compacts 3,4,… (matching the wire
+		// doc above) and keeps turn ids distinct from the handshake ids so the
+		// reader's turn-response correlation can't alias a handshake response.
+		nextID:         2,
+		silenceTimeout: codexTurnSilenceTimeout,
 	}
 	if err := c.spawn(); err != nil {
 		return nil, err
@@ -238,7 +269,9 @@ func (c *codexAppServerProcess) Send(text string) error {
 	tid := c.threadID
 	id := c.allocIDLocked()
 	c.turnActive = true
+	c.turnReqID = id
 	c.published = false
+	c.beginTurnWatchdogLocked()
 	c.mu.Unlock()
 
 	if isCodexCompactCommand(text) {
@@ -260,26 +293,106 @@ func (c *codexAppServerProcess) Send(text string) error {
 	return nil
 }
 
-// endTurn clears the in-flight turn flag and, if the turn produced no chat
-// event and wasn't an intentional close, surfaces a "no reply" notice so the
-// typing indicator clears (mirrors codexchatproc.go's safety net).
-func (c *codexAppServerProcess) endTurn() {
+// finishTurn clears the in-flight turn flag and stops the silence watchdog,
+// returning whether a turn was actually active (false = already ended) plus the
+// published / closing snapshot so the caller can decide what notice (if any) to
+// surface. Idempotent: a second terminus for the same turn returns active=false
+// and the caller does nothing. Caller must NOT hold c.mu.
+func (c *codexAppServerProcess) finishTurn() (active, published, intentional bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.turnActive {
-		c.mu.Unlock()
-		return
+		return false, false, false
 	}
 	c.turnActive = false
-	published := c.published
-	intentional := c.closed
-	c.mu.Unlock()
-	if !published && !intentional {
+	c.stopTurnWatchdogLocked()
+	return true, c.published, c.closed
+}
+
+// endTurn ends the active turn on a NORMAL terminus (turn/completed=completed,
+// thread idle, EOF). If the turn produced no chat event and wasn't an
+// intentional close, it surfaces a "no reply" notice so the typing indicator
+// clears (mirrors codexchatproc.go's safety net).
+func (c *codexAppServerProcess) endTurn() {
+	active, published, intentional := c.finishTurn()
+	if active && !published && !intentional {
 		msg := "⚠️ codex: no reply from agent (turn failed or timed out)"
 		if snip := firstMeaningfulLine(c.stderrString()); snip != "" {
 			msg = "⚠️ codex error: " + snip
 		}
 		publishChatSystem(c.publish, msg)
 	}
+}
+
+// failTurn ends the active turn with an explicit error message. Unlike endTurn
+// it ALWAYS shows the message (even if the turn had already streamed output),
+// because the caller has a concrete failure to report — suppressed only when
+// the session is intentionally closing.
+func (c *codexAppServerProcess) failTurn(msg string) {
+	active, _, intentional := c.finishTurn()
+	if active && !intentional {
+		publishChatSystem(c.publish, msg)
+	}
+}
+
+// endTurnQuiet ends the active turn without any notice — for an interrupted
+// turn, where the composer just needs to unlock.
+func (c *codexAppServerProcess) endTurnQuiet() {
+	c.finishTurn()
+}
+
+// beginTurnWatchdogLocked (re)starts the silence watchdog for a freshly-started
+// turn. Caller holds c.mu and has just set turnActive=true.
+func (c *codexAppServerProcess) beginTurnWatchdogLocked() {
+	c.turnGen++
+	c.lastActivity = claudeChatNow()
+	c.armTurnWatchdogLocked(c.silenceTimeout)
+}
+
+// armTurnWatchdogLocked schedules a watchdog fire `d` from now for the current
+// turn generation. A non-positive d (or no active turn) disarms. Caller holds
+// c.mu.
+func (c *codexAppServerProcess) armTurnWatchdogLocked(d time.Duration) {
+	if c.watchdog != nil {
+		c.watchdog.Stop()
+		c.watchdog = nil
+	}
+	if d <= 0 || !c.turnActive {
+		return
+	}
+	gen := c.turnGen
+	c.watchdog = time.AfterFunc(d, func() { c.fireTurnWatchdog(gen) })
+}
+
+// stopTurnWatchdogLocked cancels any pending watchdog and bumps the generation
+// so a timer already past Stop (waiting on c.mu in fireTurnWatchdog) bows out.
+// Caller holds c.mu.
+func (c *codexAppServerProcess) stopTurnWatchdogLocked() {
+	c.turnGen++
+	if c.watchdog != nil {
+		c.watchdog.Stop()
+		c.watchdog = nil
+	}
+}
+
+// fireTurnWatchdog runs when the watchdog elapses. If the turn produced output
+// since the timer was armed it RE-ARMS for the remaining window (cheap activity
+// tracking, no per-notification timer churn); only a turn that stayed fully
+// silent for the whole window is force-ended.
+func (c *codexAppServerProcess) fireTurnWatchdog(gen int) {
+	c.mu.Lock()
+	if gen != c.turnGen || !c.turnActive {
+		c.mu.Unlock()
+		return
+	}
+	if idle := claudeChatNow().Sub(c.lastActivity); idle < c.silenceTimeout {
+		c.armTurnWatchdogLocked(c.silenceTimeout - idle)
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "codex app-server: turn watchdog fired after %s of silence\n", c.silenceTimeout)
+	c.failTurn("⚠️ codex: no response from the agent — ending the turn so you can try again or start a new session.")
 }
 
 // readLoop scans the app-server's stdout JSONL. Responses (lines with an `id`)
@@ -299,9 +412,14 @@ func (c *codexAppServerProcess) readLoop(stdout io.Reader, resp chan<- json.RawM
 		if err := json.Unmarshal(line, &env); err != nil {
 			continue
 		}
-		// A response carries an id and no method. Forward it (a copy — the
-		// scanner reuses its buffer) to the waiting request.
+		// A response carries an id and no method. If it correlates to the
+		// active turn, the reader owns it (an error response ends the turn);
+		// otherwise forward a copy — the scanner reuses its buffer — to the
+		// handshake waiter.
 		if env.ID != nil && env.Method == "" {
+			if c.routeTurnResponse(env.ID, env.Error) {
+				continue
+			}
 			cp := make(json.RawMessage, len(line))
 			copy(cp, line)
 			select {
@@ -334,8 +452,16 @@ func (c *codexAppServerProcess) readLoop(stdout io.Reader, resp chan<- json.RawM
 
 // handleNotification routes one server notification to its effect: chat
 // view_events for assistant text / tool cards / compaction, token usage folding
-// for thread/tokenUsage/updated, and turn lifecycle for turn/completed.
+// for thread/tokenUsage/updated, and turn lifecycle (turn/completed, the
+// `error` notification, thread/status/changed). Any notification arriving for
+// an active turn counts as activity and pushes the silence watchdog out.
 func (c *codexAppServerProcess) handleNotification(method string, params json.RawMessage) {
+	c.mu.Lock()
+	if c.turnActive {
+		c.lastActivity = claudeChatNow()
+	}
+	c.mu.Unlock()
+
 	switch method {
 	case "thread/started":
 		// Belt-and-suspenders thread-id latch (the start result already
@@ -354,13 +480,89 @@ func (c *codexAppServerProcess) handleNotification(method string, params json.Ra
 			c.emit(ev)
 		}
 	case "turn/completed":
-		fmt.Fprintf(os.Stderr, "codex app-server: turn completed\n")
-		c.endTurn()
+		// codex v0.132 emits turn/completed for failed/interrupted turns too,
+		// distinguished by turn.status — surface the real failure rather than
+		// the generic "no reply".
+		status, errMsg := codexTurnCompletion(params)
+		fmt.Fprintf(os.Stderr, "codex app-server: turn completed (status=%q)\n", status)
+		switch status {
+		case "failed":
+			if errMsg == "" {
+				errMsg = "the turn failed"
+			}
+			c.failTurn("⚠️ codex: " + errMsg)
+		case "interrupted":
+			c.endTurnQuiet()
+		default:
+			c.endTurn()
+		}
+	case "error":
+		// The terminus for most turn failures (no turn/failed exists in 0.132).
+		c.handleErrorNotification(params)
+	case "thread/status/changed":
+		// Deterministic backstop: `idle` while we still think a turn is running
+		// means it ended (a turn/completed we never saw, or a dropped response);
+		// `systemError` is a terminal failure. No-op once the turn already ended.
+		switch codexThreadStatusType(params) {
+		case "systemError":
+			c.failTurn("⚠️ codex: the agent hit a system error — start a new session to continue.")
+		case "idle":
+			c.endTurn()
+		}
 	default:
-		// item/started, turn/started, thread/status/changed,
-		// account/rateLimits/updated, configWarning, mcpServer/*, etc.
-		// Nothing to render; logged sparsely to avoid noise.
+		// item/started, turn/started, account/rateLimits/updated,
+		// configWarning, mcpServer/*, etc. Nothing to render.
 	}
+}
+
+// handleErrorNotification acts on an `error` notification. willRetry=true keeps
+// the turn in flight (codex retries internally) and only surfaces a transient
+// notice; willRetry=false is a terminal failure that ends the turn.
+func (c *codexAppServerProcess) handleErrorNotification(params json.RawMessage) {
+	msg, willRetry, ok := codexErrorNotificationMessage(params)
+	if !ok {
+		// Don't end a turn on a payload we can't read — just log it.
+		fmt.Fprintf(os.Stderr, "codex app-server: unparseable error notification: %s\n", string(params))
+		return
+	}
+	if msg == "" {
+		msg = "the agent reported an error"
+	}
+	if willRetry {
+		fmt.Fprintf(os.Stderr, "codex app-server: turn error (retrying): %s\n", msg)
+		publishChatSystem(c.publish, "⚠️ codex: "+msg+" (retrying…)")
+		return
+	}
+	fmt.Fprintf(os.Stderr, "codex app-server: turn error (terminal): %s\n", msg)
+	c.failTurn("⚠️ codex: " + msg)
+}
+
+// routeTurnResponse handles a JSON-RPC response correlated to the active
+// turn/compact request. Returns true when it owns the response (so the reader
+// won't also forward it to the handshake waiter). A turn response carrying a
+// JSON-RPC error means the request was rejected outright (e.g.
+// activeTurnNotSteerable, badRequest) — no turn runs and no turn/completed will
+// arrive, so the turn must be failed here or it wedges turnActive forever. A
+// success ack is swallowed; the turn then streams via notifications.
+func (c *codexAppServerProcess) routeTurnResponse(rawID, errRaw json.RawMessage) bool {
+	var id int
+	if json.Unmarshal(rawID, &id) != nil {
+		return false
+	}
+	c.mu.Lock()
+	match := c.turnActive && id == c.turnReqID
+	if match {
+		c.lastActivity = claudeChatNow()
+	}
+	c.mu.Unlock()
+	if !match {
+		return false
+	}
+	if len(errRaw) > 0 && string(errRaw) != "null" {
+		fmt.Fprintf(os.Stderr, "codex app-server: turn request %d rejected: %s\n", id, string(errRaw))
+		c.failTurn("⚠️ codex: " + codexRPCErrorMessage(errRaw))
+	}
+	return true
 }
 
 // emit publishes one chat view_event (assistant / tool / system) and marks the

@@ -359,3 +359,91 @@ func codexNotificationToEvent(method string, params json.RawMessage) (codexAppEv
 func isCodexCompactCommand(text string) bool {
 	return strings.TrimSpace(text) == "/compact"
 }
+
+// codexMessageCap bounds a surfaced error message so a verbose codex error
+// doesn't blow up the chat bubble (mirrors firstMeaningfulLine's 200-char cap).
+const codexMessageCap = 200
+
+func codexTrimMessage(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > codexMessageCap {
+		return s[:codexMessageCap] + "…"
+	}
+	return s
+}
+
+// codexErrorNotificationMessage decodes an `error` notification's params
+// (ErrorNotification: {error:{message,additionalDetails,…}, threadId, turnId,
+// willRetry}) into a human message and the willRetry flag. willRetry=true means
+// codex retries internally (the turn is NOT over); false means the turn failed
+// terminally — codex v0.132 has no `turn/failed` notification, so this `error`
+// notification is the terminus for most turn failures (rate limit, network,
+// server error). ok=false when params don't decode as an error notification, so
+// the caller leaves an unparseable payload alone rather than ending the turn.
+func codexErrorNotificationMessage(params json.RawMessage) (msg string, willRetry, ok bool) {
+	var p struct {
+		Error struct {
+			Message           string `json:"message"`
+			AdditionalDetails string `json:"additionalDetails"`
+		} `json:"error"`
+		WillRetry bool `json:"willRetry"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return "", false, false
+	}
+	msg = p.Error.Message
+	if strings.TrimSpace(msg) == "" {
+		msg = p.Error.AdditionalDetails
+	}
+	return codexTrimMessage(msg), p.WillRetry, true
+}
+
+// codexTurnCompletion lifts params.turn.{status,error.message} from a
+// turn/completed notification. status is the TurnStatus enum
+// (completed/interrupted/failed/inProgress); errMsg is populated only when the
+// turn failed. Both empty when params don't decode.
+func codexTurnCompletion(params json.RawMessage) (status, errMsg string) {
+	var p struct {
+		Turn struct {
+			Status string `json:"status"`
+			Error  *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return "", ""
+	}
+	if p.Turn.Error != nil {
+		errMsg = codexTrimMessage(p.Turn.Error.Message)
+	}
+	return p.Turn.Status, errMsg
+}
+
+// codexThreadStatusType lifts params.status.type from a thread/status/changed
+// notification (idle / active / systemError / notLoaded). "" when absent. `idle`
+// while a turn is in flight is a deterministic turn-end signal; `systemError`
+// is a terminal failure.
+func codexThreadStatusType(params json.RawMessage) string {
+	var p struct {
+		Status struct {
+			Type string `json:"type"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return ""
+	}
+	return p.Status.Type
+}
+
+// codexRPCErrorMessage lifts a human message from a JSON-RPC error object
+// ({code,message,data}). Falls back to the raw JSON when there's no message.
+func codexRPCErrorMessage(errRaw json.RawMessage) string {
+	var e struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(errRaw, &e) == nil && strings.TrimSpace(e.Message) != "" {
+		return codexTrimMessage(e.Message)
+	}
+	return codexTrimMessage(string(errRaw))
+}
