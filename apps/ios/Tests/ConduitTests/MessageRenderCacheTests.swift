@@ -119,7 +119,7 @@ struct MessageRenderCacheTests {
         // rationale. If we change the cap, this assertion forces the
         // doc comment to be updated alongside it.
         let cache = MessageRenderCache()
-        #expect(cache.capacity == 200)
+        #expect(cache.capacity == 1200)
     }
 
     @Test func capacityIsRespectedUnderLoad() {
