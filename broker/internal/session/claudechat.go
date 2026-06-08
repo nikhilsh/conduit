@@ -33,12 +33,18 @@ var claudeChatNow = time.Now
 // works across broker restarts. An unknown id fails fast with a clean
 // error result (verified live), which lands in the normal agent-exit
 // notice path rather than hanging.
-func claudeStreamCommand(command, args []string, resumeSessionID string) []string {
+// `continueLatest` (used only when no id is known — sessions recovered
+// from a pre-latch broker) appends `--continue`, which resolves the most
+// recent conversation in the cwd; with the per-session agent-home that
+// is unambiguously THIS session's own conversation (verified live).
+func claudeStreamCommand(command, args []string, resumeSessionID string, continueLatest bool) []string {
 	argv := make([]string, 0, len(command)+len(args)+8)
 	argv = append(argv, command...)
 	argv = append(argv, args...)
 	if resumeSessionID != "" {
 		argv = append(argv, "--resume", resumeSessionID)
+	} else if continueLatest {
+		argv = append(argv, "--continue")
 	}
 	argv = append(argv,
 		"-p",

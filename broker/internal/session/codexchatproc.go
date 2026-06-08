@@ -32,6 +32,11 @@ type codexChatProcess struct {
 	extra   []string // reasoning-effort / model override flags (may be nil)
 	publish func([]byte)
 	onUsage func(usageDelta) // folds each turn.completed's token usage
+	// onThread fires once when the first turn's thread.started reveals
+	// the codex thread id — the session persists it (meta.json) so a
+	// broker restart resumes the SAME thread instead of starting an
+	// amnesiac one (the codex twin of claude's --resume fix).
+	onThread func(string)
 
 	mu       sync.Mutex
 	threadID string
@@ -39,8 +44,14 @@ type codexChatProcess struct {
 	running  *exec.Cmd // the in-flight turn, if any (killed on Close)
 }
 
-func newCodexChatProcess(binary, dir string, env, extra []string, publish func([]byte), onUsage func(usageDelta)) *codexChatProcess {
-	return &codexChatProcess{binary: binary, dir: dir, env: env, extra: extra, publish: publish, onUsage: onUsage}
+// `seedThreadID`, when non-empty (recovery path), makes the FIRST turn
+// run `exec resume <id>` so a broker restart doesn't reset the thread.
+func newCodexChatProcess(binary, dir string, env, extra []string, publish func([]byte), onUsage func(usageDelta), seedThreadID string, onThread func(string)) *codexChatProcess {
+	return &codexChatProcess{
+		binary: binary, dir: dir, env: env, extra: extra,
+		publish: publish, onUsage: onUsage,
+		onThread: onThread, threadID: seedThreadID,
+	}
 }
 
 // codexTurnArgv builds the argv for one turn. The first turn (empty
@@ -110,10 +121,16 @@ func (c *codexChatProcess) runTurn(argv []string) {
 		evs, tid, ok := parseCodexStreamLine(sc.Bytes())
 		if tid != "" {
 			c.mu.Lock()
+			latched := false
 			if c.threadID == "" {
 				c.threadID = tid
+				latched = true
 			}
 			c.mu.Unlock()
+			if latched && c.onThread != nil {
+				// Persist the thread id so recovery can resume it.
+				c.onThread(tid)
+			}
 		}
 		// turn.completed carries the turn's token usage (no cost/window);
 		// parseCodexStreamLine returns ok=false for it, so fold it here.

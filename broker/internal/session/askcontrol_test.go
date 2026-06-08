@@ -149,14 +149,24 @@ func TestAskUserQuestionContentMultiSelectMarker(t *testing.T) {
 // agent WITHOUT --resume, so it started a brand-new conversation).
 
 func TestClaudeStreamCommandResume(t *testing.T) {
-	argv := claudeStreamCommand([]string{"claude"}, nil, "sess-123")
+	argv := claudeStreamCommand([]string{"claude"}, nil, "sess-123", false)
 	joined := strings.Join(argv, " ")
 	if !strings.Contains(joined, "--resume sess-123") {
 		t.Fatalf("expected --resume in argv: %v", argv)
 	}
-	fresh := claudeStreamCommand([]string{"claude"}, nil, "")
+	fresh := claudeStreamCommand([]string{"claude"}, nil, "", false)
 	if strings.Contains(strings.Join(fresh, " "), "--resume") {
 		t.Fatalf("fresh spawn must not carry --resume: %v", fresh)
+	}
+	// Pre-latch recovery fallback: no id but conversation files on disk.
+	cont := claudeStreamCommand([]string{"claude"}, nil, "", true)
+	if !strings.Contains(strings.Join(cont, " "), "--continue") {
+		t.Fatalf("expected --continue fallback: %v", cont)
+	}
+	// An explicit id wins over the fallback flag.
+	both := strings.Join(claudeStreamCommand([]string{"claude"}, nil, "id-1", true), " ")
+	if strings.Contains(both, "--continue") || !strings.Contains(both, "--resume id-1") {
+		t.Fatalf("id must win over --continue: %v", both)
 	}
 }
 
@@ -192,5 +202,44 @@ func TestLatchChatSessionIDPersists(t *testing.T) {
 	}
 	if meta.ClaudeChatSessionID != "conv-42" {
 		t.Fatalf("persisted id = %q", meta.ClaudeChatSessionID)
+	}
+}
+
+func TestLatchCodexThreadIDPersists(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{}
+	s.metaPath = filepath.Join(dir, "meta.json")
+	s.latchCodexThreadID("thread-7")
+
+	raw, err := os.ReadFile(s.metaPath)
+	if err != nil {
+		t.Fatalf("meta.json not written: %v", err)
+	}
+	var meta sessionMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if meta.CodexThreadID != "thread-7" {
+		t.Fatalf("persisted thread = %q", meta.CodexThreadID)
+	}
+}
+
+func TestChatConversationOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	if chatConversationOnDisk(dir, ".claude") {
+		t.Fatal("empty session dir must report no conversation")
+	}
+	proj := filepath.Join(dir, "agent-home", ".claude", "projects", "-root-x")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "abc.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !chatConversationOnDisk(dir, ".claude") {
+		t.Fatal("expected conversation to be detected")
+	}
+	if chatConversationOnDisk(dir, ".codex") {
+		t.Fatal(".codex must not match .claude files")
 	}
 }
