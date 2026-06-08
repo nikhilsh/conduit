@@ -54,6 +54,34 @@ object Telemetry {
             // by default = nothing captured) and relies on the Sentry OkHttp
             // interceptor, which we don't install. Bodies — which carry code,
             // terminal commands and tokens — are never recorded. Left off.
+
+            // --- Performance tracing + CPU profiling (parity with iOS) ------
+            // Diagnose the on-device problems invisible from the dev box:
+            // long-chat CPU burn / overheat / battery, slow & frozen frames,
+            // slow app starts, ANRs. Auto activity/app-start/frames
+            // instrumentation is on by default; we opt into 0.2 sampling to
+            // keep overhead + quota modest.
+            options.tracesSampleRate = 0.2
+            // Continuous "UI Profiling" tied to the trace lifecycle (GA in
+            // 8.7): while a sampled trace is active the profiler samples call
+            // stacks, giving flame graphs of what pins the CPU during a heavy
+            // chat. profileSessionSampleRate is relative to tracesSampleRate;
+            // the legacy profilesSampleRate must NOT be set alongside it.
+            // Profiles are stack samples (symbols + timing), never user content.
+            options.profileSessionSampleRate = 1.0
+            options.profileLifecycle = io.sentry.ProfileLifecycle.TRACE
+            // ANR / watchdog detection (AnrV2) is on by default; pin it. A
+            // frozen main thread (the long-chat "spinner stuck" reports)
+            // surfaces as an ANR event.
+            options.isAnrEnabled = true
+
+            // --- Privacy: no network URL capture ----------------------------
+            // Our OAuth token exchange + WS connect carry sensitive material in
+            // URLs (the WS connect URL has a `token=` secret). Drop network
+            // breadcrumbs so no request URL reaches Sentry. We don't install the
+            // OkHttp span interceptor, and maxRequestBodySize stays NONE
+            // (default), so no body or URL is ever attached.
+            options.isEnableNetworkEventBreadcrumbs = false
         }
     }
 
