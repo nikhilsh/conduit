@@ -4,9 +4,11 @@ args                = ["--dangerously-bypass-approvals-and-sandbox"]
 env_passthrough     = ["OPENAI_API_KEY"]
 workdir             = "/workspace"
 chat_event_port_env = "AGENT_CHAT_PORT"
-# Structured chat channel (task #24): codex exec/resume → clean Chat
-# events; the Terminal tab hosts a shell (B-i).
-chat_mode           = "codex-exec"
+# Structured chat channel (task #24): codex app-server (long-lived JSON-RPC
+# over stdio) → clean Chat events; the Terminal tab hosts a shell (B-i).
+# The persistent thread unlocks manual /compact (task #18). The older
+# one-shot "codex-exec" mode remains as a fallback backend.
+chat_mode           = "codex-app-server"
 
 [hooks]
 on_start = "conduit-broker memory render --session $SESSION_UUID > /workspace/.conduit/HANDOFF.html"

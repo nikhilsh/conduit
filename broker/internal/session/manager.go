@@ -572,15 +572,38 @@ func (s *Session) startChatBackend(
 			)
 		}
 	case "codex":
-		// codex via per-turn exec/resume; constructed lazily (spawns on
-		// first Send). Same publish path; PTY is a shell.
-		// Seed the recovered/prior thread id (if any) so the first turn
-		// resumes codex's own conversation — the codex twin of the
+		// Two codex backends share this branch; the adapter's raw chat_mode
+		// picks the concrete one. Both publish via the same path; the PTY is
+		// a shell. The recovered/prior thread id (if any) is seeded so the
+		// first turn resumes codex's own conversation — the codex twin of the
 		// claude --resume fix.
 		s.mu.Lock()
 		s.codexThreadID = resumeCodexThreadID
-		s.chatRespawn = nil // per-turn exec model has no long-lived process
-		s.chat = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
+		s.chatRespawn = nil // codex has no long-lived-process self-heal respawn
+		s.mu.Unlock()
+		// Build the backend OUTSIDE s.mu: the app-server constructor runs the
+		// initialize/thread-start handshake synchronously and latches the
+		// thread id via s.latchCodexThreadID (which takes s.mu) — doing it
+		// under the lock would deadlock.
+		var backend chatBackend
+		if adapter.ChatMode == "codex-app-server" {
+			// codex app-server: one long-lived JSON-RPC subprocess (spawns +
+			// handshakes now). The persistent thread unlocks manual /compact
+			// (task #18). On a hard spawn failure, fall back to the exec
+			// backend so chat still works.
+			if proc, cerr := newCodexAppServerProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override, s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID); cerr == nil {
+				backend = proc
+			} else {
+				fmt.Fprintf(os.Stderr, "session %s: codex app-server spawn failed: %v (falling back to codex-exec)\n", s.ID, cerr)
+				backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
+			}
+		} else {
+			// codex-exec: per-turn exec/resume, constructed lazily (spawns on
+			// first Send).
+			backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
+		}
+		s.mu.Lock()
+		s.chat = backend
 		s.mu.Unlock()
 	default:
 		// Legacy TUI-scrape path (no shipped adapter uses it). If a

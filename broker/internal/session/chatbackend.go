@@ -12,16 +12,19 @@ type chatBackend interface {
 
 // structuredChatBackend maps an adapter's chat_mode to the backend kind:
 //
-//	"stream-json" → "claude"  (claude -p --input-format/--output-format stream-json)
-//	"codex-exec"  → "codex"   (codex exec / exec resume)
-//	anything else → ""        (legacy TUI-scrape path: PTY agent + chatScraper)
+//	"stream-json"      → "claude"  (claude -p --input-format/--output-format stream-json)
+//	"codex-exec"       → "codex"   (codex exec / exec resume — fallback path)
+//	"codex-app-server" → "codex"   (codex app-server JSON-RPC; persistent thread)
+//	anything else      → ""        (legacy TUI-scrape path: PTY agent + chatScraper)
 //
-// Pure, so the routing decision is unit-testable without spawning anything.
+// Both codex modes map to the "codex" branch; startChatBackend then picks the
+// concrete backend (exec vs app-server) by the raw chat_mode. Pure, so the
+// routing decision is unit-testable without spawning anything.
 func structuredChatBackend(chatMode string) string {
 	switch chatMode {
 	case "stream-json":
 		return "claude"
-	case "codex-exec":
+	case "codex-exec", "codex-app-server":
 		return "codex"
 	default:
 		return ""
