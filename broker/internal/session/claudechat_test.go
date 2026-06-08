@@ -48,6 +48,8 @@ func TestClaudeStreamCommand(t *testing.T) {
 		// AskUserQuestion waits for the phone's answer via the stdio
 		// control protocol (askcontrol.go) instead of headless auto-deny.
 		"--permission-prompt-tool", "stdio",
+		// Nudge to prefer the AskUserQuestion tool over prose questions.
+		"--append-system-prompt", askUserQuestionNudge,
 	}
 	if len(argv) != len(want) {
 		t.Fatalf("argv = %v, want %v", argv, want)
@@ -112,19 +114,19 @@ func TestAskUserQuestionContent(t *testing.T) {
 		{
 			name:  "single question with options",
 			input: `{"questions":[{"question":"Ship it?","header":"Deploy","multiSelect":false,"options":[{"label":"Yes","description":"go"},{"label":"No"}]}]}`,
-			want:  "Ship it?\n1. Yes\n2. No",
+			want:  "[[conduit:needs-input]]\nShip it?\n1. Yes\n2. No",
 			ok:    true,
 		},
 		{
 			name:  "two questions renumber per question",
 			input: `{"questions":[{"question":"Color?","options":[{"label":"Red"},{"label":"Blue"}]},{"question":"Size?","options":[{"label":"S"},{"label":"M"}]}]}`,
-			want:  "Color?\n1. Red\n2. Blue\n\nSize?\n1. S\n2. M",
+			want:  "[[conduit:needs-input]]\nColor?\n1. Red\n2. Blue\n\nSize?\n1. S\n2. M",
 			ok:    true,
 		},
 		{
 			name:  "question without options still surfaces",
 			input: `{"questions":[{"question":"Anything else?","options":[]}]}`,
-			want:  "Anything else?",
+			want:  "[[conduit:needs-input]]\nAnything else?",
 			ok:    true,
 		},
 		{name: "empty questions", input: `{"questions":[]}`, ok: false},
@@ -175,7 +177,7 @@ func TestProcessClaudeStreamOutputAskUserQuestion(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 chat event, got %d: %+v", len(got), got)
 	}
-	want := "Proceed with the merge?\n1. Merge now\n2. Hold off"
+	want := "[[conduit:needs-input]]\nProceed with the merge?\n1. Merge now\n2. Hold off"
 	if got[0].Event.Role != "assistant" || got[0].Event.Content != want {
 		t.Fatalf("unexpected event: %+v (want assistant %q)", got[0], want)
 	}

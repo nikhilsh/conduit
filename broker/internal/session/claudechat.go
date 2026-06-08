@@ -59,9 +59,22 @@ func claudeStreamCommand(command, args []string, resumeSessionID string, continu
 		// auto-allow under --dangerously-skip-permissions — verified
 		// live against claude-code 2.1.168.
 		"--permission-prompt-tool", "stdio",
+		// Nudge the agent to ASK via the AskUserQuestion tool instead of
+		// writing a numbered question in prose. Only the tool blocks the
+		// turn and renders the tappable, waiting card; a prose question
+		// just ends the turn. This makes "the agent asked me to choose"
+		// reliably interactive (device feedback, round 4).
+		"--append-system-prompt", askUserQuestionNudge,
 	)
 	return argv
 }
+
+// askUserQuestionNudge steers the agent toward the interactive path.
+const askUserQuestionNudge = "When you need the user to choose between options or " +
+	"answer a question before you continue, ALWAYS use the AskUserQuestion tool " +
+	"rather than writing the question and options as plain text. The mobile app " +
+	"renders AskUserQuestion as tappable choices and waits for the answer; a " +
+	"plain-text question does not pause your turn and the user may miss it."
 
 // claudeStreamInitSessionID extracts the CLI's own conversation id from
 // a `system/init` stream-json line. Captured + persisted so respawns can
@@ -347,7 +360,10 @@ func askUserQuestionContent(input json.RawMessage) (string, bool) {
 	if b.Len() == 0 {
 		return "", false
 	}
-	return b.String(), true
+	// Prepend the deterministic sentinel so the core classifier renders
+	// the interactive card from a REAL AskUserQuestion only — never from
+	// a text-shape guess on prose. The apps strip this leading line.
+	return pendingInputSentinel + "\n" + b.String(), true
 }
 
 // toolCardContent formats a tool_use block as "Name: <summary>" — the shape

@@ -91,6 +91,14 @@ import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.ViewEventFile
 
 /**
+ * The deterministic pending-input sentinel the broker prepends to a
+ * genuine AskUserQuestion. Byte-identical to the broker / core / iOS
+ * constants. Core strips it on the typed path; the apps strip it
+ * defensively for the raw-chatLog fallback.
+ */
+private const val PENDING_INPUT_SENTINEL = "[[conduit:needs-input]]"
+
+/**
  * Lets the neon command card reach the live [SessionStore] + current
  * session id to wire its "Re-run" action (terminal write) without
  * threading them through every card signature. Provided by [ChatPage]
@@ -1016,9 +1024,14 @@ private fun PendingInputCard(
     onQuickReply: (String) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
+    // Defensively strip the broker pending-input sentinel (core normally
+    // removes it on the typed path; this covers the raw-chatLog fallback).
+    val promptText = remember(ev.content) {
+        ev.content.lines().filter { it.trim() != PENDING_INPUT_SENTINEL }.joinToString("\n")
+    }
     val options = remember(ev) {
         ev.pendingOptions.takeIf { it.isNotEmpty() }
-            ?: ConversationRenderer.extractPendingOptions(ev.content)
+            ?: ConversationRenderer.extractPendingOptions(promptText)
     }
     val shape = RoundedCornerShape(neon.radiusDp.dp)
     Column(
@@ -1044,7 +1057,7 @@ private fun PendingInputCard(
             NeonStatusChip(ev.status, neon)
         }
         // Prompt prose in sans.
-        MarkdownBlock(ev.content, ConversationRole.Assistant)
+        MarkdownBlock(promptText, ConversationRole.Assistant)
         if (options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 options.forEachIndexed { idx, option ->

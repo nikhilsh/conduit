@@ -192,7 +192,10 @@ fn pending_input_options_extracted_via_chat_classifier() {
             "s1".to_string(),
             chat(
                 "assistant",
-                "Which? \n1. Yes\n2. Yes, don't ask\n3. No",
+                // Deterministic: only the broker sentinel marks a genuine
+                // interactive question (a bare numbered list is now a
+                // plain message).
+                "[[conduit:needs-input]]\nWhich? \n1. Yes\n2. Yes, don't ask\n3. No",
                 "2026-05-21T00:00:00Z",
             ),
         )

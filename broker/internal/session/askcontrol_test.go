@@ -136,6 +136,10 @@ func TestAskUserQuestionContentMultiSelectMarker(t *testing.T) {
 	if !ok {
 		t.Fatal("expected content")
 	}
+	// The deterministic sentinel leads a genuine AskUserQuestion.
+	if !strings.HasPrefix(content, pendingInputSentinel+"\n") {
+		t.Fatalf("content must start with the pending-input sentinel: %q", content)
+	}
 	if !strings.Contains(content, "Pick colors"+multiSelectMarker+"\n1. Red") {
 		t.Fatalf("multi-select question missing marker: %q", content)
 	}
