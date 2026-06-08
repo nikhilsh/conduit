@@ -15,10 +15,10 @@ struct AppearanceStoreTests {
     @Test func persistsAndRestoresFontFamily() {
         let defaults = freshDefaults()
         let first = AppearanceStore(defaults: defaults)
-        first.fontFamily = .monospaced
+        first.fontFamily = .spaceGrotesk
 
         let second = AppearanceStore(defaults: defaults)
-        #expect(second.fontFamily == .monospaced)
+        #expect(second.fontFamily == .spaceGrotesk)
     }
 
     @Test func persistsAndRestoresThemeMode() {
@@ -56,13 +56,13 @@ struct AppearanceStoreTests {
 
     // MARK: - Defaults
 
-    @Test func freshInstallDefaultsToSerif() {
-        // The Claude-style refresh (PR #15) moved the default from
-        // .monospaced to .serif. If someone "tightens" the init
-        // fallback in the future, this test catches the visual
-        // regression that would follow.
+    @Test func freshInstallDefaultsToSystem() {
+        // The type-forward Chat-font redesign (handoff Part A) replaced the
+        // serif default with System — the first card in the picker strip.
+        // If someone "tightens" the init fallback later, this catches the
+        // regression.
         let store = AppearanceStore(defaults: freshDefaults())
-        #expect(store.fontFamily == .serif)
+        #expect(store.fontFamily == .system)
     }
 
     @Test func freshInstallDefaultsToSystemTheme() {
@@ -91,6 +91,27 @@ struct AppearanceStoreTests {
         #expect(second.bodyPointSize == 16)
     }
 
+    @Test func persistedBodyPointSizeWinsOverDefaultOnLaunch() {
+        // Revert-bug guard (handoff Part A): a stored value DIFFERENT from
+        // the default must survive relaunch — the store must not re-seed
+        // from `defaultBodyPointSize` on init. Pick a value that is both
+        // in-range and not the default so a "re-seed" regression fails here.
+        let defaults = freshDefaults()
+        let chosen: CGFloat = 13
+        #expect(chosen != AppearanceStore.defaultBodyPointSize)
+        let first = AppearanceStore(defaults: defaults)
+        first.bodyPointSize = chosen
+
+        let second = AppearanceStore(defaults: defaults)
+        #expect(second.bodyPointSize == chosen)
+    }
+
+    @Test func freshInstallBodyPointSizeIs18() {
+        // Handoff Part A bumped the default to 18pt.
+        let store = AppearanceStore(defaults: freshDefaults())
+        #expect(store.bodyPointSize == 18)
+    }
+
     @Test func bodyPointSizeClampsAboveRange() {
         let store = AppearanceStore(defaults: freshDefaults())
         store.bodyPointSize = 99
@@ -115,14 +136,23 @@ struct AppearanceStoreTests {
 
     // MARK: - Backwards-compat for existing installs
 
-    @Test func legacyMonospacedPreferenceSurvives() {
-        // Users who picked Monospaced before the serif-default
-        // change must continue to see Monospaced after the update.
+    @Test func legacySerifPreferenceMigratesToNewsreader() {
+        // The type-forward redesign dropped the bare `serif` case. Users who
+        // had it picked migrate to Newsreader (the new easy-read serif)
+        // rather than snapping to System.
         let defaults = freshDefaults()
-        defaults.set(AppearanceStore.FontFamily.monospaced.rawValue,
-                     forKey: "conduit.appearance.font")
+        defaults.set("serif", forKey: "conduit.appearance.font")
         let store = AppearanceStore(defaults: defaults)
-        #expect(store.fontFamily == .monospaced)
+        #expect(store.fontFamily == .newsreader)
+    }
+
+    @Test func legacyMonospacedPreferenceMigratesToSystem() {
+        // Monospaced has no chat-font equivalent (mono is terminal-only
+        // now), so the legacy value lands on System.
+        let defaults = freshDefaults()
+        defaults.set("monospaced", forKey: "conduit.appearance.font")
+        let store = AppearanceStore(defaults: defaults)
+        #expect(store.fontFamily == .system)
     }
 
     @Test func legacySystemPreferenceSurvives() {
@@ -131,6 +161,16 @@ struct AppearanceStoreTests {
                      forKey: "conduit.appearance.font")
         let store = AppearanceStore(defaults: defaults)
         #expect(store.fontFamily == .system)
+    }
+
+    @Test func newChatFontsPersist() {
+        for family in AppearanceStore.FontFamily.allCases {
+            let defaults = freshDefaults()
+            let first = AppearanceStore(defaults: defaults)
+            first.fontFamily = family
+            let second = AppearanceStore(defaults: defaults)
+            #expect(second.fontFamily == family)
+        }
     }
 
     // MARK: - ColorScheme mapping

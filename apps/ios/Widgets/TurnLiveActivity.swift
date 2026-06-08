@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -17,14 +18,21 @@ import WidgetKit
 ///     which refreshes the activity).
 ///   - **No fake progress** — nothing animates that the app can't feed.
 ///
-/// Four states (state.status + staleness):
-///   running·fresh (claude tint) / running·stale (dimmed) /
-///   needs-you ("pending", cyan, Approve + View diff) /
-///   done ("exited", green, summary + Open session).
+/// Five states (state.status + interruptKind + staleness):
+///   running·fresh (agent tint) / running·stale (dimmed) /
+///   **choice** ("pending" + `.choice`, cyan — an n-way question, CTA
+///   "Open to choose" opens the app) / **permission** ("pending" +
+///   `.permission`, amber — a binary tool gate, Approve/Reject run as a
+///   non-opening App Intent in the background) / done ("exited", green).
+///
+/// Handoff Part B — the bug being fixed: the shipped card slapped a single
+/// "Approve" on a multiple-CHOICE question (approve *what*? it hid the
+/// options). We now model two honest interrupt kinds and only ever offer
+/// background Approve/Reject on a real binary gate.
 ///
 /// **Why no `ConduitTheme` import?** Widget extensions get a separate
 /// bundle; this file stays self-contained (BRAND.md hex tokens inlined)
-/// so the extension target depends only on the two shared model files.
+/// so the extension target depends only on the shared model + intent files.
 struct TurnLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TurnActivityAttributes.self) { context in
@@ -37,7 +45,11 @@ struct TurnLiveActivity: Widget {
             .activityBackgroundTint(ConduitBrand.bg.opacity(0.88))
             .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
-            let card = TurnCardState(status: context.state.status, isStale: context.isStale)
+            let card = TurnCardState(
+                status: context.state.status,
+                interruptKind: context.state.interruptKind,
+                isStale: context.isStale
+            )
             let tint = ConduitBrand.tint(for: card, agent: context.attributes.agentName)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -68,10 +80,18 @@ struct TurnLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            ActionLine(state: context.state, card: card)
-                            Spacer(minLength: 8)
-                            SyncStamp(syncedAt: context.state.syncedAt, isStale: context.isStale)
+                        if card.isNeedsYou {
+                            NeedsBody(
+                                state: context.state,
+                                card: card,
+                                agentName: context.attributes.agentName
+                            )
+                        } else {
+                            HStack {
+                                ActionLine(state: context.state, card: card)
+                                Spacer(minLength: 8)
+                                SyncStamp(syncedAt: context.state.syncedAt, isStale: context.isStale)
+                            }
                         }
                         ActionButtons(
                             sessionID: context.attributes.sessionID,
@@ -96,10 +116,10 @@ struct TurnLiveActivity: Widget {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 44)
-                case .needsYou:
-                    Text("reply")
+                case .choice, .permission:
+                    Text(TurnPresentation.compactWord(for: card))
                         .font(.system(.caption2, design: .monospaced).weight(.bold))
-                        .foregroundStyle(ConduitBrand.cyan)
+                        .foregroundStyle(tint)
                 case .done:
                     Label("done", systemImage: "checkmark")
                         .font(.system(.caption2, design: .monospaced).weight(.bold))
@@ -115,21 +135,34 @@ struct TurnLiveActivity: Widget {
 
 // MARK: - Card state
 
-/// The four round-3 §2 states, folded from `status` + ActivityKit
-/// staleness.
+/// The five render states, folded from `status` + `interruptKind` +
+/// ActivityKit staleness.
 enum TurnCardState {
     case runningFresh
     case runningStale
-    case needsYou
+    /// "pending" + `.choice` — an n-way question (cyan, opens the app).
+    case choice
+    /// "pending" + `.permission` — a binary tool gate (amber, Approve/Reject).
+    case permission
     case done
 
-    init(status: String, isStale: Bool) {
+    init(status: String, interruptKind: TurnInterruptKind?, isStale: Bool) {
         switch status {
-        case "pending":          self = .needsYou
-        case "exited", "done":   self = .done
-        default:                 self = isStale ? .runningStale : .runningFresh
+        case "pending":
+            // Default to choice — the safe option. A mis-classified
+            // permission still resolves (choice opens the app to answer);
+            // the inverse would offer a background Approve on a real
+            // question, the exact bug Part B fixes.
+            self = (interruptKind == .permission) ? .permission : .choice
+        case "exited", "done":
+            self = .done
+        default:
+            self = isStale ? .runningStale : .runningFresh
         }
     }
+
+    /// Whether the card is a "needs you" interrupt (choice or permission).
+    var isNeedsYou: Bool { self == .choice || self == .permission }
 }
 
 // MARK: - Brand tokens (self-contained — BRAND.md §3)
@@ -138,19 +171,21 @@ enum ConduitBrand {
     static let bg = Color(red: 0x04 / 255, green: 0x05 / 255, blue: 0x0A / 255)
     static let cyan = Color(red: 0x22 / 255, green: 0xD3 / 255, blue: 0xEE / 255)
     static let green = Color(red: 0x3E / 255, green: 0xF0 / 255, blue: 0xA0 / 255)
+    static let amber = Color(red: 0xFF / 255, green: 0xB6 / 255, blue: 0x27 / 255)
     static let claude = Color(red: 0xFF / 255, green: 0x9D / 255, blue: 0x4D / 255)
 
     static func agentTint(_ agent: String) -> Color {
         agent.lowercased().contains("codex") ? cyan : claude
     }
 
-    /// State tint: running keeps the agent tint, needs-you goes cyan,
-    /// done goes green.
+    /// State tint: running keeps the agent tint, a choice goes cyan, a
+    /// permission goes amber, done goes green.
     static func tint(for card: TurnCardState, agent: String) -> Color {
         switch card {
         case .runningFresh:  return agentTint(agent)
         case .runningStale:  return agentTint(agent).opacity(0.6)
-        case .needsYou:      return cyan
+        case .choice:        return cyan
+        case .permission:    return amber
         case .done:          return green
         }
     }
@@ -161,11 +196,31 @@ enum TurnPresentation {
         attributes.sessionName.isEmpty ? attributes.agentName : attributes.sessionName
     }
 
+    /// Status-line word under the title (lock banner + island expanded).
     static func statusWord(for card: TurnCardState) -> String {
         switch card {
         case .runningFresh, .runningStale: return "running"
-        case .needsYou:                    return "needs you"
+        case .choice:                      return "needs your pick"
+        case .permission:                  return "permission"
         case .done:                        return "done"
+        }
+    }
+
+    /// Compact-island trailing word for a needs-you state.
+    static func compactWord(for card: TurnCardState) -> String {
+        switch card {
+        case .choice:     return "answer"
+        case .permission: return "approve?"
+        default:          return ""
+        }
+    }
+
+    /// Uppercase section label above a needs-you question.
+    static func needsSectionLabel(for card: TurnCardState, agentName: String) -> String {
+        switch card {
+        case .choice:     return "\(agentName) is asking".uppercased()
+        case .permission: return "Permission requested".uppercased()
+        default:          return ""
         }
     }
 
@@ -193,14 +248,17 @@ enum TurnPresentation {
 
 // MARK: - Lock-screen card
 
-/// Designs 06–09: mark tile · title + status line · trailing clock,
-/// then the action/freshness line, then the state's CTA row.
+/// Mark tile · title + status line · trailing clock, then either the
+/// running/done action line + freshness, or the needs-you question, then
+/// the state's CTA row.
 private struct TurnLockScreenView: View {
     let attributes: TurnActivityAttributes
     let state: TurnActivityAttributes.ContentState
     let isStale: Bool
 
-    private var card: TurnCardState { TurnCardState(status: state.status, isStale: isStale) }
+    private var card: TurnCardState {
+        TurnCardState(status: state.status, interruptKind: state.interruptKind, isStale: isStale)
+    }
     private var tint: Color { ConduitBrand.tint(for: card, agent: attributes.agentName) }
 
     var body: some View {
@@ -227,10 +285,14 @@ private struct TurnLockScreenView: View {
                 TrailingClock(state: state, card: card, tint: tint)
             }
 
-            HStack(spacing: 8) {
-                ActionLine(state: state, card: card)
-                Spacer(minLength: 8)
-                SyncStamp(syncedAt: state.syncedAt, isStale: isStale)
+            if card.isNeedsYou {
+                NeedsBody(state: state, card: card, agentName: attributes.agentName)
+            } else {
+                HStack(spacing: 8) {
+                    ActionLine(state: state, card: card)
+                    Spacer(minLength: 8)
+                    SyncStamp(syncedAt: state.syncedAt, isStale: isStale)
+                }
             }
 
             ActionButtons(sessionID: attributes.sessionID, card: card)
@@ -238,6 +300,53 @@ private struct TurnLockScreenView: View {
         // Honest degradation: past staleDate the whole card dims; the
         // timer keeps ticking (it's on-device truth).
         .opacity(card == .runningStale ? 0.72 : 1.0)
+    }
+}
+
+// MARK: - Needs-you body (choice / permission)
+
+/// The actual question (handoff Part B). For a **choice**: the prompt + a
+/// small "N options" pill (the count — we do NOT list the options; the
+/// answer UI lives in the app). For a **permission**: the binary prompt
+/// ("Run … to origin?"). NO fake "Approve" on a choice.
+private struct NeedsBody: View {
+    let state: TurnActivityAttributes.ContentState
+    let card: TurnCardState
+    let agentName: String
+
+    private var tint: Color { ConduitBrand.tint(for: card, agent: agentName) }
+    private var prompt: String {
+        if let p = state.prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+            return p
+        }
+        return "Needs your input"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(TurnPresentation.needsSectionLabel(for: card, agentName: agentName))
+                .font(.system(size: 10, design: .monospaced).weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(tint)
+                .lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(prompt)
+                    .font(.system(.subheadline, design: .default))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if card == .choice, state.optionCount > 0 {
+                    Text("\(state.optionCount) options")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(tint)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(tint.opacity(0.14)))
+                        .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
+                        .fixedSize()
+                }
+            }
+        }
     }
 }
 
@@ -326,7 +435,7 @@ private struct TrailingClock: View {
     }
 }
 
-/// "⚡ current action" (running/pending) or "✓ summary" (done).
+/// "⚡ current action" (running) or "✓ summary" (done).
 private struct ActionLine: View {
     let state: TurnActivityAttributes.ContentState
     let card: TurnCardState
@@ -375,8 +484,14 @@ private struct SyncStamp: View {
     }
 }
 
-/// Per-state CTA row. All actions deep-link into the app (no backend —
-/// the app is the only thing that can act).
+/// Per-state CTA row (handoff Part B).
+///   - running·fresh: no CTA (the live timer is the signal).
+///   - running·stale: "Tap to refresh" → opens the app (which refreshes).
+///   - **choice**: "Open to choose" → opens the app's picker (a question
+///     needs real UI; we never answer it from the lock screen).
+///   - **permission**: Approve / Reject → non-opening `LiveActivityIntent`s
+///     that post the decision to the broker in the BACKGROUND, no launch.
+///   - done: "Open session" → opens the app.
 private struct ActionButtons: View {
     let sessionID: String
     let card: TurnCardState
@@ -384,30 +499,41 @@ private struct ActionButtons: View {
     var body: some View {
         switch card {
         case .runningFresh:
-            EmptyView()  // live card needs no CTA; tapping it opens the app
+            EmptyView()
         case .runningStale:
             ctaLink(
                 "Tap to refresh", icon: "arrow.clockwise",
                 fill: ConduitBrand.claude, foreground: .black,
                 action: "refresh"
             )
-        case .needsYou:
-            HStack(spacing: 8) {
-                // "Reply", not "Approve" (device feedback, round 4):
-                // AskUserQuestion is usually a multiple-CHOICE question,
-                // not a yes/no — an in-place "Approve" sent an arbitrary
-                // first option and read as a misnomer. Open the session so
-                // the user picks the actual answer on the card.
+        case .choice:
+            VStack(spacing: 4) {
                 ctaLink(
-                    "Reply", icon: "arrowshape.turn.up.left.fill",
+                    "Open to choose", icon: "eye",
                     fill: ConduitBrand.cyan, foreground: .black,
-                    action: "reply"
+                    action: "choose"
                 )
-                ctaLink(
-                    "View diff", icon: "eye",
-                    fill: Color.white.opacity(0.12), foreground: .white,
-                    action: "diff"
-                )
+                Text("opens Conduit to the picker")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        case .permission:
+            VStack(spacing: 4) {
+                HStack(spacing: 8) {
+                    Button(intent: ApproveSessionIntent(sessionID: sessionID)) {
+                        ctaLabel("Approve", icon: "checkmark",
+                                 fill: ConduitBrand.amber, foreground: .black)
+                    }
+                    .buttonStyle(.plain)
+                    Button(intent: RejectSessionIntent(sessionID: sessionID)) {
+                        ctaLabel("Reject", icon: "xmark",
+                                 fill: Color.white.opacity(0.12), foreground: .white)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("answers in background · no app launch")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
         case .done:
             ctaLink(

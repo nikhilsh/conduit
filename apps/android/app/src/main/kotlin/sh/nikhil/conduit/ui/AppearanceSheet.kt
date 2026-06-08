@@ -96,20 +96,11 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
             }
             NeonThemePreviewChip(appearance)
 
-            SettingsSection("Chat Body Font") {
-                AppearanceStore.FontFamily.values().forEachIndexed { idx, choice ->
-                    PickerRow(
-                        icon = if (choice == AppearanceStore.FontFamily.Monospaced) Icons.Filled.Code else Icons.Filled.TextFields,
-                        title = choice.label,
-                        isSelected = fontFamily == choice,
-                        onClick = { appearance.setFontFamily(choice) },
-                    )
-                    if (idx < AppearanceStore.FontFamily.values().lastIndex) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                        )
-                    }
+            // Chat font — type-forward preview-card strip (handoff Part A),
+            // shared with the full Settings screen via [ChatFontStrip].
+            SettingsSection("Chat font") {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp)) {
+                    ChatFontStrip(current = fontFamily, onSelect = { appearance.setFontFamily(it) })
                 }
             }
 

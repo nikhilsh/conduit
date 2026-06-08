@@ -143,9 +143,10 @@ extension ConduitUI {
 
         private func fontIcon(for family: AppearanceStore.FontFamily) -> String {
             switch family {
-            case .serif:      return "textformat.alt"
-            case .system:     return "textformat"
-            case .monospaced: return "chevron.left.forwardslash.chevron.right"
+            case .system:       return "textformat"
+            case .spaceGrotesk: return "a.square"
+            case .ibmPlexSans:  return "character"
+            case .newsreader:   return "textformat.alt"
             }
         }
 

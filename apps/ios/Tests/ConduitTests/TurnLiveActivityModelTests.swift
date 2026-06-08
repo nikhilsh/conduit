@@ -292,6 +292,92 @@ struct TurnLiveActivityModelTests {
         #expect(state.status == "pending")
     }
 
+    @Test func pendingInputCarriesInterruptKindPromptAndCount() {
+        // Handoff Part B: the choice/permission shape + prompt + option
+        // count must ride through the model into the content state so the
+        // widget can render the honest CTA.
+        var model = TurnActivityModel()
+        let effect = model.apply(
+            item: TurnActivityItem(
+                id: "p1", kind: .pendingInput, timestamp: Date(),
+                interruptKind: .choice, prompt: "Which migration strategy?", optionCount: 3
+            ),
+            sessionID: "s1",
+            agentName: "claude"
+        )
+        guard case let .start(_, state) = effect else {
+            Issue.record("expected .start, got \(effect)")
+            return
+        }
+        #expect(state.status == "pending")
+        #expect(state.interruptKind == .choice)
+        #expect(state.prompt == "Which migration strategy?")
+        #expect(state.optionCount == 3)
+    }
+
+    @Test func resumingToolClearsInterruptPayload() {
+        // Once the agent resumes (a fresh tool/command), the card drops
+        // back to running and the interrupt payload is cleared.
+        var model = TurnActivityModel()
+        _ = model.apply(
+            item: TurnActivityItem(
+                id: "p1", kind: .pendingInput, timestamp: Date(),
+                interruptKind: .permission, prompt: "Run git push?", optionCount: 0
+            ),
+            sessionID: "s1", agentName: "claude"
+        )
+        let effect = model.apply(
+            item: TurnActivityItem(id: "t1", kind: .tool, toolName: "Bash", timestamp: Date()),
+            sessionID: "s1", agentName: "claude"
+        )
+        guard case let .update(state) = effect else {
+            Issue.record("expected .update, got \(effect)")
+            return
+        }
+        #expect(state.status == "running")
+        #expect(state.interruptKind == nil)
+        #expect(state.prompt == nil)
+        #expect(state.optionCount == 0)
+    }
+
+    // MARK: - Pending classifier (choice vs permission)
+
+    @Test func classifyPendingBinaryGateIsPermission() {
+        let result = TurnLiveActivityMapping.classifyPending(
+            content: "Run git push --force-with-lease to origin?",
+            options: ["Approve", "Reject"],
+            command: nil
+        )
+        #expect(result.kind == .permission)
+        #expect(result.prompt == "Run git push --force-with-lease to origin?")
+    }
+
+    @Test func classifyPendingCodexApprovalIsPermission() {
+        let result = TurnLiveActivityMapping.classifyPending(
+            content: "[A]pprove / [E]dit / [R]eject — run the build?",
+            options: [],
+            command: nil
+        )
+        #expect(result.kind == .permission)
+    }
+
+    @Test func classifyPendingMultiChoiceIsChoice() {
+        let result = TurnLiveActivityMapping.classifyPending(
+            content: "Which migration strategy should I use?",
+            options: ["Big bang", "Incremental", "Dual-write"],
+            command: nil
+        )
+        #expect(result.kind == .choice)
+    }
+
+    @Test func pendingPromptStripsSentinelAndTakesFirstLine() {
+        let prompt = TurnLiveActivityMapping.pendingPrompt(
+            content: "[[conduit:needs-input]]\nWhich option?\n1. A\n2. B",
+            command: nil
+        )
+        #expect(prompt == "Which option?")
+    }
+
     @Test func idleTickSparesPendingActivity() {
         // An approval can wait minutes — the idle timeout must not reap
         // a "needs you" card; only a fresh item or a session exit may.
