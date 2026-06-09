@@ -164,6 +164,15 @@ func providerForAssistant(assistant string) string {
 	}
 }
 
+// allCredentialProviders is every agent-credential provider the broker
+// knows how to materialize into a session's ephemeral HOME. Used to log
+// the interactive Terminal tab into BOTH agents regardless of which one
+// (if any) the session's own agent is. Keep in sync with
+// providerForAssistant / mirrorHostCredentials.
+func allCredentialProviders() []string {
+	return []string{"anthropic", "openai"}
+}
+
 // hostHomeDir returns the broker's real $HOME — the place where claude
 // / codex stash their per-user credentials when the operator runs them
 // interactively for the first login. Honours $CONDUIT_HOST_HOME for

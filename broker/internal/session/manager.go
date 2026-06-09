@@ -417,14 +417,31 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 				fmt.Fprintf(os.Stderr, "session %s: mirrorHostCredentials(%s): %v (agent will prompt for login)\n", s.ID, provider, err)
 			}
 		}
-		// Seed a theme + onboarding marker so Claude Code's first-run
-		// interactive theme picker doesn't block the PTY. Non-fatal:
-		// worst case the agent shows the picker once. Anthropic-only —
-		// codex has no equivalent first-run prompt.
-		if provider == "anthropic" {
-			if err := seedClaudeConfig(ephemeral); err != nil {
-				fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
+		// The interactive Terminal tab runs under this SAME ephemeral HOME.
+		// If we only materialized the session's own agent provider, the user
+		// would find `claude`/`codex` LOGGED OUT in the terminal of any
+		// session whose agent differs — a `shell` session (no provider at
+		// all), or running `codex` inside a claude session and vice-versa —
+		// even though the box itself is logged in. Mirror the host login for
+		// every OTHER known provider too so the terminal is always logged in
+		// for whatever CLI the user runs. Host-creds only (the app-blob path
+		// stays reserved for the agent's own provider above), best-effort,
+		// and quiet on the common "host isn't logged into that agent" case.
+		// Each session keeps its own private copy, so this does NOT
+		// reintroduce the cross-session refresh-token race.
+		for _, p := range allCredentialProviders() {
+			if p == provider {
+				continue // already materialized above (possibly via app blob)
 			}
+			_ = mirrorHostCredentials(p, ephemeral)
+		}
+		// Seed a theme + onboarding marker so Claude Code's first-run
+		// interactive theme picker doesn't block the PTY — for the agent AND
+		// for an interactive `claude` the user runs in the Terminal tab of a
+		// non-claude session. Harmless for codex (no equivalent prompt); the
+		// file only matters to claude. Non-fatal.
+		if err := seedClaudeConfig(ephemeral); err != nil {
+			fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
 		}
 	}
 	cmd.Env = s.commandEnv(nil)
