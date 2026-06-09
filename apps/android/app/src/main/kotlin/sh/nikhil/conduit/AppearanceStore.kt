@@ -170,6 +170,43 @@ class AppearanceStore : ViewModel() {
     private val _neonGlow = MutableStateFlow(true)
     val neonGlow: StateFlow<Boolean> = _neonGlow.asStateFlow()
 
+    // ── Feature flags / experiments (§2/§3/§5) — Android mirror of iOS
+    //    FeatureFlags. Pure decision logic lives in [FeatureFlags]; this is
+    //    the persisted state it feeds into.
+
+    /** chat-shell-v2 conversation-style override (Settings › Labs). */
+    private val _chatStylePreference = MutableStateFlow(FeatureFlags.ChatStylePreference.Auto)
+    val chatStylePreference: StateFlow<FeatureFlags.ChatStylePreference> = _chatStylePreference.asStateFlow()
+
+    /** Kill-switch (guardrail) — forces arm A globally. */
+    private val _chatExperimentKilled = MutableStateFlow(false)
+    val chatExperimentKilled: StateFlow<Boolean> = _chatExperimentKilled.asStateFlow()
+
+    /** The deterministically-assigned bucket for this device, computed once
+     *  from [chatStableID] and persisted (never re-bucketed). */
+    private val _chatAssignedArm = MutableStateFlow(FeatureFlags.ChatArm.A)
+    val chatAssignedArm: StateFlow<FeatureFlags.ChatArm> = _chatAssignedArm.asStateFlow()
+
+    /** Stable per-device id the bucket hashes over (no accounts). */
+    var chatStableID: String = ""
+        private set
+
+    /** New-session redesign flags (§3) — default on. */
+    private val _newSessionAgentCards = MutableStateFlow(true)
+    val newSessionAgentCards: StateFlow<Boolean> = _newSessionAgentCards.asStateFlow()
+    private val _newSessionEffortDial = MutableStateFlow(true)
+    val newSessionEffortDial: StateFlow<Boolean> = _newSessionEffortDial.asStateFlow()
+    private val _newSessionLaunchLine = MutableStateFlow(true)
+    val newSessionLaunchLine: StateFlow<Boolean> = _newSessionLaunchLine.asStateFlow()
+
+    /** Onboarding state (§5). seenWelcome only governs the Welcome screen. */
+    private val _onboardingSeenWelcome = MutableStateFlow(false)
+    val onboardingSeenWelcome: StateFlow<Boolean> = _onboardingSeenWelcome.asStateFlow()
+    private val _onboardingFurthestStep = MutableStateFlow(0)
+    val onboardingFurthestStep: StateFlow<Int> = _onboardingFurthestStep.asStateFlow()
+    private val _onboardingGuide = MutableStateFlow(true)
+    val onboardingGuide: StateFlow<Boolean> = _onboardingGuide.asStateFlow()
+
     private var prefs: SharedPreferences? = null
 
     fun hydrate(ctx: Context) {
@@ -190,6 +227,78 @@ class AppearanceStore : ViewModel() {
             ?: TerminalTheme.GhosttyDark
         _neonPalette.value = NeonPalette.fromId(p.getString(KEY_NEON_PALETTE, null))
         _neonGlow.value = p.getBoolean(KEY_NEON_GLOW, true)
+
+        // Feature flags / experiments.
+        _chatStylePreference.value =
+            FeatureFlags.ChatStylePreference.fromId(p.getString(KEY_CHAT_STYLE_PREF, null))
+        _chatExperimentKilled.value = p.getBoolean(KEY_CHAT_KILLED, false)
+        _newSessionAgentCards.value = p.getBoolean(KEY_NS_AGENT_CARDS, true)
+        _newSessionEffortDial.value = p.getBoolean(KEY_NS_EFFORT_DIAL, true)
+        _newSessionLaunchLine.value = p.getBoolean(KEY_NS_LAUNCH_LINE, true)
+        _onboardingSeenWelcome.value = p.getBoolean(KEY_ONB_SEEN_WELCOME, false)
+        _onboardingFurthestStep.value = p.getInt(KEY_ONB_FURTHEST_STEP, 0)
+        _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
+
+        // Stable DEVICE id (no accounts): persist a generated id once so the
+        // bucket never moves. Then assign the bucket once and persist it —
+        // never re-bucket the same install.
+        chatStableID = p.getString(KEY_CHAT_STABLE_ID, null) ?: run {
+            val seed = java.util.UUID.randomUUID().toString()
+            p.edit().putString(KEY_CHAT_STABLE_ID, seed).apply()
+            seed
+        }
+        _chatAssignedArm.value = p.getString(KEY_CHAT_ASSIGNED_ARM, null)
+            ?.let { FeatureFlags.ChatArm.fromId(it) }
+            ?: FeatureFlags.bucket(chatStableID).also {
+                p.edit().putString(KEY_CHAT_ASSIGNED_ARM, it.id).apply()
+            }
+    }
+
+    /** Resolved chat arm after overrides + kill-switch (§2). */
+    fun resolvedChatArm(): FeatureFlags.ChatArm = FeatureFlags.resolvedChatArm(
+        preference = _chatStylePreference.value,
+        killed = _chatExperimentKilled.value,
+        assigned = _chatAssignedArm.value,
+    )
+
+    fun setChatStylePreference(value: FeatureFlags.ChatStylePreference) {
+        _chatStylePreference.value = value
+        prefs?.edit()?.putString(KEY_CHAT_STYLE_PREF, value.id)?.apply()
+    }
+
+    fun setChatExperimentKilled(value: Boolean) {
+        _chatExperimentKilled.value = value
+        prefs?.edit()?.putBoolean(KEY_CHAT_KILLED, value)?.apply()
+    }
+
+    fun setNewSessionAgentCards(value: Boolean) {
+        _newSessionAgentCards.value = value
+        prefs?.edit()?.putBoolean(KEY_NS_AGENT_CARDS, value)?.apply()
+    }
+
+    fun setNewSessionEffortDial(value: Boolean) {
+        _newSessionEffortDial.value = value
+        prefs?.edit()?.putBoolean(KEY_NS_EFFORT_DIAL, value)?.apply()
+    }
+
+    fun setNewSessionLaunchLine(value: Boolean) {
+        _newSessionLaunchLine.value = value
+        prefs?.edit()?.putBoolean(KEY_NS_LAUNCH_LINE, value)?.apply()
+    }
+
+    fun setOnboardingSeenWelcome(value: Boolean) {
+        _onboardingSeenWelcome.value = value
+        prefs?.edit()?.putBoolean(KEY_ONB_SEEN_WELCOME, value)?.apply()
+    }
+
+    fun setOnboardingFurthestStep(value: Int) {
+        _onboardingFurthestStep.value = value
+        prefs?.edit()?.putInt(KEY_ONB_FURTHEST_STEP, value)?.apply()
+    }
+
+    fun setOnboardingGuide(value: Boolean) {
+        _onboardingGuide.value = value
+        prefs?.edit()?.putBoolean(KEY_ONB_GUIDE, value)?.apply()
     }
 
     fun setFontFamily(value: FontFamily) {
@@ -278,6 +387,16 @@ class AppearanceStore : ViewModel() {
         private const val KEY_TERMINAL_THEME = "terminalTheme"
         private const val KEY_NEON_PALETTE = "neonPalette"
         private const val KEY_NEON_GLOW = "neonGlow"
+        private const val KEY_CHAT_STYLE_PREF = "chat.stylePreference"
+        private const val KEY_CHAT_KILLED = "chat.experimentKilled"
+        private const val KEY_CHAT_ASSIGNED_ARM = "chat.assignedArm"
+        private const val KEY_CHAT_STABLE_ID = "chat.stableID"
+        private const val KEY_NS_AGENT_CARDS = "newSession.agentCards"
+        private const val KEY_NS_EFFORT_DIAL = "newSession.effortDial"
+        private const val KEY_NS_LAUNCH_LINE = "newSession.launchLine"
+        private const val KEY_ONB_SEEN_WELCOME = "onboarding.seenWelcome"
+        private const val KEY_ONB_FURTHEST_STEP = "onboarding.furthestStep"
+        private const val KEY_ONB_GUIDE = "onboarding.guide"
     }
 }
 
