@@ -459,14 +459,22 @@ extension ConduitUI {
             }
 
             let cal = Calendar.current
+            // Bucket relative to the injected `now` (NOT the system clock):
+            // `Calendar.isDateInToday/Yesterday` ignore `now`, so we compare
+            // calendar-day offsets from `now`'s start-of-day instead. Keeps
+            // production correct (now = Date()) and tests deterministic.
+            let nowDay = cal.startOfDay(for: now)
             func bucket(_ row: HomeRow) -> Int {
                 guard case .session(let id) = row.kind, let date = dateByID[id] else {
                     return 0   // placeholders / unknown → Today
                 }
-                if cal.isDateInToday(date) { return 0 }
-                if cal.isDateInYesterday(date) { return 1 }
-                if let days = cal.dateComponents([.day], from: date, to: now).day, days < 7 { return 2 }
-                return 3
+                let dayOffset = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: nowDay).day ?? 0
+                switch dayOffset {
+                case ..<1:  return 0   // today (or future-stamped) → Today
+                case 1:     return 1   // Yesterday
+                case 2..<7: return 2   // This week
+                default:    return 3   // Earlier
+                }
             }
 
             let titles = ["Today", "Yesterday", "This week", "Earlier"]
