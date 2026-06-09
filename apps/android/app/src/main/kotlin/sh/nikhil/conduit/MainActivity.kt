@@ -40,10 +40,12 @@ class MainActivity : ComponentActivity() {
             // composable below can read LocalNeonTheme.current.
             val neonPalette by appearance.neonPalette.collectAsState()
             val neonGlow by appearance.neonGlow.collectAsState()
+            val chatFont by appearance.fontFamily.collectAsState()
             val neonTheme = NeonTheme.resolve(
                 palette = sh.nikhil.conduit.ui.NeonPalette.fromId(neonPalette.id),
                 dark = useDark,
                 glow = neonGlow,
+                chatFont = chatFont,
             )
             // Provide the effective dark flag alongside the appearance
             // store so ConduitPalette palette resolution stays in sync

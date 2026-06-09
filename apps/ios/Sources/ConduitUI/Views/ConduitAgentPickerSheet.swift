@@ -867,7 +867,7 @@ extension ConduitUI {
         /// Live mono launch preview (§3, `04-ns`): `will run claude · medium ·
         /// <folder>`. Updates as the agent / effort / folder change.
         private var launchLine: some View {
-            let folder = listing?.path.flatMap { displayName(of: $0) }
+            let folder = (listing?.path).map { displayName(of: $0) }
             return HStack(spacing: 0) {
                 Text("will run ")
                     .foregroundStyle(neon.textFaint)

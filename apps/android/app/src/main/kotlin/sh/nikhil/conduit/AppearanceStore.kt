@@ -27,19 +27,37 @@ class AppearanceStore : ViewModel() {
      * `Serif`) decode through [fromPersisted] so existing installs migrate
      * instead of resetting.
      */
-    enum class FontFamily(val label: String, val note: String) {
-        System("System", "native"),
-        SpaceGrotesk("Space Grotesk", "brand"),
-        IbmPlexSans("IBM Plex Sans", "humanist"),
-        Newsreader("Newsreader", "serif · easy read");
+    /**
+     * Chat-font **pairing** (handoff §4) — mirrors iOS
+     * `AppearanceStore.FontFamily`. Each case names BOTH a prose face and a
+     * mono face, because Conduit's soul is the mono (commands, identifiers,
+     * exit codes). The pairing drives both `neon.sans` and `neon.mono`
+     * app-wide. [note] is the "Prose · Mono" face names; [blurb] the
+     * one-line personality.
+     */
+    enum class FontFamily(val label: String, val note: String, val blurb: String) {
+        Terminal("Terminal", "Space Grotesk · JetBrains Mono", "Sharp, techy, a little futurist. The baseline."),
+        Plex("Plex", "IBM Plex Sans · IBM Plex Mono", "Engineered and neutral. Prose and code feel related."),
+        Geist("Geist", "Geist · Geist Mono", "Clean, modern, developer-native."),
+        Editorial("Editorial", "Newsreader · Spline Sans Mono", "Serif prose + humanist mono — the calmest voice."),
+        Soft("Soft", "IBM Plex Sans · Spline Sans Mono", "Rounded, friendly mono. Warm but still machine.");
 
         companion object {
-            /** Decode a persisted name, migrating pre-redesign values. */
+            /**
+             * Decode a persisted name, migrating BOTH prior generations:
+             * the original {Serif,Monospaced,System} and the single-face
+             * {System,SpaceGrotesk,IbmPlexSans,Newsreader} enum → the
+             * pairing whose prose face matches.
+             */
             fun fromPersisted(raw: String?): FontFamily = when (raw) {
-                null -> System
-                "Monospaced" -> System          // mono is terminal-only now
-                "Serif" -> Newsreader            // closest easy-read serif
-                else -> runCatching { valueOf(raw) }.getOrNull() ?: System
+                null -> Terminal
+                "SpaceGrotesk" -> Terminal
+                "IbmPlexSans" -> Plex
+                "Newsreader" -> Editorial
+                "System" -> Terminal
+                "Serif" -> Editorial
+                "Monospaced" -> Terminal
+                else -> runCatching { valueOf(raw) }.getOrNull() ?: Terminal
             }
         }
     }
@@ -87,7 +105,7 @@ class AppearanceStore : ViewModel() {
         GruvboxDark("Gruvbox Dark"),
     }
 
-    private val _fontFamily = MutableStateFlow(FontFamily.System)
+    private val _fontFamily = MutableStateFlow(FontFamily.Terminal)
     val fontFamily: StateFlow<FontFamily> = _fontFamily.asStateFlow()
 
     private val _themeMode = MutableStateFlow(ThemeMode.System)

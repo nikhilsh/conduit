@@ -1729,7 +1729,7 @@ private fun MarkdownBlock(text: String, role: ConversationRole) {
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     // Prose renders in the user's chosen Chat font (handoff Part A):
     // System / Space Grotesk / IBM Plex Sans / Newsreader.
-    val resolvedFont = neonChatFontFamily(fontChoice)
+    val resolvedFont = neonProseFontFamily(fontChoice)
     val onColor = if (role == ConversationRole.System) {
         neon.textDim
     } else {

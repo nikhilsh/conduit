@@ -636,13 +636,25 @@ internal fun ChatFontStrip(
                     .padding(start = 13.dp, end = 13.dp, top = 13.dp, bottom = 11.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                Text(
-                    "Ag",
-                    fontFamily = neonChatFontFamily(family),
-                    fontSize = 30.sp,
-                    color = neon.text,
-                    maxLines = 1,
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Text(
+                        "Ag",
+                        fontFamily = neonProseFontFamily(family),
+                        fontSize = 30.sp,
+                        color = neon.text,
+                        maxLines = 1,
+                    )
+                    Text(
+                        "\$>",
+                        fontFamily = neonMonoFontFamily(family),
+                        fontSize = 18.sp,
+                        color = neon.accent,
+                        maxLines = 1,
+                    )
+                }
                 Text(
                     family.label,
                     fontFamily = neon.mono,
