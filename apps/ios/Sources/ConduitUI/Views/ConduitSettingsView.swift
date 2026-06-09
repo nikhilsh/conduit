@@ -32,6 +32,7 @@ extension ConduitUI {
     struct SettingsView: View {
         @Environment(SessionStore.self) private var store
         @Environment(AppearanceStore.self) private var appearance
+        @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
@@ -62,6 +63,7 @@ extension ConduitUI {
                             usageLimitsSection
                             appearanceSection
                             conversationSection
+                            labsSection
                             aboutSection
                         }
                         .padding(.horizontal, 16)
@@ -634,6 +636,64 @@ extension ConduitUI {
                     subtitle: "Start command cards collapsed by default",
                     isOn: $appearance.collapseTurns
                 )
+            }
+        }
+
+        // MARK: Labs (handoff §2 — chat A/B + Debug)
+
+        /// Settings › Labs (`01-ab`): the user-facing "Conversation style"
+        /// A/B/Auto control, plus a drill-in to the staff Debug menu. The
+        /// segments override the chat shell locally; `Auto` defers to the
+        /// assigned experiment bucket without changing the logged bucket.
+        private var labsSection: some View {
+            @Bindable var flags = flags
+            return sectionCard(title: "Labs") {
+                VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Conversation style")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(neon.text)
+                            Spacer(minLength: 6)
+                            Text(flags.resolvedChatArm.label)
+                                .font(neon.mono(11))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                        Picker("Conversation style", selection: $flags.chatStylePreference) {
+                            ForEach(FeatureFlags.ChatStylePreference.allCases) { pref in
+                                Text(pref.label).tag(pref)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .tint(neon.accent)
+                        Text("A = Breathe · B = Signature · Auto follows your assigned bucket.")
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(neon.textFaint)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+
+                    Divider()
+                        .background(neon.border)
+                        .padding(.leading, 14)
+
+                    NavigationLink {
+                        ConduitUI.DebugMenuView()
+                    } label: {
+                        ConduitUI.ListRow(
+                            icon: "ladybug",
+                            title: "Debug menu",
+                            subtitle: "Experiment buckets & feature flags",
+                            iconTint: neon.accent
+                        ) {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
 
