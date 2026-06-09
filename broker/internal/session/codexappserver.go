@@ -72,6 +72,18 @@ type codexAppServerProcess struct {
 	// turn/started notification. Required (with threadID) to target turn/interrupt
 	// — the Stop button. Empty until turn/started arrives and after the turn ends.
 	turnID string
+	// interrupting is set when the user Stopped this turn (turn/interrupt sent).
+	// While set, the turn's terminus is QUIET regardless of which path ends it
+	// (turn/completed:interrupted, a racing thread `idle` status, or an error) —
+	// a deliberate stop must never surface a "no reply" / error notice. Cleared
+	// by finishTurn.
+	interrupting bool
+	// turnStderrOffset is the stderr-buffer length at this turn's START. A turn
+	// failure surfaces only stderr written AFTER it (the turn's own error), never
+	// the startup residue — codex logs a benign "project not trusted" line at
+	// launch, and surfacing that stale line on every later turn read as a
+	// recurring error (device report: identical-timestamp "codex error" lines).
+	turnStderrOffset int
 	// turnGen increments on every turn start/end so a stale watchdog timer from
 	// a prior turn can detect it no longer owns the current turn and bow out.
 	turnGen int
@@ -275,6 +287,8 @@ func (c *codexAppServerProcess) Send(text string) error {
 	c.turnActive = true
 	c.turnReqID = id
 	c.published = false
+	c.interrupting = false
+	c.turnStderrOffset = c.stderrLenLocked()
 	c.beginTurnWatchdogLocked()
 	c.mu.Unlock()
 
@@ -302,27 +316,33 @@ func (c *codexAppServerProcess) Send(text string) error {
 // published / closing snapshot so the caller can decide what notice (if any) to
 // surface. Idempotent: a second terminus for the same turn returns active=false
 // and the caller does nothing. Caller must NOT hold c.mu.
-func (c *codexAppServerProcess) finishTurn() (active, published, intentional bool) {
+func (c *codexAppServerProcess) finishTurn() (active, published, intentional, interrupting bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.turnActive {
-		return false, false, false
+		return false, false, false, false
 	}
 	c.turnActive = false
 	c.turnID = ""
+	interrupting = c.interrupting
+	c.interrupting = false
 	c.stopTurnWatchdogLocked()
-	return true, c.published, c.closed
+	return true, c.published, c.closed, interrupting
 }
 
 // endTurn ends the active turn on a NORMAL terminus (turn/completed=completed,
 // thread idle, EOF). If the turn produced no chat event and wasn't an
 // intentional close, it surfaces a "no reply" notice so the typing indicator
-// clears (mirrors codexchatproc.go's safety net).
+// clears (mirrors codexchatproc.go's safety net). A user-Stopped turn is silent
+// — InterruptTurn already published the "Stopped." line — even when an `idle`
+// status races ahead of the turn/completed:interrupted terminus.
 func (c *codexAppServerProcess) endTurn() {
-	active, published, intentional := c.finishTurn()
-	if active && !published && !intentional {
+	active, published, intentional, interrupting := c.finishTurn()
+	if active && !published && !intentional && !interrupting {
 		msg := "⚠️ codex: no reply from agent (turn failed or timed out)"
-		if snip := firstMeaningfulLine(c.stderrString()); snip != "" {
+		// Only the THIS-TURN stderr (not startup residue like codex's benign
+		// "project not trusted" launch warning) is a real per-turn error.
+		if snip := firstMeaningfulLine(c.stderrSinceTurn()); snip != "" {
 			msg = "⚠️ codex error: " + snip
 		}
 		publishChatSystem(c.publish, msg)
@@ -332,10 +352,10 @@ func (c *codexAppServerProcess) endTurn() {
 // failTurn ends the active turn with an explicit error message. Unlike endTurn
 // it ALWAYS shows the message (even if the turn had already streamed output),
 // because the caller has a concrete failure to report — suppressed only when
-// the session is intentionally closing.
+// the session is intentionally closing OR the user Stopped the turn.
 func (c *codexAppServerProcess) failTurn(msg string) {
-	active, _, intentional := c.finishTurn()
-	if active && !intentional {
+	active, _, intentional, interrupting := c.finishTurn()
+	if active && !intentional && !interrupting {
 		publishChatSystem(c.publish, msg)
 	}
 }
@@ -618,6 +638,10 @@ func (c *codexAppServerProcess) Interrupt() error {
 	tid := c.threadID
 	turnID := c.turnID
 	id := c.allocIDLocked()
+	// Mark the turn as user-Stopped so its terminus (turn/completed:interrupted,
+	// a racing thread `idle` status, or a stray error) stays silent — no "no
+	// reply"/error notice. The "Stopped." line is published by InterruptTurn.
+	c.interrupting = true
 	c.mu.Unlock()
 	fmt.Fprintf(os.Stderr, "codex app-server: turn interrupt (thread %s, turn %s, id %d)\n", tid, turnID, id)
 	return c.writeRequest(id, "turn/interrupt", map[string]any{"threadId": tid, "turnId": turnID})
@@ -654,4 +678,28 @@ func (c *codexAppServerProcess) stderrString() string {
 		return ""
 	}
 	return c.stderrBuf.String()
+}
+
+// stderrLenLocked returns the current captured-stderr length (the turn-start
+// offset). Caller holds c.mu.
+func (c *codexAppServerProcess) stderrLenLocked() int {
+	if c.stderrBuf == nil {
+		return 0
+	}
+	return c.stderrBuf.Len()
+}
+
+// stderrSinceTurn returns only the stderr written AFTER the active turn started,
+// so a turn-failure notice reflects the turn's own error and not the startup
+// residue (codex's benign "project not trusted" launch line). Falls back to the
+// full buffer if the offset is out of range (defensive).
+func (c *codexAppServerProcess) stderrSinceTurn() string {
+	c.mu.Lock()
+	off := c.turnStderrOffset
+	c.mu.Unlock()
+	s := c.stderrString()
+	if off > 0 && off <= len(s) {
+		return s[off:]
+	}
+	return s
 }
