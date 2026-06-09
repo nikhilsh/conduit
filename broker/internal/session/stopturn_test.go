@@ -8,6 +8,68 @@ import (
 	"testing"
 )
 
+// TestCodexInterruptedTurnEndsQuietly: once a turn is Stopped (Interrupt sent),
+// whichever terminus ends it — including a racing thread `idle` status that
+// routes through endTurn — must be SILENT (no "no reply"/error notice). The
+// "Stopped." line is published separately by InterruptTurn.
+func TestCodexInterruptedTurnEndsQuietly(t *testing.T) {
+	var published [][]byte
+	c := &codexAppServerProcess{
+		stdin:     bufWriteCloser{&bytes.Buffer{}},
+		publish:   func(b []byte) { published = append(published, b) },
+		threadID:  "t-1",
+		stderrBuf: bytes.NewBufferString("2026-06-09T01:21:54Z ERROR codex_app_server: project not trusted\n"),
+	}
+	c.turnActive = true
+	c.turnID = "turn-1"
+	if err := c.Interrupt(); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	// Racing `idle` thread-status terminus (endTurn, not endTurnQuiet).
+	c.endTurn()
+	if len(published) != 0 {
+		t.Fatalf("a Stopped turn must end silently, but published: %s", published)
+	}
+}
+
+// TestCodexEndTurnExcludesStartupStderr: a turn that ends with no reply must NOT
+// surface stale startup stderr (codex's benign "project not trusted" launch
+// line) — only stderr written during the turn counts. Pins the device report of
+// recurring identical-timestamp "codex error" lines.
+func TestCodexEndTurnExcludesStartupStderr(t *testing.T) {
+	startup := "2026-06-09T01:21:54.828789Z ERROR codex_app_server: Project-local config disabled until trusted\n"
+	buf := bytes.NewBufferString(startup)
+	var published [][]byte
+	c := &codexAppServerProcess{
+		publish:   func(b []byte) { published = append(published, b) },
+		stderrBuf: buf,
+	}
+
+	// Case A: turn starts after the startup line, produces no new stderr → a
+	// generic no-reply notice, never the stale startup line.
+	c.turnActive = true
+	c.published = false
+	c.turnStderrOffset = buf.Len()
+	c.endTurn()
+	if len(published) != 1 {
+		t.Fatalf("expected one notice, got %d", len(published))
+	}
+	if s := string(published[0]); strings.Contains(s, "trusted") || !strings.Contains(s, "no reply") {
+		t.Fatalf("must surface the generic no-reply notice, not stale startup stderr: %s", s)
+	}
+
+	// Case B: a real error DURING the turn (after the offset) IS surfaced.
+	offset := buf.Len()
+	buf.WriteString("2026-06-09T02:00:00Z ERROR codex_core: model request failed\n")
+	c.turnActive = true
+	c.published = false
+	c.turnStderrOffset = offset
+	c.endTurn()
+	if s := string(published[len(published)-1]); !strings.Contains(s, "model request failed") {
+		t.Fatalf("a turn-time error must be surfaced: %s", s)
+	}
+}
+
 // TestInterruptTurnPublishesStoppedNote: InterruptTurn must publish a role-
 // "system" chat view_event so the client's typing indicator (and the composer
 // Stop button) clear — stopping mid-think otherwise leaves the user's prompt as
