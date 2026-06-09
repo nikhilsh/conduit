@@ -50,6 +50,14 @@ extension ConduitUI {
         @Environment(FeatureFlags.self) private var flags
         @Environment(StreamingRendererCoordinator.self) private var coordinator
         @Environment(\.neonTheme) private var neon
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+        /// On tablet (regular width) the transcript is capped + centered so
+        /// lines don't run the full pane width (handoff §6 — "max content
+        /// width ~760pt"). Phone (compact) fills the width as before.
+        private var chatContentMaxWidth: CGFloat {
+            horizontalSizeClass == .regular ? 760 : .infinity
+        }
 
         let session: ProjectSession
 
@@ -538,6 +546,9 @@ extension ConduitUI {
                             .id(Self.bottomAnchorID)
                     }
                     .padding(.vertical, 14)
+                    // Cap + center the transcript column on tablet (§6).
+                    .frame(maxWidth: chatContentMaxWidth)
+                    .frame(maxWidth: .infinity)
                     .animation(.easeOut(duration: 0.18), value: isAgentWorking)
                 }
                 .scrollDismissesKeyboard(.interactively)

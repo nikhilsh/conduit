@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 // MARK: - ConduitSessionsRail
@@ -71,9 +72,31 @@ extension ConduitUI {
                 wordmark
                 Spacer(minLength: 6)
                 serverChip
+                newButton
                 overflowMenu
             }
             .padding(.horizontal, 14)
+        }
+
+        /// Header "＋ new" (handoff §6) — the primary new-session affordance
+        /// on tablet, alongside the pinned bottom button.
+        private var newButton: some View {
+            Button {
+                if store.harness.canIssueCommands {
+                    showAgentPicker = true
+                } else {
+                    showAddServer = true
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(neon.accentText)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(neon.accent))
+                    .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New session")
         }
 
         private var wordmark: some View {
@@ -209,12 +232,21 @@ extension ConduitUI {
                 case .failed(let reason): return .failed(reason)
                 }
             }()
-            let sessions = store.sessions.map { s in
-                ConduitUI.HomeSnapshotSession(
+            let sessions = store.sessions.map { s -> ConduitUI.HomeSnapshotSession in
+                let status = store.statusBySession[s.id]
+                let cwd = status?.cwd ?? s.cwd
+                return ConduitUI.HomeSnapshotSession(
                     id: s.id,
                     displayName: store.displayName(for: s),
                     assistant: s.assistant,
-                    phase: store.statusBySession[s.id]?.phase
+                    phase: status?.phase,
+                    // Sort / group key — broker-stamped activity time that
+                    // survives reboot (the live last-message ts is HomeView's
+                    // richer source; the rail uses the durable session stamp).
+                    lastActivityAt: s.lastActivityAt ?? s.startedAt ?? status?.lastActivityAt,
+                    workingDir: SessionNaming.meaningfulWorkingDir(cwd),
+                    lastActivityPreview: railActivityPreview(for: s.id),
+                    isConfirmedLive: store.isConfirmedLive(sessionID: s.id)
                 )
             }
             return ConduitUI.HomeSnapshot(
@@ -226,9 +258,24 @@ extension ConduitUI {
             )
         }
 
+        /// One-line preview of the latest non-user activity for a session
+        /// (mirrors HomeView) — the 2-line preview in the redesigned rail row.
+        private func railActivityPreview(for sessionID: String) -> String? {
+            guard let log = store.conversationLog[sessionID], !log.isEmpty else { return nil }
+            guard let latest = log.last(where: { $0.role.lowercased() != "user" }) else { return nil }
+            return ConduitUI.HomeViewModel.activityPreview(
+                role: latest.role,
+                kind: latest.kind,
+                toolName: latest.toolName,
+                command: latest.command,
+                content: latest.content
+            )
+        }
+
         @ViewBuilder
         private var sessionsList: some View {
             let snap = snapshot
+            let sections = ConduitUI.SessionsRailModel.sections(snap)
             let rows = ConduitUI.SessionsRailModel.rows(snap)
             if rows.isEmpty {
                 VStack(spacing: 8) {
@@ -249,14 +296,24 @@ extension ConduitUI {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(rows) { row in
-                            RailRowView(row: row)
-                                .onTapGesture {
-                                    if case .session(let id) = row.kind {
-                                        store.switchTo(sessionID: id)
-                                    }
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(sections) { section in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(section.title.uppercased())
+                                    .font(neon.mono(10).weight(.bold))
+                                    .tracking(1.4)
+                                    .foregroundStyle(neon.textFaint)
+                                    .padding(.horizontal, 10)
+                                    .padding(.bottom, 3)
+                                ForEach(section.rows) { row in
+                                    RailRowView(row: row)
+                                        .onTapGesture {
+                                            if case .session(let id) = row.kind {
+                                                store.switchTo(sessionID: id)
+                                            }
+                                        }
                                 }
+                            }
                         }
                     }
                     .padding(.horizontal, 8)
@@ -274,34 +331,45 @@ private struct RailRowView: View {
     @Environment(\.neonTheme) private var neon
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             indicator
-            VStack(alignment: .leading, spacing: 1) {
+                .padding(.top, 3)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
-                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(ConduitUI.Palette.textPrimary.color)
+                    .font(neon.sans(14).weight(.semibold))
+                    .foregroundStyle(neon.text)
                     .lineLimit(1)
                 Text(subtitle)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                    .font(neon.mono(10.5))
+                    .foregroundStyle(neon.textDim)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                if case .session = row.kind, !row.lastActivityPreview.isEmpty {
+                    Text(row.lastActivityPreview)
+                        .font(neon.sans(11.5))
+                        .foregroundStyle(neon.textFaint)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 1)
+                }
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(row.isSelected
-                      ? neon.accent.opacity(0.18)
-                      : Color.clear)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(row.isSelected ? neon.accent.opacity(0.16) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(row.isSelected ? neon.accent.opacity(0.4) : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
     }
 
-    /// Compact rail subtitle reassembled from the structured `HomeRow`
-    /// fields (the old single `subtitle` string is gone): agent + status,
-    /// plus a relative time when we have one.
+    /// `agent · repo:branch` (or status) mono subline — what the row runs.
     private var subtitle: String {
         switch row.kind {
         case .creatingPlaceholder:
@@ -309,24 +377,43 @@ private struct RailRowView: View {
         case .session:
             var parts: [String] = []
             if !row.agent.isEmpty { parts.append(row.agent) }
-            parts.append(row.statusText)
+            if let dir = row.workingDir, !dir.isEmpty {
+                parts.append(shortDir(dir))
+            } else {
+                parts.append(row.statusText)
+            }
             if !row.relativeTime.isEmpty { parts.append(row.relativeTime) }
             return parts.joined(separator: " · ")
         }
     }
 
+    /// Trim a cwd to its last path component for the compact subline.
+    private func shortDir(_ dir: String) -> String {
+        let trimmed = dir.hasSuffix("/") ? String(dir.dropLast()) : dir
+        return trimmed.split(separator: "/").last.map(String.init) ?? trimmed
+    }
+
+    /// Status dot color (handoff §6): live = green, starting/paused = amber,
+    /// done/exited = cyan, idle/archived = faint. Running rows pulse.
     @ViewBuilder
     private var indicator: some View {
         switch row.kind {
         case .creatingPlaceholder:
             ProgressView().controlSize(.small)
         case .session:
-            Image(systemName: row.isSelected ? "circle.fill" : "circle")
-                .font(.caption)
-                .foregroundStyle(row.isSelected
-                                 ? neon.accent
-                                 : ConduitUI.Palette.textMuted.color.opacity(0.5))
+            let color = dotColor
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+                .neonGlowBox(row.isRunning && neon.glow ? neon.glowBox?.tinted(color) : nil)
         }
+    }
+
+    private var dotColor: Color {
+        if row.isRunning { return neon.green }
+        if row.isStarting { return neon.yellow }
+        if row.statusText.lowercased().contains("exit") { return neon.codex }
+        return neon.textFaint
     }
 }
 
@@ -344,6 +431,61 @@ extension ConduitUI {
     enum SessionsRailModel {
         static func rows(_ snap: HomeSnapshot) -> [HomeRow] {
             HomeViewModel.rows(snap)
+        }
+
+        /// A titled group of rows in the redesigned tablet sidebar
+        /// (handoff §6 — Today / Yesterday / This week / Earlier).
+        struct RailSection: Identifiable, Equatable {
+            let id: String
+            let title: String
+            let rows: [HomeRow]
+        }
+
+        /// Group the rail rows by recency. The order from `rows(_:)` is
+        /// preserved within each bucket (it's already recency-sorted). Rows
+        /// without a parseable timestamp — and creating placeholders — fall
+        /// into Today (they're the freshest, in-flight work). Empty buckets
+        /// are dropped. Pure + testable.
+        static func sections(_ snap: HomeSnapshot, now: Date = Date()) -> [RailSection] {
+            let rows = HomeViewModel.rows(snap)
+            guard !rows.isEmpty else { return [] }
+
+            // session id → its last-activity Date (when parseable).
+            var dateByID: [String: Date] = [:]
+            for s in snap.sessions {
+                if let iso = s.lastActivityAt, let d = parseTimestamp(iso) {
+                    dateByID[s.id] = d
+                }
+            }
+
+            let cal = Calendar.current
+            func bucket(_ row: HomeRow) -> Int {
+                guard case .session(let id) = row.kind, let date = dateByID[id] else {
+                    return 0   // placeholders / unknown → Today
+                }
+                if cal.isDateInToday(date) { return 0 }
+                if cal.isDateInYesterday(date) { return 1 }
+                if let days = cal.dateComponents([.day], from: date, to: now).day, days < 7 { return 2 }
+                return 3
+            }
+
+            let titles = ["Today", "Yesterday", "This week", "Earlier"]
+            var grouped: [[HomeRow]] = [[], [], [], []]
+            for row in rows { grouped[bucket(row)].append(row) }
+            return zip(titles, grouped).compactMap { title, rows in
+                rows.isEmpty ? nil : RailSection(id: title, title: title, rows: rows)
+            }
+        }
+
+        /// Parse a broker timestamp — RFC3339 with or without fractional
+        /// seconds (the broker emits both shapes).
+        private static func parseTimestamp(_ s: String) -> Date? {
+            let withFraction = ISO8601DateFormatter()
+            withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let d = withFraction.date(from: s) { return d }
+            let plain = ISO8601DateFormatter()
+            plain.formatOptions = [.withInternetDateTime]
+            return plain.date(from: s)
         }
     }
 }
