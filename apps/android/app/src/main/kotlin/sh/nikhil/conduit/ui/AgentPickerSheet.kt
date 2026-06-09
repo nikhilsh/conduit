@@ -79,12 +79,12 @@ fun AgentPickerSheet(
     val resolvedServerId = selectedServerId
         ?: savedServers.firstOrNull { it.endpoint == endpoint }?.id
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = neon.surfaceSolid,
-        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
-    ) {
+    // §6: the new-session surface is a centered modal over the dimmed
+    // two-pane on tablet (≥840dp), and a bottom sheet on phone.
+    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
+
+    // Container-agnostic content — both presentations render the same flow.
+    val content: @Composable () -> Unit = {
         val agent = pickedAgent
         if (agent == null) {
             AgentStep(
@@ -113,6 +113,27 @@ fun AgentPickerSheet(
                     onDismiss()
                 },
             )
+        }
+    }
+
+    if (wide) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+            androidx.compose.material3.Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = neon.surfaceSolid,
+                modifier = Modifier.width(620.dp).heightIn(max = 760.dp),
+            ) {
+                content()
+            }
+        }
+    } else {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = neon.surfaceSolid,
+            shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+        ) {
+            content()
         }
     }
 }
@@ -409,47 +430,62 @@ private fun DirectoryStep(
                 onSelect = { model = it },
             )
 
-            if (useDial) {
-                EffortDial(
-                    effort = effort,
-                    tint = agentTint,
-                    onSelect = { effort = it; appearance.setNewSessionLastEffort(it) },
-                )
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SectionLabel("Reasoning effort")
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        effortOptions.forEach { level ->
-                            FilterChip(
-                                selected = effort == level,
-                                onClick = { effort = level },
-                                label = { Text(level.replaceFirstChar { it.uppercase() }) },
-                            )
+            // Effort + Mode: side by side on a wide (tablet) modal, stacked
+            // on phone (§6 "two columns").
+            val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
+            val effortBlock: @Composable () -> Unit = {
+                if (useDial) {
+                    EffortDial(
+                        effort = effort,
+                        tint = agentTint,
+                        onSelect = { effort = it; appearance.setNewSessionLastEffort(it) },
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SectionLabel("Reasoning effort")
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            effortOptions.forEach { level ->
+                                FilterChip(
+                                    selected = effort == level,
+                                    onClick = { effort = level },
+                                    label = { Text(level.replaceFirstChar { it.uppercase() }) },
+                                )
+                            }
                         }
                     }
                 }
             }
-
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SectionLabel("Mode")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(
-                        selected = permissionMode == "",
-                        onClick = { permissionMode = "" },
-                        label = { Text("Auto") },
-                    )
-                    FilterChip(
-                        selected = permissionMode == "plan",
-                        onClick = { permissionMode = "plan" },
-                        label = { Text("Plan") },
+            val modeBlock: @Composable () -> Unit = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SectionLabel("Mode")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = permissionMode == "",
+                            onClick = { permissionMode = "" },
+                            label = { Text("Auto") },
+                        )
+                        FilterChip(
+                            selected = permissionMode == "plan",
+                            onClick = { permissionMode = "plan" },
+                            label = { Text("Plan") },
+                        )
+                    }
+                    Text(
+                        "Plan = read-only; agent explores and proposes without editing.",
+                        fontFamily = neon.mono,
+                        fontSize = 10.5.sp,
+                        color = neon.textFaint,
                     )
                 }
-                Text(
-                    "Plan = read-only; agent explores and proposes without editing.",
-                    fontFamily = neon.mono,
-                    fontSize = 10.5.sp,
-                    color = neon.textFaint,
-                )
+            }
+            if (wide) {
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Box(Modifier.weight(1f)) { effortBlock() }
+                    Box(Modifier.weight(1f)) { modeBlock() }
+                }
+            } else {
+                effortBlock()
+                modeBlock()
             }
 
             if (recent.isNotEmpty()) {

@@ -452,6 +452,7 @@ extension ConduitUI {
         @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
         @State private var listing: RemoteDirectoryListing?
         @State private var isLoading = false
@@ -527,8 +528,17 @@ extension ConduitUI {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         modelSection
-                        effortSection
-                        modeSection
+                        // Tablet (§6): effort + mode sit side by side to use
+                        // the width; phone stacks them.
+                        if horizontalSizeClass == .regular {
+                            HStack(alignment: .top, spacing: 14) {
+                                effortSection.frame(maxWidth: .infinity, alignment: .leading)
+                                modeSection.frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        } else {
+                            effortSection
+                            modeSection
+                        }
                         if !store.recentDirectories.isEmpty {
                             recentSection
                         }
