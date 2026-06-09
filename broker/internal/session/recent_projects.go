@@ -69,7 +69,7 @@ func (m *Manager) recordRecentProjectLocked(path, assistant, sessionID string) {
 }
 
 func (m *Manager) recentProjectsPath() string {
-	return filepath.Join(m.kittyRoot, "recent-projects.json")
+	return filepath.Join(m.conduitRoot, "recent-projects.json")
 }
 
 func (m *Manager) loadRecentProjects() {

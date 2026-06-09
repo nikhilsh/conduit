@@ -60,7 +60,7 @@ type Session struct {
 	switchFn      func(string) error
 
 	repoRoot        string
-	kittyRoot       string
+	conduitRoot     string
 	sessionDir      string
 	worktreeDir     string
 	scrollbackPath  string
@@ -247,13 +247,13 @@ type Session struct {
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
-	repoRoot, kittyRoot, err := resolveKittyRoots()
+	repoRoot, conduitRoot, err := resolveConduitRoots()
 	if err != nil {
 		return nil, err
 	}
 	return newSession(id, adapter, sessionOptions{
-		repoRoot:  repoRoot,
-		kittyRoot: kittyRoot,
+		repoRoot:    repoRoot,
+		conduitRoot: conduitRoot,
 	})
 }
 
@@ -270,7 +270,17 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		// die and re-attach, but tmux keeps the real shell alive between
 		// attaches. When tmux isn't on PATH we fall back to plain bash
 		// with no behaviour change (terminalShellArgv handles both).
+		//
+		// CONDUIT_DISABLE_TERMINAL_TMUX forces the plain-bash fallback even
+		// when tmux IS on PATH. Unit tests set it (see TestMain) so they
+		// never spawn real tmux sessions on the shared tmux server — those
+		// would leak past the test exactly as the old `kitty-switch-chat`
+		// orphan did, since a test tears its Manager down with Close() (no
+		// per-session DeleteSession that would reap the tmux).
 		tmuxPath, _ := exec.LookPath("tmux")
+		if os.Getenv("CONDUIT_DISABLE_TERMINAL_TMUX") != "" {
+			tmuxPath = ""
+		}
 		argv := terminalShellArgv(tmuxPath, sanitizeTmuxName(id))
 		cmd = exec.Command(argv[0], argv[1:]...)
 	} else {
@@ -294,23 +304,23 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		subs:         make(map[chan []byte]struct{}),
 		textSubs:     make(map[chan []byte]struct{}),
 		repoRoot:     opts.repoRoot,
-		kittyRoot:    opts.kittyRoot,
+		conduitRoot:  opts.conduitRoot,
 		previewPort:  opts.previewPort,
 		requestedCWD: strings.TrimSpace(opts.requestedCWD),
 		checkpointEvery: durationFromEnv(
-			"KITTY_SESSION_CHECKPOINT_INTERVAL_MS",
+			"CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS",
 			60*time.Second,
 		),
 		watchdogEvery: durationFromEnv(
-			"KITTY_SESSION_WATCHDOG_INTERVAL_MS",
+			"CONDUIT_SESSION_WATCHDOG_INTERVAL_MS",
 			30*time.Second,
 		),
 		stallAfter: durationFromEnv(
-			"KITTY_SESSION_STALL_AFTER_MS",
+			"CONDUIT_SESSION_STALL_AFTER_MS",
 			5*time.Minute,
 		),
 		handoffTimeout: durationFromEnv(
-			"KITTY_SESSION_HANDOFF_TIMEOUT_MS",
+			"CONDUIT_SESSION_HANDOFF_TIMEOUT_MS",
 			250*time.Millisecond,
 		),
 		hooks:      adapter.Hooks,
@@ -1287,7 +1297,7 @@ type Manager struct {
 	recentProjects []RecentProject
 	registry       *agents.Registry
 	repoRoot       string
-	kittyRoot      string
+	conduitRoot    string
 
 	// termgrid is the optional headless xterm.js sidecar. nil when node
 	// isn't installed at startup. Shared by all sessions.
@@ -1349,13 +1359,13 @@ type CreateOptions struct {
 }
 
 func NewManager(registry *agents.Registry) *Manager {
-	repoRoot, kittyRoot, _ := resolveKittyRoots()
+	repoRoot, conduitRoot, _ := resolveConduitRoots()
 	m := &Manager{
-		sessions:  make(map[string]*Session),
-		registry:  registry,
-		repoRoot:  repoRoot,
-		kittyRoot: kittyRoot,
-		stopGC:    make(chan struct{}),
+		sessions:    make(map[string]*Session),
+		registry:    registry,
+		repoRoot:    repoRoot,
+		conduitRoot: conduitRoot,
+		stopGC:      make(chan struct{}),
 	}
 	if strings.TrimSpace(os.Getenv("CONDUIT_DISABLE_SIDECAR")) == "" {
 		tg, err := termgrid.NewManager()
@@ -1499,12 +1509,12 @@ func (m *Manager) HasAssistant(name string) bool {
 }
 
 // ConversationLog returns the persisted conversation transcript for a
-// session id, read from `<kittyRoot>/sessions/<id>/conversation.jsonl`.
+// session id, read from `<conduitRoot>/sessions/<id>/conversation.jsonl`.
 // Works for both live and exited sessions — both append to the same
 // on-disk log, which survives reap — so the app can reopen a past
 // session read-only. Returns an error only when no log exists for the id.
 //
-// Falls back to `<kittyRoot>/archived-sessions/<id>/conversation.jsonl`
+// Falls back to `<conduitRoot>/archived-sessions/<id>/conversation.jsonl`
 // when the active dir has none, so a session deleted (archived) via
 // DeleteSession stays reachable read-only — the delete preserves the
 // transcript, it just takes the session out of the active set.
@@ -1512,14 +1522,14 @@ func (m *Manager) ConversationLog(id string) ([]ConvEntry, error) {
 	if id == "" {
 		return nil, os.ErrNotExist
 	}
-	entries, err := readConvLog(filepath.Join(m.kittyRoot, "sessions", id, "conversation.jsonl"))
+	entries, err := readConvLog(filepath.Join(m.conduitRoot, "sessions", id, "conversation.jsonl"))
 	if err == nil {
 		return entries, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	return readConvLog(filepath.Join(m.kittyRoot, archivedSessionsDirName, id, "conversation.jsonl"))
+	return readConvLog(filepath.Join(m.conduitRoot, archivedSessionsDirName, id, "conversation.jsonl"))
 }
 
 // GetOrCreate returns the existing session for id, or starts a new one
@@ -1605,7 +1615,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	previewPort := m.allocatePreviewPortLocked()
 	s, err := newSession(id, adapter, sessionOptions{
 		repoRoot:      m.repoRoot,
-		kittyRoot:     m.kittyRoot,
+		conduitRoot:   m.conduitRoot,
 		requestedCWD:  requestedCWD,
 		termgrid:      m.termgrid,
 		replayBaseDir: m.replayBaseDir,
@@ -1635,7 +1645,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 }
 
 func (m *Manager) Recover() ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(m.kittyRoot, "sessions"))
+	entries, err := os.ReadDir(filepath.Join(m.conduitRoot, "sessions"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -1706,7 +1716,7 @@ func dirExists(path string) bool {
 
 type sessionOptions struct {
 	repoRoot       string
-	kittyRoot      string
+	conduitRoot    string
 	snapshot       []byte
 	lastCheckpoint time.Time
 	handoffHTML    string
@@ -1844,12 +1854,12 @@ func (s *Session) RewriteUploadRefs(msg string) string {
 }
 
 func (s *Session) applyPaths() {
-	s.sessionDir = filepath.Join(s.kittyRoot, "sessions", s.ID)
+	s.sessionDir = filepath.Join(s.conduitRoot, "sessions", s.ID)
 	s.convLog = newConvLogger(filepath.Join(s.sessionDir, "conversation.jsonl"))
 	s.worktreeDir = filepath.Join(s.sessionDir, "work")
 	s.scrollbackPath = filepath.Join(s.sessionDir, "scrollback.bin")
 	s.metaPath = filepath.Join(s.sessionDir, "meta.json")
-	s.memoryPath = filepath.Join(s.kittyRoot, "memory", "sessions", s.ID+".html")
+	s.memoryPath = filepath.Join(s.conduitRoot, "memory", "sessions", s.ID+".html")
 	s.handoffPath = filepath.Join(s.worktreeDir, ".conduit", "HANDOFF.html")
 	s.handoffOutPath = filepath.Join(s.worktreeDir, ".conduit", "HANDOFF-OUT.html")
 }
@@ -1900,7 +1910,7 @@ func atomicWriteJSON(path string, v any) error {
 	return atomicWriteFile(path, append(data, '\n'))
 }
 
-func resolveKittyRoots() (string, string, error) {
+func resolveConduitRoots() (string, string, error) {
 	if root := strings.TrimSpace(os.Getenv("CONDUIT_ROOT")); root != "" {
 		abs, err := filepath.Abs(root)
 		if err != nil {

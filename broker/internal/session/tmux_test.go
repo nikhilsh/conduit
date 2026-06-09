@@ -8,7 +8,7 @@ import (
 
 // TestSanitizeTmuxName pins the UUID -> tmux-name transform. tmux session
 // names cannot contain `.` or `:` (target-spec separators); the helper must
-// replace those (and any other unsafe char) and prefix `kitty-`. The
+// replace those (and any other unsafe char) and prefix `conduit-`. The
 // transform is pure: the same UUID always maps to the same name, which is
 // what lets a reconnect re-attach to the same tmux session.
 func TestSanitizeTmuxName(t *testing.T) {
@@ -17,13 +17,13 @@ func TestSanitizeTmuxName(t *testing.T) {
 		in    string
 		want  string
 	}{
-		{"plain-uuid", "a94dfc72d609d57cd", "kitty-a94dfc72d609d57cd"},
-		{"hyphenated-uuid", "550e8400-e29b-41d4-a716-446655440000", "kitty-550e8400-e29b-41d4-a716-446655440000"},
-		{"dots-replaced", "1.2.3", "kitty-1_2_3"},
-		{"colons-replaced", "host:1234", "kitty-host_1234"},
-		{"slash-and-space", "foo/bar baz", "kitty-foo_bar_baz"},
-		{"already-safe", "abc_DEF-123", "kitty-abc_DEF-123"},
-		{"empty", "", "kitty-"},
+		{"plain-uuid", "a94dfc72d609d57cd", "conduit-a94dfc72d609d57cd"},
+		{"hyphenated-uuid", "550e8400-e29b-41d4-a716-446655440000", "conduit-550e8400-e29b-41d4-a716-446655440000"},
+		{"dots-replaced", "1.2.3", "conduit-1_2_3"},
+		{"colons-replaced", "host:1234", "conduit-host_1234"},
+		{"slash-and-space", "foo/bar baz", "conduit-foo_bar_baz"},
+		{"already-safe", "abc_DEF-123", "conduit-abc_DEF-123"},
+		{"empty", "", "conduit-"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -53,7 +53,7 @@ func TestSanitizeTmuxNameDeterministic(t *testing.T) {
 // falls back to plain bash with no behaviour change.
 func TestTerminalShellArgv(t *testing.T) {
 	t.Run("tmux-absent-falls-back-to-bash", func(t *testing.T) {
-		got := terminalShellArgv("", "kitty-abc")
+		got := terminalShellArgv("", "conduit-abc")
 		want := []string{"bash"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("terminalShellArgv(\"\", ...): want %v got %v", want, got)
@@ -61,7 +61,7 @@ func TestTerminalShellArgv(t *testing.T) {
 	})
 
 	t.Run("tmux-present-yields-tmux-argv", func(t *testing.T) {
-		got := terminalShellArgv("/usr/bin/tmux", "kitty-abc")
+		got := terminalShellArgv("/usr/bin/tmux", "conduit-abc")
 		if len(got) != 3 || got[0] != "bash" || got[1] != "-lc" {
 			t.Fatalf("expected [bash -lc <script>], got %v", got)
 		}
@@ -71,7 +71,7 @@ func TestTerminalShellArgv(t *testing.T) {
 		// `start-server` then set options BEFORE attaching via `new-session`,
 		// so the alt-screen suppression takes hold pre-attach; the final bare
 		// `;` is a real bash separator for `exec bash -l`.
-		want := `/usr/bin/tmux start-server \; set -g default-terminal 'tmux-256color' \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -ga terminal-overrides ',*:Tc' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s kitty-abc; exec bash -l`
+		want := `/usr/bin/tmux start-server \; set -g default-terminal 'tmux-256color' \; set -ga terminal-overrides ',*:smcup@:rmcup@' \; set -ga terminal-overrides ',*:Tc' \; set -g status off \; set -g mouse off \; set -g history-limit 50000 \; new-session -A -s conduit-abc; exec bash -l`
 		if script != want {
 			t.Fatalf("script:\n want %q\n got  %q", want, script)
 		}
@@ -96,4 +96,31 @@ func TestTerminalShellArgv(t *testing.T) {
 			t.Fatalf("options must be set before new-session: %q", script)
 		}
 	})
+}
+
+// TestTmuxSessionID pins the reverse of sanitizeTmuxName used by the orphan
+// reaper: classify a tmux session name as ours (current or legacy prefix)
+// or the user's, and recover the encoded session id.
+func TestTmuxSessionID(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         string
+		wantID     string
+		wantLegacy bool
+		wantOK     bool
+	}{
+		{"current-prefix", sanitizeTmuxName("abc-123"), "abc-123", false, true},
+		{"legacy-prefix", legacyTmuxName("abc-123"), "abc-123", true, true},
+		{"foreign-name", "my-own-session", "", false, false},
+		{"bare-current", "conduit-", "", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, legacy, ok := tmuxSessionID(tc.in)
+			if id != tc.wantID || legacy != tc.wantLegacy || ok != tc.wantOK {
+				t.Fatalf("tmuxSessionID(%q) = (%q,%v,%v), want (%q,%v,%v)",
+					tc.in, id, legacy, ok, tc.wantID, tc.wantLegacy, tc.wantOK)
+			}
+		})
+	}
 }

@@ -12,6 +12,18 @@ import (
 	"github.com/nikhilsh/conduit/broker/internal/agents"
 )
 
+// TestMain disables the Terminal-tab tmux backing for the entire session
+// test package. Structured-chat sessions otherwise spawn a real
+// `tmux new-session` on the shared tmux server (terminalShellArgv), and
+// because tests tear their Manager down with Close() — not a per-session
+// DeleteSession — those detached sessions leak past the test exactly as
+// the stray `kitty-switch-chat` orphan did. Forcing the plain-bash
+// fallback keeps `go test` from polluting the dev box's tmux server.
+func TestMain(m *testing.M) {
+	os.Setenv("CONDUIT_DISABLE_TERMINAL_TMUX", "1")
+	os.Exit(m.Run())
+}
+
 func TestCheckpointPersistsSessionRails(t *testing.T) {
 	root := testRoot(t)
 	reg := testRegistry(t, root, map[string]string{
@@ -372,10 +384,10 @@ func testRoot(t *testing.T) string {
 		t.Fatalf("MkdirAll(.conduit): %v", err)
 	}
 	t.Setenv("CONDUIT_ROOT", filepath.Join(root, ".conduit"))
-	t.Setenv("KITTY_SESSION_CHECKPOINT_INTERVAL_MS", "1000")
-	t.Setenv("KITTY_SESSION_WATCHDOG_INTERVAL_MS", "1000")
-	t.Setenv("KITTY_SESSION_STALL_AFTER_MS", "1000")
-	t.Setenv("KITTY_SESSION_HANDOFF_TIMEOUT_MS", "500")
+	t.Setenv("CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS", "1000")
+	t.Setenv("CONDUIT_SESSION_WATCHDOG_INTERVAL_MS", "1000")
+	t.Setenv("CONDUIT_SESSION_STALL_AFTER_MS", "1000")
+	t.Setenv("CONDUIT_SESSION_HANDOFF_TIMEOUT_MS", "500")
 	return root
 }
 
@@ -437,7 +449,7 @@ func idleScript(ready string) string {
 }
 
 func handoffTrapScript(ready string) string {
-	return "trap 'cp \"$KITTY_HANDOFF_PATH\" \"$KITTY_HANDOFF_OUT_PATH\"; exit 0' USR1; echo " + ready + "; while :; do sleep 1; done"
+	return "trap 'cp \"$CONDUIT_HANDOFF_PATH\" \"$CONDUIT_HANDOFF_OUT_PATH\"; exit 0' USR1; echo " + ready + "; while :; do sleep 1; done"
 }
 
 func quoteTOML(v string) string {

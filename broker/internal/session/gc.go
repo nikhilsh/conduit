@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// RunGC prunes session directories under `<kittyRoot>/sessions/` and
-// their paired `<kittyRoot>/memory/sessions/<id>.html` snapshots when
+// RunGC prunes session directories under `<conduitRoot>/sessions/` and
+// their paired `<conduitRoot>/memory/sessions/<id>.html` snapshots when
 // they haven't been touched in `maxAge`. Live sessions (anything in
 // `m.sessions`) are always preserved.
 //
@@ -28,7 +28,7 @@ func (m *Manager) RunGC(maxAge time.Duration, now time.Time) ([]string, error) {
 		return nil, nil
 	}
 	cutoff := now.Add(-maxAge)
-	root := filepath.Join(m.kittyRoot, "sessions")
+	root := filepath.Join(m.conduitRoot, "sessions")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -65,13 +65,18 @@ func (m *Manager) RunGC(maxAge time.Duration, now time.Time) ([]string, error) {
 			}
 			continue
 		}
-		memoryFile := filepath.Join(m.kittyRoot, "memory", "sessions", id+".html")
+		memoryFile := filepath.Join(m.conduitRoot, "memory", "sessions", id+".html")
 		if err := os.Remove(memoryFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 			if firstErr == nil {
 				firstErr = err
 			}
 			// Don't undo the prune — the orphan HTML is harmless.
 		}
+		// Tear down the Terminal-tab tmux session now that its owning
+		// session is gone; otherwise the detached tmux session (and its
+		// 50000-line scrollback) would linger on the tmux server until the
+		// next broker restart's ReapOrphanTmuxSessions sweep. Best-effort.
+		killTmuxSession(id)
 		pruned = append(pruned, id)
 	}
 	return pruned, firstErr
@@ -96,16 +101,17 @@ func mostRecentTouch(sessionDir string) time.Time {
 
 // startGCLoop runs an initial GC pass and then keeps pruning every
 // `interval`. Reads tuning from the environment once at startup:
-//   - KITTY_SESSION_GC_AGE_DAYS    (default 7,  set 0 to disable)
-//   - KITTY_SESSION_GC_INTERVAL_HOURS (default 24)
+//   - CONDUIT_SESSION_GC_AGE_DAYS    (default 7,  set 0 to disable)
+//   - CONDUIT_SESSION_GC_INTERVAL_HOURS (default 24)
 //
+// The legacy KITTY_-prefixed names are still honoured (see envIntDefault).
 // Diagnostic output goes to stderr so it shows up in journalctl.
 func (m *Manager) startGCLoop(stop <-chan struct{}) {
-	ageDays := envIntDefault("KITTY_SESSION_GC_AGE_DAYS", 7)
+	ageDays := envIntDefault("CONDUIT_SESSION_GC_AGE_DAYS", 7)
 	if ageDays <= 0 {
 		return
 	}
-	intervalHours := envIntDefault("KITTY_SESSION_GC_INTERVAL_HOURS", 24)
+	intervalHours := envIntDefault("CONDUIT_SESSION_GC_INTERVAL_HOURS", 24)
 	if intervalHours <= 0 {
 		intervalHours = 24
 	}
@@ -147,7 +153,7 @@ func (m *Manager) runGCAndLog(maxAge time.Duration) {
 }
 
 func envIntDefault(name string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(name))
+	raw := strings.TrimSpace(lookupEnvCompat(name))
 	if raw == "" {
 		return fallback
 	}

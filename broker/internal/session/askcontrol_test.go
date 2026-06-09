@@ -96,7 +96,7 @@ func TestEncodeAskAnswerMultiQuestionUsesFreeText(t *testing.T) {
 func TestSendChatAnswersPendingAsk(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{}
-	s.kittyRoot = dir
+	s.conduitRoot = dir
 	s.ID = "ask-test"
 	s.applyPaths()
 	fake := &fakeChatBackend{}

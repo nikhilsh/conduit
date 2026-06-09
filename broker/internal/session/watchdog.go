@@ -57,7 +57,7 @@ func (s *Session) runWatchdogChecks() {
 		s.setHealthWithReason("healthy", "running", "ok")
 	}
 
-	probe := filepath.Join(s.kittyRoot, "memory", ".probe-"+s.ID)
+	probe := filepath.Join(s.conduitRoot, "memory", ".probe-"+s.ID)
 	if err := atomicWriteFile(probe, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
 		s.setHealthWithReason("warning", "running", "probe_write_failed")
 	}

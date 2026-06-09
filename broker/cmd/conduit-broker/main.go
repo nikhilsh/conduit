@@ -109,6 +109,12 @@ func runUp(args []string) int {
 		// agent starts on demand when a client first opens the session.
 		log.Printf("recoverable sessions (lazy, spawn on open): %d", len(recovered))
 	}
+	// Reap Terminal-tab tmux sessions left behind by sessions that were
+	// archived/pruned or lost to a crash in a previous broker lifetime
+	// (plus any pre-rebrand `kitty-` named ones). Detached + orphaned only;
+	// attached and still-recoverable sessions are preserved. Runs after
+	// Recover so the on-disk session set it checks against is settled.
+	mgr.ReapOrphanTmuxSessions()
 	srv := ws.New(store, mgr)
 	// Wire the per-identity OAuth credential store (Stage 1 of
 	// docs/PLAN-AGENT-OAUTH.md). Empty --credentials-dir disables the

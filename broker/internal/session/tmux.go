@@ -1,6 +1,9 @@
 package session
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // tmuxNameUnsafe matches every character that is NOT allowed in a tmux
 // session name. tmux uses `.` and `:` as window/pane separators in target
@@ -10,17 +13,52 @@ import "regexp"
 // safe set to ASCII letters, digits, underscore, and hyphen.
 var tmuxNameUnsafe = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 
+const (
+	// tmuxSessionPrefix namespaces the broker's per-session Terminal-tab
+	// tmux sessions away from any the user started by hand.
+	tmuxSessionPrefix = "conduit-"
+	// legacyTmuxSessionPrefix is the pre-rebrand prefix. The broker no
+	// longer creates these, but kill/reap paths still recognise them so a
+	// session that predates the rename gets cleaned up rather than
+	// lingering forever (the new code attaches under tmuxSessionPrefix and
+	// will never re-attach to a legacy name).
+	legacyTmuxSessionPrefix = "kitty-"
+)
+
 // sanitizeTmuxName turns an arbitrary session UUID into a tmux-safe
 // session name. Every unsafe character (notably `.` and `:`) is replaced
-// with `_`, and the result is prefixed with `kitty-` so the broker's
+// with `_`, and the result is prefixed with `conduit-` so the broker's
 // sessions are namespaced away from any tmux sessions the user started
 // by hand. The transform is pure and deterministic: the same UUID always
 // maps to the same tmux name, which is what lets a reconnect re-attach.
 //
-// An empty input still yields a usable name (`kitty-`), but in practice
+// An empty input still yields a usable name (`conduit-`), but in practice
 // the caller always passes a non-empty UUID.
 func sanitizeTmuxName(id string) string {
-	return "kitty-" + tmuxNameUnsafe.ReplaceAllString(id, "_")
+	return tmuxSessionPrefix + tmuxNameUnsafe.ReplaceAllString(id, "_")
+}
+
+// legacyTmuxName is sanitizeTmuxName with the pre-rebrand prefix. Used
+// only by the kill/reap paths to also tear down a terminal that was
+// created before the conduit rename.
+func legacyTmuxName(id string) string {
+	return legacyTmuxSessionPrefix + tmuxNameUnsafe.ReplaceAllString(id, "_")
+}
+
+// tmuxSessionID returns the Conduit session id encoded in a tmux session
+// name and whether the name belongs to the broker's namespace at all. The
+// second return is true when the name used the legacy (pre-rebrand)
+// prefix, which the reaper treats as always-dead. The id is the sanitized
+// form (unsafe chars already collapsed to `_`); it is only ever compared
+// against other sanitized names, never used to re-derive a UUID.
+func tmuxSessionID(name string) (id string, legacy, ok bool) {
+	if rest, found := strings.CutPrefix(name, tmuxSessionPrefix); found {
+		return rest, false, true
+	}
+	if rest, found := strings.CutPrefix(name, legacyTmuxSessionPrefix); found {
+		return rest, true, true
+	}
+	return "", false, false
 }
 
 // terminalShellArgv builds the argv for the Terminal-tab PTY shell.

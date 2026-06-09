@@ -9,12 +9,12 @@ import (
 )
 
 func (m *Manager) sessionOnDisk(id string) bool {
-	_, err := os.Stat(filepath.Join(m.kittyRoot, "sessions", id, "meta.json"))
+	_, err := os.Stat(filepath.Join(m.conduitRoot, "sessions", id, "meta.json"))
 	return err == nil
 }
 
 func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
-	metaPath := filepath.Join(m.kittyRoot, "sessions", id, "meta.json")
+	metaPath := filepath.Join(m.conduitRoot, "sessions", id, "meta.json")
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		return nil, err
@@ -37,12 +37,12 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	scrollbackPath := filepath.Join(m.kittyRoot, "sessions", id, "scrollback.bin")
+	scrollbackPath := filepath.Join(m.conduitRoot, "sessions", id, "scrollback.bin")
 	snapshot, err := os.ReadFile(scrollbackPath)
 	if err != nil {
 		return nil, err
 	}
-	memoryPath := filepath.Join(m.kittyRoot, "memory", "sessions", id+".html")
+	memoryPath := filepath.Join(m.conduitRoot, "memory", "sessions", id+".html")
 	if _, err := os.Stat(memoryPath); err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// after newSession would both deny it $PORT and race the watchdog
 	// goroutine's lock-free read of s.previewPort.
 	previewPort := m.allocatePreviewPortLocked()
-	sessionDir := filepath.Join(m.kittyRoot, "sessions", id)
+	sessionDir := filepath.Join(m.conduitRoot, "sessions", id)
 	hasClaudeConversation := chatConversationOnDisk(sessionDir, ".claude")
 	resumeID := meta.ClaudeChatSessionID
 	if !hasClaudeConversation {
@@ -68,7 +68,7 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	}
 	s, err := newSession(id, adapter, sessionOptions{
 		repoRoot:       m.repoRoot,
-		kittyRoot:      m.kittyRoot,
+		conduitRoot:    m.conduitRoot,
 		snapshot:       snapshot,
 		lastCheckpoint: lastCheckpoint,
 		termgrid:       m.termgrid,
