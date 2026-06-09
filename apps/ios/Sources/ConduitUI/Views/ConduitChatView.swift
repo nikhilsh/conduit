@@ -1,6 +1,26 @@
 import SwiftUI
 import UIKit
 
+// MARK: - Chat A/B arm (chat-shell-v2, handoff §2)
+//
+// The resolved arm (Breathe / Signature) is injected once at the chat
+// shell and read deep in the row tree via this environment value, so the
+// per-turn presentation (spine lane vs. label) and tool-row weight branch
+// without threading a parameter through every intermediate view. Rows are
+// `.equatable()`; the arm is folded into `appearanceRenderRevision` so an
+// A↔B switch re-renders every row.
+
+private struct ChatArmKey: EnvironmentKey {
+    static let defaultValue: FeatureFlags.ChatArm = .a
+}
+
+extension EnvironmentValues {
+    var chatArm: FeatureFlags.ChatArm {
+        get { self[ChatArmKey.self] }
+        set { self[ChatArmKey.self] = newValue }
+    }
+}
+
 // MARK: - ConduitChatView
 //
 // Conduit-faithful chat surface. Mirrors upstream's ConversationView:
@@ -27,8 +47,17 @@ extension ConduitUI {
     struct ChatView: View {
         @Environment(SessionStore.self) private var store
         @Environment(AppearanceStore.self) private var appearance
+        @Environment(FeatureFlags.self) private var flags
         @Environment(StreamingRendererCoordinator.self) private var coordinator
         @Environment(\.neonTheme) private var neon
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+        /// On tablet (regular width) the transcript is capped + centered so
+        /// lines don't run the full pane width (handoff §6 — "max content
+        /// width ~760pt"). Phone (compact) fills the width as before.
+        private var chatContentMaxWidth: CGFloat {
+            horizontalSizeClass == .regular ? 760 : .infinity
+        }
 
         let session: ProjectSession
 
@@ -156,6 +185,11 @@ extension ConduitUI {
                         composerFocused = true
                     }, agent: session.assistant, sessionName: store.displayName(for: session))
                 }
+                // chat-shell-v2 (§2): resolve the arm once at the shell and
+                // inject it for the row tree to read. Log the exposure event
+                // the first time the chat shell mounts (idempotent).
+                .environment(\.chatArm, flags.resolvedChatArm)
+                .task { flags.logChatExposureIfNeeded() }
         }
 
         // MARK: Messages
@@ -275,7 +309,8 @@ extension ConduitUI {
                 palette: appearance.neonPalette.rawValue,
                 glow: appearance.neonGlow,
                 dark: neon.dark,
-                collapseTurns: appearance.collapseTurns
+                collapseTurns: appearance.collapseTurns,
+                chatArm: flags.resolvedChatArm.rawValue
             )
         }
 
@@ -511,6 +546,9 @@ extension ConduitUI {
                             .id(Self.bottomAnchorID)
                     }
                     .padding(.vertical, 14)
+                    // Cap + center the transcript column on tablet (§6).
+                    .frame(maxWidth: chatContentMaxWidth)
+                    .frame(maxWidth: .infinity)
                     .animation(.easeOut(duration: 0.18), value: isAgentWorking)
                 }
                 .scrollDismissesKeyboard(.interactively)
@@ -1299,12 +1337,30 @@ private struct ConduitChatMessageRow: View {
     var isContinuation: Bool = false
     @Environment(AppearanceStore.self) private var appearance
     @Environment(\.neonTheme) private var neon
+    /// chat-shell-v2 arm (§2). Arm A "Breathe" keeps ASSISTANT/YOU labels;
+    /// arm B "Signature" wraps assistant turns in the conduit-spine lane.
+    @Environment(\.chatArm) private var arm
 
     private var role: ConduitRole { ConduitRole(event.role) }
 
+    /// Arm B routes assistant/system turns through the spine lane; the user
+    /// bubble is shared by both arms (§2: "both arms share the green user
+    /// bubble").
+    private var usesSpine: Bool { arm == .b && role != .user }
+
     var body: some View {
+        if usesSpine {
+            signatureLane
+        } else {
+            breatheRow
+        }
+    }
+
+    // MARK: Arm A — Breathe (today's chat, de-cramped)
+
+    private var breatheRow: some View {
         let alignment: HorizontalAlignment = role == .user ? .trailing : .leading
-        VStack(alignment: alignment, spacing: 4) {
+        return VStack(alignment: alignment, spacing: 4) {
             if !isContinuation {
                 Text(roleLabel)
                     // Role labels stay mono (terminal-shaped chrome) +
@@ -1314,28 +1370,71 @@ private struct ConduitChatMessageRow: View {
                     .textCase(.uppercase)
                     .neonTextGlow(roleGlow)
             }
-            // §2: user messages render in a right-aligned accent pill;
-            // the assistant/system prose renders flat on the canvas (no
-            // heavy bubble), styled inside ConduitBlockStack.
-            if role == .user {
-                // The bubble strips its own `[attached …]` reference lines
-                // and renders them as chips/thumbnails instead of raw paths.
-                ConduitUserBubble(event: event)
-            } else {
-                ConduitBlockStack(
-                    blocks: ConversationRenderer.blocks(for: event.content),
-                    role: role,
-                    itemID: event.id
-                )
-            }
-            if !event.files.isEmpty {
-                ConduitFileStrip(files: event.files)
-            }
+            messageContent
         }
         .frame(maxWidth: .infinity, alignment: role == .user ? .trailing : .leading)
         // Continuation rows get tighter top spacing: the LazyVStack's 14pt
         // gap minus 10pt offset makes grouped messages sit closer together.
         .padding(.top, isContinuation ? -10 : 0)
+    }
+
+    // MARK: Arm B — Signature (the conduit spine)
+
+    /// Each assistant turn is a lane: the daemon mark at its head and a
+    /// cyan→green line running down it (§2, `03-chat`). Continuation rows
+    /// keep the line but drop a second mark so a multi-message turn reads as
+    /// one lane.
+    private var signatureLane: some View {
+        HStack(alignment: .top, spacing: 11) {
+            VStack(spacing: 0) {
+                if isContinuation {
+                    spineLine
+                } else {
+                    ConduitUI.ConduitMark(size: 18, color: neon.codex, glow: neon.glow)
+                    spineLine.padding(.top, 5)
+                }
+            }
+            .frame(width: 18)
+            messageContent
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, isContinuation ? -8 : 0)
+    }
+
+    /// The vertical cyan→green spine that runs down an assistant lane.
+    private var spineLine: some View {
+        Rectangle()
+            .fill(
+                LinearGradient(
+                    colors: [neon.codex, neon.green],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .frame(width: 2)
+            .frame(maxHeight: .infinity)
+            .opacity(0.55)
+    }
+
+    /// The message body, shared by both arms: user → green bubble; everyone
+    /// else → flat prose blocks. Files strip underneath when present.
+    @ViewBuilder
+    private var messageContent: some View {
+        if role == .user {
+            // The bubble strips its own `[attached …]` reference lines
+            // and renders them as chips/thumbnails instead of raw paths.
+            ConduitUserBubble(event: event)
+        } else {
+            ConduitBlockStack(
+                blocks: ConversationRenderer.blocks(for: event.content),
+                role: role,
+                itemID: event.id
+            )
+        }
+        if !event.files.isEmpty {
+            ConduitFileStrip(files: event.files)
+        }
     }
 
     private var roleLabel: String {
@@ -1628,13 +1727,18 @@ private struct ConduitStructuredMarkdownView: View {
     /// looking double-spaced.
     private let blockSpacing: CGFloat = 10
 
-    /// Prose font for transcript text — the user's selected Chat font
-    /// (handoff Part A). `FontFamily.font(size:weight:)` resolves the
-    /// concrete face (System / Space Grotesk / IBM Plex Sans / Newsreader)
-    /// and falls back to the system face if a bundled TTF is missing.
+    /// Prose font for transcript text — the user's selected Chat font.
+    /// `FontFamily.font(size:weight:)` resolves the pairing's prose face and
+    /// falls back to the system face if a bundled TTF is missing.
     private func proseFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         fontFamily.font(size: size, weight: weight)
     }
+
+    /// De-cramp (handoff §1/§7): both chat arms read calmer than today by
+    /// lifting prose line-height from ~1.46 toward ~1.7. SwiftUI `lineSpacing`
+    /// is added leading on top of the font's intrinsic ~1.2, so ~0.34× the
+    /// point size lands the rendered line-height near the 1.7 target.
+    private var proseLineSpacing: CGFloat { basePointSize * 0.34 }
 
     var body: some View {
         VStack(alignment: role == .user ? .trailing : .leading, spacing: blockSpacing) {
@@ -1654,6 +1758,7 @@ private struct ConduitStructuredMarkdownView: View {
         case .paragraph(let text):
             inlineText(text)
                 .font(proseFont(basePointSize))
+                .lineSpacing(proseLineSpacing)
         case .list(let ordered, let items):
             listView(ordered: ordered, items: items)
         case .table(let headers, let rows):
@@ -1692,6 +1797,7 @@ private struct ConduitStructuredMarkdownView: View {
                         .frame(minWidth: ordered ? 18 : 10, alignment: .trailing)
                     inlineText(item)
                         .font(proseFont(basePointSize))
+                        .lineSpacing(proseLineSpacing)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -2081,6 +2187,9 @@ private struct ConduitToolBundleCard: View {
     @State private var expanded: Bool
     @State private var focusedID: String?
     @Environment(\.neonTheme) private var neon
+    /// chat-shell-v2 arm (§2). Arm B drops the grouped card and renders each
+    /// tool as a recessive one-line spine row.
+    @Environment(\.chatArm) private var arm
 
     init(items: [ConversationItem], sessionID: String = "") {
         self.items = items
@@ -2159,6 +2268,21 @@ private struct ConduitToolBundleCard: View {
     }
 
     var body: some View {
+        if arm == .b {
+            // Signature arm: the run reads as a stack of quiet rows, no
+            // grouping chrome — tool output recedes (§2).
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(displayItems, id: \.id) { item in
+                    ConduitSpineToolRow(event: item)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            breatheBody
+        }
+    }
+
+    private var breatheBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if expanded {
@@ -2457,16 +2581,88 @@ private struct ConduitToolCard: View {
     /// opens collapsed instead of expanded. The compact tool row already
     /// opens collapsed regardless (device feedback v0.0.47 #2).
     var collapseDefault: Bool = false
+    /// chat-shell-v2 arm (§2). Arm B recedes tool calls to quiet one-line
+    /// rows instead of glowing cards.
+    @Environment(\.chatArm) private var arm
 
     var body: some View {
-        // §4.1 vs §4.5: shell/exec calls (or anything carrying a
-        // command) get the headline CommandCard; everything else gets
-        // the compact neon tool row.
-        if NeonToolClassifier.isCommand(toolName: event.toolName, command: ConversationRenderer.extractCommand(from: event)) {
+        if arm == .b {
+            ConduitSpineToolRow(event: event)
+        } else if NeonToolClassifier.isCommand(toolName: event.toolName, command: ConversationRenderer.extractCommand(from: event)) {
+            // §4.1 vs §4.5: shell/exec calls (or anything carrying a
+            // command) get the headline CommandCard; everything else gets
+            // the compact neon tool row.
             ConduitNeonCommandCard(event: event, sessionID: sessionID, collapseDefault: collapseDefault)
         } else {
             ConduitNeonToolCard(event: event)
         }
+    }
+}
+
+// MARK: - Signature arm — recessive tool row (§2, `03-chat`)
+//
+// Arm B "Signature" lets tool output recede: a quiet one-line row
+// (`⌁ git status --porcelain=… exit 0 ›`) instead of a glowing card. The
+// leading bolt is tinted by run state (running/ok/fail); tapping expands
+// the raw output inline. Mono throughout — this is the machine talking.
+private struct ConduitSpineToolRow: View {
+    let event: ConversationItem
+    @State private var expanded = false
+    @Environment(\.neonTheme) private var neon
+
+    private var state: NeonCardState { NeonCardState(status: event.status, exitCode: event.exitCode) }
+    private var summary: String {
+        ConversationRenderer.extractCommand(from: event)
+            ?? NeonToolClassifier.humanLabel(toolName: event.toolName, fileCount: event.files.count)
+    }
+    private var detail: String {
+        event.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 8) {
+                    Text("\u{2301}")   // ⌁ daemon bolt
+                        .font(neon.mono(12).weight(.bold))
+                        .foregroundStyle(state.color(neon))
+                    Text(summary)
+                        .font(neon.mono(12))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    if let code = event.exitCode {
+                        Text("exit \(code)")
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(code == 0 ? neon.textFaint : neon.red)
+                    }
+                    if !detail.isEmpty {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(detail.isEmpty)
+
+            if expanded, !detail.isEmpty {
+                Text(detail)
+                    .font(neon.mono(11.5))
+                    .foregroundStyle(neon.codeText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(neon.codeBg)
+                    )
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
     }
 }
 

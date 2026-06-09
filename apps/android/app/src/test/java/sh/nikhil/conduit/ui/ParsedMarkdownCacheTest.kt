@@ -141,26 +141,26 @@ class ParsedMarkdownCacheTest {
     // --- markdownRevision (the cache-key fold) ---
 
     @Test fun revisionIsStableForSameInputs() {
-        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
-        val b = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
+        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal)
+        val b = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal)
         assertEquals(a, b)
     }
 
     @Test fun revisionVariesWithContent() {
-        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
-        val b = markdownRevision("world", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
+        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal)
+        val b = markdownRevision("world", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal)
         assertTrue(a != b)
     }
 
     @Test fun revisionVariesWithBodyPointSize() {
-        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
-        val b = markdownRevision("hello", 22f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
+        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal)
+        val b = markdownRevision("hello", 22f, sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal)
         assertTrue(a != b)
     }
 
     @Test fun revisionVariesWithFontChoice() {
-        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.System)
-        val b = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Newsreader)
+        val a = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal)
+        val b = markdownRevision("hello", 16f, sh.nikhil.conduit.AppearanceStore.FontFamily.Editorial)
         assertTrue(a != b)
     }
 }

@@ -134,19 +134,25 @@ data class NeonTheme(
     val textGlow: NeonTextGlow?,
     val glowBox: NeonGlowBox?,
     val cardElevation: NeonCardElevation?,
+
+    // §4 chat-font pairing — drives BOTH [sans] and [mono] app-wide. The
+    // Terminal default keeps the brand baseline (Space Grotesk · JetBrains
+    // Mono). Defaulted so framework-free theme tests / previews stay on brand.
+    val chatFont: sh.nikhil.conduit.AppearanceStore.FontFamily =
+        sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal,
 ) {
     /**
-     * Type intent (BRAND.md §4): sans = Space Grotesk, mono =
-     * JetBrains Mono — both BUNDLED in `res/font/` and resolved through
-     * [NeonBrandFonts] (lazy `ResourceFont` descriptors; nothing loads
-     * until first render, so the pure-JVM theme tests stay framework-
-     * free). Mirrors the iOS `sans()`/`mono()` helpers, which map to the
-     * same bundled faces.
+     * Type intent (handoff §4): [sans] resolves the selected pairing's PROSE
+     * face and [mono] its MONO face, both BUNDLED in `res/font/` and resolved
+     * through [NeonBrandFonts] (lazy `ResourceFont` descriptors; nothing loads
+     * until first render, so the pure-JVM theme tests stay framework-free).
+     * The Terminal default = Space Grotesk · JetBrains Mono (the brand
+     * baseline). Mirrors iOS `NeonTheme.sans()`/`mono()`.
      */
     val sans: androidx.compose.ui.text.font.FontFamily
-        get() = NeonBrandFonts.sans
+        get() = neonProseFontFamily(chatFont)
     val mono: androidx.compose.ui.text.font.FontFamily
-        get() = NeonBrandFonts.mono
+        get() = neonMonoFontFamily(chatFont)
 
     companion object {
         const val RADIUS_DP: Float = 20f
@@ -162,8 +168,16 @@ data class NeonTheme(
         }
 
         /** Resolve the token set for a (palette, dark, glow) combination.
-         *  Reproduces iOS `NeonTheme.resolve(...)` / `makeNeon(...)`. */
-        fun resolve(palette: NeonPalette, dark: Boolean, glow: Boolean): NeonTheme {
+         *  Reproduces iOS `NeonTheme.resolve(...)` / `makeNeon(...)`.
+         *  [chatFont] is the §4 pairing driving [sans]/[mono]; defaults to
+         *  the brand baseline so existing call sites stay on brand. */
+        fun resolve(
+            palette: NeonPalette,
+            dark: Boolean,
+            glow: Boolean,
+            chatFont: sh.nikhil.conduit.AppearanceStore.FontFamily =
+                sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal,
+        ): NeonTheme {
             val aBright = Color(palette.accent)            // A
             val a2 = Color(palette.accent2)                // A2
             val accent = if (dark) aBright else Color(palette.accentDark)
@@ -338,6 +352,7 @@ data class NeonTheme(
                 textGlow = textGlow,
                 glowBox = glowBox,
                 cardElevation = cardElevation,
+                chatFont = chatFont,
             )
         }
     }
@@ -390,18 +405,49 @@ object NeonBrandFonts {
         androidx.compose.ui.text.font.Font(R.font.newsreader_medium, androidx.compose.ui.text.font.FontWeight.SemiBold),
         androidx.compose.ui.text.font.Font(R.font.newsreader_bold, androidx.compose.ui.text.font.FontWeight.Bold),
     )
+
+    // §4 pairing faces added for the chat-font pairings. Geist / Geist Mono /
+    // Spline Sans Mono ship as single variable TTFs (wght axis 400→700);
+    // Compose synthesizes the intermediate weights off the one descriptor.
+    val ibmPlexMono = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.ibm_plex_mono_regular, androidx.compose.ui.text.font.FontWeight.Normal),
+        androidx.compose.ui.text.font.Font(R.font.ibm_plex_mono_bold, androidx.compose.ui.text.font.FontWeight.Bold),
+    )
+    val geist = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.geist, androidx.compose.ui.text.font.FontWeight.Normal),
+    )
+    val geistMono = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.geist_mono, androidx.compose.ui.text.font.FontWeight.Normal),
+    )
+    val splineSansMono = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.spline_sans_mono, androidx.compose.ui.text.font.FontWeight.Normal),
+    )
 }
 
 /**
- * Resolve the user's chat-font choice to a Compose [FontFamily]. `System`
- * uses the platform default; the other three map to their bundled face.
- * Mirrors iOS `AppearanceStore.FontFamily.font(size:weight:)`.
+ * Resolve a §4 pairing to its PROSE Compose [FontFamily]. Mirrors iOS
+ * `FontFamily.proseFamilyName`.
  */
-fun neonChatFontFamily(
+fun neonProseFontFamily(
     choice: sh.nikhil.conduit.AppearanceStore.FontFamily,
 ): androidx.compose.ui.text.font.FontFamily = when (choice) {
-    sh.nikhil.conduit.AppearanceStore.FontFamily.System -> androidx.compose.ui.text.font.FontFamily.Default
-    sh.nikhil.conduit.AppearanceStore.FontFamily.SpaceGrotesk -> NeonBrandFonts.sans
-    sh.nikhil.conduit.AppearanceStore.FontFamily.IbmPlexSans -> NeonBrandFonts.ibmPlexSans
-    sh.nikhil.conduit.AppearanceStore.FontFamily.Newsreader -> NeonBrandFonts.newsreader
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal -> NeonBrandFonts.sans          // Space Grotesk
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Plex -> NeonBrandFonts.ibmPlexSans
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Geist -> NeonBrandFonts.geist
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Editorial -> NeonBrandFonts.newsreader
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Soft -> NeonBrandFonts.ibmPlexSans
+}
+
+/**
+ * Resolve a §4 pairing to its MONO Compose [FontFamily]. Mirrors iOS
+ * `FontFamily.monoFamilyName`.
+ */
+fun neonMonoFontFamily(
+    choice: sh.nikhil.conduit.AppearanceStore.FontFamily,
+): androidx.compose.ui.text.font.FontFamily = when (choice) {
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Terminal -> NeonBrandFonts.mono           // JetBrains Mono
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Plex -> NeonBrandFonts.ibmPlexMono
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Geist -> NeonBrandFonts.geistMono
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Editorial -> NeonBrandFonts.splineSansMono
+    sh.nikhil.conduit.AppearanceStore.FontFamily.Soft -> NeonBrandFonts.splineSansMono
 }

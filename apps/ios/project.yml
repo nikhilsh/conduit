@@ -149,13 +149,24 @@ targets:
           # Brand body face (BRAND.md §4) — `neon.sans()` maps to it.
           - SpaceGrotesk-Regular.ttf
           - SpaceGrotesk-Bold.ttf
-          # Chat-font options (handoff Part A "Chat font" strip). IBM Plex
-          # Sans ships as a single variable TTF (wght axis covers regular→
-          # bold); Newsreader as static Regular/Bold. Resolved by CoreText
-          # family name via `AppearanceStore.FontFamily.customFontName`.
+          # Chat-font pairings (handoff §4). Each FontFamily case names a
+          # PROSE + a MONO face; resolved by CoreText family name via
+          # `FontFamily.proseFamilyName` / `monoFamilyName`. IBM Plex Sans,
+          # Geist, Geist Mono and Spline Sans Mono ship as single variable
+          # TTFs (wght axis covers 400→700); Newsreader as static Regular/
+          # Bold. JetBrains Mono / IBM Plex Mono are already declared above
+          # (shared with the terminal). Pairings:
+          #   .terminal  Space Grotesk · JetBrains Mono   (default)
+          #   .plex      IBM Plex Sans · IBM Plex Mono
+          #   .geist     Geist · Geist Mono
+          #   .editorial Newsreader · Spline Sans Mono
+          #   .soft      IBM Plex Sans · Spline Sans Mono
           - IBMPlexSans.ttf
           - Newsreader-Regular.ttf
           - Newsreader-Bold.ttf
+          - Geist.ttf
+          - GeistMono.ttf
+          - SplineSansMono.ttf
         NSMicrophoneUsageDescription: "Dictate replies to the coding agent."
         NSSpeechRecognitionUsageDescription: "Transcribe your voice on-device into chat messages for the coding agent."
         NSLocalNetworkUsageDescription: "Discover Conduit harnesses advertising on your Wi-Fi."

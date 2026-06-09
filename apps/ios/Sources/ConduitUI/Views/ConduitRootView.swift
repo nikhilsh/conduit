@@ -23,6 +23,27 @@ extension ConduitUI {
 
     struct RootView: View {
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+        @Environment(SessionStore.self) private var store
+        @Environment(FeatureFlags.self) private var flags
+
+        /// Set true when the user explicitly finishes onboarding, so a paired
+        /// session doesn't snap back into the wizard on the same launch.
+        @State private var onboardingFinished = false
+
+        /// Onboarding gate (§5): show the wizard whenever this DEVICE holds no
+        /// pairing key for any broker. No accounts / sign-in — trust is the
+        /// device↔broker pairing handshake, so `savedServers` (the brokers
+        /// this device is paired with) is the only signal. Once one is paired
+        /// the route flips to `.none` and the cover dismisses; an unreachable
+        /// paired broker is Home + offline banner, never re-onboarding.
+        private var needsOnboarding: Bool {
+            guard !onboardingFinished else { return false }
+            let route = FeatureFlags.onboardingRoute(
+                pairedBrokers: store.savedServers.count,
+                brokerReachable: store.harness.canIssueCommands
+            )
+            return route != .none
+        }
 
         var body: some View {
             ZStack {
@@ -35,6 +56,14 @@ extension ConduitUI {
                 } else {
                     ConduitUI.HomeView()
                 }
+            }
+            .fullScreenCover(isPresented: Binding(
+                get: { needsOnboarding },
+                set: { if !$0 { onboardingFinished = true } }
+            )) {
+                ConduitUI.OnboardingView(onFinish: { onboardingFinished = true })
+                    .environment(store)
+                    .environment(flags)
             }
         }
     }

@@ -89,7 +89,8 @@ extension ConduitUI {
             palette: String,
             glow: Bool,
             dark: Bool,
-            collapseTurns: Bool
+            collapseTurns: Bool,
+            chatArm: String = "a"
         ) -> Int {
             var hasher = Hasher()
             hasher.combine(fontFamily)
@@ -98,6 +99,8 @@ extension ConduitUI {
             hasher.combine(glow)
             hasher.combine(dark)
             hasher.combine(collapseTurns)
+            // chat-shell-v2 arm (§2): switching A↔B must re-render every row.
+            hasher.combine(chatArm)
             return hasher.finalize()
         }
 

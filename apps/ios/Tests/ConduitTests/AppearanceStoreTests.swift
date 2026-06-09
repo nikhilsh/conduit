@@ -15,10 +15,10 @@ struct AppearanceStoreTests {
     @Test func persistsAndRestoresFontFamily() {
         let defaults = freshDefaults()
         let first = AppearanceStore(defaults: defaults)
-        first.fontFamily = .spaceGrotesk
+        first.fontFamily = .plex
 
         let second = AppearanceStore(defaults: defaults)
-        #expect(second.fontFamily == .spaceGrotesk)
+        #expect(second.fontFamily == .plex)
     }
 
     @Test func persistsAndRestoresThemeMode() {
@@ -56,13 +56,13 @@ struct AppearanceStoreTests {
 
     // MARK: - Defaults
 
-    @Test func freshInstallDefaultsToSystem() {
-        // The type-forward Chat-font redesign (handoff Part A) replaced the
-        // serif default with System — the first card in the picker strip.
+    @Test func freshInstallDefaultsToTerminal() {
+        // The §4 pairing redesign leads the picker with Terminal (Space
+        // Grotesk · JetBrains Mono — the shipped baseline / brand identity).
         // If someone "tightens" the init fallback later, this catches the
         // regression.
         let store = AppearanceStore(defaults: freshDefaults())
-        #expect(store.fontFamily == .system)
+        #expect(store.fontFamily == .terminal)
     }
 
     @Test func freshInstallDefaultsToSystemTheme() {
@@ -136,31 +136,39 @@ struct AppearanceStoreTests {
 
     // MARK: - Backwards-compat for existing installs
 
-    @Test func legacySerifPreferenceMigratesToNewsreader() {
-        // The type-forward redesign dropped the bare `serif` case. Users who
-        // had it picked migrate to Newsreader (the new easy-read serif)
-        // rather than snapping to System.
+    @Test func legacySerifPreferenceMigratesToEditorial() {
+        // Original `serif` → Editorial (Newsreader serif prose, the calmest
+        // voice) rather than snapping to the baseline.
         let defaults = freshDefaults()
         defaults.set("serif", forKey: "conduit.appearance.font")
         let store = AppearanceStore(defaults: defaults)
-        #expect(store.fontFamily == .newsreader)
+        #expect(store.fontFamily == .editorial)
     }
 
-    @Test func legacyMonospacedPreferenceMigratesToSystem() {
-        // Monospaced has no chat-font equivalent (mono is terminal-only
-        // now), so the legacy value lands on System.
+    @Test func legacyMonospacedPreferenceMigratesToTerminal() {
+        // `monospaced` has no prose equivalent, so it lands on the baseline.
         let defaults = freshDefaults()
         defaults.set("monospaced", forKey: "conduit.appearance.font")
         let store = AppearanceStore(defaults: defaults)
-        #expect(store.fontFamily == .system)
+        #expect(store.fontFamily == .terminal)
     }
 
-    @Test func legacySystemPreferenceSurvives() {
-        let defaults = freshDefaults()
-        defaults.set(AppearanceStore.FontFamily.system.rawValue,
-                     forKey: "conduit.appearance.font")
-        let store = AppearanceStore(defaults: defaults)
-        #expect(store.fontFamily == .system)
+    @Test func priorSingleFacePreferencesMigrateByProse() {
+        // The prior single-face enum maps to the pairing whose PROSE face
+        // matches: spaceGrotesk→terminal, ibmPlexSans→plex, newsreader→
+        // editorial, system→terminal.
+        let cases: [(String, AppearanceStore.FontFamily)] = [
+            ("spaceGrotesk", .terminal),
+            ("ibmPlexSans", .plex),
+            ("newsreader", .editorial),
+            ("system", .terminal),
+        ]
+        for (raw, expected) in cases {
+            let defaults = freshDefaults()
+            defaults.set(raw, forKey: "conduit.appearance.font")
+            let store = AppearanceStore(defaults: defaults)
+            #expect(store.fontFamily == expected)
+        }
     }
 
     @Test func newChatFontsPersist() {

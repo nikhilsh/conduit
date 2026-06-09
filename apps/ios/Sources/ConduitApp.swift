@@ -4,6 +4,10 @@ import SwiftUI
 struct ConduitApp: App {
     @State private var store = SessionStore()
     @State private var appearance = AppearanceStore()
+    /// App-wide feature flags + the chat-shell-v2 A/B assignment (handoff
+    /// §2/§3). Injected so the new-session sheet and the chat shell read the
+    /// same resolved state, and the Debug/Labs surfaces can mutate it.
+    @State private var flags = FeatureFlags()
 
     // Streaming render plumbing (upstream audit A.5):
     //   - `StreamingRendererCoordinator.shared` is `@Observable`, so it's
@@ -52,6 +56,7 @@ struct ConduitApp: App {
                 ConduitUI.RootView()
                     .environment(store)
                     .environment(appearance)
+                    .environment(flags)
                     .environment(StreamingRendererCoordinator.shared)
                     // Resolve + inject the Neon Terminal theme. The
                     // effective dark/light is `themeMode` resolved
@@ -119,6 +124,7 @@ struct ConduitApp: App {
                     .sheet(item: agentPickBinding) { pick in
                         ConduitUI.AgentPickerSheet(headerNote: pick.hostNote)
                             .environment(store)
+                            .environment(flags)
                     }
                 if showSplash {
                     AnimatedSplashView { showSplash = false }

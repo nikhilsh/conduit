@@ -80,7 +80,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import sh.nikhil.conduit.FeatureFlags
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -969,11 +972,37 @@ private fun ConversationEventRow(
         SubagentCard(ev)
         return
     }
+    // chat-shell-v2 arm (§2). Arm B "Signature" gives each assistant turn a
+    // cyan→green spine lane; arm A "Breathe" keeps today's flat layout.
+    val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
+    val pref by appearance.chatStylePreference.collectAsState()
+    val killed by appearance.chatExperimentKilled.collectAsState()
+    val assigned by appearance.chatAssignedArm.collectAsState()
+    val arm = FeatureFlags.resolvedChatArm(pref, killed, assigned)
+    val signature = arm == FeatureFlags.ChatArm.B
+    val spineNeon = LocalNeonTheme.current
     when (ConversationRole.from(ev.role)) {
         ConversationRole.User ->
             ConversationBubble(ev, ConversationRole.User, agentAccent, Modifier, alignEnd = true, isContinuation = isContinuation)
-        ConversationRole.Assistant ->
-            ConversationBubble(ev, ConversationRole.Assistant, agentAccent, Modifier, alignEnd = false, isContinuation = isContinuation)
+        ConversationRole.Assistant -> {
+            val assistantMod = if (signature) {
+                val brush = Brush.verticalGradient(listOf(spineNeon.codex, spineNeon.green))
+                Modifier
+                    .drawBehind {
+                        drawLine(
+                            brush = brush,
+                            start = Offset(1.dp.toPx(), 0f),
+                            end = Offset(1.dp.toPx(), size.height),
+                            strokeWidth = 2.dp.toPx(),
+                            alpha = 0.55f,
+                        )
+                    }
+                    .padding(start = 14.dp)
+            } else {
+                Modifier
+            }
+            ConversationBubble(ev, ConversationRole.Assistant, agentAccent, assistantMod, alignEnd = false, isContinuation = isContinuation)
+        }
         ConversationRole.Tool -> ConversationToolCard(ev)
         ConversationRole.System -> {
             val neon = LocalNeonTheme.current
@@ -1729,7 +1758,7 @@ private fun MarkdownBlock(text: String, role: ConversationRole) {
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     // Prose renders in the user's chosen Chat font (handoff Part A):
     // System / Space Grotesk / IBM Plex Sans / Newsreader.
-    val resolvedFont = neonChatFontFamily(fontChoice)
+    val resolvedFont = neonProseFontFamily(fontChoice)
     val onColor = if (role == ConversationRole.System) {
         neon.textDim
     } else {
@@ -1828,6 +1857,13 @@ private fun MarkdownProse(
         style = MaterialTheme.typography.bodyMedium.copy(
             fontSize = androidx.compose.ui.unit.TextUnit(
                 bodyPointSize,
+                androidx.compose.ui.unit.TextUnitType.Sp,
+            ),
+            // De-cramp (handoff §1/§7): both chat arms read calmer at ~1.7
+            // line-height vs the cramped ~1.46 baseline. Mirrors iOS
+            // `proseLineSpacing`.
+            lineHeight = androidx.compose.ui.unit.TextUnit(
+                bodyPointSize * 1.7f,
                 androidx.compose.ui.unit.TextUnitType.Sp,
             ),
         ),

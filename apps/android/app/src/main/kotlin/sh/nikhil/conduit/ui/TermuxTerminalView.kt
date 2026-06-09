@@ -581,17 +581,11 @@ internal fun applyAppearance(
     //    effect even on rows the emulator hasn't repainted yet.
     runCatching { view.setBackgroundColor(palette.defaultBackground) }
 
-    // 2. Typeface. Always a monospaced face — the cell grid renderer
-    //    in Termux assumes fixed-width glyphs. The Chat-font choice does
-    //    NOT apply to the terminal grid (it's a reading font, not a
-    //    terminal-native one), so every choice resolves to MONOSPACE.
-    val typeface = when (fontFamily) {
-        AppearanceStore.FontFamily.System,
-        AppearanceStore.FontFamily.SpaceGrotesk,
-        AppearanceStore.FontFamily.IbmPlexSans,
-        AppearanceStore.FontFamily.Newsreader -> Typeface.MONOSPACE
-    }
-    runCatching { view.setTypeface(typeface) }
+    // 2. Typeface. Always a monospaced face — the cell grid renderer in
+    //    Termux assumes fixed-width glyphs. The chat-font pairing does NOT
+    //    apply to the terminal grid (it's a reading font, not a terminal-
+    //    native one), so every pairing resolves to MONOSPACE.
+    runCatching { view.setTypeface(Typeface.MONOSPACE) }
 
     // 3. Cell text size. Base is the user's Settings terminal font size
     //    (default 10sp, denser than the old 13sp — matches iOS), scaled
