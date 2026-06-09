@@ -455,8 +455,10 @@ extension ConduitUI {
             }
         }
 
-        /// Chat-font row: header (title + current value) over a horizontal
-        /// strip of live preview cards, each "Ag" rendered in its own face.
+        /// Chat-font row (handoff §4): header (title + current pairing's face
+        /// names) over a horizontal strip of live pairing cards. Each card
+        /// shows the PROSE "Ag" and a MONO `$>` token so the prose-vs-mono
+        /// split is honest at a glance.
         private var chatFontRow: some View {
             VStack(alignment: .leading, spacing: 11) {
                 HStack(alignment: .firstTextBaseline) {
@@ -464,20 +466,20 @@ extension ConduitUI {
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(neon.text)
                     Spacer(minLength: 6)
-                    Text(appearance.fontFamily.label)
-                        .font(neon.mono(13))
+                    Text(appearance.fontFamily.note)
+                        .font(neon.mono(11))
                         .foregroundStyle(neon.textFaint)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 fontStripScroll {
                     ForEach(AppearanceStore.FontFamily.allCases) { family in
                         Button {
                             appearance.fontFamily = family
                         } label: {
-                            fontCard(
-                                sample: "Ag",
-                                name: family.label,
-                                selected: appearance.fontFamily == family,
-                                sampleFont: family.font(size: 30)
+                            pairingFontCard(
+                                family: family,
+                                selected: appearance.fontFamily == family
                             )
                         }
                         .buttonStyle(.plain)
@@ -487,6 +489,42 @@ extension ConduitUI {
             .padding(.horizontal, 14)
             .padding(.top, 14)
             .padding(.bottom, 6)
+        }
+
+        /// One pairing card: PROSE "Ag" big + a MONO `$>` token beneath, then
+        /// the pairing name. Renders in the pairing's own faces so the strip
+        /// is a live specimen. Selected card gets the accent border + glow.
+        private func pairingFontCard(family: AppearanceStore.FontFamily, selected: Bool) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Ag")
+                        .font(family.proseFont(size: 30))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text("$>")
+                        .font(family.monoFont(size: 18))
+                        .foregroundStyle(neon.accent)
+                        .lineLimit(1)
+                }
+                .frame(height: 34, alignment: .center)
+                Text(family.label)
+                    .font(neon.mono(11).weight(selected ? .bold : .regular))
+                    .foregroundStyle(selected ? neon.accent : neon.textFaint)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(width: 128, alignment: .leading)
+            .padding(EdgeInsets(top: 13, leading: 13, bottom: 11, trailing: 13))
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(selected ? neon.accent.opacity(0.08) : neon.surface2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(selected ? neon.accent : neon.border, lineWidth: selected ? 1.6 : 1)
+            )
+            .neonGlowBox(selected && neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+            .contentShape(Rectangle())
         }
 
         /// Terminal-font row: same type-forward strip, each card a mono `x>`

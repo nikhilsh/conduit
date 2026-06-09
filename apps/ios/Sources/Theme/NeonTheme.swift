@@ -194,13 +194,37 @@ struct NeonTheme {
     /// Light-mode card elevation used when glow is off, else `nil`.
     let cardElevation: NeonCardElevation?
 
+    // Type pairing (handoff §4). The selected `FontFamily` pairing drives
+    // BOTH faces app-wide: `sans()` resolves the prose face, `mono()` the
+    // mono face. `nil` family → the system face (sans) / system monospaced
+    // (mono). Availability is resolved once here (not per glyph) so a
+    // dropped `UIAppFonts` entry degrades to system instead of mis-rendering.
+    /// CoreText family for the prose face, or `nil` for the system face.
+    let sansFamily: String?
+    /// Whether `sansFamily` is registered (false → fall back to system).
+    let sansAvailable: Bool
+    /// CoreText family for the mono face, or `nil` for system monospaced.
+    let monoFamily: String?
+    /// Whether `monoFamily` is registered (false → fall back to system mono).
+    let monoAvailable: Bool
+
     static let radiusValue: CGFloat = 20
 
     // MARK: Resolve
 
     /// Resolve the token set for a (palette, dark, glow) combination.
     /// Reproduces `makeNeon({mode, palette, glow})` from neon-theme.jsx.
-    static func resolve(palette: NeonPalette, dark: Bool, glow: Bool) -> NeonTheme {
+    ///
+    /// `fontFamily` is the user's §4 chat-font pairing. `nil` keeps the
+    /// brand baseline (Space Grotesk · JetBrains Mono) so call sites that
+    /// don't thread appearance (tests, previews, the lower-level resolve)
+    /// stay on brand. The appearance-driven overload below passes it through.
+    static func resolve(
+        palette: NeonPalette,
+        dark: Bool,
+        glow: Bool,
+        fontFamily: AppearanceStore.FontFamily? = nil
+    ) -> NeonTheme {
         let aBright = Color(hex: palette.accentHex)          // A
         let a2 = Color(hex: palette.accent2Hex)              // A2
         let accent = dark ? aBright : Color(hex: palette.accentDarkHex)
@@ -322,6 +346,13 @@ struct NeonTheme {
                 )
         }
 
+        // §4 type pairing. `nil` → brand baseline (Terminal pairing).
+        let pairing = fontFamily ?? .terminal
+        let sansFamily = pairing.proseFamilyName
+        let monoFamily = pairing.monoFamilyName
+        let sansAvailable = FontFamilyAvailability.isProseAvailable(pairing)
+        let monoAvailable = FontFamilyAvailability.isMonoAvailable(pairing)
+
         return NeonTheme(
             paletteId: palette.rawValue,
             mode: dark ? "dark" : "light",
@@ -357,7 +388,11 @@ struct NeonTheme {
             textGlowEnabled: textGlowEnabled,
             textGlow: textGlow,
             glowBox: glowBox,
-            cardElevation: cardElevation
+            cardElevation: cardElevation,
+            sansFamily: sansFamily,
+            sansAvailable: sansAvailable,
+            monoFamily: monoFamily,
+            monoAvailable: monoAvailable
         )
     }
 
@@ -380,41 +415,36 @@ struct NeonTheme {
         return resolve(
             palette: appearance.neonPalette.neonPalette,
             dark: dark,
-            glow: appearance.neonGlow
+            glow: appearance.neonGlow,
+            fontFamily: appearance.fontFamily
         )
     }
 
-    // MARK: Type intent (BRAND.md §4)
+    // MARK: Type intent (handoff §4 — chat-font pairings)
     //
-    // sans = Space Grotesk (bundled Regular/Bold, registered in
-    // project.yml UIAppFonts). mono = JetBrains Mono (bundled, shared
-    // with the terminal font picker). Regular+Bold are style-linked, so
-    // `.bold()` / `.weight(.bold)` resolve inside the family; the
-    // intermediate weights render at the nearest registered face. The
-    // availability probe keeps us on the system fonts if registration
-    // ever breaks (a bad UIAppFonts edit) instead of silently falling
-    // back to an unthemed face.
+    // sans = the selected pairing's PROSE face, mono = its MONO face
+    // (resolved into `sansFamily` / `monoFamily` at `resolve` time). The
+    // `.terminal` default keeps the brand baseline (Space Grotesk ·
+    // JetBrains Mono — BRAND.md §4). Weights are taken from the variable
+    // axis where the face ships one; style-linked Regular/Bold faces
+    // resolve `.bold()` inside the family. The availability flag keeps us
+    // on the system faces if registration ever breaks (a bad UIAppFonts
+    // edit) instead of silently falling back to an unthemed face.
 
-    /// Sans font at `size` — Space Grotesk per BRAND.md §4 (body/prose).
+    /// Sans font at `size` — the selected pairing's prose face.
     func sans(_ size: CGFloat) -> Font {
-        NeonBrandFonts.sansAvailable
-            ? .custom("Space Grotesk", size: size)
-            : .system(size: size, design: .default)
+        guard let family = sansFamily, sansAvailable else {
+            return .system(size: size, design: .default)
+        }
+        return .custom(family, size: size)
     }
-    /// Mono font at `size` — JetBrains Mono per BRAND.md §4 (display/labels/code).
+    /// Mono font at `size` — the selected pairing's mono face.
     func mono(_ size: CGFloat) -> Font {
-        NeonBrandFonts.monoAvailable
-            ? .custom("JetBrains Mono", size: size)
-            : .system(size: size, design: .monospaced)
+        guard let family = monoFamily, monoAvailable else {
+            return .system(size: size, design: .monospaced)
+        }
+        return .custom(family, size: size)
     }
-}
-
-/// One-time availability probe for the bundled brand fonts. `UIFont` by
-/// PostScript name returns nil when the face isn't registered — cached
-/// statically so the check costs one lookup per launch, not one per call.
-private enum NeonBrandFonts {
-    static let sansAvailable = UIFont(name: "SpaceGrotesk-Regular", size: 12) != nil
-    static let monoAvailable = UIFont(name: "JetBrainsMono-Regular", size: 12) != nil
 }
 
 // MARK: - Hex with alpha helper

@@ -13,67 +13,132 @@ import GhosttyVT
 /// monospaced body font, `SettingsSheet`/`AppearanceSheet` for the UI).
 @Observable
 final class AppearanceStore {
-    /// Chat / reading body font (handoff Part A "Chat font"). This is the
-    /// conversation font, NOT the terminal-native one — the terminal keeps
-    /// its own `GhosttyFont`. The pre-redesign enum was serif/system/mono;
-    /// the type-forward redesign replaces it with four curated faces. Old
-    /// persisted `serif`/`monospaced` values are migrated on load (see
-    /// `decodeFontFamily`).
+    /// Chat / reading font (handoff §4 "Fonts"). This is the conversation
+    /// font, NOT the terminal-native one — the terminal keeps its own
+    /// `GhosttyFont`. Each case is a curated **pairing** that names BOTH a
+    /// prose face (markdown / what the agent *says*) and a mono face (the
+    /// `$` commands, identifiers, exit codes, branch tokens — what the
+    /// machine *does*), because Conduit's soul is the mono. All five are
+    /// free Google fonts embedded via `project.yml` `UIAppFonts`.
+    ///
+    /// The pairing applies app-wide: `NeonTheme.sans(_:)` resolves the prose
+    /// face and `NeonTheme.mono(_:)` resolves the mono face, so a single
+    /// switch reflows chat, new-session, settings, and tablet identically.
+    ///
+    /// The pre-redesign enums (serif/system/monospaced, then
+    /// system/spaceGrotesk/ibmPlexSans/newsreader) are migrated on load —
+    /// see `decodeFontFamily`.
     enum FontFamily: String, CaseIterable, Identifiable {
-        case system
-        case spaceGrotesk
-        case ibmPlexSans
-        case newsreader
+        /// Space Grotesk · JetBrains Mono — the shipped baseline. Default.
+        case terminal
+        /// IBM Plex Sans · IBM Plex Mono — one superfamily, prose+code related.
+        case plex
+        /// Geist · Geist Mono — clean, modern, developer-native.
+        case geist
+        /// Newsreader · Spline Sans Mono — serif prose, the calmest voice.
+        case editorial
+        /// IBM Plex Sans · Spline Sans Mono — warm, rounded mono.
+        case soft
 
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .system:       return "System"
-            case .spaceGrotesk: return "Space Grotesk"
-            case .ibmPlexSans:  return "IBM Plex Sans"
-            case .newsreader:   return "Newsreader"
+            case .terminal:  return "Terminal"
+            case .plex:      return "Plex"
+            case .geist:     return "Geist"
+            case .editorial: return "Editorial"
+            case .soft:      return "Soft"
             }
         }
 
-        /// Short qualifier shown beneath the name on the picker card.
+        /// "Prose · Mono" face names — shown beneath the name on the picker card.
         var note: String {
             switch self {
-            case .system:       return "native"
-            case .spaceGrotesk: return "brand"
-            case .ibmPlexSans:  return "humanist"
-            case .newsreader:   return "serif · easy read"
+            case .terminal:  return "Space Grotesk · JetBrains Mono"
+            case .plex:      return "IBM Plex Sans · IBM Plex Mono"
+            case .geist:     return "Geist · Geist Mono"
+            case .editorial: return "Newsreader · Spline Sans Mono"
+            case .soft:      return "IBM Plex Sans · Spline Sans Mono"
             }
         }
 
-        /// Registered CoreText family name for the bundled face, or `nil`
-        /// when the family is the system face (resolved via `.system(...)`).
-        var customFontName: String? {
+        /// One-line personality blurb (from `imp-fonts.jsx`).
+        var blurb: String {
             switch self {
-            case .system:       return nil
-            case .spaceGrotesk: return "Space Grotesk"
-            case .ibmPlexSans:  return "IBM Plex Sans"
-            case .newsreader:   return "Newsreader"
+            case .terminal:  return "Sharp, techy, a little futurist. The baseline."
+            case .plex:      return "Engineered and neutral. Prose and code feel related."
+            case .geist:     return "Clean, modern, developer-native. Disappears behind the work."
+            case .editorial: return "Serif prose + humanist mono — the calmest, most Claude-like voice."
+            case .soft:      return "Rounded, friendly mono. Reads warm without losing the machine."
             }
         }
 
-        /// Resolve a SwiftUI `Font` for this family at an explicit point
-        /// size. Custom families fall back to the system face when the
-        /// bundled TTF isn't registered (mirrors `NeonTheme.sans(_:)`'s
-        /// defensive probe) so a bad `UIAppFonts` edit degrades to system
-        /// rather than silently mis-rendering.
-        func font(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-            guard let name = customFontName, FontFamilyAvailability.isAvailable(self) else {
+        /// Registered CoreText family for the PROSE face, or `nil` when the
+        /// pairing's prose is the system face (none currently — every pairing
+        /// names a bundled prose face).
+        var proseFamilyName: String? {
+            switch self {
+            case .terminal:  return "Space Grotesk"
+            case .plex:      return "IBM Plex Sans"
+            case .geist:     return "Geist"
+            case .editorial: return "Newsreader"
+            case .soft:      return "IBM Plex Sans"
+            }
+        }
+
+        /// Registered CoreText family for the MONO face, or `nil` to fall
+        /// back to the system monospaced face.
+        var monoFamilyName: String? {
+            switch self {
+            case .terminal:  return "JetBrains Mono"
+            case .plex:      return "IBM Plex Mono"
+            case .geist:     return "Geist Mono"
+            case .editorial: return "Spline Sans Mono"
+            case .soft:      return "Spline Sans Mono"
+            }
+        }
+
+        /// Resolve the PROSE `Font` at an explicit point size. Falls back to
+        /// the system face when the bundled TTF isn't registered (mirrors
+        /// `NeonTheme.sans(_:)`'s defensive probe) so a bad `UIAppFonts` edit
+        /// degrades to system rather than silently mis-rendering.
+        func proseFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+            guard let name = proseFamilyName, FontFamilyAvailability.isProseAvailable(self) else {
                 return .system(size: size, weight: weight)
             }
             return .custom(name, fixedSize: size).weight(weight)
         }
 
-        /// Resolve a `Font` against a Dynamic Type text style (caption /
-        /// footnote / etc.) for the secondary ramps that scale with the
-        /// OS text-size setting rather than the body-size slider.
+        /// Resolve the MONO `Font` at an explicit point size. Falls back to
+        /// the system *monospaced* face when the bundled TTF isn't registered.
+        func monoFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+            guard let name = monoFamilyName, FontFamilyAvailability.isMonoAvailable(self) else {
+                return .system(size: size, weight: weight, design: .monospaced)
+            }
+            return .custom(name, fixedSize: size).weight(weight)
+        }
+
+        /// Back-compat alias — `font(size:)` resolves the PROSE face. Existing
+        /// call sites (markdown body, list rows) expect prose.
+        func font(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+            proseFont(size: size, weight: weight)
+        }
+
+        /// Resolve the PROSE `Font` against a Dynamic Type text style for the
+        /// secondary ramps that scale with the OS text-size setting rather
+        /// than the body-size slider.
         func font(textStyle: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
-            guard let name = customFontName, FontFamilyAvailability.isAvailable(self) else {
+            guard let name = proseFamilyName, FontFamilyAvailability.isProseAvailable(self) else {
                 return .system(textStyle).weight(weight)
+            }
+            return .custom(name, size: Self.pointSize(for: textStyle), relativeTo: textStyle)
+                .weight(weight)
+        }
+
+        /// Resolve the MONO `Font` against a Dynamic Type text style.
+        func monoFont(textStyle: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
+            guard let name = monoFamilyName, FontFamilyAvailability.isMonoAvailable(self) else {
+                return .system(textStyle).weight(weight).monospaced()
             }
             return .custom(name, size: Self.pointSize(for: textStyle), relativeTo: textStyle)
                 .weight(weight)
@@ -255,9 +320,10 @@ final class AppearanceStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // Default is now System (matches the redesigned Chat-font strip,
-        // which leads with System selected). Legacy `serif`/`monospaced`
-        // rawValues from before the redesign are migrated rather than reset.
+        // Default is now `.terminal` (Space Grotesk · JetBrains Mono — the
+        // shipped baseline / brand identity, leading the picker). Legacy
+        // rawValues from before the §4 pairing redesign are migrated rather
+        // than reset (see `decodeFontFamily`).
         self.fontFamily = Self.decodeFontFamily(defaults.string(forKey: Keys.font))
         self.themeMode = (defaults.string(forKey: Keys.theme)
             .flatMap(ThemeMode.init(rawValue:))) ?? .system
@@ -297,18 +363,25 @@ final class AppearanceStore {
         fontFamily.font(textStyle: .body)
     }
 
-    /// Decode the persisted chat-font rawValue, migrating the pre-redesign
-    /// `serif` / `monospaced` values so existing installs don't snap to an
-    /// unrelated face. Serif maps to Newsreader (the new easy-read serif);
-    /// monospaced has no chat equivalent (mono is terminal-only now) so it
-    /// lands on System.
+    /// Decode the persisted chat-font rawValue, migrating the two prior enum
+    /// generations so existing installs don't snap to an unrelated face:
+    ///   - The §4 pairing rawValues (`terminal`/`plex`/`geist`/`editorial`/
+    ///     `soft`) decode directly.
+    ///   - The prior single-face enum (`system`/`spaceGrotesk`/`ibmPlexSans`/
+    ///     `newsreader`) maps to the pairing whose PROSE face matches.
+    ///   - The original enum (`serif`/`monospaced`) maps by character.
+    /// Anything unknown lands on `.terminal` (the default baseline).
     private static func decodeFontFamily(_ raw: String?) -> FontFamily {
-        guard let raw else { return .system }
+        guard let raw else { return .terminal }
         if let family = FontFamily(rawValue: raw) { return family }
         switch raw {
-        case "serif":      return .newsreader
-        case "monospaced": return .system
-        default:           return .system
+        case "spaceGrotesk": return .terminal   // Space Grotesk prose
+        case "ibmPlexSans":  return .plex        // IBM Plex Sans prose
+        case "newsreader":   return .editorial   // Newsreader serif prose
+        case "serif":        return .editorial   // calmest serif voice
+        case "system":       return .terminal    // baseline
+        case "monospaced":   return .terminal    // baseline
+        default:             return .terminal
         }
     }
 
@@ -359,26 +432,47 @@ private extension Comparable {
 }
 
 /// One-time availability probe for the bundled chat-font faces. Probes by
-/// the SAME CoreText family name that `FontFamily.customFontName` (and
-/// hence `.custom(_:size:)`) resolves against — so a registered face is
-/// never a false negative, and a dropped `UIAppFonts` entry degrades to
-/// the system face instead of silently mis-rendering. Cached statically so
-/// the check costs one lookup per launch.
+/// the SAME CoreText family name that `FontFamily.proseFamilyName` /
+/// `monoFamilyName` (and hence `.custom(_:size:)`) resolve against — so a
+/// registered face is never a false negative, and a dropped `UIAppFonts`
+/// entry degrades to the system face instead of silently mis-rendering.
+/// Cached statically so the check costs one lookup per launch.
 enum FontFamilyAvailability {
     private static func registered(_ family: String) -> Bool {
         !UIFont.fontNames(forFamilyName: family).isEmpty
     }
 
+    /// Prose faces (one probe per distinct family across the five pairings).
     private static let spaceGrotesk = registered("Space Grotesk")
     private static let ibmPlexSans = registered("IBM Plex Sans")
+    private static let geist = registered("Geist")
     private static let newsreader = registered("Newsreader")
 
-    static func isAvailable(_ family: AppearanceStore.FontFamily) -> Bool {
+    /// Mono faces.
+    private static let jetBrainsMono = registered("JetBrains Mono")
+    private static let ibmPlexMono = registered("IBM Plex Mono")
+    private static let geistMono = registered("Geist Mono")
+    private static let splineSansMono = registered("Spline Sans Mono")
+
+    /// Whether the pairing's PROSE face is registered.
+    static func isProseAvailable(_ family: AppearanceStore.FontFamily) -> Bool {
         switch family {
-        case .system:       return true
-        case .spaceGrotesk: return spaceGrotesk
-        case .ibmPlexSans:  return ibmPlexSans
-        case .newsreader:   return newsreader
+        case .terminal:  return spaceGrotesk
+        case .plex:      return ibmPlexSans
+        case .geist:     return geist
+        case .editorial: return newsreader
+        case .soft:      return ibmPlexSans
+        }
+    }
+
+    /// Whether the pairing's MONO face is registered.
+    static func isMonoAvailable(_ family: AppearanceStore.FontFamily) -> Bool {
+        switch family {
+        case .terminal:  return jetBrainsMono
+        case .plex:      return ibmPlexMono
+        case .geist:     return geistMono
+        case .editorial: return splineSansMono
+        case .soft:      return splineSansMono
         }
     }
 }
