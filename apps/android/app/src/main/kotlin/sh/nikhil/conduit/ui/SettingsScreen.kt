@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
 import sh.nikhil.conduit.AppearanceStore
+import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SavedServer
@@ -120,6 +121,7 @@ fun SettingsScreen(
     val fontFamily by appearance.fontFamily.collectAsState()
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
+    val chatStylePref by appearance.chatStylePreference.collectAsState()
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val terminalFontSize by appearance.terminalFontSize.collectAsState()
@@ -369,6 +371,37 @@ fun SettingsScreen(
                     isOn = collapseTurns,
                     onChange = { appearance.setCollapseTurns(it) },
                 )
+            }
+
+            // Labs — chat-shell-v2 A/B override (§2). Auto follows the
+            // assigned bucket; A/B are a local override for dogfooding.
+            SettingsSection("Labs") {
+                val neon = LocalNeonTheme.current
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Conversation style", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = neon.text)
+                        Spacer(Modifier.weight(1f))
+                        Text(appearance.resolvedChatArm().label, fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        FeatureFlags.ChatStylePreference.entries.forEach { p ->
+                            val on = p == chatStylePref
+                            Box(
+                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                                    .background(if (on) neon.accent.copy(alpha = 0.16f) else neon.surface)
+                                    .border(1.dp, if (on) neon.accent else neon.border, RoundedCornerShape(10.dp))
+                                    .clickable { appearance.setChatStylePreference(p) }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(p.label, fontFamily = neon.mono, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, fontSize = 13.sp, color = if (on) neon.accent else neon.textDim)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text("A = Breathe · B = Signature · Auto follows your assigned bucket.", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
+                }
             }
 
             // About — static identity card + a tap-through to the
