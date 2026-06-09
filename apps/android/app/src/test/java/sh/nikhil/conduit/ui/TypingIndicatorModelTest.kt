@@ -119,4 +119,28 @@ class TypingIndicatorModelTest {
         assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = "done", lastContentEmpty = false))
         assertFalse(TypingIndicatorModel.agentWorking(lastRole = "assistant", lastStatus = "", lastContentEmpty = true))
     }
+
+    @Test fun agentWorkingTrustsServerTurnActiveOverLogRole() {
+        // Reconnect fix: the broker's authoritative `turn_active` wins over
+        // the log-role inference for structured-chat sessions.
+        // turn_active=false clears a stuck indicator even though the trailing
+        // log item is still the user's prompt (turn finished while backgrounded).
+        assertFalse(
+            TypingIndicatorModel.agentWorking(
+                lastRole = "user", lastStatus = "", lastContentEmpty = false, serverTurnActive = false,
+            ),
+        )
+        // turn_active=true keeps it on even with a settled-looking log.
+        assertTrue(
+            TypingIndicatorModel.agentWorking(
+                lastRole = "assistant", lastStatus = "done", lastContentEmpty = false, serverTurnActive = true,
+            ),
+        )
+        // null (TUI-scrape session / pre-field broker) → fall back to inference.
+        assertTrue(
+            TypingIndicatorModel.agentWorking(
+                lastRole = "user", lastStatus = "", lastContentEmpty = false, serverTurnActive = null,
+            ),
+        )
+    }
 }

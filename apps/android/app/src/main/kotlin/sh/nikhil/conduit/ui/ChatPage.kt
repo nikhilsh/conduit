@@ -361,6 +361,9 @@ fun ChatPage(
     val typedLog by store.conversationLog.collectAsState()
     val fallbackLog by store.chatLog.collectAsState()
     val aiQuickReplies by store.quickReplies.collectAsState()
+    // Live per-session status (carries the broker's authoritative
+    // `turn_active` for the typing indicator's reconnect fix).
+    val statusBySession by store.statusBySession.collectAsState()
     // PR #111 + iOS ChatViewModel parity: render a SINGLE chronologically
     // sorted list, merging the typed `conversationLog` with the broker's
     // raw `chatLog`. Picking one source or the other (the prior
@@ -475,6 +478,11 @@ fun ChatPage(
             lastRole = l?.role,
             lastStatus = l?.status,
             lastContentEmpty = l?.content.orEmpty().isBlank(),
+            // Authoritative broker turn-state: clears a stuck indicator on
+            // reconnect / keeps it on when a turn is really running. null for
+            // TUI-scrape sessions or a pre-field broker → falls back to
+            // log-role inference.
+            serverTurnActive = statusBySession[session.id]?.turnActive,
         )
     }
     val showTyping = !readOnly && (typing.isStreaming(typingTick) || agentWorking)

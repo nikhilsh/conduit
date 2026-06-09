@@ -89,7 +89,22 @@ data class TypingIndicatorModel(
          * status clause on empty content stops a settled turn (the agent
          * replied and is waiting on the user) from keeping the indicator on.
          */
-        fun agentWorking(lastRole: String?, lastStatus: String?, lastContentEmpty: Boolean): Boolean {
+        fun agentWorking(
+            lastRole: String?,
+            lastStatus: String?,
+            lastContentEmpty: Boolean,
+            serverTurnActive: Boolean? = null,
+        ): Boolean {
+            // Authoritative broker signal (status frame `turn_active`): for a
+            // structured-chat session the broker tells us exactly whether a
+            // turn is in flight, so trust it over the log-role heuristic
+            // below. This clears a stuck indicator on reconnect when the
+            // trailing log item is still the user's prompt (the turn finished
+            // while the app was backgrounded), and keeps it on when a turn
+            // really is running. null = legacy TUI-scrape session or a
+            // pre-field broker → fall through to the inference. (The caller
+            // ORs this with the local streaming signal, so streaming wins.)
+            if (serverTurnActive != null) return serverTurnActive
             if (lastRole == null) return false
             return when {
                 lastRole.equals("user", ignoreCase = true) -> true
