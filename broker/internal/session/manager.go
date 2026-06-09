@@ -860,21 +860,35 @@ func (s *Session) MarkUserChatSent(msg string) {
 	}
 }
 
-// TurnActive reports whether the session's structured chat backend has a
-// turn in flight right now. Folded into the status frame as `turn_active`
-// so a (re)connecting client can drive its "agent is working" indicator
-// from authoritative backend truth instead of inferring it from the
-// conversation log's trailing role (the stuck-indicator bug after the app
-// is backgrounded mid-turn). Returns false for the legacy TUI-scrape path
-// (no chat backend) — those keep the log-role inference. We read s.chat
-// under s.mu but call TurnActive() OUTSIDE the lock so we never nest s.mu
-// → backend-mu (StatusPayload's accessors re-acquire s.mu; see
-// accumulateUsage).
-func (s *Session) TurnActive() bool {
+// structuredTurnActive reports whether a turn is in flight, AND whether the
+// session even has a structured chat backend to answer authoritatively.
+// present is false for the legacy TUI-scrape path (s.chat == nil): the
+// status frame then OMITS turn_active entirely so clients keep inferring
+// the working state from the conversation log's trailing role (a flat
+// turn_active:false would otherwise pin those sessions' indicator OFF
+// forever). We read s.chat under s.mu but call TurnActive() OUTSIDE the
+// lock so we never nest s.mu → backend-mu (StatusPayload's accessors
+// re-acquire s.mu; see accumulateUsage).
+func (s *Session) structuredTurnActive() (active, present bool) {
 	s.mu.Lock()
 	chat := s.chat
 	s.mu.Unlock()
-	return chat != nil && chat.TurnActive()
+	if chat == nil {
+		return false, false
+	}
+	return chat.TurnActive(), true
+}
+
+// TurnActive reports whether the session's structured chat backend has a
+// turn in flight right now (false when there is no structured backend).
+// Folded into the status frame as `turn_active` (only for structured-chat
+// sessions; see structuredTurnActive) so a (re)connecting client drives its
+// "agent is working" indicator from authoritative backend truth instead of
+// inferring it from the conversation log's trailing role — the
+// stuck-indicator bug after the app is backgrounded mid-turn.
+func (s *Session) TurnActive() bool {
+	active, _ := s.structuredTurnActive()
+	return active
 }
 
 // SendChat routes a composer message to the structured chat channel when
