@@ -24,6 +24,13 @@ type chatProcess struct {
 
 	mu     sync.Mutex
 	closed bool
+	// turnActive is true between a user Send and the stream-json `result`
+	// envelope that ends the turn (claude has no native latch — we infer it
+	// from the same turn-end signal the title/quick-reply generators use).
+	// Folded into the status frame's `turn_active` so a reconnecting client
+	// doesn't have to guess "is the agent working" from the trailing log
+	// role. Guarded by mu.
+	turnActive bool
 }
 
 // errChatProcessClosed is returned by Send after the process has been
@@ -83,7 +90,13 @@ func startChatProcess(
 	go func() {
 		// processClaudeStreamOutput returns at EOF (agent exit); the
 		// goroutine then ends. Reap the process so it doesn't zombie.
-		_ = processClaudeStreamOutput(stdout, publish, gen, titleGen, onUsage, onControl, onInit)
+		// onTurnEnd clears the turn-in-flight latch on each `result`
+		// envelope; do it BEFORE the usage fold so the status broadcast
+		// that rides accumulateUsage carries turn_active=false.
+		_ = processClaudeStreamOutput(stdout, publish, gen, titleGen, onUsage, onControl, onInit,
+			func() { cp.markTurnActive(false) })
+		// EOF / agent exit: whatever turn was in flight is over.
+		cp.markTurnActive(false)
 		werr := cmd.Wait()
 		// Surface an *unexpected* exit in the Chat tab so a dead
 		// stream-json agent isn't just silence (the original #6
@@ -115,8 +128,28 @@ func (c *chatProcess) Send(text string) error {
 	if c.closed {
 		return errChatProcessClosed
 	}
-	_, err = c.stdin.Write(line)
-	return err
+	if _, err = c.stdin.Write(line); err != nil {
+		return err
+	}
+	// Latch the turn as in flight; the stream pump clears it on the
+	// turn-end `result` (see startChatProcess's onTurnEnd) or on EOF/Close.
+	c.turnActive = true
+	return nil
+}
+
+// markTurnActive sets the turn-in-flight latch under c.mu. Used by the
+// stream pump (false on `result`/EOF) and Close.
+func (c *chatProcess) markTurnActive(active bool) {
+	c.mu.Lock()
+	c.turnActive = active
+	c.mu.Unlock()
+}
+
+// TurnActive reports whether a claude turn is in flight. See turnActive.
+func (c *chatProcess) TurnActive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.turnActive
 }
 
 // SendRaw writes one pre-encoded stream-json line (a control_response)
@@ -155,6 +188,7 @@ func (c *chatProcess) Close() error {
 		return nil
 	}
 	c.closed = true
+	c.turnActive = false
 	_ = c.stdin.Close()
 	if c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()

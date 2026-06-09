@@ -91,10 +91,15 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 	}
 	env = append(env, "TERM=xterm-256color", "PS1=$ ")
 	pairs := map[string]string{
-		"SESSION_UUID":           s.ID,
-		"AGENT_NAME":             s.Assistant,
-		"KITTY_HANDOFF_PATH":     s.handoffPath,
-		"KITTY_HANDOFF_OUT_PATH": s.handoffOutPath,
+		"SESSION_UUID": s.ID,
+		"AGENT_NAME":   s.Assistant,
+		// Handoff path exported under the new CONDUIT_ name; the legacy
+		// KITTY_ aliases are kept (set below) so any agent hook that still
+		// reads the old spelling keeps working post-rebrand.
+		"CONDUIT_HANDOFF_PATH":     s.handoffPath,
+		"CONDUIT_HANDOFF_OUT_PATH": s.handoffOutPath,
+		"KITTY_HANDOFF_PATH":       s.handoffPath,
+		"KITTY_HANDOFF_OUT_PATH":   s.handoffOutPath,
 		// Claude Code refuses `--dangerously-skip-permissions` (the
 		// claude adapter's only arg) under root/sudo "for security
 		// reasons", which kills every claude session in a respawn loop
@@ -157,6 +162,15 @@ func providerForAssistant(assistant string) string {
 	default:
 		return ""
 	}
+}
+
+// allCredentialProviders is every agent-credential provider the broker
+// knows how to materialize into a session's ephemeral HOME. Used to log
+// the interactive Terminal tab into BOTH agents regardless of which one
+// (if any) the session's own agent is. Keep in sync with
+// providerForAssistant / mirrorHostCredentials.
+func allCredentialProviders() []string {
+	return []string{"anthropic", "openai"}
 }
 
 // hostHomeDir returns the broker's real $HOME — the place where claude

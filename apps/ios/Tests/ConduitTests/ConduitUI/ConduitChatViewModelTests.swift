@@ -160,6 +160,35 @@ struct ConduitChatViewModelTests {
         ))
     }
 
+    @Test func isAgentWorkingTrustsServerTurnActiveOverLogRole() {
+        // The reconnect fix: the broker's authoritative `turn_active` wins
+        // over the log-role inference for structured-chat sessions.
+        // turn_active=false clears a stuck indicator even though the trailing
+        // log item is still the user's prompt (turn finished while
+        // backgrounded) …
+        #expect(!ConduitUI.ChatViewModel.isAgentWorking(
+            lastRole: "user", lastStatus: "", lastContentEmpty: false,
+            isStreaming: false, serverTurnActive: false
+        ))
+        // … and turn_active=true keeps it on even with a settled-looking log.
+        #expect(ConduitUI.ChatViewModel.isAgentWorking(
+            lastRole: "assistant", lastStatus: "done", lastContentEmpty: false,
+            isStreaming: false, serverTurnActive: true
+        ))
+        // Local streaming still wins immediately (lower latency than waiting
+        // for the next status frame).
+        #expect(ConduitUI.ChatViewModel.isAgentWorking(
+            lastRole: "assistant", lastStatus: "done", lastContentEmpty: false,
+            isStreaming: true, serverTurnActive: false
+        ))
+        // nil (TUI-scrape session / pre-field broker) → fall back to the
+        // log-role inference unchanged.
+        #expect(ConduitUI.ChatViewModel.isAgentWorking(
+            lastRole: "user", lastStatus: "", lastContentEmpty: false,
+            isStreaming: false, serverTurnActive: nil
+        ))
+    }
+
     // MARK: - appearanceRenderRevision (per-row Equatable digest)
 
     @Test func appearanceRevisionStableForSameInputs() {

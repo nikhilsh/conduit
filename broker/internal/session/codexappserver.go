@@ -313,6 +313,14 @@ func (c *codexAppServerProcess) Send(text string) error {
 
 // finishTurn clears the in-flight turn flag and stops the silence watchdog,
 // returning whether a turn was actually active (false = already ended) plus the
+// TurnActive reports whether a codex turn is in flight (the authoritative
+// app-server latch). Read under c.mu; safe for the status-frame path.
+func (c *codexAppServerProcess) TurnActive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.turnActive
+}
+
 // published / closing snapshot so the caller can decide what notice (if any) to
 // surface. Idempotent: a second terminus for the same turn returns active=false
 // and the caller does nothing. Caller must NOT hold c.mu.

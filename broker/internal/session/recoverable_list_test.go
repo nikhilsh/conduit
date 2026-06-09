@@ -60,10 +60,10 @@ func TestRecoverableSessionsAdvertisesOnlyResumable(t *testing.T) {
 	root := t.TempDir()
 	reg := testRegistry(t, root, map[string]string{"claude": "echo hi"})
 	m := &Manager{
-		sessions:  make(map[string]*Session),
-		kittyRoot: root,
-		registry:  reg,
-		stopGC:    make(chan struct{}),
+		sessions:    make(map[string]*Session),
+		conduitRoot: root,
+		registry:    reg,
+		stopGC:      make(chan struct{}),
 	}
 
 	// Clean, recoverable session — should be advertised.
@@ -102,10 +102,10 @@ func TestRecoverableSessionsExcludesLive(t *testing.T) {
 	root := t.TempDir()
 	reg := testRegistry(t, root, map[string]string{"claude": "echo hi"})
 	m := &Manager{
-		sessions:  make(map[string]*Session),
-		kittyRoot: root,
-		registry:  reg,
-		stopGC:    make(chan struct{}),
+		sessions:    make(map[string]*Session),
+		conduitRoot: root,
+		registry:    reg,
+		stopGC:      make(chan struct{}),
 	}
 	writeRecoverableFixture(t, root, "live-1", fixtureOpts{assistant: "claude"})
 	// Pretend it's already held in memory — RecoverableSessions must skip

@@ -49,6 +49,16 @@ pub struct SessionStatus {
     pub preview: Option<PreviewInfo>,
     pub session_name: Option<String>,
     pub viewers: Option<u32>,
+    /// Authoritative "is a turn in flight right now" from the broker.
+    /// `phase` stays "running" whether the agent is idle or working, so it
+    /// can't drive the composer's transient "agent is working" indicator —
+    /// clients fold this instead to clear/keep that state on (re)connect
+    /// rather than inferring it from the conversation log's trailing role
+    /// (the stuck-indicator bug after the app is backgrounded mid-turn).
+    /// `None` when the broker predates the field (clients keep the old
+    /// log-role inference as a fallback).
+    #[serde(default)]
+    pub turn_active: Option<bool>,
     /// Per-agent reasoning effort ("low" / "medium" / "high") read
     /// from the agent toml. The pill in the project header tracks
     /// this so users can see what they're paying for at a glance.

@@ -96,7 +96,7 @@ func TestEncodeAskAnswerMultiQuestionUsesFreeText(t *testing.T) {
 func TestSendChatAnswersPendingAsk(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{}
-	s.kittyRoot = dir
+	s.conduitRoot = dir
 	s.ID = "ask-test"
 	s.applyPaths()
 	fake := &fakeChatBackend{}
@@ -126,6 +126,7 @@ type fakeChatBackend struct{ sent []string }
 func (f *fakeChatBackend) Send(text string) error { f.sent = append(f.sent, text); return nil }
 func (f *fakeChatBackend) Interrupt() error       { return nil }
 func (f *fakeChatBackend) Close() error           { return nil }
+func (f *fakeChatBackend) TurnActive() bool       { return false }
 
 // The multi-select marker rides inside the rendered card text.
 func TestAskUserQuestionContentMultiSelectMarker(t *testing.T) {

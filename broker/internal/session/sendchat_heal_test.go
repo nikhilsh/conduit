@@ -29,6 +29,8 @@ func (c *stubChatBackend) Send(text string) error {
 
 func (c *stubChatBackend) Interrupt() error { return nil }
 
+func (c *stubChatBackend) TurnActive() bool { return false }
+
 func (c *stubChatBackend) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

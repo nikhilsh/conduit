@@ -60,7 +60,7 @@ type Session struct {
 	switchFn      func(string) error
 
 	repoRoot        string
-	kittyRoot       string
+	conduitRoot     string
 	sessionDir      string
 	worktreeDir     string
 	scrollbackPath  string
@@ -247,13 +247,13 @@ type Session struct {
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
-	repoRoot, kittyRoot, err := resolveKittyRoots()
+	repoRoot, conduitRoot, err := resolveConduitRoots()
 	if err != nil {
 		return nil, err
 	}
 	return newSession(id, adapter, sessionOptions{
-		repoRoot:  repoRoot,
-		kittyRoot: kittyRoot,
+		repoRoot:    repoRoot,
+		conduitRoot: conduitRoot,
 	})
 }
 
@@ -270,7 +270,17 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		// die and re-attach, but tmux keeps the real shell alive between
 		// attaches. When tmux isn't on PATH we fall back to plain bash
 		// with no behaviour change (terminalShellArgv handles both).
+		//
+		// CONDUIT_DISABLE_TERMINAL_TMUX forces the plain-bash fallback even
+		// when tmux IS on PATH. Unit tests set it (see TestMain) so they
+		// never spawn real tmux sessions on the shared tmux server — those
+		// would leak past the test exactly as the old `kitty-switch-chat`
+		// orphan did, since a test tears its Manager down with Close() (no
+		// per-session DeleteSession that would reap the tmux).
 		tmuxPath, _ := exec.LookPath("tmux")
+		if os.Getenv("CONDUIT_DISABLE_TERMINAL_TMUX") != "" {
+			tmuxPath = ""
+		}
 		argv := terminalShellArgv(tmuxPath, sanitizeTmuxName(id))
 		cmd = exec.Command(argv[0], argv[1:]...)
 	} else {
@@ -294,23 +304,23 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		subs:         make(map[chan []byte]struct{}),
 		textSubs:     make(map[chan []byte]struct{}),
 		repoRoot:     opts.repoRoot,
-		kittyRoot:    opts.kittyRoot,
+		conduitRoot:  opts.conduitRoot,
 		previewPort:  opts.previewPort,
 		requestedCWD: strings.TrimSpace(opts.requestedCWD),
 		checkpointEvery: durationFromEnv(
-			"KITTY_SESSION_CHECKPOINT_INTERVAL_MS",
+			"CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS",
 			60*time.Second,
 		),
 		watchdogEvery: durationFromEnv(
-			"KITTY_SESSION_WATCHDOG_INTERVAL_MS",
+			"CONDUIT_SESSION_WATCHDOG_INTERVAL_MS",
 			30*time.Second,
 		),
 		stallAfter: durationFromEnv(
-			"KITTY_SESSION_STALL_AFTER_MS",
+			"CONDUIT_SESSION_STALL_AFTER_MS",
 			5*time.Minute,
 		),
 		handoffTimeout: durationFromEnv(
-			"KITTY_SESSION_HANDOFF_TIMEOUT_MS",
+			"CONDUIT_SESSION_HANDOFF_TIMEOUT_MS",
 			250*time.Millisecond,
 		),
 		hooks:      adapter.Hooks,
@@ -407,14 +417,31 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 				fmt.Fprintf(os.Stderr, "session %s: mirrorHostCredentials(%s): %v (agent will prompt for login)\n", s.ID, provider, err)
 			}
 		}
-		// Seed a theme + onboarding marker so Claude Code's first-run
-		// interactive theme picker doesn't block the PTY. Non-fatal:
-		// worst case the agent shows the picker once. Anthropic-only —
-		// codex has no equivalent first-run prompt.
-		if provider == "anthropic" {
-			if err := seedClaudeConfig(ephemeral); err != nil {
-				fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
+		// The interactive Terminal tab runs under this SAME ephemeral HOME.
+		// If we only materialized the session's own agent provider, the user
+		// would find `claude`/`codex` LOGGED OUT in the terminal of any
+		// session whose agent differs — a `shell` session (no provider at
+		// all), or running `codex` inside a claude session and vice-versa —
+		// even though the box itself is logged in. Mirror the host login for
+		// every OTHER known provider too so the terminal is always logged in
+		// for whatever CLI the user runs. Host-creds only (the app-blob path
+		// stays reserved for the agent's own provider above), best-effort,
+		// and quiet on the common "host isn't logged into that agent" case.
+		// Each session keeps its own private copy, so this does NOT
+		// reintroduce the cross-session refresh-token race.
+		for _, p := range allCredentialProviders() {
+			if p == provider {
+				continue // already materialized above (possibly via app blob)
 			}
+			_ = mirrorHostCredentials(p, ephemeral)
+		}
+		// Seed a theme + onboarding marker so Claude Code's first-run
+		// interactive theme picker doesn't block the PTY — for the agent AND
+		// for an interactive `claude` the user runs in the Terminal tab of a
+		// non-claude session. Harmless for codex (no equivalent prompt); the
+		// file only matters to claude. Non-fatal.
+		if err := seedClaudeConfig(ephemeral); err != nil {
+			fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
 		}
 	}
 	cmd.Env = s.commandEnv(nil)
@@ -833,6 +860,37 @@ func (s *Session) MarkUserChatSent(msg string) {
 	}
 }
 
+// structuredTurnActive reports whether a turn is in flight, AND whether the
+// session even has a structured chat backend to answer authoritatively.
+// present is false for the legacy TUI-scrape path (s.chat == nil): the
+// status frame then OMITS turn_active entirely so clients keep inferring
+// the working state from the conversation log's trailing role (a flat
+// turn_active:false would otherwise pin those sessions' indicator OFF
+// forever). We read s.chat under s.mu but call TurnActive() OUTSIDE the
+// lock so we never nest s.mu → backend-mu (StatusPayload's accessors
+// re-acquire s.mu; see accumulateUsage).
+func (s *Session) structuredTurnActive() (active, present bool) {
+	s.mu.Lock()
+	chat := s.chat
+	s.mu.Unlock()
+	if chat == nil {
+		return false, false
+	}
+	return chat.TurnActive(), true
+}
+
+// TurnActive reports whether the session's structured chat backend has a
+// turn in flight right now (false when there is no structured backend).
+// Folded into the status frame as `turn_active` (only for structured-chat
+// sessions; see structuredTurnActive) so a (re)connecting client drives its
+// "agent is working" indicator from authoritative backend truth instead of
+// inferring it from the conversation log's trailing role — the
+// stuck-indicator bug after the app is backgrounded mid-turn.
+func (s *Session) TurnActive() bool {
+	active, _ := s.structuredTurnActive()
+	return active
+}
+
 // SendChat routes a composer message to the structured chat channel when
 // the session runs in stream-json mode (chat_mode="stream-json"). It
 // returns true when it handled the message, so the websocket handler skips
@@ -897,7 +955,17 @@ func (s *Session) SendChat(msg string) bool {
 		// Surface the failure in the Chat tab — stderr-only here is the
 		// "says connected but never replies" bug: the user's message
 		// silently vanishes and the typing dots spin forever.
-		publishChatSystem(s.PublishText, "⚠️ Couldn't deliver your message to the agent ("+err.Error()+"). Try again, or start a new session.")
+		if errors.Is(err, errCodexTurnInFlight) {
+			// Not a delivery failure — the previous turn is still running
+			// (common after a background→reconnect: the client thinks the
+			// turn ended and the user re-sends). Give accurate guidance
+			// instead of the scary "start a new session". The status
+			// frame's turn_active already shows the agent as working, so
+			// the composer's Stop button is the right next action.
+			publishChatSystem(s.PublishText, "The agent is still working on your previous message — tap Stop to interrupt it, or wait for it to finish, then resend.")
+		} else {
+			publishChatSystem(s.PublishText, "⚠️ Couldn't deliver your message to the agent ("+err.Error()+"). Try again, or start a new session.")
+		}
 	}
 	return true
 }
@@ -1287,7 +1355,7 @@ type Manager struct {
 	recentProjects []RecentProject
 	registry       *agents.Registry
 	repoRoot       string
-	kittyRoot      string
+	conduitRoot    string
 
 	// termgrid is the optional headless xterm.js sidecar. nil when node
 	// isn't installed at startup. Shared by all sessions.
@@ -1349,13 +1417,13 @@ type CreateOptions struct {
 }
 
 func NewManager(registry *agents.Registry) *Manager {
-	repoRoot, kittyRoot, _ := resolveKittyRoots()
+	repoRoot, conduitRoot, _ := resolveConduitRoots()
 	m := &Manager{
-		sessions:  make(map[string]*Session),
-		registry:  registry,
-		repoRoot:  repoRoot,
-		kittyRoot: kittyRoot,
-		stopGC:    make(chan struct{}),
+		sessions:    make(map[string]*Session),
+		registry:    registry,
+		repoRoot:    repoRoot,
+		conduitRoot: conduitRoot,
+		stopGC:      make(chan struct{}),
 	}
 	if strings.TrimSpace(os.Getenv("CONDUIT_DISABLE_SIDECAR")) == "" {
 		tg, err := termgrid.NewManager()
@@ -1499,12 +1567,12 @@ func (m *Manager) HasAssistant(name string) bool {
 }
 
 // ConversationLog returns the persisted conversation transcript for a
-// session id, read from `<kittyRoot>/sessions/<id>/conversation.jsonl`.
+// session id, read from `<conduitRoot>/sessions/<id>/conversation.jsonl`.
 // Works for both live and exited sessions — both append to the same
 // on-disk log, which survives reap — so the app can reopen a past
 // session read-only. Returns an error only when no log exists for the id.
 //
-// Falls back to `<kittyRoot>/archived-sessions/<id>/conversation.jsonl`
+// Falls back to `<conduitRoot>/archived-sessions/<id>/conversation.jsonl`
 // when the active dir has none, so a session deleted (archived) via
 // DeleteSession stays reachable read-only — the delete preserves the
 // transcript, it just takes the session out of the active set.
@@ -1512,14 +1580,14 @@ func (m *Manager) ConversationLog(id string) ([]ConvEntry, error) {
 	if id == "" {
 		return nil, os.ErrNotExist
 	}
-	entries, err := readConvLog(filepath.Join(m.kittyRoot, "sessions", id, "conversation.jsonl"))
+	entries, err := readConvLog(filepath.Join(m.conduitRoot, "sessions", id, "conversation.jsonl"))
 	if err == nil {
 		return entries, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	return readConvLog(filepath.Join(m.kittyRoot, archivedSessionsDirName, id, "conversation.jsonl"))
+	return readConvLog(filepath.Join(m.conduitRoot, archivedSessionsDirName, id, "conversation.jsonl"))
 }
 
 // GetOrCreate returns the existing session for id, or starts a new one
@@ -1605,7 +1673,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	previewPort := m.allocatePreviewPortLocked()
 	s, err := newSession(id, adapter, sessionOptions{
 		repoRoot:      m.repoRoot,
-		kittyRoot:     m.kittyRoot,
+		conduitRoot:   m.conduitRoot,
 		requestedCWD:  requestedCWD,
 		termgrid:      m.termgrid,
 		replayBaseDir: m.replayBaseDir,
@@ -1635,7 +1703,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 }
 
 func (m *Manager) Recover() ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(m.kittyRoot, "sessions"))
+	entries, err := os.ReadDir(filepath.Join(m.conduitRoot, "sessions"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -1706,7 +1774,7 @@ func dirExists(path string) bool {
 
 type sessionOptions struct {
 	repoRoot       string
-	kittyRoot      string
+	conduitRoot    string
 	snapshot       []byte
 	lastCheckpoint time.Time
 	handoffHTML    string
@@ -1844,12 +1912,12 @@ func (s *Session) RewriteUploadRefs(msg string) string {
 }
 
 func (s *Session) applyPaths() {
-	s.sessionDir = filepath.Join(s.kittyRoot, "sessions", s.ID)
+	s.sessionDir = filepath.Join(s.conduitRoot, "sessions", s.ID)
 	s.convLog = newConvLogger(filepath.Join(s.sessionDir, "conversation.jsonl"))
 	s.worktreeDir = filepath.Join(s.sessionDir, "work")
 	s.scrollbackPath = filepath.Join(s.sessionDir, "scrollback.bin")
 	s.metaPath = filepath.Join(s.sessionDir, "meta.json")
-	s.memoryPath = filepath.Join(s.kittyRoot, "memory", "sessions", s.ID+".html")
+	s.memoryPath = filepath.Join(s.conduitRoot, "memory", "sessions", s.ID+".html")
 	s.handoffPath = filepath.Join(s.worktreeDir, ".conduit", "HANDOFF.html")
 	s.handoffOutPath = filepath.Join(s.worktreeDir, ".conduit", "HANDOFF-OUT.html")
 }
@@ -1900,7 +1968,7 @@ func atomicWriteJSON(path string, v any) error {
 	return atomicWriteFile(path, append(data, '\n'))
 }
 
-func resolveKittyRoots() (string, string, error) {
+func resolveConduitRoots() (string, string, error) {
 	if root := strings.TrimSpace(os.Getenv("CONDUIT_ROOT")); root != "" {
 		abs, err := filepath.Abs(root)
 		if err != nil {

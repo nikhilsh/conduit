@@ -315,7 +315,12 @@ extension ConduitUI {
                 lastRole: last?.role,
                 lastStatus: last?.status,
                 lastContentEmpty: contentEmpty,
-                isStreaming: isStreaming
+                isStreaming: isStreaming,
+                // Authoritative broker turn-state: clears a stuck indicator
+                // on reconnect / keeps it on when a turn is really running.
+                // nil for TUI-scrape sessions or a pre-field broker → the
+                // model falls back to log-role inference.
+                serverTurnActive: store.statusBySession[session.id]?.turnActive
             )
         }
 

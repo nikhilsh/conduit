@@ -15,17 +15,17 @@ func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	root := t.TempDir()
 	return &Manager{
-		sessions:  make(map[string]*Session),
-		kittyRoot: root,
-		stopGC:    make(chan struct{}),
+		sessions:    make(map[string]*Session),
+		conduitRoot: root,
+		stopGC:      make(chan struct{}),
 	}
 }
 
-// makeSession plants a fake session-on-disk: kittyRoot/sessions/<id>/
+// makeSession plants a fake session-on-disk: conduitRoot/sessions/<id>/
 // with a meta.json whose mtime is `age` old.
 func makeSession(t *testing.T, m *Manager, id string, age time.Duration) string {
 	t.Helper()
-	dir := filepath.Join(m.kittyRoot, "sessions", id)
+	dir := filepath.Join(m.conduitRoot, "sessions", id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -50,7 +50,7 @@ func makeSession(t *testing.T, m *Manager, id string, age time.Duration) string 
 
 // memoryFile returns the snapshot path the GC pairs with a session id.
 func memoryFile(m *Manager, id string) string {
-	return filepath.Join(m.kittyRoot, "memory", "sessions", id+".html")
+	return filepath.Join(m.conduitRoot, "memory", "sessions", id+".html")
 }
 
 func TestRunGCPrunesStale(t *testing.T) {
@@ -63,7 +63,7 @@ func TestRunGCPrunesStale(t *testing.T) {
 	m.sessions["live"] = &Session{ID: "live"}
 
 	// Plant a pair memory HTML for "old" so we can prove it's cleaned.
-	mDir := filepath.Join(m.kittyRoot, "memory", "sessions")
+	mDir := filepath.Join(m.conduitRoot, "memory", "sessions")
 	if err := os.MkdirAll(mDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +80,11 @@ func TestRunGCPrunesStale(t *testing.T) {
 	}
 	// "old" gone, others present.
 	for _, id := range []string{"fresh", "edge", "live"} {
-		if _, err := os.Stat(filepath.Join(m.kittyRoot, "sessions", id)); err != nil {
+		if _, err := os.Stat(filepath.Join(m.conduitRoot, "sessions", id)); err != nil {
 			t.Errorf("expected session %q to be kept, got: %v", id, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(m.kittyRoot, "sessions", "old")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(m.conduitRoot, "sessions", "old")); !os.IsNotExist(err) {
 		t.Errorf("expected sessions/old to be gone, err = %v", err)
 	}
 	if _, err := os.Stat(memoryFile(m, "old")); !os.IsNotExist(err) {
@@ -103,7 +103,7 @@ func TestRunGCDisabledWithZeroAge(t *testing.T) {
 	if len(pruned) != 0 {
 		t.Errorf("disabled GC should be a no-op, pruned: %v", pruned)
 	}
-	if _, err := os.Stat(filepath.Join(m.kittyRoot, "sessions", "ancient")); err != nil {
+	if _, err := os.Stat(filepath.Join(m.conduitRoot, "sessions", "ancient")); err != nil {
 		t.Errorf("session should remain when GC disabled: %v", err)
 	}
 }
@@ -125,7 +125,7 @@ func TestRunGCKeepsCheckpointedSession(t *testing.T) {
 	// whose dir mtime is older — mostRecentTouch must pick the
 	// max so we don't reap an active recovered session.
 	m := newTestManager(t)
-	dir := filepath.Join(m.kittyRoot, "sessions", "recovered")
+	dir := filepath.Join(m.conduitRoot, "sessions", "recovered")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

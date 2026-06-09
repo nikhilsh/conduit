@@ -43,8 +43,8 @@ type chatScraper struct {
 func newChatScraper(publish func([]byte)) *chatScraper {
 	return &chatScraper{
 		publish:    publish,
-		idleAfter:  durationFromEnv("KITTY_CHAT_IDLE_MS", 700*time.Millisecond),
-		maxTurn:    durationFromEnv("KITTY_CHAT_TURN_MAX_MS", 30*time.Second),
+		idleAfter:  durationFromEnv("CONDUIT_CHAT_IDLE_MS", 700*time.Millisecond),
+		maxTurn:    durationFromEnv("CONDUIT_CHAT_TURN_MAX_MS", 30*time.Second),
 		now:        func() time.Time { return time.Now().UTC() },
 		tickerStop: make(chan struct{}),
 	}

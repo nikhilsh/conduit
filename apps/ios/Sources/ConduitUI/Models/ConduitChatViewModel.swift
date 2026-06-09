@@ -338,9 +338,20 @@ extension ConduitUI {
             lastRole: String?,
             lastStatus: String?,
             lastContentEmpty: Bool,
-            isStreaming: Bool
+            isStreaming: Bool,
+            serverTurnActive: Bool? = nil
         ) -> Bool {
             if isStreaming { return true }
+            // Authoritative broker signal (status frame `turn_active`): for a
+            // structured-chat session the broker tells us exactly whether a
+            // turn is in flight, so trust it over the log-role heuristic
+            // below. This is what clears a stuck indicator on reconnect when
+            // the trailing log item is still the user's prompt (the turn
+            // finished while the app was backgrounded), and what keeps it on
+            // when a turn really is running. `nil` = legacy TUI-scrape session
+            // or a pre-field broker → fall through to the inference.
+            // (`isStreaming` already won above as the lower-latency signal.)
+            if let serverTurnActive { return serverTurnActive }
             guard let lastRole else { return false }
             if lastRole.lowercased() == "user" { return true }
             // The assistant turn is the trailing event. Only treat it as

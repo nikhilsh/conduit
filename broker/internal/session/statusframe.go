@@ -44,6 +44,18 @@ func (s *Session) StatusPayload() map[string]any {
 		"reason_code": reason,
 		"ts":          time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	// turn_active is the authoritative "is a turn in flight" signal for
+	// structured-chat sessions. `phase` stays "running" whether idle or
+	// working, so it can't drive a transient indicator — clients fold this
+	// instead to clear/keep the composer's working state on (re)connect.
+	// Emitted ONLY for structured-chat sessions; OMITTED for the legacy
+	// TUI-scrape path so those clients keep their log-role inference (a flat
+	// false would pin their indicator off). Rides every status frame, so the
+	// existing turn-end broadcast (accumulateUsage) and the watchdog tick
+	// flip it live, not only on reconnect.
+	if active, present := s.structuredTurnActive(); present {
+		payload["turn_active"] = active
+	}
 	if cwd := s.WorkspaceDir(); cwd != "" {
 		payload["cwd"] = cwd
 	}

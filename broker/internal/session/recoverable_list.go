@@ -22,7 +22,7 @@ import (
 // offer Resume; the conservative "fail closed to read-only" path then only
 // catches sessions that truly cannot come back.
 func (m *Manager) RecoverableSessions() []LiveSessionInfo {
-	entries, err := os.ReadDir(filepath.Join(m.kittyRoot, "sessions"))
+	entries, err := os.ReadDir(filepath.Join(m.conduitRoot, "sessions"))
 	if err != nil {
 		return nil
 	}
@@ -73,7 +73,7 @@ func (m *Manager) RecoverableSessions() []LiveSessionInfo {
 // readSessionMeta loads and decodes sessions/<id>/meta.json.
 func (m *Manager) readSessionMeta(id string) (sessionMetadata, error) {
 	var meta sessionMetadata
-	data, err := os.ReadFile(filepath.Join(m.kittyRoot, "sessions", id, "meta.json"))
+	data, err := os.ReadFile(filepath.Join(m.conduitRoot, "sessions", id, "meta.json"))
 	if err != nil {
 		return meta, err
 	}
@@ -104,10 +104,10 @@ func (m *Manager) recoverabilityError(id string, meta sessionMetadata) error {
 	if _, err := m.registry.Get(meta.Assistant); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(m.kittyRoot, "sessions", id, "scrollback.bin")); err != nil {
+	if _, err := os.Stat(filepath.Join(m.conduitRoot, "sessions", id, "scrollback.bin")); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(m.kittyRoot, "memory", "sessions", id+".html")); err != nil {
+	if _, err := os.Stat(filepath.Join(m.conduitRoot, "memory", "sessions", id+".html")); err != nil {
 		return err
 	}
 	return nil
