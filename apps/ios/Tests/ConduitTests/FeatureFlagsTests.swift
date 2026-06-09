@@ -99,26 +99,20 @@ struct FeatureFlagsTests {
         #expect(second.newSessionLastEffort == "high")
     }
 
-    // MARK: - Onboarding routing (§5)
+    // MARK: - Onboarding routing (§5 — accounts-free, device-local gating)
 
-    @Test func routeFullWhenNoMachine() {
-        // Row 2 — brand-new user, nothing exists.
-        #expect(FeatureFlags.onboardingRoute(
-            signedIn: true, machines: 0, linkedHere: false, brokerReachable: false) == .full)
+    @Test func routeFullWhenNoBrokerPaired() {
+        // No pairing key on this device → full setup. Reachability is moot
+        // when nothing is paired.
+        #expect(FeatureFlags.onboardingRoute(pairedBrokers: 0, brokerReachable: false) == .full)
+        #expect(FeatureFlags.onboardingRoute(pairedBrokers: 0, brokerReachable: true) == .full)
     }
 
-    @Test func routePairOnlyWhenMachineExistsButNotLinkedHere() {
-        // Row 3 — new device, existing account.
-        #expect(FeatureFlags.onboardingRoute(
-            signedIn: true, machines: 1, linkedHere: false, brokerReachable: false) == .pairOnly)
-    }
-
-    @Test func routeNoneWhenLinkedRegardlessOfReachability() {
-        // Rows 4 (offline banner) & 5 (home) — never onboard a linked device.
-        #expect(FeatureFlags.onboardingRoute(
-            signedIn: true, machines: 1, linkedHere: true, brokerReachable: false) == .none)
-        #expect(FeatureFlags.onboardingRoute(
-            signedIn: true, machines: 1, linkedHere: true, brokerReachable: true) == .none)
+    @Test func routeNoneWhenAnyBrokerPairedRegardlessOfReachability() {
+        // Paired-but-offline = Home + offline banner; paired-and-reachable =
+        // Home. Neither re-onboards. No account / pair-only fast-path exists.
+        #expect(FeatureFlags.onboardingRoute(pairedBrokers: 1, brokerReachable: false) == .none)
+        #expect(FeatureFlags.onboardingRoute(pairedBrokers: 2, brokerReachable: true) == .none)
     }
 
     @Test func fullRouteSkipsWelcomeOnceSeen() {
@@ -137,9 +131,9 @@ struct FeatureFlagsTests {
         #expect(flags.onboardingInitialStep(for: .full) == 2)
     }
 
-    @Test func pairOnlyAlwaysLandsOnPair() {
+    @Test func noneRouteLandsOnDone() {
         let flags = FeatureFlags(defaults: freshDefaults())
-        #expect(flags.onboardingInitialStep(for: .pairOnly) == 2)
+        #expect(flags.onboardingInitialStep(for: .none) == 3)
     }
 
     // MARK: - Helpers

@@ -30,17 +30,16 @@ extension ConduitUI {
         /// session doesn't snap back into the wizard on the same launch.
         @State private var onboardingFinished = false
 
-        /// Onboarding gate (handoff §5 / ONBOARDING.md): show the wizard
-        /// whenever the user lacks a reachable, linked broker — driven from
-        /// LIVE state (no saved server = no machine), never a "seen it" flag.
-        /// Once a server is paired the route flips to `.none` and the cover
-        /// dismisses.
+        /// Onboarding gate (§5): show the wizard whenever this DEVICE holds no
+        /// pairing key for any broker. No accounts / sign-in — trust is the
+        /// device↔broker pairing handshake, so `savedServers` (the brokers
+        /// this device is paired with) is the only signal. Once one is paired
+        /// the route flips to `.none` and the cover dismisses; an unreachable
+        /// paired broker is Home + offline banner, never re-onboarding.
         private var needsOnboarding: Bool {
             guard !onboardingFinished else { return false }
             let route = FeatureFlags.onboardingRoute(
-                signedIn: true,
-                machines: store.savedServers.count,
-                linkedHere: !store.savedServers.isEmpty,
+                pairedBrokers: store.savedServers.count,
                 brokerReachable: store.harness.canIssueCommands
             )
             return route != .none

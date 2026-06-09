@@ -63,9 +63,7 @@ extension ConduitUI {
             guard !didResolveInitialStep else { return }
             didResolveInitialStep = true
             let route = FeatureFlags.onboardingRoute(
-                signedIn: true,
-                machines: store.savedServers.count,
-                linkedHere: !store.savedServers.isEmpty,
+                pairedBrokers: store.savedServers.count,
                 brokerReachable: store.harness.canIssueCommands
             )
             step = flags.onboardingInitialStep(for: route)

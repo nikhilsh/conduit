@@ -125,7 +125,9 @@ final class FeatureFlags {
     /// install (§2 acceptance: a bucketed user sees a stable arm).
     private(set) var chatAssignedArm: ChatArm
 
-    /// Stable per-install id the bucket hashes over (account/device proxy).
+    /// Stable per-device id the bucket hashes over. Conduit has no accounts,
+    /// so this is a device-local id (the vendor id, persisted) — never an
+    /// account id.
     let chatStableID: String
 
     /// Whether the one-per-install exposure event has been logged.
@@ -152,9 +154,9 @@ final class FeatureFlags {
         self.chatExperimentKilled = defaults.object(forKey: Keys.chatExperimentKilled) as? Bool ?? false
         self.chatExposureLogged = defaults.object(forKey: Keys.chatExposureLogged) as? Bool ?? false
 
-        // Stable id: reuse the persisted one, else seed from the vendor id
-        // (stable per install), else a fresh UUID. Persist so the bucket
-        // never moves even if `identifierForVendor` later changes.
+        // Stable DEVICE id (no accounts): reuse the persisted one, else seed
+        // from the vendor id (stable per install), else a fresh UUID. Persist
+        // so the bucket never moves even if `identifierForVendor` later changes.
         let stableID: String
         if let stored = defaults.string(forKey: Keys.chatStableID) {
             stableID = stored
@@ -213,42 +215,50 @@ final class FeatureFlags {
         ])
     }
 
-    // MARK: - Onboarding routing (§5 / ONBOARDING.md)
+    // MARK: - Onboarding routing (§5)
 
-    /// Where launch routing should send the user. Gated on LIVE broker state,
-    /// never on `seenWelcome` (which only decides whether Welcome appears).
+    /// Where launch routing should send the user.
+    ///
+    /// **Conduit has no accounts / sign-in** — trust is established
+    /// device-to-broker through the pairing handshake, and the pairing key
+    /// lives on THIS device. So there is no `signedIn` concept and no cloud
+    /// "my machines" list: routing is gated purely on device-local state.
+    /// An auth wall must never precede onboarding.
     enum OnboardingRoute: Equatable {
-        case none       // rows 4 & 5 — Home (offline banner handled elsewhere)
-        case full       // row 2 — Welcome → Install → Pair (brand-new user)
-        case pairOnly   // row 3 — Pair only (new device, existing account)
+        case none       // Home (offline banner handled elsewhere when unreachable)
+        case full       // Welcome → Install → Pair (no broker paired on this device)
     }
 
-    /// First-matching-rule-wins launch routing (ONBOARDING.md table). Pure +
-    /// testable. Row 1 (Auth) is not modelled here — Conduit has no cloud
-    /// account separate from pairing, so `signedIn` is always true and the
-    /// gate is purely about reaching a broker.
+    /// First-matching-rule-wins launch routing. Pure + testable. Signals are
+    /// device-local only:
+    ///   - `pairedBrokers` — count of brokers this device holds a key for
+    ///   - `brokerReachable` — at least one paired broker online right now
+    ///
+    /// Rules:
+    ///   1. `pairedBrokers == 0`        → **full** onboarding (Welcome shows
+    ///      only if `!seenWelcome`, else enter at Install — see
+    ///      `onboardingInitialStep`).
+    ///   2. paired but `!brokerReachable` → **none** (Home + "broker offline"
+    ///      banner; let it wake — never re-onboard).
+    ///   3. paired and reachable          → **none** (Home / Sessions).
+    ///
+    /// The old "existing account, new device → pair-only" fast-path is gone:
+    /// without accounts a brand-new device starts fresh and pairs the brokers
+    /// it will talk to (the accepted tradeoff).
     static func onboardingRoute(
-        signedIn: Bool,
-        machines: Int,
-        linkedHere: Bool,
+        pairedBrokers: Int,
         brokerReachable: Bool
     ) -> OnboardingRoute {
-        guard signedIn else { return .full }            // (row 1 → treat as full setup)
-        if machines == 0 { return .full }               // row 2 — nothing exists
-        if !linkedHere { return .pairOnly }             // row 3 — pair this device
-        return .none                                    // rows 4 & 5 — never onboard
+        pairedBrokers == 0 ? .full : .none
     }
 
-    /// The step the wizard should open on for a route, honouring resume and
-    /// the once-ever Welcome (§5 "Resume"): full route enters at Welcome only
-    /// if it hasn't been seen, else at the furthest incomplete step (min
-    /// Install); pair-only always lands on Pair.
+    /// The step the wizard should open on, honouring resume and the once-ever
+    /// Welcome: full route enters at Welcome only if it hasn't been seen, else
+    /// at the furthest incomplete step (min Install).
     func onboardingInitialStep(for route: OnboardingRoute) -> Int {
         switch route {
         case .none:
             return OnboardingStep.done.rawValue
-        case .pairOnly:
-            return OnboardingStep.pair.rawValue
         case .full:
             let floor = onboardingSeenWelcome ? OnboardingStep.install.rawValue : OnboardingStep.welcome.rawValue
             return max(floor, min(onboardingFurthestStep, OnboardingStep.pair.rawValue))
