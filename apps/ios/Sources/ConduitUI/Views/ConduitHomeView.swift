@@ -294,10 +294,12 @@ extension ConduitUI {
             .listRowBackground(Color.clear)
         }
 
-        /// Pinned "This device" row: Conduit mark, `localhost:1977 ·
-        /// on-device`, a LOCAL badge (accent), and a `● ready` status. Not
-        /// tappable — there is no remote connection to manage for the phone
-        /// itself.
+        /// Pinned "This device" row: identity only. A phone can't host the
+        /// broker, so agents NEVER run here — every session runs on a paired
+        /// box. The subtitle/status say so plainly (the earlier `localhost:1977
+        /// · on-device` + `● ready` read as a runnable target and had users
+        /// trying to start a local session). Not tappable — there's no
+        /// connection to manage for the phone itself.
         private var localDeviceRow: some View {
             HStack(spacing: 11) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -309,7 +311,7 @@ extension ConduitUI {
                         .font(neon.sans(13).weight(.semibold))
                         .foregroundStyle(neon.text)
                         .lineLimit(1)
-                    Text("localhost:1977 · on-device")
+                    Text("signed in · agents run on a box")
                         .font(neon.mono(10.5))
                         .foregroundStyle(neon.textFaint)
                         .lineLimit(1)
@@ -322,12 +324,11 @@ extension ConduitUI {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(neon.accent.opacity(0.14)))
-                HStack(spacing: 5) {
-                    Circle().fill(neon.textDim).frame(width: 6, height: 6)
-                    Text("ready")
-                        .font(neon.mono(11))
-                        .foregroundStyle(neon.textDim)
-                }
+                // No status dot: "● ready" implied this device was a runnable
+                // session target. It isn't — it's a client.
+                Text("client")
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.textFaint)
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)

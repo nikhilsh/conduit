@@ -165,6 +165,18 @@ func runUp(args []string) int {
 	qrterminal.GenerateHalfBlock(pairing, qrterminal.L, os.Stdout)
 	fmt.Printf("\nScan the QR above with the Conduit app, or:\n  wscat -c \"%s/ws/$(uuidgen)?assistant=claude&token=%s\"\n",
 		replaceScheme(hostURL), token)
+	if strings.TrimSpace(*publicURL) == "" {
+		// Without --public-url the pairing URL/QR can only encode localhost
+		// or a LAN IP (resolveHostURL never emits a public address). A phone
+		// on cellular scanning that QR saves a server it can never reach —
+		// the #1 onboarding dead end for a remote/VPS broker. Make the
+		// remedy loud so the operator doesn't ship an unreachable QR.
+		fmt.Fprintf(os.Stderr,
+			"\n⚠️  No --public-url set: the pairing URL/QR points at %q, reachable only on this machine/LAN.\n"+
+				"    If this broker is remote (e.g. a VPS), restart with:  --public-url wss://<public-host>:<port>\n"+
+				"    or pair the app manually with  ws://<public-ip>%s  + the token above.\n",
+			hostURL, *addr)
+	}
 
 	var mdnsShutdown func()
 	if *local {

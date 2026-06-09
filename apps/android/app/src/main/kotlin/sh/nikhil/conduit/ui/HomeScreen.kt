@@ -694,10 +694,11 @@ private fun HomeBoxRow(
 }
 
 /**
- * Pinned "This device" row (Round-2 fix 5, handoff images 09→10): Conduit
- * mark, `localhost:1977 · on-device`, a LOCAL badge (accent), and a
- * `● ready` status. Not tappable — there is no remote connection to manage
- * for the phone itself. Mirror of iOS `ConduitHomeView.localDeviceRow`.
+ * Pinned "This device" row: identity only. A phone can't host the broker, so
+ * agents NEVER run here — every session runs on a paired box. The
+ * subtitle/status say so plainly (the earlier `localhost:1977 · on-device` +
+ * `● ready` read as a runnable target and had users trying to start a local
+ * session). Not tappable. Mirror of iOS `ConduitHomeView.localDeviceRow`.
  */
 @Composable
 private fun HomeLocalDeviceRow(neon: NeonTheme) {
@@ -728,7 +729,7 @@ private fun HomeLocalDeviceRow(neon: NeonTheme) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "localhost:1977 · on-device",
+                "signed in · agents run on a box",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = neon.mono,
                 color = neon.textFaint,
@@ -747,12 +748,13 @@ private fun HomeLocalDeviceRow(neon: NeonTheme) {
                 .background(neon.accent.copy(alpha = 0.14f), CircleShape)
                 .padding(horizontal = 6.dp, vertical = 2.dp),
         )
-        Box(modifier = Modifier.size(6.dp).background(neon.textDim, CircleShape))
+        // No status dot: "● ready" implied this device was a runnable session
+        // target. It isn't — it's a client.
         Text(
-            "ready",
+            "client",
             style = MaterialTheme.typography.labelSmall,
             fontFamily = neon.mono,
-            color = neon.textDim,
+            color = neon.textFaint,
         )
     }
 }
