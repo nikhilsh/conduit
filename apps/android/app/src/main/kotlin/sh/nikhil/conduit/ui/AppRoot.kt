@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.SessionStore
 
@@ -55,11 +56,22 @@ fun AppRoot(store: SessionStore) {
     val sessions by store.sessions.collectAsState()
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
+    val savedServers by store.savedServers.collectAsState()
 
-    // First-launch settings prompt.
+    // Onboarding gate (§5) — accounts-free, device-local. No sign-in wall:
+    // show the wizard when this device holds no broker pairing key. `Full`
+    // route ⇒ overlay; a paired-but-offline broker is Home + offline banner.
+    var onboardingFinished by remember { mutableStateOf(false) }
+    val needsOnboarding = !onboardingFinished &&
+        FeatureFlags.onboardingRoute(
+            pairedBrokers = savedServers.size,
+            brokerReachable = harness is HarnessState.Live || harness is HarnessState.Linked,
+        ) == FeatureFlags.OnboardingRoute.Full
+
+    // Auto-connect a paired-but-disconnected broker on launch (no settings
+    // takeover — onboarding handles the unpaired case).
     androidx.compose.runtime.LaunchedEffect(Unit) {
-        if (!endpoint.isComplete) showSettings = true
-        else if (harness is HarnessState.Disconnected) store.connect()
+        if (endpoint.isComplete && harness is HarnessState.Disconnected) store.connect()
     }
 
     val onNewSession: () -> Unit = {
@@ -316,6 +328,16 @@ fun AppRoot(store: SessionStore) {
             store = store,
             headerNote = pick.hostNote,
             onDismiss = { store.setPendingAgentPick(null) },
+        )
+    }
+
+    // Onboarding takeover (§5). Full-screen over the app; dismisses itself
+    // once a broker is paired (savedServers becomes non-empty → route flips
+    // to None) or the user finishes.
+    if (needsOnboarding) {
+        OnboardingScreen(
+            store = store,
+            onFinish = { onboardingFinished = true },
         )
     }
 
