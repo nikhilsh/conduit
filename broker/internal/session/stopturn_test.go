@@ -3,9 +3,52 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestInterruptTurnPublishesStoppedNote: InterruptTurn must publish a role-
+// "system" chat view_event so the client's typing indicator (and the composer
+// Stop button) clear — stopping mid-think otherwise leaves the user's prompt as
+// the last item, which the apps read as "agent still working" forever.
+func TestInterruptTurnPublishesStoppedNote(t *testing.T) {
+	s := &Session{
+		ID:       "stop-note",
+		convLog:  newConvLogger(filepath.Join(t.TempDir(), "conversation.jsonl")),
+		textSubs: map[chan []byte]struct{}{},
+	}
+	s.chat = &fakeChatBackend{}
+	sub := s.SubscribeText()
+	defer s.UnsubscribeText(sub)
+
+	if !s.InterruptTurn() {
+		t.Fatal("InterruptTurn returned false with a backend present")
+	}
+
+	select {
+	case frame := <-sub:
+		var env struct {
+			Type  string `json:"type"`
+			View  string `json:"view"`
+			Event struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"event"`
+		}
+		if err := json.Unmarshal(frame, &env); err != nil {
+			t.Fatalf("unmarshal published frame: %v", err)
+		}
+		if env.Type != "view_event" || env.View != "chat" || env.Event.Role != "system" {
+			t.Fatalf("expected a system chat view_event, got: %s", frame)
+		}
+		if env.Event.Content == "" {
+			t.Fatalf("stopped note must carry content: %s", frame)
+		}
+	default:
+		t.Fatal("InterruptTurn published no frame")
+	}
+}
 
 // TestEncodeControlInterrupt pins the claude Stop-button wire format: a
 // stream-json control_request with subtype "interrupt" and a unique request_id,
