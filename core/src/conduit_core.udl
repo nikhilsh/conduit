@@ -23,6 +23,10 @@ dictionary SessionStatus {
     PreviewInfo? preview;
     string? session_name;
     u32? viewers;
+    // Authoritative "is a turn in flight" from the broker. null when the
+    // broker predates this field (clients then fall back to inferring the
+    // working state from the conversation log's trailing role).
+    boolean? turn_active = null;
     string? reasoning_effort;
     string? cwd;
     string? started_at;

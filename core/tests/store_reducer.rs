@@ -60,6 +60,7 @@ fn status(
         preview: None,
         session_name: name.map(|s| s.to_string()),
         viewers: None,
+        turn_active: None,
         reasoning_effort: effort.map(|s| s.to_string()),
         cwd: None,
         started_at: None,

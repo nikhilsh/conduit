@@ -744,6 +744,8 @@ async fn handle_text(
         #[serde(default)]
         viewers: Option<u32>,
         #[serde(default)]
+        turn_active: Option<bool>,
+        #[serde(default)]
         reasoning_effort: Option<String>,
         #[serde(default)]
         cwd: Option<String>,
@@ -816,6 +818,7 @@ async fn handle_text(
                 preview: env.preview.clone(),
                 session_name: env.session_name,
                 viewers: env.viewers,
+                turn_active: env.turn_active,
                 reasoning_effort: env.reasoning_effort,
                 cwd: env.cwd,
                 started_at: env.started_at,
