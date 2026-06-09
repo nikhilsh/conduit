@@ -58,6 +58,9 @@ final class FeatureFlags {
         static let chatStableID = "conduit.flags.chat.stableID"
         static let chatExposureLogged = "conduit.flags.chat.exposureLogged"
         static let newSessionLastEffort = "conduit.flags.newSession.lastEffort"
+        static let onboardingSeenWelcome = "conduit.flags.onboarding.seenWelcome"
+        static let onboardingFurthestStep = "conduit.flags.onboarding.furthestStep"
+        static let onboardingGuide = "conduit.flags.onboarding.guide"
     }
 
     // MARK: - New-session flags (§3) — default ON (this is the shipping design)
@@ -83,6 +86,25 @@ final class FeatureFlags {
     /// raw API value (`low`/`medium`/`high`).
     var newSessionLastEffort: String {
         didSet { defaults.set(newSessionLastEffort, forKey: Keys.newSessionLastEffort) }
+    }
+
+    // MARK: - Onboarding state (§5)
+
+    /// Whether the marketing **Welcome** screen has been shown on this
+    /// device. Its ONLY job (per `ONBOARDING.md`) is to decide whether
+    /// Welcome appears again — all other gating is driven from live broker
+    /// state, never from this flag.
+    var onboardingSeenWelcome: Bool {
+        didSet { defaults.set(onboardingSeenWelcome, forKey: Keys.onboardingSeenWelcome) }
+    }
+    /// Furthest onboarding step reached (0 Welcome · 1 Install · 2 Pair · 3
+    /// Done) so a quit mid-setup resumes at the furthest incomplete step.
+    var onboardingFurthestStep: Int {
+        didSet { defaults.set(onboardingFurthestStep, forKey: Keys.onboardingFurthestStep) }
+    }
+    /// "Guide me" (true) vs "I know my way" (false) — scales the hand-holding.
+    var onboardingGuide: Bool {
+        didSet { defaults.set(onboardingGuide, forKey: Keys.onboardingGuide) }
     }
 
     // MARK: - Chat A/B state (§2)
@@ -120,6 +142,10 @@ final class FeatureFlags {
         self.newSessionEffortDial = defaults.object(forKey: Keys.newSessionEffortDial) as? Bool ?? true
         self.newSessionLaunchLine = defaults.object(forKey: Keys.newSessionLaunchLine) as? Bool ?? true
         self.newSessionLastEffort = defaults.string(forKey: Keys.newSessionLastEffort) ?? ""
+
+        self.onboardingSeenWelcome = defaults.object(forKey: Keys.onboardingSeenWelcome) as? Bool ?? false
+        self.onboardingFurthestStep = defaults.object(forKey: Keys.onboardingFurthestStep) as? Int ?? 0
+        self.onboardingGuide = defaults.object(forKey: Keys.onboardingGuide) as? Bool ?? true
 
         self.chatStylePreference = (defaults.string(forKey: Keys.chatStylePreference)
             .flatMap(ChatStylePreference.init(rawValue:))) ?? .auto
@@ -186,6 +212,51 @@ final class FeatureFlags {
             "hash": String(chatBucketHash),
         ])
     }
+
+    // MARK: - Onboarding routing (§5 / ONBOARDING.md)
+
+    /// Where launch routing should send the user. Gated on LIVE broker state,
+    /// never on `seenWelcome` (which only decides whether Welcome appears).
+    enum OnboardingRoute: Equatable {
+        case none       // rows 4 & 5 — Home (offline banner handled elsewhere)
+        case full       // row 2 — Welcome → Install → Pair (brand-new user)
+        case pairOnly   // row 3 — Pair only (new device, existing account)
+    }
+
+    /// First-matching-rule-wins launch routing (ONBOARDING.md table). Pure +
+    /// testable. Row 1 (Auth) is not modelled here — Conduit has no cloud
+    /// account separate from pairing, so `signedIn` is always true and the
+    /// gate is purely about reaching a broker.
+    static func onboardingRoute(
+        signedIn: Bool,
+        machines: Int,
+        linkedHere: Bool,
+        brokerReachable: Bool
+    ) -> OnboardingRoute {
+        guard signedIn else { return .full }            // (row 1 → treat as full setup)
+        if machines == 0 { return .full }               // row 2 — nothing exists
+        if !linkedHere { return .pairOnly }             // row 3 — pair this device
+        return .none                                    // rows 4 & 5 — never onboard
+    }
+
+    /// The step the wizard should open on for a route, honouring resume and
+    /// the once-ever Welcome (§5 "Resume"): full route enters at Welcome only
+    /// if it hasn't been seen, else at the furthest incomplete step (min
+    /// Install); pair-only always lands on Pair.
+    func onboardingInitialStep(for route: OnboardingRoute) -> Int {
+        switch route {
+        case .none:
+            return OnboardingStep.done.rawValue
+        case .pairOnly:
+            return OnboardingStep.pair.rawValue
+        case .full:
+            let floor = onboardingSeenWelcome ? OnboardingStep.install.rawValue : OnboardingStep.welcome.rawValue
+            return max(floor, min(onboardingFurthestStep, OnboardingStep.pair.rawValue))
+        }
+    }
+
+    /// Onboarding step indices — shared by the routing math and the wizard.
+    enum OnboardingStep: Int { case welcome = 0, install = 1, pair = 2, done = 3 }
 
     // MARK: - Deterministic bucketing
 

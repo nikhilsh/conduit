@@ -99,6 +99,49 @@ struct FeatureFlagsTests {
         #expect(second.newSessionLastEffort == "high")
     }
 
+    // MARK: - Onboarding routing (§5)
+
+    @Test func routeFullWhenNoMachine() {
+        // Row 2 — brand-new user, nothing exists.
+        #expect(FeatureFlags.onboardingRoute(
+            signedIn: true, machines: 0, linkedHere: false, brokerReachable: false) == .full)
+    }
+
+    @Test func routePairOnlyWhenMachineExistsButNotLinkedHere() {
+        // Row 3 — new device, existing account.
+        #expect(FeatureFlags.onboardingRoute(
+            signedIn: true, machines: 1, linkedHere: false, brokerReachable: false) == .pairOnly)
+    }
+
+    @Test func routeNoneWhenLinkedRegardlessOfReachability() {
+        // Rows 4 (offline banner) & 5 (home) — never onboard a linked device.
+        #expect(FeatureFlags.onboardingRoute(
+            signedIn: true, machines: 1, linkedHere: true, brokerReachable: false) == .none)
+        #expect(FeatureFlags.onboardingRoute(
+            signedIn: true, machines: 1, linkedHere: true, brokerReachable: true) == .none)
+    }
+
+    @Test func fullRouteSkipsWelcomeOnceSeen() {
+        let flags = FeatureFlags(defaults: freshDefaults())
+        // Fresh: Welcome (0).
+        #expect(flags.onboardingInitialStep(for: .full) == 0)
+        // After Welcome seen: enters at Install (1), never back at Welcome.
+        flags.onboardingSeenWelcome = true
+        #expect(flags.onboardingInitialStep(for: .full) == 1)
+    }
+
+    @Test func fullRouteResumesAtFurthestStep() {
+        let flags = FeatureFlags(defaults: freshDefaults())
+        flags.onboardingSeenWelcome = true
+        flags.onboardingFurthestStep = 2   // got to Pair before quitting
+        #expect(flags.onboardingInitialStep(for: .full) == 2)
+    }
+
+    @Test func pairOnlyAlwaysLandsOnPair() {
+        let flags = FeatureFlags(defaults: freshDefaults())
+        #expect(flags.onboardingInitialStep(for: .pairOnly) == 2)
+    }
+
     // MARK: - Helpers
 
     private func freshDefaults() -> UserDefaults {
