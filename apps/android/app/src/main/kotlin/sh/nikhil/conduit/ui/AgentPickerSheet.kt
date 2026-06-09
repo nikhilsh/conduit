@@ -100,6 +100,7 @@ fun AgentPickerSheet(
             DirectoryStep(
                 store = store,
                 assistant = agent,
+                agentTint = neonAgentColor(agent, neon),
                 onCreate = { cwd, model, effort, permissionMode ->
                     val target = savedServers.firstOrNull { it.id == resolvedServerId }
                     if (target != null && target.endpoint != endpoint) {
@@ -127,6 +128,12 @@ private fun AgentStep(
     onPick: (String) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
+    val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
+    val useCards by appearance.newSessionAgentCards.collectAsState()
+    // Cards mode (§3): the selected agent tints the whole sheet + the Continue
+    // button before the user commits. Defaults to Claude (first card).
+    var selectedAgent by remember { mutableStateOf("claude") }
+    val sheetTint = neonAgentColor(selectedAgent, neon)
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -162,22 +169,49 @@ private fun AgentStep(
                 }
             }
         }
-        AgentTile(
-            assistant = "claude",
-            label = "Claude",
-            subtitle = "Powered by Anthropic",
-            tint = neon.claude,
-            enabled = canIssue,
-            onTap = { onPick("claude") },
-        )
-        AgentTile(
-            assistant = "codex",
-            label = "Codex",
-            subtitle = "Powered by OpenAI",
-            tint = neon.codex,
-            enabled = canIssue,
-            onTap = { onPick("codex") },
-        )
+        if (useCards) {
+            Row(horizontalArrangement = Arrangement.spacedBy(11.dp), modifier = Modifier.fillMaxWidth()) {
+                AgentCard(
+                    assistant = "claude",
+                    name = "Claude",
+                    model = "Sonnet 4.6",
+                    blurb = "Careful, conversational — best for ambiguous work.",
+                    tint = neon.claude,
+                    selected = selectedAgent == "claude",
+                    enabled = canIssue,
+                    onTap = { selectedAgent = "claude" },
+                    modifier = Modifier.weight(1f),
+                )
+                AgentCard(
+                    assistant = "codex",
+                    name = "Codex",
+                    model = "gpt-5-codex",
+                    blurb = "Terse and fast on well-scoped code tasks.",
+                    tint = neon.codex,
+                    selected = selectedAgent == "codex",
+                    enabled = canIssue,
+                    onTap = { selectedAgent = "codex" },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            AgentTile(
+                assistant = "claude",
+                label = "Claude",
+                subtitle = "Powered by Anthropic",
+                tint = neon.claude,
+                enabled = canIssue,
+                onTap = { onPick("claude") },
+            )
+            AgentTile(
+                assistant = "codex",
+                label = "Codex",
+                subtitle = "Powered by OpenAI",
+                tint = neon.codex,
+                enabled = canIssue,
+                onTap = { onPick("codex") },
+            )
+        }
         // Box choice — always shown so the user can see where the session
         // will run (device feedback round 4: gated on >1 servers, a
         // single-box user "can't choose the box" and can't tell local vs
@@ -217,7 +251,81 @@ private fun AgentStep(
                 color = neon.textDim,
             )
         }
+        // Cards mode commits with a tinted Continue button (§3); tiles mode
+        // drills in on tap, so no button there.
+        if (useCards && canIssue) {
+            Button(
+                onClick = { onPick(selectedAgent) },
+                shape = RoundedCornerShape(14.dp),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = sheetTint,
+                    contentColor = neon.accentText,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    "Continue with ${if (selectedAgent == "codex") "Codex" else "Claude"}",
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+/**
+ * Side-by-side agent card (§3, `02-ns`): brand-tinted, with the model name
+ * and a one-line character note. Selecting tints the sheet + Continue button.
+ * Mirrors iOS `agentCard`.
+ */
+@Composable
+private fun AgentCard(
+    assistant: String,
+    name: String,
+    model: String,
+    blurb: String,
+    tint: Color,
+    selected: Boolean,
+    enabled: Boolean,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val neon = LocalNeonTheme.current
+    val shape = RoundedCornerShape(15.dp)
+    Column(
+        modifier = modifier
+            .neonCardSurface(
+                neon = neon,
+                shape = shape,
+                fill = if (selected) tint.copy(alpha = 0.14f) else neon.surface,
+                borderColor = if (selected) tint else neon.border,
+                glowTint = if (selected) tint else null,
+            )
+            .clickable(enabled = enabled, onClick = onTap)
+            .padding(13.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+            AgentAvatar(assistant = assistant, size = 34.dp)
+            Spacer(Modifier.weight(1f))
+            if (selected) {
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(20.dp),
+                )
+            } else {
+                Box(
+                    modifier = Modifier.size(20.dp).clip(CircleShape)
+                        .border(1.5.dp, neon.border, CircleShape),
+                )
+            }
+        }
+        Text(name, fontFamily = neon.sans, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = neon.text)
+        Text(model, fontFamily = neon.mono, fontSize = 11.5.sp, color = if (selected) tint else neon.textFaint)
+        Text(blurb, fontFamily = neon.sans, fontSize = 12.5.sp, color = neon.textDim)
     }
 }
 
@@ -226,8 +334,13 @@ private fun AgentStep(
 private fun DirectoryStep(
     store: SessionStore,
     assistant: String,
+    agentTint: Color,
     onCreate: (String?, String?, String?, String?) -> Unit,
 ) {
+    val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
+    val useDial by appearance.newSessionEffortDial.collectAsState()
+    val useLaunch by appearance.newSessionLaunchLine.collectAsState()
+    val lastEffort by appearance.newSessionLastEffort.collectAsState()
     val recent by store.recentDirectories.collectAsState()
     var currentPath by remember { mutableStateOf<String?>(null) }
     var listing by remember { mutableStateOf<RemoteDirectoryListing?>(null) }
@@ -243,7 +356,11 @@ private fun DirectoryStep(
     // previously couldn't set effort (passed null).
     val effortOptions = remember(assistant) { forkEffortOptions(assistant) }
     var effort by remember(assistant) {
-        mutableStateOf(if (effortOptions.contains("medium")) "medium" else effortOptions.first())
+        // Honour the last dial choice if this agent supports it (§3), else
+        // the agent default ("medium" when offered).
+        val initial = lastEffort.takeIf { it.isNotEmpty() && effortOptions.contains(it) }
+            ?: if (effortOptions.contains("medium")) "medium" else effortOptions.first()
+        mutableStateOf(initial)
     }
     // Permission mode. "" = Auto (full-auto default, broker spawns with
     // --dangerously-skip-permissions); "plan" = read-only planning. The
@@ -292,15 +409,23 @@ private fun DirectoryStep(
                 onSelect = { model = it },
             )
 
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SectionLabel("Reasoning effort")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    effortOptions.forEach { level ->
-                        FilterChip(
-                            selected = effort == level,
-                            onClick = { effort = level },
-                            label = { Text(level.replaceFirstChar { it.uppercase() }) },
-                        )
+            if (useDial) {
+                EffortDial(
+                    effort = effort,
+                    tint = agentTint,
+                    onSelect = { effort = it; appearance.setNewSessionLastEffort(it) },
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SectionLabel("Reasoning effort")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        effortOptions.forEach { level ->
+                            FilterChip(
+                                selected = effort == level,
+                                onClick = { effort = level },
+                                label = { Text(level.replaceFirstChar { it.uppercase() }) },
+                            )
+                        }
                     }
                 }
             }
@@ -385,12 +510,30 @@ private fun DirectoryStep(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            if (useLaunch) {
+                // Live launch preview (§3): will run <agent> · <effort> · <folder>.
+                val folder = listing?.path?.trimEnd('/')?.substringAfterLast('/')?.ifEmpty { null }
+                Text(
+                    buildString {
+                        append("will run ")
+                        append(assistant)
+                        append(" · ")
+                        append(effort)
+                        if (!folder.isNullOrEmpty()) { append(" · "); append(folder) }
+                    },
+                    fontFamily = neon.mono,
+                    fontSize = 11.5.sp,
+                    color = neon.textFaint,
+                    maxLines = 1,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             Button(
                 onClick = { onCreate(listing?.path, selectedModel, effort, selectedMode) },
                 enabled = listing != null,
                 shape = RoundedCornerShape(14.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = neon.accent,
+                    containerColor = agentTint,
                     contentColor = neon.accentText,
                 ),
                 modifier = Modifier.fillMaxWidth(),
@@ -639,6 +782,75 @@ private fun BoxRow(
                 tint = if (selected) neon.accent else neon.textFaint.copy(alpha = 0.35f),
                 modifier = Modifier.size(20.dp),
             )
+        }
+    }
+}
+
+/**
+ * 3-stop reasoning-effort dial (§3, `03-ns`): Fast / Balanced / Deep mapped
+ * to the raw API values low/medium/high. The track fills up to (and
+ * including) the selected stop in the agent tint; a consequence line + the
+ * raw API value chip sit beneath. Mirrors iOS `effortDialSection`.
+ */
+@Composable
+private fun EffortDial(
+    effort: String,
+    tint: Color,
+    onSelect: (String) -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    data class Stop(val label: String, val value: String, val desc: String)
+    val stops = listOf(
+        Stop("Fast", "low", "Quick passes, minimal deliberation"),
+        Stop("Balanced", "medium", "Reasons before it acts — the default"),
+        Stop("Deep", "high", "Plans hard and checks itself, slower"),
+    )
+    val idx = stops.indexOfFirst { it.value == effort }.let { if (it < 0) 1 else it }
+    val cur = stops[idx]
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionLabel("Reasoning effort")
+        Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+            stops.forEachIndexed { i, stop ->
+                Column(
+                    modifier = Modifier.weight(1f).clickable { onSelect(stop.value) },
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(if (i <= idx) tint else neon.textFaint.copy(alpha = 0.25f)),
+                    )
+                    Text(
+                        stop.label,
+                        fontFamily = neon.sans,
+                        fontSize = 13.sp,
+                        fontWeight = if (i == idx) FontWeight.Bold else FontWeight.Medium,
+                        color = if (i == idx) neon.text else neon.textFaint,
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .neonCardSurface(neon = neon, shape = RoundedCornerShape(12.dp), fill = neon.surface)
+                .padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            Text(
+                cur.value,
+                fontFamily = neon.mono,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = tint,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(tint.copy(alpha = 0.12f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+            Text(cur.desc, fontFamily = neon.sans, fontSize = 13.sp, color = neon.textDim)
         }
     }
 }

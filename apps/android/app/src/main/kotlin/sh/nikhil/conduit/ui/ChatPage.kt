@@ -1859,6 +1859,13 @@ private fun MarkdownProse(
                 bodyPointSize,
                 androidx.compose.ui.unit.TextUnitType.Sp,
             ),
+            // De-cramp (handoff §1/§7): both chat arms read calmer at ~1.7
+            // line-height vs the cramped ~1.46 baseline. Mirrors iOS
+            // `proseLineSpacing`.
+            lineHeight = androidx.compose.ui.unit.TextUnit(
+                bodyPointSize * 1.7f,
+                androidx.compose.ui.unit.TextUnitType.Sp,
+            ),
         ),
         fontFamily = font,
         color = onColor,

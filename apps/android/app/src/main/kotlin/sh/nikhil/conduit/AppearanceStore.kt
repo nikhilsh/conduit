@@ -199,6 +199,11 @@ class AppearanceStore : ViewModel() {
     private val _newSessionLaunchLine = MutableStateFlow(true)
     val newSessionLaunchLine: StateFlow<Boolean> = _newSessionLaunchLine.asStateFlow()
 
+    /** Last reasoning-effort picked on the dial (§3 — persists last choice).
+     *  Empty until first use → the sheet falls back to the agent default. */
+    private val _newSessionLastEffort = MutableStateFlow("")
+    val newSessionLastEffort: StateFlow<String> = _newSessionLastEffort.asStateFlow()
+
     /** Onboarding state (§5). seenWelcome only governs the Welcome screen. */
     private val _onboardingSeenWelcome = MutableStateFlow(false)
     val onboardingSeenWelcome: StateFlow<Boolean> = _onboardingSeenWelcome.asStateFlow()
@@ -235,6 +240,7 @@ class AppearanceStore : ViewModel() {
         _newSessionAgentCards.value = p.getBoolean(KEY_NS_AGENT_CARDS, true)
         _newSessionEffortDial.value = p.getBoolean(KEY_NS_EFFORT_DIAL, true)
         _newSessionLaunchLine.value = p.getBoolean(KEY_NS_LAUNCH_LINE, true)
+        _newSessionLastEffort.value = p.getString(KEY_NS_LAST_EFFORT, null) ?: ""
         _onboardingSeenWelcome.value = p.getBoolean(KEY_ONB_SEEN_WELCOME, false)
         _onboardingFurthestStep.value = p.getInt(KEY_ONB_FURTHEST_STEP, 0)
         _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
@@ -284,6 +290,11 @@ class AppearanceStore : ViewModel() {
     fun setNewSessionLaunchLine(value: Boolean) {
         _newSessionLaunchLine.value = value
         prefs?.edit()?.putBoolean(KEY_NS_LAUNCH_LINE, value)?.apply()
+    }
+
+    fun setNewSessionLastEffort(value: String) {
+        _newSessionLastEffort.value = value
+        prefs?.edit()?.putString(KEY_NS_LAST_EFFORT, value)?.apply()
     }
 
     fun setOnboardingSeenWelcome(value: Boolean) {
@@ -394,6 +405,7 @@ class AppearanceStore : ViewModel() {
         private const val KEY_NS_AGENT_CARDS = "newSession.agentCards"
         private const val KEY_NS_EFFORT_DIAL = "newSession.effortDial"
         private const val KEY_NS_LAUNCH_LINE = "newSession.launchLine"
+        private const val KEY_NS_LAST_EFFORT = "newSession.lastEffort"
         private const val KEY_ONB_SEEN_WELCOME = "onboarding.seenWelcome"
         private const val KEY_ONB_FURTHEST_STEP = "onboarding.furthestStep"
         private const val KEY_ONB_GUIDE = "onboarding.guide"
