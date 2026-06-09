@@ -860,6 +860,23 @@ func (s *Session) MarkUserChatSent(msg string) {
 	}
 }
 
+// TurnActive reports whether the session's structured chat backend has a
+// turn in flight right now. Folded into the status frame as `turn_active`
+// so a (re)connecting client can drive its "agent is working" indicator
+// from authoritative backend truth instead of inferring it from the
+// conversation log's trailing role (the stuck-indicator bug after the app
+// is backgrounded mid-turn). Returns false for the legacy TUI-scrape path
+// (no chat backend) — those keep the log-role inference. We read s.chat
+// under s.mu but call TurnActive() OUTSIDE the lock so we never nest s.mu
+// → backend-mu (StatusPayload's accessors re-acquire s.mu; see
+// accumulateUsage).
+func (s *Session) TurnActive() bool {
+	s.mu.Lock()
+	chat := s.chat
+	s.mu.Unlock()
+	return chat != nil && chat.TurnActive()
+}
+
 // SendChat routes a composer message to the structured chat channel when
 // the session runs in stream-json mode (chat_mode="stream-json"). It
 // returns true when it handled the message, so the websocket handler skips
@@ -924,7 +941,17 @@ func (s *Session) SendChat(msg string) bool {
 		// Surface the failure in the Chat tab — stderr-only here is the
 		// "says connected but never replies" bug: the user's message
 		// silently vanishes and the typing dots spin forever.
-		publishChatSystem(s.PublishText, "⚠️ Couldn't deliver your message to the agent ("+err.Error()+"). Try again, or start a new session.")
+		if errors.Is(err, errCodexTurnInFlight) {
+			// Not a delivery failure — the previous turn is still running
+			// (common after a background→reconnect: the client thinks the
+			// turn ended and the user re-sends). Give accurate guidance
+			// instead of the scary "start a new session". The status
+			// frame's turn_active already shows the agent as working, so
+			// the composer's Stop button is the right next action.
+			publishChatSystem(s.PublishText, "The agent is still working on your previous message — tap Stop to interrupt it, or wait for it to finish, then resend.")
+		} else {
+			publishChatSystem(s.PublishText, "⚠️ Couldn't deliver your message to the agent ("+err.Error()+"). Try again, or start a new session.")
+		}
 	}
 	return true
 }

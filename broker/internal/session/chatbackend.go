@@ -14,6 +14,14 @@ type chatBackend interface {
 	// `turn/interrupt`; codex-exec kills the in-flight turn process.
 	Interrupt() error
 	Close() error
+	// TurnActive reports whether a turn is in flight right now. It is the
+	// authoritative backend truth the broker folds into the status frame
+	// (`turn_active`) so a reconnecting client can clear or keep its
+	// "agent is working" indicator instead of guessing from the
+	// conversation log's trailing role — the source of the stuck-indicator
+	// bug when an app is backgrounded mid-turn. Must be cheap and
+	// non-blocking (read a mutex-guarded flag).
+	TurnActive() bool
 }
 
 // structuredChatBackend maps an adapter's chat_mode to the backend kind:

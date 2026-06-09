@@ -273,6 +273,15 @@ func (c *codexChatProcess) Interrupt() error {
 	return nil
 }
 
+// TurnActive reports whether a codex-exec turn process is in flight.
+// runTurn sets c.running for the duration of the turn and clears it on
+// exit, so this is the authoritative in-flight signal for the status frame.
+func (c *codexChatProcess) TurnActive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.running != nil
+}
+
 // Close stops the codex backend: no persistent process, but kill any
 // in-flight turn and refuse further Sends. Idempotent.
 func (c *codexChatProcess) Close() error {
