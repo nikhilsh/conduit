@@ -19,6 +19,7 @@ import SwiftUI
 extension ConduitUI {
     struct AgentPickerSheet: View {
         @Environment(SessionStore.self) private var store
+        @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
@@ -34,6 +35,10 @@ extension ConduitUI {
         /// Agent the user tapped; pushes the directory picker. nil while
         /// on the agent-selection screen.
         @State private var pickedAgent: String?
+
+        /// In cards mode (§3) the selected agent tints the whole sheet before
+        /// the user commits with "Continue". Defaults to Claude (first card).
+        @State private var selectedAgentKind: String = "claude"
 
         /// Box the session should run on (device feedback, round 3:
         /// "I can't choose where to start the session in"). nil =
@@ -63,17 +68,24 @@ extension ConduitUI {
                                !prompt.isEmpty {
                                 promptPreview(prompt)
                             }
-                            sectionLabel("Agent")
-                            agentRow(
-                                kind: "claude",
-                                label: "Claude",
-                                subtitle: "Powered by Anthropic"
-                            )
-                            agentRow(
-                                kind: "codex",
-                                label: "Codex",
-                                subtitle: "Powered by OpenAI"
-                            )
+                            sectionLabel("Agent", tint: flags.newSessionAgentCards ? sheetTint : nil)
+                            if flags.newSessionAgentCards {
+                                HStack(alignment: .top, spacing: 11) {
+                                    agentCard(kind: "claude")
+                                    agentCard(kind: "codex")
+                                }
+                            } else {
+                                agentRow(
+                                    kind: "claude",
+                                    label: "Claude",
+                                    subtitle: "Powered by Anthropic"
+                                )
+                                agentRow(
+                                    kind: "codex",
+                                    label: "Codex",
+                                    subtitle: "Powered by OpenAI"
+                                )
+                            }
                             // Always show where the session will run — even
                             // with one box. Device feedback round 4: with the
                             // section gated on >1 servers, a single-box user
@@ -99,9 +111,17 @@ extension ConduitUI {
                 }
                 .navigationTitle("New session")
                 .navigationBarTitleDisplayMode(.inline)
+                .safeAreaInset(edge: .bottom) {
+                    // Cards mode commits with a tinted Continue bar (§3); rows
+                    // mode keeps tap-to-drill, so no bottom bar there.
+                    if flags.newSessionAgentCards && store.harness.canIssueCommands {
+                        continueBar
+                    }
+                }
                 .navigationDestination(item: $pickedAgent) { kind in
                     DirectoryPicker(
                         agentKind: kind,
+                        agentTint: neon.agentTint(forAgent: kind),
                         initialPrompt: initialPrompt,
                         onCreate: { cwd, model, effort, permissionMode in
                             if let target = resolvedServer, target.endpoint != store.endpoint {
@@ -180,6 +200,42 @@ extension ConduitUI {
             }
         }
 
+        /// Tinted commit bar for cards mode — pushes the directory step for
+        /// the selected agent. Tint tracks the selected card (§3 acceptance:
+        /// switching agent recolors the Start/Continue button).
+        private var continueBar: some View {
+            let meta = Self.agentMeta(selectedAgentKind)
+            return Button {
+                pickedAgent = selectedAgentKind
+            } label: {
+                HStack(spacing: 8) {
+                    Text("Continue with \(meta.name)")
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .bold))
+                }
+                .font(neon.sans(15).weight(.semibold))
+                .foregroundStyle(neon.accentText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(sheetTint)
+                )
+                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(sheetTint) : nil)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+            .background(
+                neon.surfaceSolid
+                    .overlay(alignment: .top) {
+                        Rectangle().fill(neon.border).frame(height: 1)
+                    }
+                    .ignoresSafeArea(edges: .bottom)
+            )
+        }
+
         private func promptPreview(_ prompt: String) -> some View {
             VStack(alignment: .leading, spacing: 6) {
                 sectionLabel("Initial prompt")
@@ -196,11 +252,79 @@ extension ConduitUI {
             .accessibilityIdentifier("ConduitAgentPickerSheet.initialPrompt")
         }
 
-        private func sectionLabel(_ text: String) -> some View {
+        private func sectionLabel(_ text: String, tint: Color? = nil) -> some View {
             Text(text.uppercased())
                 .font(neon.mono(11).weight(.bold))
                 .tracking(0.6)
-                .foregroundStyle(neon.textFaint)
+                .foregroundStyle(tint ?? neon.textFaint)
+        }
+
+        /// The agent tint that recolors the sheet in cards mode (§3).
+        private var sheetTint: Color { neon.agentTint(forAgent: selectedAgentKind) }
+
+        /// Side-by-side agent card (§3, `02-ns`). Carries the agent's brand
+        /// color, model name, and a one-line character note. Selecting a card
+        /// tints the whole sheet (labels + Continue button) with its color.
+        private func agentCard(kind: String) -> some View {
+            let canIssue = store.harness.canIssueCommands
+            let tint = neon.agentTint(forAgent: kind)
+            let selected = selectedAgentKind == kind
+            let meta = Self.agentMeta(kind)
+            return Button {
+                selectedAgentKind = kind
+            } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top) {
+                        AgentAvatar(assistant: kind, size: 34)
+                        Spacer(minLength: 0)
+                        ZStack {
+                            Circle()
+                                .fill(selected ? tint : Color.clear)
+                                .overlay(Circle().strokeBorder(selected ? Color.clear : neon.border, lineWidth: 1.5))
+                                .frame(width: 20, height: 20)
+                            if selected {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(neon.accentText)
+                            }
+                        }
+                    }
+                    Text(meta.name)
+                        .font(neon.sans(16).weight(.bold))
+                        .foregroundStyle(neon.text)
+                    Text(meta.model)
+                        .font(neon.mono(11.5))
+                        .foregroundStyle(selected ? tint : neon.textFaint)
+                    Text(meta.blurb)
+                        .font(neon.sans(12.5))
+                        .foregroundStyle(neon.textDim)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(EdgeInsets(top: 13, leading: 13, bottom: 14, trailing: 13))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .neonCardSurface(
+                    neon,
+                    fill: selected ? tint.opacity(neon.dark ? 0.14 : 0.10) : neon.surface,
+                    cornerRadius: 15,
+                    border: selected ? tint : neon.border,
+                    glowTint: selected ? tint : nil
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canIssue)
+            .opacity(canIssue ? 1.0 : 0.55)
+        }
+
+        /// Brand metadata for the agent cards (§3). Mirrors `imp-newsession`.
+        private static func agentMeta(_ kind: String) -> (name: String, model: String, blurb: String) {
+            switch kind {
+            case "codex":
+                return ("Codex", "gpt-5-codex", "Terse and fast on well-scoped code tasks.")
+            default:
+                return ("Claude", "Sonnet 4.6", "Careful, conversational — best for ambiguous work.")
+            }
         }
 
         /// One row per paired box; the session is created on the checked
@@ -311,6 +435,11 @@ extension ConduitUI {
 extension ConduitUI {
     struct DirectoryPicker: View {
         let agentKind: String
+        /// The chosen agent's brand color (§3) — tints the effort dial fill,
+        /// the launch line, and the Start button so the directory step keeps
+        /// the agent's identity carried over from the cards step. nil on the
+        /// legacy rows path → falls back to the neon accent.
+        var agentTint: Color?
         var initialPrompt: String?
         /// Called with the absolute path to cd into (or nil to start with no
         /// working directory), the selected model alias (nil = inherit the
@@ -320,6 +449,7 @@ extension ConduitUI {
         let onCreate: (String?, String?, String?, String?) -> Void
 
         @Environment(SessionStore.self) private var store
+        @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
@@ -343,14 +473,34 @@ extension ConduitUI {
 
         init(
             agentKind: String,
+            agentTint: Color? = nil,
             initialPrompt: String? = nil,
             onCreate: @escaping (String?, String?, String?, String?) -> Void
         ) {
             self.agentKind = agentKind
+            self.agentTint = agentTint
             self.initialPrompt = initialPrompt
             self.onCreate = onCreate
             self._effort = State(initialValue: Self.defaultEffort(forAssistant: agentKind))
         }
+
+        /// The effort dial's three stops (§3): Fast/Balanced/Deep mapped to
+        /// the raw API values low/medium/high. Curated — Claude's extra
+        /// xhigh/max levels are reachable only via the legacy segmented row.
+        private struct EffortStop {
+            let label: String
+            let value: String   // low / medium / high
+            let desc: String
+        }
+        private static let effortStops: [EffortStop] = [
+            EffortStop(label: "Fast",     value: "low",    desc: "Quick passes, minimal deliberation"),
+            EffortStop(label: "Balanced", value: "medium", desc: "Reasons before it acts — the default"),
+            EffortStop(label: "Deep",     value: "high",   desc: "Plans hard and checks itself, slower"),
+        ]
+
+        /// Tint to use for the agent-coloured chrome — falls back to the neon
+        /// accent if no agent tint was threaded in (rows-mode / legacy paths).
+        private var tint: Color { agentTint ?? neon.accent }
 
         private static func defaultEffort(forAssistant assistant: String) -> String {
             let options = ConduitUI.ForkOptions.efforts(forAssistant: assistant)
@@ -414,6 +564,16 @@ extension ConduitUI {
             }
             .safeAreaInset(edge: .bottom) { bottomBar }
             .task(id: currentPath) { await load() }
+            .onAppear {
+                // Honour the last effort the user picked on the dial (§3
+                // acceptance: "persists the last choice"), but only when it's
+                // a value this agent supports — otherwise keep the per-agent
+                // default seeded in init.
+                let last = flags.newSessionLastEffort
+                if flags.newSessionEffortDial, !last.isEmpty, effortOptions.contains(last) {
+                    effort = last
+                }
+            }
             .tint(neon.accent)
         }
 
@@ -446,17 +606,76 @@ extension ConduitUI {
             }
         }
 
+        @ViewBuilder
         private var effortSection: some View {
-            VStack(alignment: .leading, spacing: 8) {
-                sectionLabel("Reasoning effort")
-                Picker("Reasoning effort", selection: $effort) {
-                    ForEach(effortOptions, id: \.self) { level in
-                        Text(level.capitalized).tag(level)
+            if flags.newSessionEffortDial {
+                effortDialSection
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    sectionLabel("Reasoning effort")
+                    Picker("Reasoning effort", selection: $effort) {
+                        ForEach(effortOptions, id: \.self) { level in
+                            Text(level.capitalized).tag(level)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .tint(neon.accent)
+                }
+            }
+        }
+
+        /// 3-stop effort dial (§3, `03-ns`): Fast / Balanced / Deep. The
+        /// track fills up to (and including) the selected stop in the agent
+        /// tint; a consequence line + the raw API value chip sit beneath.
+        private var effortDialSection: some View {
+            let stops = Self.effortStops
+            let idx = max(0, stops.firstIndex(where: { $0.value == effort }) ?? 1)
+            let cur = stops[idx]
+            return VStack(alignment: .leading, spacing: 8) {
+                sectionLabel("Reasoning effort", tint: tint)
+                HStack(spacing: 7) {
+                    ForEach(Array(stops.enumerated()), id: \.offset) { i, stop in
+                        Button {
+                            effort = stop.value
+                            flags.newSessionLastEffort = stop.value
+                        } label: {
+                            VStack(spacing: 9) {
+                                Capsule()
+                                    .fill(i <= idx ? tint : neon.textFaint.opacity(0.25))
+                                    .frame(height: 8)
+                                    .neonGlowBox(i == idx && neon.glow ? neon.glowBox?.tinted(tint) : nil)
+                                Text(stop.label)
+                                    .font(neon.sans(13).weight(i == idx ? .bold : .medium))
+                                    .foregroundStyle(i == idx ? neon.text : neon.textFaint)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
                     }
                 }
-                .pickerStyle(.segmented)
-                .tint(neon.accent)
+                HStack(spacing: 9) {
+                    Text(cur.value)
+                        .font(neon.mono(11).weight(.bold))
+                        .foregroundStyle(tint)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(tint.opacity(0.12))
+                                .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
+                        )
+                    Text(cur.desc)
+                        .font(neon.sans(13))
+                        .foregroundStyle(neon.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12)
             }
+            .animation(.easeInOut(duration: 0.18), value: effort)
         }
 
         private var modeSection: some View {
@@ -593,6 +812,9 @@ extension ConduitUI {
 
         private var bottomBar: some View {
             VStack(spacing: 10) {
+                if flags.newSessionLaunchLine {
+                    launchLine
+                }
                 Button {
                     onCreate(listing?.path, selectedModel, effort, selectedPermissionMode)
                 } label: {
@@ -606,9 +828,9 @@ extension ConduitUI {
                     .padding(.vertical, 13)
                     .background(
                         RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .fill(neon.accent)
+                            .fill(tint)
                     )
-                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
+                    .neonGlowBox(neon.glow ? neon.glowBox?.tinted(tint) : nil)
                 }
                 .buttonStyle(.plain)
                 .disabled(listing == nil)
@@ -642,6 +864,30 @@ extension ConduitUI {
             )
         }
 
+        /// Live mono launch preview (§3, `04-ns`): `will run claude · medium ·
+        /// <folder>`. Updates as the agent / effort / folder change.
+        private var launchLine: some View {
+            let folder = listing?.path.flatMap { displayName(of: $0) }
+            return HStack(spacing: 0) {
+                Text("will run ")
+                    .foregroundStyle(neon.textFaint)
+                Text(agentKind)
+                    .foregroundStyle(tint)
+                Text(" · \(effort)")
+                    .foregroundStyle(neon.textDim)
+                if let folder, !folder.isEmpty {
+                    Text(" · \(folder)")
+                        .foregroundStyle(neon.textDim)
+                }
+                Spacer(minLength: 0)
+            }
+            .font(neon.mono(11.5))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
+        }
+
         // MARK: Helpers
 
         private var canGoUp: Bool {
@@ -649,11 +895,11 @@ extension ConduitUI {
             return !listing.parent.isEmpty && listing.parent != listing.path
         }
 
-        private func sectionLabel(_ text: String) -> some View {
+        private func sectionLabel(_ text: String, tint: Color? = nil) -> some View {
             Text(text.uppercased())
                 .font(neon.mono(11).weight(.bold))
                 .tracking(0.6)
-                .foregroundStyle(neon.textFaint)
+                .foregroundStyle(tint ?? neon.textFaint)
         }
 
         private func displayName(of path: String) -> String {

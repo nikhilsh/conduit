@@ -1,0 +1,208 @@
+import Foundation
+import Observation
+import UIKit
+
+/// App-wide feature flags + experiment assignment (design handoff §2/§3).
+///
+/// Persisted to `UserDefaults.standard`, injected at the app root, and read
+/// by:
+///   - the **new-session** sheet — agent cards / effort dial / launch line
+///     (§3), each an independent flag so they can ship piecemeal;
+///   - the **chat shell** — the `chat-shell-v2` A/B (§2), where the resolved
+///     arm decides Breathe (A) vs Signature (B).
+///
+/// A staff Debug menu (`ConduitDebugMenuView`) can force any value and shows
+/// the computed bucket/hash/exposure state. The Settings → Labs control
+/// (`ConduitLabsView`) exposes the user-facing A/B/Auto conversation-style
+/// override.
+@Observable
+final class FeatureFlags {
+
+    // MARK: - Chat arms (§2)
+
+    /// The two chat-shell arms. `a` = "Breathe" (today's chat, de-cramped);
+    /// `b` = "Signature" (the conduit-spine lane). The rawValue is the
+    /// stable bucket id logged to telemetry.
+    enum ChatArm: String, CaseIterable, Identifiable {
+        case a
+        case b
+        var id: String { rawValue }
+        /// Human label for the Debug menu / Labs control.
+        var label: String { self == .a ? "Breathe (A)" : "Signature (B)" }
+    }
+
+    /// User/staff conversation-style override (Settings → Labs, `01-ab`).
+    /// `auto` uses the assigned bucket; `a`/`b` are a manual LOCAL override
+    /// for dogfooding that never changes the logged bucket (§2 acceptance).
+    enum ChatStylePreference: String, CaseIterable, Identifiable {
+        case auto
+        case a
+        case b
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .auto: return "Auto"
+            case .a:    return "A"
+            case .b:    return "B"
+            }
+        }
+    }
+
+    private enum Keys {
+        static let newSessionAgentCards = "conduit.flags.newSession.agentCards"
+        static let newSessionEffortDial = "conduit.flags.newSession.effortDial"
+        static let newSessionLaunchLine = "conduit.flags.newSession.launchLine"
+        static let chatStylePreference = "conduit.flags.chat.stylePreference"
+        static let chatExperimentKilled = "conduit.flags.chat.experimentKilled"
+        static let chatAssignedArm = "conduit.flags.chat.assignedArm"
+        static let chatStableID = "conduit.flags.chat.stableID"
+        static let chatExposureLogged = "conduit.flags.chat.exposureLogged"
+        static let newSessionLastEffort = "conduit.flags.newSession.lastEffort"
+    }
+
+    // MARK: - New-session flags (§3) — default ON (this is the shipping design)
+
+    /// Agent picker renders as side-by-side **cards** that tint the sheet
+    /// (`new-session.agent-cards`).
+    var newSessionAgentCards: Bool {
+        didSet { defaults.set(newSessionAgentCards, forKey: Keys.newSessionAgentCards) }
+    }
+    /// Reasoning-effort picker renders as the 3-stop **dial**
+    /// (`new-session.effort-dial`).
+    var newSessionEffortDial: Bool {
+        didSet { defaults.set(newSessionEffortDial, forKey: Keys.newSessionEffortDial) }
+    }
+    /// Live mono **launch line** above Start (`will run claude · medium · …`).
+    var newSessionLaunchLine: Bool {
+        didSet { defaults.set(newSessionLaunchLine, forKey: Keys.newSessionLaunchLine) }
+    }
+
+    /// Last reasoning-effort the user picked on the effort dial (§3
+    /// acceptance: "persists the last choice"). Empty until first use, in
+    /// which case the sheet falls back to the agent's default. Stored as the
+    /// raw API value (`low`/`medium`/`high`).
+    var newSessionLastEffort: String {
+        didSet { defaults.set(newSessionLastEffort, forKey: Keys.newSessionLastEffort) }
+    }
+
+    // MARK: - Chat A/B state (§2)
+
+    /// User/staff override. Persisted. `auto` defers to the assigned bucket.
+    var chatStylePreference: ChatStylePreference {
+        didSet { defaults.set(chatStylePreference.rawValue, forKey: Keys.chatStylePreference) }
+    }
+
+    /// Kill-switch (§2 guardrail). When true, EVERYONE falls back to arm A
+    /// regardless of bucket or local override. Staff-flippable in Debug.
+    var chatExperimentKilled: Bool {
+        didSet { defaults.set(chatExperimentKilled, forKey: Keys.chatExperimentKilled) }
+    }
+
+    /// The deterministically-assigned bucket for this install. Computed once
+    /// from a stable id and **persisted** — never re-bucketed on the same
+    /// install (§2 acceptance: a bucketed user sees a stable arm).
+    private(set) var chatAssignedArm: ChatArm
+
+    /// Stable per-install id the bucket hashes over (account/device proxy).
+    let chatStableID: String
+
+    /// Whether the one-per-install exposure event has been logged.
+    private var chatExposureLogged: Bool {
+        didSet { defaults.set(chatExposureLogged, forKey: Keys.chatExposureLogged) }
+    }
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        self.newSessionAgentCards = defaults.object(forKey: Keys.newSessionAgentCards) as? Bool ?? true
+        self.newSessionEffortDial = defaults.object(forKey: Keys.newSessionEffortDial) as? Bool ?? true
+        self.newSessionLaunchLine = defaults.object(forKey: Keys.newSessionLaunchLine) as? Bool ?? true
+        self.newSessionLastEffort = defaults.string(forKey: Keys.newSessionLastEffort) ?? ""
+
+        self.chatStylePreference = (defaults.string(forKey: Keys.chatStylePreference)
+            .flatMap(ChatStylePreference.init(rawValue:))) ?? .auto
+        self.chatExperimentKilled = defaults.object(forKey: Keys.chatExperimentKilled) as? Bool ?? false
+        self.chatExposureLogged = defaults.object(forKey: Keys.chatExposureLogged) as? Bool ?? false
+
+        // Stable id: reuse the persisted one, else seed from the vendor id
+        // (stable per install), else a fresh UUID. Persist so the bucket
+        // never moves even if `identifierForVendor` later changes.
+        let stableID: String
+        if let stored = defaults.string(forKey: Keys.chatStableID) {
+            stableID = stored
+        } else {
+            let seed = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+            defaults.set(seed, forKey: Keys.chatStableID)
+            stableID = seed
+        }
+        self.chatStableID = stableID
+
+        // Assignment is computed once and persisted. If a value is already
+        // stored, honour it verbatim (never re-bucket the same install).
+        if let stored = defaults.string(forKey: Keys.chatAssignedArm),
+           let arm = ChatArm(rawValue: stored) {
+            self.chatAssignedArm = arm
+        } else {
+            let arm = Self.bucket(for: stableID)
+            defaults.set(arm.rawValue, forKey: Keys.chatAssignedArm)
+            self.chatAssignedArm = arm
+        }
+    }
+
+    // MARK: - Resolution
+
+    /// The arm the chat shell should actually render right now (§2):
+    ///   - kill-switch on → always **A** (safe evolution);
+    ///   - local override `a`/`b` → that arm (does NOT change the bucket);
+    ///   - `auto` → the persisted assigned bucket.
+    var resolvedChatArm: ChatArm {
+        if chatExperimentKilled { return .a }
+        switch chatStylePreference {
+        case .a:    return .a
+        case .b:    return .b
+        case .auto: return chatAssignedArm
+        }
+    }
+
+    /// The 32-bit hash the bucket is derived from — surfaced in Debug so a
+    /// tester can sanity-check the assignment.
+    var chatBucketHash: UInt32 { Self.fnv1a(chatStableID) }
+
+    /// Log the `chat-shell-v2` exposure event exactly once per install, the
+    /// first time the chat shell mounts for a bucketed user (§2). Logs the
+    /// assigned bucket + resolved arm + whether an override is active.
+    /// Idempotent — safe to call on every chat mount.
+    func logChatExposureIfNeeded() {
+        guard !chatExposureLogged else { return }
+        chatExposureLogged = true
+        Telemetry.debug("experiment", "chat-shell-v2 exposure", data: [
+            "experiment": "chat-shell-v2",
+            "assigned": chatAssignedArm.rawValue,
+            "resolved": resolvedChatArm.rawValue,
+            "preference": chatStylePreference.rawValue,
+            "killed": String(chatExperimentKilled),
+            "hash": String(chatBucketHash),
+        ])
+    }
+
+    // MARK: - Deterministic bucketing
+
+    /// 50/50 bucket from a stable id: low bit of an FNV-1a hash. Deterministic
+    /// and stable across launches (unlike Swift's per-process-seeded
+    /// `hashValue`), so the same id always lands in the same arm.
+    static func bucket(for id: String) -> ChatArm {
+        (fnv1a(id) & 1) == 0 ? .a : .b
+    }
+
+    /// FNV-1a 32-bit over the UTF-8 bytes. Small, dependency-free, stable.
+    static func fnv1a(_ s: String) -> UInt32 {
+        var hash: UInt32 = 0x811c_9dc5
+        for byte in s.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 0x0100_0193
+        }
+        return hash
+    }
+}
