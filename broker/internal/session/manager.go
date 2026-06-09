@@ -917,6 +917,17 @@ func (s *Session) InterruptTurn() bool {
 	if err := chat.Interrupt(); err != nil {
 		fmt.Fprintf(os.Stderr, "session %s: chat interrupt: %v\n", s.ID, err)
 	}
+	// Publish a terminal system line so the client's typing indicator — and the
+	// composer Stop button it drives — clear. The apps infer "agent working"
+	// from the conversation's shape, and stopping while the agent was still
+	// thinking (before any assistant message) leaves the user's prompt as the
+	// last item (lastRole == "user" → "working" forever). Both terminuses are
+	// otherwise SILENT to the client: claude's interrupt yields a `result`
+	// envelope the broker consumes, and codex's interrupted `turn/completed`
+	// goes through endTurnQuiet. This note (persisted via PublishText →
+	// convLog) flips the last item to role:"system", clearing the indicator on
+	// the live session AND on reopen — and works on already-shipped apps.
+	publishChatSystem(s.PublishText, "Stopped.")
 	return true
 }
 
