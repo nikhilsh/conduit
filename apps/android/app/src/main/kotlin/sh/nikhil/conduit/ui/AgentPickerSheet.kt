@@ -83,6 +83,12 @@ fun AgentPickerSheet(
     // two-pane on tablet (≥840dp), and a bottom sheet on phone.
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
 
+    // Pull the live per-agent model catalog (broker-discovered from the
+    // agent CLIs) so the cards' model line and the directory step's
+    // model/effort options reflect what the box actually serves. Failure =
+    // keep static fallbacks.
+    LaunchedEffect(Unit) { store.refreshModelCatalog() }
+
     // Container-agnostic content — both presentations render the same flow.
     val content: @Composable () -> Unit = {
         val agent = pickedAgent
@@ -191,11 +197,15 @@ private fun AgentStep(
             }
         }
         if (useCards) {
+            // Live default-model names from the discovered catalog
+            // ("GPT-5.5", "Opus 4.8") — the static strings are only the
+            // offline fallback, so the cards never pin a stale model name.
+            val catalogs by store.modelCatalog.collectAsState()
             Row(horizontalArrangement = Arrangement.spacedBy(11.dp), modifier = Modifier.fillMaxWidth()) {
                 AgentCard(
                     assistant = "claude",
                     name = "Claude",
-                    model = "Sonnet 4.6",
+                    model = defaultModelTitle(catalogs["claude"]) ?: "Sonnet 4.6",
                     blurb = "Careful, conversational — best for ambiguous work.",
                     tint = neon.claude,
                     selected = selectedAgent == "claude",
@@ -206,7 +216,7 @@ private fun AgentStep(
                 AgentCard(
                     assistant = "codex",
                     name = "Codex",
-                    model = "gpt-5-codex",
+                    model = defaultModelTitle(catalogs["codex"]) ?: "gpt-5-codex",
                     blurb = "Terse and fast on well-scoped code tasks.",
                     tint = neon.codex,
                     selected = selectedAgent == "codex",
@@ -372,17 +382,30 @@ private fun DirectoryStep(
     var model by remember(assistant) { mutableStateOf(forkModelInherit) }
     // The model handed to onCreate: the sentinel maps to null.
     val selectedModel = model.trim().ifEmpty { null }
-    // Reasoning effort. Defaults to the agent's sensible default ("medium"
-    // when offered), mirroring the Fork chooser — the new-session flow
-    // previously couldn't set effort (passed null).
-    val effortOptions = remember(assistant) { forkEffortOptions(assistant) }
+    // Reasoning effort. Options come from the broker's live catalog for the
+    // SELECTED model when available (per-model: sonnet lacks xhigh, haiku
+    // has none — empty list hides the effort UI and sends no override);
+    // static per-assistant fallback otherwise.
+    val catalogs by store.modelCatalog.collectAsState()
+    val catalog = catalogs[assistant]
+    val effortOptions = forkEffortOptions(assistant, model, catalog)
     var effort by remember(assistant) {
         // Honour the last dial choice if this agent supports it (§3), else
         // the agent default ("medium" when offered).
         val initial = lastEffort.takeIf { it.isNotEmpty() && effortOptions.contains(it) }
-            ?: if (effortOptions.contains("medium")) "medium" else effortOptions.first()
+            ?: forkDefaultEffort(assistant, model, catalog)
         mutableStateOf(initial)
     }
+    // A model switch (or a late catalog arrival) can change the supported
+    // effort range — snap an out-of-range selection back to the default.
+    LaunchedEffect(model, catalog) {
+        if (effortOptions.isNotEmpty() && effort !in effortOptions) {
+            effort = forkDefaultEffort(assistant, model, catalog)
+        }
+    }
+    // The effort handed to onCreate: null when the model has no effort
+    // control so the spawn carries no override.
+    val selectedEffort = effort.trim().ifEmpty { null }?.takeIf { effortOptions.isNotEmpty() }
     // Permission mode. "" = Auto (full-auto default, broker spawns with
     // --dangerously-skip-permissions); "plan" = read-only planning. The
     // sentinel "" maps to null on the way to onCreate, mirroring model.
@@ -427,15 +450,18 @@ private fun DirectoryStep(
             ModelPicker(
                 assistant = assistant,
                 model = model,
+                catalog = catalog,
                 onSelect = { model = it },
             )
 
             // Effort + Mode: side by side on a wide (tablet) modal, stacked
-            // on phone (§6 "two columns").
+            // on phone (§6 "two columns"). A model with no effort control
+            // (haiku) drops the effort block entirely.
             val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
             val effortBlock: @Composable () -> Unit = {
                 if (useDial) {
                     EffortDial(
+                        options = effortOptions,
                         effort = effort,
                         tint = agentTint,
                         onSelect = { effort = it; appearance.setNewSessionLastEffort(it) },
@@ -448,7 +474,7 @@ private fun DirectoryStep(
                                 FilterChip(
                                     selected = effort == level,
                                     onClick = { effort = level },
-                                    label = { Text(level.replaceFirstChar { it.uppercase() }) },
+                                    label = { Text(effortLabel(level)) },
                                 )
                             }
                         }
@@ -478,7 +504,9 @@ private fun DirectoryStep(
                     )
                 }
             }
-            if (wide) {
+            if (effortOptions.isEmpty()) {
+                modeBlock()
+            } else if (wide) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
                     Box(Modifier.weight(1f)) { effortBlock() }
                     Box(Modifier.weight(1f)) { modeBlock() }
@@ -492,7 +520,7 @@ private fun DirectoryStep(
                 SectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recent.forEach { path ->
-                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, effort, selectedMode) })
+                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode) })
                     }
                 }
             }
@@ -553,8 +581,7 @@ private fun DirectoryStep(
                     buildString {
                         append("will run ")
                         append(assistant)
-                        append(" · ")
-                        append(effort)
+                        if (selectedEffort != null) { append(" · "); append(selectedEffort) }
                         if (!folder.isNullOrEmpty()) { append(" · "); append(folder) }
                     },
                     fontFamily = neon.mono,
@@ -565,7 +592,7 @@ private fun DirectoryStep(
                 )
             }
             Button(
-                onClick = { onCreate(listing?.path, selectedModel, effort, selectedMode) },
+                onClick = { onCreate(listing?.path, selectedModel, selectedEffort, selectedMode) },
                 enabled = listing != null,
                 shape = RoundedCornerShape(14.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
@@ -578,7 +605,7 @@ private fun DirectoryStep(
                 Spacer(Modifier.width(8.dp))
                 Text("Use this folder", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
             }
-            TextButton(onClick = { onCreate(null, selectedModel, effort, selectedMode) }) {
+            TextButton(onClick = { onCreate(null, selectedModel, selectedEffort, selectedMode) }) {
                 Text(
                     "Start without a folder",
                     fontFamily = neon.sans,
@@ -600,10 +627,11 @@ private fun DirectoryStep(
 private fun ModelPicker(
     assistant: String,
     model: String,
+    catalog: List<sh.nikhil.conduit.SessionStore.AgentModel>?,
     onSelect: (String) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
-    val options = forkModelOptions(assistant)
+    val options = forkModelOptions(assistant, catalog)
     var expanded by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         SectionLabel("Model")
@@ -621,7 +649,7 @@ private fun ModelPicker(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(
-                        forkModelLabel(model),
+                        forkModelLabel(model, catalog),
                         style = MaterialTheme.typography.bodyMedium,
                         fontFamily = neon.sans,
                         color = neon.text,
@@ -639,7 +667,7 @@ private fun ModelPicker(
             ) {
                 options.forEach { option ->
                     DropdownMenuItem(
-                        text = { Text(forkModelLabel(option), fontFamily = neon.sans) },
+                        text = { Text(forkModelLabel(option, catalog), fontFamily = neon.sans) },
                         onClick = {
                             onSelect(option)
                             expanded = false
@@ -647,6 +675,17 @@ private fun ModelPicker(
                     )
                 }
             }
+        }
+        // The agent's own description of the (resolved) selection — e.g.
+        // "Sonnet 4.6 · Efficient for routine tasks". Only when the live
+        // catalog is in; the static fallback has none.
+        forkModelDetail(model, catalog)?.let { detail ->
+            Text(
+                detail,
+                fontFamily = neon.mono,
+                fontSize = 10.5.sp,
+                color = neon.textFaint,
+            )
         }
     }
 }
@@ -823,25 +862,26 @@ private fun BoxRow(
 }
 
 /**
- * 3-stop reasoning-effort dial (§3, `03-ns`): Fast / Balanced / Deep mapped
- * to the raw API values low/medium/high. The track fills up to (and
- * including) the selected stop in the agent tint; a consequence line + the
- * raw API value chip sit beneath. Mirrors iOS `effortDialSection`.
+ * Reasoning-effort dial (§3, `03-ns`): one stop per effort level the
+ * selected model supports — Fast/Balanced/Deep for the classic three,
+ * growing to X-High/Max when the agent's catalog offers them. The track
+ * fills up to (and including) the selected stop in the agent tint; a
+ * consequence line + the raw API value chip sit beneath. Mirrors iOS
+ * `effortDialSection`.
  */
 @Composable
 private fun EffortDial(
+    options: List<String>,
     effort: String,
     tint: Color,
     onSelect: (String) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     data class Stop(val label: String, val value: String, val desc: String)
-    val stops = listOf(
-        Stop("Fast", "low", "Quick passes, minimal deliberation"),
-        Stop("Balanced", "medium", "Reasons before it acts — the default"),
-        Stop("Deep", "high", "Plans hard and checks itself, slower"),
-    )
-    val idx = stops.indexOfFirst { it.value == effort }.let { if (it < 0) 1 else it }
+    val stops = options.map { Stop(effortLabel(it), it, effortDescription(it)) }
+    if (stops.isEmpty()) return
+    val idx = stops.indexOfFirst { it.value == effort }
+        .let { if (it < 0) minOf(1, stops.size - 1) else it }
     val cur = stops[idx]
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionLabel("Reasoning effort")
@@ -864,6 +904,8 @@ private fun EffortDial(
                         fontSize = 13.sp,
                         fontWeight = if (i == idx) FontWeight.Bold else FontWeight.Medium,
                         color = if (i == idx) neon.text else neon.textFaint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

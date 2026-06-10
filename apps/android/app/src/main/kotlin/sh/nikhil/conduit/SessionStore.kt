@@ -1875,6 +1875,57 @@ class SessionStore : ViewModel(), ConduitDelegate {
     )
 
     /**
+     * One model an agent advertises, discovered live by the broker from the
+     * agent CLI (capabilities "models", broker modelcatalog.go). `id` is the
+     * value sent as the session-create model override; "" is the
+     * inherit/default sentinel. Mirror of iOS `ConduitUI.AgentModel`.
+     */
+    data class AgentModel(
+        val id: String,
+        val displayName: String,
+        val description: String = "",
+        val isDefault: Boolean = false,
+        val defaultEffort: String = "",
+        val efforts: List<String> = emptyList(),
+    )
+
+    /**
+     * Per-assistant model catalogs from the active box. Empty until the
+     * first successful [refreshModelCatalog] — the pickers then fall back
+     * to the static fork option lists. Kept across failures so a flaky
+     * refresh never downgrades an already-populated picker.
+     */
+    private val _modelCatalog = MutableStateFlow<Map<String, List<AgentModel>>>(emptyMap())
+    val modelCatalog: StateFlow<Map<String, List<AgentModel>>> = _modelCatalog.asStateFlow()
+
+    /**
+     * Refresh [modelCatalog] from the active endpoint's capabilities.
+     * Old brokers (no "models" key) and failures are no-ops.
+     */
+    suspend fun refreshModelCatalog() = withContext(Dispatchers.IO) {
+        val ep = _endpoint.value
+        Telemetry.breadcrumb("model_catalog", "refresh start", mapOf("host" to ep.displayHost))
+        val raw = getJsonOrNull(ep, "/api/capabilities")
+        if (raw == null) {
+            Telemetry.breadcrumb("model_catalog", "capabilities fetch failed", mapOf("host" to ep.displayHost))
+            return@withContext
+        }
+        val parsed = runCatching { parseModelCatalog(raw) }.getOrNull()
+        if (parsed.isNullOrEmpty()) {
+            Telemetry.breadcrumb(
+                "model_catalog", "no models in capabilities (old broker or discovery pending)",
+                mapOf("host" to ep.displayHost),
+            )
+            return@withContext
+        }
+        _modelCatalog.value = parsed
+        Telemetry.breadcrumb(
+            "model_catalog", "refreshed",
+            mapOf("counts" to parsed.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value.size}" }),
+        )
+    }
+
+    /**
      * Probe `GET /api/capabilities` on a specific saved endpoint (works for
      * non-active boxes — plain authed GET, no WS needed). Null on any
      * failure (old broker, unreachable, 401): the Box health screen hides

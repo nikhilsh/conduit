@@ -103,17 +103,29 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var showEndConfirm by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf(name) }
 
-    // Fork chooser state (unchanged from before the redesign).
-    val effortOptions = remember(session.assistant) { forkEffortOptions(session.assistant) }
+    // Fork chooser state. Model + effort options come from the broker's
+    // live per-agent catalog when available (per-model effort ranges, live
+    // display names) and fall back to the static lists otherwise.
+    val catalogs by store.modelCatalog.collectAsState()
+    val catalog = catalogs[session.assistant]
+    var forkModel by remember(showFork) { mutableStateOf(forkModelInherit) }
+    val modelOptions = forkModelOptions(session.assistant, catalog)
+    val effortOptions = forkEffortOptions(session.assistant, forkModel, catalog)
     val currentEffort = status?.reasoningEffort ?: session.reasoningEffort
     var forkEffort by remember(showFork) {
         mutableStateOf(
             currentEffort?.takeIf { effortOptions.contains(it) }
-                ?: if (effortOptions.contains("medium")) "medium" else effortOptions.first(),
+                ?: forkDefaultEffort(session.assistant, forkModel, catalog),
         )
     }
-    val modelOptions = remember(session.assistant) { forkModelOptions(session.assistant) }
-    var forkModel by remember(showFork) { mutableStateOf(forkModelInherit) }
+    // A model switch can change the supported effort range (catalog is
+    // per-model: sonnet lacks xhigh, haiku has none) — snap an
+    // out-of-range selection back to the model's default.
+    LaunchedEffect(forkModel) {
+        if (effortOptions.isNotEmpty() && forkEffort !in effortOptions) {
+            forkEffort = forkDefaultEffort(session.assistant, forkModel, catalog)
+        }
+    }
     var modelMenuExpanded by remember(showFork) { mutableStateOf(false) }
     // Permission mode for the fork. "" = Auto (full-auto default); "plan" =
     // read-only planning. The sentinel "" maps to null into forkSession.
@@ -133,6 +145,10 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
         if (agent.lowercase() in listOf("claude", "codex")) {
             store.refreshAccountUsage(session.id)
         }
+        // Pull the live model catalog so the fork chooser's model/effort
+        // options reflect what the box actually serves. Failure = keep
+        // static fallbacks.
+        store.refreshModelCatalog()
     }
 
     val content: @Composable () -> Unit = {
@@ -473,19 +489,21 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(
-                        "REASONING EFFORT",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        effortOptions.forEach { level ->
-                            FilterChip(
-                                selected = forkEffort == level,
-                                onClick = { forkEffort = level },
-                                label = { Text(level.replaceFirstChar { it.uppercase() }) },
-                            )
+                    if (effortOptions.isNotEmpty()) {
+                        Text(
+                            "REASONING EFFORT",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            effortOptions.forEach { level ->
+                                FilterChip(
+                                    selected = forkEffort == level,
+                                    onClick = { forkEffort = level },
+                                    label = { Text(effortLabel(level)) },
+                                )
+                            }
                         }
                     }
                     Text(
@@ -531,7 +549,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
                                 Text(
-                                    forkModelLabel(forkModel),
+                                    forkModelLabel(forkModel, catalog),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
@@ -548,7 +566,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         ) {
                             modelOptions.forEach { option ->
                                 DropdownMenuItem(
-                                    text = { Text(forkModelLabel(option)) },
+                                    text = { Text(forkModelLabel(option, catalog)) },
                                     onClick = {
                                         forkModel = option
                                         modelMenuExpanded = false
@@ -558,7 +576,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         }
                     }
                     Text(
-                        "Default keeps the current model.",
+                        forkModelDetail(forkModel, catalog) ?: "Default keeps the current model.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -568,7 +586,9 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 TextButton(onClick = {
                     val model = forkModel.trim().ifEmpty { null }
                     val mode = forkMode.trim().ifEmpty { null }
-                    store.forkSession(session.id, reasoningEffort = forkEffort, model = model, permissionMode = mode)
+                    // No effort control on the chosen model (haiku) → no override.
+                    val effort = forkEffort.trim().ifEmpty { null }?.takeIf { effortOptions.isNotEmpty() }
+                    store.forkSession(session.id, reasoningEffort = effort, model = model, permissionMode = mode)
                     showFork = false
                     onDismiss()
                 }) { Text("Fork") }
@@ -882,6 +902,123 @@ internal fun forkModelOptions(assistant: String): List<String> = when (assistant
 /** Display label for a fork model option; the sentinel reads as inherit. */
 internal fun forkModelLabel(option: String): String =
     if (option.isEmpty()) "Default (inherit)" else option
+
+// --- Catalog-aware overloads -------------------------------------------
+//
+// Each takes the assistant's broker-discovered catalog
+// (`store.modelCatalog.value[assistant]`) and falls back to the static
+// lists above whenever it's null/empty (old broker, discovery still
+// running, offline). Mirror of iOS `ConduitUI.ForkOptions` catalog
+// overloads.
+
+/**
+ * The catalog entry a model option resolves to. The inherit sentinel
+ * resolves to the agent's default entry so its effort range / description
+ * follow the model the session would really run.
+ */
+internal fun catalogEntryFor(option: String, catalog: List<SessionStore.AgentModel>?): SessionStore.AgentModel? {
+    if (catalog.isNullOrEmpty()) return null
+    catalog.firstOrNull { it.id == option }?.let { return it }
+    if (option != forkModelInherit) return null
+    return catalog.firstOrNull { it.isDefault } ?: catalog.firstOrNull()
+}
+
+/**
+ * Model options from the discovered catalog (inherit sentinel first), or
+ * the static list when no catalog is available.
+ */
+internal fun forkModelOptions(assistant: String, catalog: List<SessionStore.AgentModel>?): List<String> {
+    if (catalog.isNullOrEmpty()) return forkModelOptions(assistant)
+    val ids = catalog.map { it.id }.toMutableList()
+    if (forkModelInherit !in ids) ids.add(0, forkModelInherit)
+    return ids
+}
+
+/**
+ * Display label for a model option, preferring the agent's own display
+ * name ("Fable", "GPT-5.5", "Default (recommended)").
+ */
+internal fun forkModelLabel(option: String, catalog: List<SessionStore.AgentModel>?): String {
+    val entry = catalog?.firstOrNull { it.id == option }
+    return if (entry != null && entry.displayName.isNotEmpty()) entry.displayName else forkModelLabel(option)
+}
+
+/**
+ * One-line detail for a model option (the agent's own description, e.g.
+ * "Sonnet 4.6 · Efficient for routine tasks"). Null without a catalog —
+ * the caller hides the caption.
+ */
+internal fun forkModelDetail(option: String, catalog: List<SessionStore.AgentModel>?): String? =
+    catalogEntryFor(option, catalog)?.description?.takeIf { it.isNotEmpty() }
+
+/**
+ * Effort levels for the chosen model from the discovered catalog
+ * (per-model: claude sonnet lacks xhigh, haiku has none at all); static
+ * per-assistant list when no catalog. An EMPTY result means the model has
+ * no effort control — hide the effort UI and send no override.
+ */
+internal fun forkEffortOptions(assistant: String, model: String, catalog: List<SessionStore.AgentModel>?): List<String> {
+    if (catalog.isNullOrEmpty()) return forkEffortOptions(assistant)
+    return catalogEntryFor(model, catalog)?.efforts ?: emptyList()
+}
+
+/**
+ * The effort to preselect for a model: the agent's own default when
+ * advertised, else "medium" when offered, else the first level. "" when
+ * the model has no effort control.
+ */
+internal fun forkDefaultEffort(
+    assistant: String,
+    model: String = forkModelInherit,
+    catalog: List<SessionStore.AgentModel>? = null,
+): String {
+    val options = forkEffortOptions(assistant, model, catalog)
+    if (options.isEmpty()) return ""
+    val entry = catalogEntryFor(model, catalog)
+    if (entry != null && entry.defaultEffort.isNotEmpty() && entry.defaultEffort in options) return entry.defaultEffort
+    return if ("medium" in options) "medium" else options.first()
+}
+
+/**
+ * Friendly dial label for a raw effort level. Unknown levels fall back to
+ * their capitalized raw value so a future agent-side addition still renders.
+ */
+internal fun effortLabel(value: String): String = when (value) {
+    "low" -> "Fast"
+    "medium" -> "Balanced"
+    "high" -> "Deep"
+    "xhigh" -> "X-High"
+    "max" -> "Max"
+    else -> value.replaceFirstChar { it.uppercase() }
+}
+
+/** Consequence line shown under the effort dial. */
+internal fun effortDescription(value: String): String = when (value) {
+    "low" -> "Quick passes, minimal deliberation"
+    "medium" -> "Reasons before it acts — the default"
+    "high" -> "Plans hard and checks itself, slower"
+    "xhigh" -> "Extra-high reasoning depth for hard problems"
+    "max" -> "Maximum reasoning depth — slowest, most thorough"
+    else -> "Reasoning depth: $value"
+}
+
+/**
+ * The model name to show on the agent card: the discovered default model's
+ * display name ("GPT-5.5"); for claude's "Default (recommended)" alias
+ * entry, the resolved model is the first "·"-chunk of its description
+ * ("Opus 4.8 with 1M context" → "Opus 4.8"). Null without a catalog — the
+ * caller keeps its static label.
+ */
+internal fun defaultModelTitle(catalog: List<SessionStore.AgentModel>?): String? {
+    val entry = catalog?.firstOrNull { it.isDefault } ?: catalog?.firstOrNull() ?: return null
+    var name = entry.displayName
+    if (name.isEmpty() || name.lowercase().startsWith("default")) {
+        name = entry.description.substringBefore('·').trim()
+        val withIdx = name.indexOf(" with ")
+        if (withIdx >= 0) name = name.substring(0, withIdx)
+    }
+    return name.ifEmpty { null }
+}
 
 /**
  * Client-side stats derived from the conversation log. Mirrors

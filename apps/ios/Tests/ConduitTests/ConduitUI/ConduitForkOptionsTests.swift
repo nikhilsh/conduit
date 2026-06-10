@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Conduit
 
@@ -49,5 +50,130 @@ struct ConduitForkOptionsTests {
         #expect(ConduitUI.ForkOptions.modelLabel("") == "Default (inherit)")
         #expect(ConduitUI.ForkOptions.modelLabel("opus") == "opus")
         #expect(ConduitUI.ForkOptions.modelLabel("gpt-5-codex") == "gpt-5-codex")
+    }
+}
+
+/// Pins the catalog-aware ForkOptions overloads: with a broker-discovered
+/// catalog the picker options come from the agent itself (per-model effort
+/// ranges, live display names); without one everything falls back to the
+/// static lists above. Mirror of Android `AgentModelCatalogTest`.
+@Suite("ConduitUI.ForkOptions catalog")
+struct ConduitForkOptionsCatalogTests {
+    // Shapes mirror what the broker normalizes from the live agents
+    // (claude initialize control response / codex model/list).
+    private let claudeCatalog: [ConduitUI.AgentModel] = [
+        .init(id: "", displayName: "Default (recommended)",
+              description: "Opus 4.8 with 1M context · Best for everyday, complex tasks",
+              isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max"]),
+        .init(id: "claude-fable-5[1m]", displayName: "Fable",
+              description: "Fable 5 · Most capable",
+              efforts: ["low", "medium", "high", "xhigh", "max"]),
+        .init(id: "sonnet", displayName: "Sonnet",
+              description: "Sonnet 4.6 · Efficient for routine tasks",
+              efforts: ["low", "medium", "high", "max"]),
+        .init(id: "haiku", displayName: "Haiku",
+              description: "Haiku 4.5 · Fastest for quick answers"),
+    ]
+    private let codexCatalog: [ConduitUI.AgentModel] = [
+        .init(id: "gpt-5.5", displayName: "GPT-5.5",
+              description: "Frontier model for complex coding.",
+              isDefault: true, defaultEffort: "medium",
+              efforts: ["low", "medium", "high", "xhigh"]),
+        .init(id: "gpt-5.4-mini", displayName: "GPT-5.4-Mini",
+              description: "Small and fast.", defaultEffort: "medium",
+              efforts: ["low", "medium"]),
+    ]
+
+    @Test func catalogModelsPrependInheritWhenAbsent() {
+        // codex's catalog has no "" entry → the inherit sentinel is added.
+        let codex = ConduitUI.ForkOptions.models(forAssistant: "codex", catalog: codexCatalog)
+        #expect(codex == ["", "gpt-5.5", "gpt-5.4-mini"])
+        // claude's catalog already leads with the normalized "" entry.
+        let claude = ConduitUI.ForkOptions.models(forAssistant: "claude", catalog: claudeCatalog)
+        #expect(claude == ["", "claude-fable-5[1m]", "sonnet", "haiku"])
+    }
+
+    @Test func nilOrEmptyCatalogFallsBackToStaticLists() {
+        #expect(ConduitUI.ForkOptions.models(forAssistant: "claude", catalog: nil)
+            == ConduitUI.ForkOptions.models(forAssistant: "claude"))
+        #expect(ConduitUI.ForkOptions.models(forAssistant: "codex", catalog: [])
+            == ConduitUI.ForkOptions.models(forAssistant: "codex"))
+        #expect(ConduitUI.ForkOptions.efforts(forAssistant: "claude", model: "", catalog: nil)
+            == ConduitUI.ForkOptions.efforts(forAssistant: "claude"))
+    }
+
+    @Test func effortsArePerModel() {
+        // sonnet lacks xhigh; haiku has no effort control at all.
+        #expect(ConduitUI.ForkOptions.efforts(forAssistant: "claude", model: "sonnet", catalog: claudeCatalog)
+            == ["low", "medium", "high", "max"])
+        #expect(ConduitUI.ForkOptions.efforts(forAssistant: "claude", model: "haiku", catalog: claudeCatalog).isEmpty)
+        // codex xhigh flows through from the live catalog (the static
+        // fallback list tops out at high).
+        #expect(ConduitUI.ForkOptions.efforts(forAssistant: "codex", model: "gpt-5.5", catalog: codexCatalog)
+            .contains("xhigh"))
+    }
+
+    @Test func inheritResolvesToDefaultEntryForEfforts() {
+        // Selecting "Default (inherit)" on codex uses the default model's
+        // effort range (gpt-5.5), not an empty list.
+        #expect(ConduitUI.ForkOptions.efforts(forAssistant: "codex", model: "", catalog: codexCatalog)
+            == ["low", "medium", "high", "xhigh"])
+    }
+
+    @Test func defaultEffortPrefersAgentAdvertisedDefault() {
+        #expect(ConduitUI.ForkOptions.defaultEffort(forAssistant: "codex", model: "gpt-5.5", catalog: codexCatalog) == "medium")
+        // haiku: no effort control → empty (UI hides the section).
+        #expect(ConduitUI.ForkOptions.defaultEffort(forAssistant: "claude", model: "haiku", catalog: claudeCatalog) == "")
+        // No catalog → static list default.
+        #expect(ConduitUI.ForkOptions.defaultEffort(forAssistant: "claude") == "medium")
+    }
+
+    @Test func modelLabelAndDetailComeFromCatalog() {
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5")
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: claudeCatalog) == "Default (recommended)")
+        // Unknown id (stale selection) falls back to verbatim.
+        #expect(ConduitUI.ForkOptions.modelLabel("opus", catalog: codexCatalog) == "opus")
+        #expect(ConduitUI.ForkOptions.modelDetail("sonnet", catalog: claudeCatalog)
+            == "Sonnet 4.6 · Efficient for routine tasks")
+        // Inherit resolves to the default entry's description.
+        #expect(ConduitUI.ForkOptions.modelDetail("", catalog: codexCatalog)
+            == "Frontier model for complex coding.")
+        #expect(ConduitUI.ForkOptions.modelDetail("opus", catalog: nil) == nil)
+    }
+
+    @Test func defaultModelTitleResolvesCardLabel() {
+        // codex: the default entry's display name verbatim.
+        #expect(ConduitUI.ForkOptions.defaultModelTitle(forCatalog: codexCatalog) == "GPT-5.5")
+        // claude: "Default (recommended)" resolves through the description's
+        // first ·-chunk, with the context-size suffix stripped.
+        #expect(ConduitUI.ForkOptions.defaultModelTitle(forCatalog: claudeCatalog) == "Opus 4.8")
+        #expect(ConduitUI.ForkOptions.defaultModelTitle(forCatalog: nil) == nil)
+        #expect(ConduitUI.ForkOptions.defaultModelTitle(forCatalog: []) == nil)
+    }
+
+    @Test func effortLabelsCoverKnownLevelsAndFallBack() {
+        #expect(ConduitUI.ForkOptions.effortLabel("low") == "Fast")
+        #expect(ConduitUI.ForkOptions.effortLabel("medium") == "Balanced")
+        #expect(ConduitUI.ForkOptions.effortLabel("high") == "Deep")
+        #expect(ConduitUI.ForkOptions.effortLabel("xhigh") == "X-High")
+        #expect(ConduitUI.ForkOptions.effortLabel("max") == "Max")
+        #expect(ConduitUI.ForkOptions.effortLabel("turbo") == "Turbo")
+    }
+
+    @Test func agentModelDecodesBrokerWireShape() throws {
+        let json = """
+        [{"id":"gpt-5.5","display_name":"GPT-5.5","description":"Frontier.",
+          "is_default":true,"default_effort":"medium","efforts":["low","medium","high","xhigh"]},
+         {"id":"haiku","display_name":"Haiku"}]
+        """.data(using: .utf8)!
+        let models = try JSONDecoder().decode([ConduitUI.AgentModel].self, from: json)
+        #expect(models.count == 2)
+        #expect(models[0].id == "gpt-5.5")
+        #expect(models[0].isDefault)
+        #expect(models[0].efforts == ["low", "medium", "high", "xhigh"])
+        // Omitted optional fields decode to inert defaults.
+        #expect(models[1].efforts.isEmpty)
+        #expect(!models[1].isDefault)
+        #expect(models[1].defaultEffort == "")
     }
 }

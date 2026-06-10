@@ -169,6 +169,13 @@ extension ConduitUI {
             .presentationDetents([.medium, .large])
             .presentationCornerRadius(26)
             .tint(neon.accent)
+            .task {
+                // Pull the live per-agent model catalog (broker-discovered
+                // from the agent CLIs) so the cards' model line and the
+                // directory step's model/effort options reflect what the
+                // box actually serves. Failure = keep static fallbacks.
+                await store.refreshModelCatalog()
+            }
             .appearanceColorScheme()
         }
 
@@ -270,6 +277,11 @@ extension ConduitUI {
             let tint = neon.agentTint(forAgent: kind)
             let selected = selectedAgentKind == kind
             let meta = Self.agentMeta(kind)
+            // Live default-model name from the discovered catalog ("GPT-5.5",
+            // "Opus 4.8") — the static meta.model is only the offline
+            // fallback, so the card never pins a stale model name.
+            let modelTitle = ConduitUI.ForkOptions.defaultModelTitle(
+                forCatalog: store.modelCatalog[kind]) ?? meta.model
             return Button {
                 selectedAgentKind = kind
             } label: {
@@ -292,7 +304,7 @@ extension ConduitUI {
                     Text(meta.name)
                         .font(neon.sans(16).weight(.bold))
                         .foregroundStyle(neon.text)
-                    Text(meta.model)
+                    Text(modelTitle)
                         .font(neon.mono(11.5))
                         .foregroundStyle(selected ? tint : neon.textFaint)
                     Text(meta.blurb)
@@ -485,19 +497,23 @@ extension ConduitUI {
             self._effort = State(initialValue: Self.defaultEffort(forAssistant: agentKind))
         }
 
-        /// The effort dial's three stops (§3): Fast/Balanced/Deep mapped to
-        /// the raw API values low/medium/high. Curated — Claude's extra
-        /// xhigh/max levels are reachable only via the legacy segmented row.
+        /// One dial stop: a friendly label over a raw API effort value with
+        /// a consequence line. Stops are derived from the effort options of
+        /// the selected model (catalog-aware), so the dial grows past the
+        /// classic Fast/Balanced/Deep when the agent offers xhigh/max.
         private struct EffortStop {
             let label: String
-            let value: String   // low / medium / high
+            let value: String
             let desc: String
         }
-        private static let effortStops: [EffortStop] = [
-            EffortStop(label: "Fast",     value: "low",    desc: "Quick passes, minimal deliberation"),
-            EffortStop(label: "Balanced", value: "medium", desc: "Reasons before it acts — the default"),
-            EffortStop(label: "Deep",     value: "high",   desc: "Plans hard and checks itself, slower"),
-        ]
+        private var effortStops: [EffortStop] {
+            effortOptions.map {
+                EffortStop(
+                    label: ConduitUI.ForkOptions.effortLabel($0),
+                    value: $0,
+                    desc: ConduitUI.ForkOptions.effortDescription($0))
+            }
+        }
 
         /// Tint to use for the agent-coloured chrome — falls back to the neon
         /// accent if no agent tint was threaded in (rows-mode / legacy paths).
@@ -508,16 +524,31 @@ extension ConduitUI {
             return options.contains("medium") ? "medium" : (options.first ?? "medium")
         }
 
-        private var modelOptions: [String] {
-            ConduitUI.ForkOptions.models(forAssistant: agentKind)
+        /// The agent's live model catalog (broker-discovered, fetched by the
+        /// agent step's `.task`); nil/empty falls back to the static lists.
+        private var catalog: [ConduitUI.AgentModel]? {
+            store.modelCatalog[agentKind]
         }
 
+        private var modelOptions: [String] {
+            ConduitUI.ForkOptions.models(forAssistant: agentKind, catalog: catalog)
+        }
+
+        /// Effort options for the SELECTED model (catalog is per-model:
+        /// sonnet lacks xhigh, haiku has none). Empty = the model has no
+        /// effort control → the effort UI hides and no override is sent.
         private var effortOptions: [String] {
-            ConduitUI.ForkOptions.efforts(forAssistant: agentKind)
+            ConduitUI.ForkOptions.efforts(forAssistant: agentKind, model: model, catalog: catalog)
         }
 
         /// The model to hand to onCreate: the sentinel maps to nil.
         private var selectedModel: String? { model.isEmpty ? nil : model }
+
+        /// The effort to hand to onCreate: nil when the model has no effort
+        /// control (or nothing is selected) so the spawn carries no override.
+        private var selectedEffort: String? {
+            effortOptions.isEmpty || effort.isEmpty ? nil : effort
+        }
 
         /// The agent mode to hand to onCreate: Auto (sentinel) maps to nil.
         private var selectedPermissionMode: String? { permissionMode.isEmpty ? nil : permissionMode }
@@ -529,8 +560,11 @@ extension ConduitUI {
                     VStack(alignment: .leading, spacing: 14) {
                         modelSection
                         // Tablet (§6): effort + mode sit side by side to use
-                        // the width; phone stacks them.
-                        if horizontalSizeClass == .regular {
+                        // the width; phone stacks them. A model with no
+                        // effort control (haiku) drops the effort section.
+                        if effortOptions.isEmpty {
+                            modeSection
+                        } else if horizontalSizeClass == .regular {
                             HStack(alignment: .top, spacing: 14) {
                                 effortSection.frame(maxWidth: .infinity, alignment: .leading)
                                 modeSection.frame(maxWidth: .infinity, alignment: .leading)
@@ -582,6 +616,19 @@ extension ConduitUI {
                 let last = flags.newSessionLastEffort
                 if flags.newSessionEffortDial, !last.isEmpty, effortOptions.contains(last) {
                     effort = last
+                } else if !effortOptions.isEmpty, !effortOptions.contains(effort) {
+                    // The catalog may know a narrower range than the static
+                    // seed used in init (per-model efforts).
+                    effort = ConduitUI.ForkOptions.defaultEffort(
+                        forAssistant: agentKind, model: model, catalog: catalog)
+                }
+            }
+            // A model switch can change the supported effort range — snap an
+            // out-of-range selection back to the new model's default.
+            .onChange(of: model) {
+                if !effortOptions.isEmpty, !effortOptions.contains(effort) {
+                    effort = ConduitUI.ForkOptions.defaultEffort(
+                        forAssistant: agentKind, model: model, catalog: catalog)
                 }
             }
             .tint(neon.accent)
@@ -595,12 +642,12 @@ extension ConduitUI {
                 Menu {
                     Picker("Model", selection: $model) {
                         ForEach(modelOptions, id: \.self) { option in
-                            Text(ConduitUI.ForkOptions.modelLabel(option)).tag(option)
+                            Text(ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)).tag(option)
                         }
                     }
                 } label: {
                     HStack {
-                        Text(ConduitUI.ForkOptions.modelLabel(model))
+                        Text(ConduitUI.ForkOptions.modelLabel(model, catalog: catalog))
                             .font(neon.sans(13).weight(.medium))
                             .foregroundStyle(neon.text)
                         Spacer()
@@ -613,6 +660,16 @@ extension ConduitUI {
                     .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
                 }
                 .tint(neon.accent)
+                // The agent's own description of the (resolved) selection —
+                // e.g. "Sonnet 4.6 · Efficient for routine tasks". Only when
+                // the live catalog is in; the static fallback has none.
+                if let detail = ConduitUI.ForkOptions.modelDetail(model, catalog: catalog) {
+                    Text(detail)
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textFaint)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
 
@@ -634,12 +691,14 @@ extension ConduitUI {
             }
         }
 
-        /// 3-stop effort dial (§3, `03-ns`): Fast / Balanced / Deep. The
-        /// track fills up to (and including) the selected stop in the agent
-        /// tint; a consequence line + the raw API value chip sit beneath.
+        /// Effort dial (§3, `03-ns`): one stop per effort level the selected
+        /// model supports — Fast/Balanced/Deep for the classic three, growing
+        /// to X-High/Max when the agent's catalog offers them. The track
+        /// fills up to (and including) the selected stop in the agent tint; a
+        /// consequence line + the raw API value chip sit beneath.
         private var effortDialSection: some View {
-            let stops = Self.effortStops
-            let idx = max(0, stops.firstIndex(where: { $0.value == effort }) ?? 1)
+            let stops = effortStops
+            let idx = max(0, min(stops.count - 1, stops.firstIndex(where: { $0.value == effort }) ?? 1))
             let cur = stops[idx]
             return VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Reasoning effort", tint: tint)
@@ -657,6 +716,8 @@ extension ConduitUI {
                                 Text(stop.label)
                                     .font(neon.sans(13).weight(i == idx ? .bold : .medium))
                                     .foregroundStyle(i == idx ? neon.text : neon.textFaint)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
                             }
                             .contentShape(Rectangle())
                         }
@@ -711,7 +772,7 @@ extension ConduitUI {
                 VStack(spacing: 6) {
                     ForEach(store.recentDirectories, id: \.self) { path in
                         Button {
-                            onCreate(path, selectedModel, effort, selectedPermissionMode)
+                            onCreate(path, selectedModel, selectedEffort, selectedPermissionMode)
                         } label: {
                             ConduitUI.ListRow(
                                 icon: "clock.arrow.circlepath",
@@ -826,7 +887,7 @@ extension ConduitUI {
                     launchLine
                 }
                 Button {
-                    onCreate(listing?.path, selectedModel, effort, selectedPermissionMode)
+                    onCreate(listing?.path, selectedModel, selectedEffort, selectedPermissionMode)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
@@ -847,7 +908,7 @@ extension ConduitUI {
                 .opacity(listing == nil ? 0.5 : 1.0)
 
                 Button {
-                    onCreate(nil, selectedModel, effort, selectedPermissionMode)
+                    onCreate(nil, selectedModel, selectedEffort, selectedPermissionMode)
                 } label: {
                     Text("Start without a folder")
                         .font(neon.sans(13).weight(.medium))
@@ -883,8 +944,10 @@ extension ConduitUI {
                     .foregroundStyle(neon.textFaint)
                 Text(agentKind)
                     .foregroundStyle(tint)
-                Text(" · \(effort)")
-                    .foregroundStyle(neon.textDim)
+                if let effortValue = selectedEffort {
+                    Text(" · \(effortValue)")
+                        .foregroundStyle(neon.textDim)
+                }
                 if let folder, !folder.isEmpty {
                     Text(" · \(folder)")
                         .foregroundStyle(neon.textDim)

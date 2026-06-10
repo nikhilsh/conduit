@@ -3,11 +3,15 @@ package ws
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nikhilsh/conduit/broker/internal/auth"
+	"github.com/nikhilsh/conduit/broker/internal/session"
 )
 
 func TestCapabilitiesEndpoint(t *testing.T) {
@@ -31,6 +35,52 @@ func TestCapabilitiesEndpoint(t *testing.T) {
 	assistants, _ := body["assistants"].([]any)
 	if len(assistants) < 1 {
 		t.Fatalf("expected assistants, got %v", body["assistants"])
+	}
+	// Discovery hasn't run in tests → "models" must be omitted entirely so
+	// the apps fall back to their built-in lists.
+	if _, present := body["models"]; present {
+		t.Fatalf("models should be omitted before discovery, got %v", body["models"])
+	}
+}
+
+func TestCapabilitiesIncludesDiscoveredModels(t *testing.T) {
+	a := auth.NewStore()
+	tok := a.Mint()
+	reg := newTestRegistry(t)
+	m := session.NewManager(reg)
+	m.SetModelCatalog("claude", []session.ModelInfo{
+		{ID: "", DisplayName: "Default (recommended)", Description: "Opus 4.8 with 1M context", IsDefault: true, Efforts: []string{"low", "medium", "high", "xhigh", "max"}},
+		{ID: "haiku", DisplayName: "Haiku", Description: "Fastest"},
+	})
+	srv := httptest.NewServer(New(a, m).Handler())
+	t.Cleanup(func() { srv.Close(); m.Close() })
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET capabilities: %v", err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Models map[string][]struct {
+			ID          string   `json:"id"`
+			DisplayName string   `json:"display_name"`
+			IsDefault   bool     `json:"is_default"`
+			Efforts     []string `json:"efforts"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	claude := body.Models["claude"]
+	if len(claude) != 2 || !claude[0].IsDefault || claude[0].DisplayName != "Default (recommended)" {
+		t.Fatalf("unexpected claude catalog: %+v", claude)
+	}
+	if len(claude[0].Efforts) != 5 || claude[0].Efforts[3] != "xhigh" {
+		t.Fatalf("unexpected efforts: %v", claude[0].Efforts)
+	}
+	if len(claude[1].Efforts) != 0 {
+		t.Fatalf("haiku should carry no efforts, got %v", claude[1].Efforts)
 	}
 }
 

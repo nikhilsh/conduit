@@ -694,6 +694,45 @@ final class SessionStore {
         var shellSessions: Bool
     }
 
+    /// Per-assistant model catalogs discovered by the broker live from the
+    /// agent CLIs (capabilities "models", broker modelcatalog.go). Empty
+    /// until the first successful fetch — the pickers then fall back to the
+    /// static `ConduitUI.ForkOptions` lists. Kept across failures so a flaky
+    /// refresh never downgrades an already-populated picker.
+    private(set) var modelCatalog: [String: [ConduitUI.AgentModel]] = [:]
+
+    /// Refresh `modelCatalog` from the active endpoint's capabilities.
+    /// Old brokers (no "models" key) and failures are no-ops.
+    func refreshModelCatalog() async {
+        struct Envelope: Decodable {
+            let models: [String: [ConduitUI.AgentModel]]?
+        }
+        Telemetry.breadcrumb(
+            "model_catalog", "refresh start",
+            data: ["host": endpoint.displayHost])
+        guard let data = await getJSON(endpoint: endpoint, path: "/api/capabilities"),
+              let caps = try? JSONDecoder().decode(Envelope.self, from: data)
+        else {
+            Telemetry.breadcrumb(
+                "model_catalog", "capabilities fetch/decode failed",
+                data: ["host": endpoint.displayHost])
+            return
+        }
+        guard let models = caps.models, !models.isEmpty else {
+            Telemetry.breadcrumb(
+                "model_catalog", "no models in capabilities (old broker or discovery pending)",
+                data: ["host": endpoint.displayHost])
+            return
+        }
+        modelCatalog = models
+        Telemetry.breadcrumb(
+            "model_catalog", "refreshed",
+            data: [
+                "assistants": models.keys.sorted().joined(separator: ","),
+                "counts": models.map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ","),
+            ])
+    }
+
     /// Probe `GET /api/capabilities` on a specific saved endpoint (works
     /// for non-active boxes too — plain authed GET, no WS needed).
     /// Returns nil on any failure (old broker, unreachable, 401): the
