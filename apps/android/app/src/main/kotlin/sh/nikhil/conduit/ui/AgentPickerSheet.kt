@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.AgentDescriptor
 import sh.nikhil.conduit.RemoteDirectoryListing
+import sh.nikhil.conduit.RemoteHarnessStatus
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.descriptorFor
 
