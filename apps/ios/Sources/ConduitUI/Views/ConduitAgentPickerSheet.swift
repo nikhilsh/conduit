@@ -536,11 +536,6 @@ extension ConduitUI {
         /// the app's current full-auto default — sent as nil so the spawn
         /// carries no override, identical to before this picker existed.
         @State private var permissionMode: String = ConduitUI.ForkOptions.autoMode
-        /// Controls the fully-opaque model picker confirmation dialog.
-        /// A system Menu renders its popover with a translucent material that
-        /// lets scroll content show through (device feedback: recent-dir rows
-        /// visible through the dropdown). A confirmationDialog is fully opaque.
-        @State private var modelPickerPresented: Bool = false
 
         init(
             agentKind: String,
@@ -706,13 +701,12 @@ extension ConduitUI {
         private var modelSection: some View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Model")
-                // Opaque trigger row — tapping opens a confirmationDialog
-                // picker. A system Menu renders its popover with a translucent
-                // material; on iOS 26 the recent-dir rows below were visible
-                // through it (device feedback). confirmationDialog is fully
-                // opaque (system sheet presented from the bottom).
-                Button {
-                    modelPickerPresented = true
+                Menu {
+                    Picker("Model", selection: $model) {
+                        ForEach(modelOptions, id: \.self) { option in
+                            Text(ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)).tag(option)
+                        }
+                    }
                 } label: {
                     HStack {
                         Text(ConduitUI.ForkOptions.modelLabel(model, catalog: catalog))
@@ -725,24 +719,9 @@ extension ConduitUI {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .fill(neon.surfaceSolid)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .stroke(neon.border, lineWidth: 1)
-                            )
-                    )
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
                 }
-                .buttonStyle(.plain)
-                .confirmationDialog("Model", isPresented: $modelPickerPresented, titleVisibility: .visible) {
-                    ForEach(modelOptions, id: \.self) { option in
-                        Button(ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)) {
-                            model = option
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                }
+                .tint(neon.accent)
                 // The agent's own description of the (resolved) selection —
                 // e.g. "Sonnet 4.6 · Efficient for routine tasks". Only when
                 // the live catalog is in; the static fallback has none.
@@ -1008,6 +987,10 @@ extension ConduitUI {
             // behind a safe-area inset to hide it, so the bar must be
             // solid. A hairline on top keeps it visually separated from
             // the scrolling content above.
+            // ignoresSafeArea(.bottom) extends the solid fill through the
+            // home-indicator gap to the physical screen edge so folder rows
+            // can't peek through in the safe-area gutter below "Start without
+            // a folder" (device feedback: "go" folder visible at the bottom).
             .background(
                 neon.surfaceSolid
                     .overlay(alignment: .top) {
@@ -1015,6 +998,7 @@ extension ConduitUI {
                             .fill(neon.border)
                             .frame(height: 1)
                     }
+                    .ignoresSafeArea(edges: .bottom)
             )
         }
 

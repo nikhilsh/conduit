@@ -135,9 +135,9 @@ struct ConduitForkOptionsCatalogTests {
         // claude: catalog has an entry with id "" and displayName
         // "Default (recommended)" → resolved to "Opus 4.8 (recommended)".
         #expect(ConduitUI.ForkOptions.modelLabel("", catalog: claudeCatalog) == "Opus 4.8 (recommended)")
-        // codex: no catalog entry with id "" → falls back to the no-catalog
-        // static label "Default (inherit)".
-        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "Default (inherit)")
+        // codex: no catalog entry with id "" but isDefault=gpt-5.5 →
+        // inherit sentinel resolves to "GPT-5.5 (recommended)".
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "GPT-5.5 (recommended)")
         // Unknown id (stale selection) falls back to verbatim.
         #expect(ConduitUI.ForkOptions.modelLabel("opus", catalog: codexCatalog) == "opus")
         #expect(ConduitUI.ForkOptions.modelDetail("sonnet", catalog: claudeCatalog)
@@ -164,6 +164,20 @@ struct ConduitForkOptionsCatalogTests {
         #expect(ConduitUI.ForkOptions.modelLabel("", catalog: []) == "Default (inherit)")
         // Unknown id with catalog: no matching entry → falls back to verbatim.
         #expect(ConduitUI.ForkOptions.modelLabel("unknown-model", catalog: claudeCatalog) == "unknown-model")
+    }
+
+    // Fix 3 (device feedback v0.0.134): codex has no literal "" catalog entry,
+    // so the inherit sentinel must resolve via the isDefault entry ("gpt-5.5")
+    // and show "GPT-5.5 (recommended)" — not the stale "Default (inherit)".
+    @Test func codexInheritResolvesToDefaultModelName() {
+        // The inherit sentinel "" resolves through the isDefault entry (gpt-5.5)
+        // → "GPT-5.5 (recommended)".
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "GPT-5.5 (recommended)")
+        // Explicit gpt-5.5 row still shows its own name verbatim (no "(recommended)" suffix).
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5")
+        // Consequence: the picker will show both "GPT-5.5 (recommended)" (inherit)
+        // and "GPT-5.5" (pinned). That's acceptable — inherit-follows-default vs
+        // pinned — Nikhil to decide if a dedup pass is needed.
     }
 
     @Test func defaultModelTitleResolvesCardLabel() {
