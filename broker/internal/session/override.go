@@ -1,6 +1,10 @@
 package session
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/nikhilsh/conduit/broker/internal/agents"
+)
 
 // SpawnOverride carries the per-session reasoning-effort / model overrides
 // supplied at session creation (the "fork onto a different model / effort"
@@ -158,4 +162,76 @@ func (o SpawnOverride) effectiveEffort(assistant, adapterDefault string) string 
 		}
 	}
 	return adapterDefault
+}
+
+// --- manifest-reading variants (WS-1.2) ---
+//
+// These functions take an agents.Adapter and read the manifest fields
+// populated by applyLegacyDefaults (registry.go) instead of using a
+// hardcoded name switch. The name-based functions above are preserved
+// so existing callers (tests, legacy shims) continue to compile without
+// change — the behavior is byte-identical because applyLegacyDefaults
+// fills in exactly the same defaults for "claude" and "codex".
+
+// extraArgsForAdapter returns the additional CLI args for the override by
+// reading the adapter's manifest EffortArgs/ModelArgs. The placeholder
+// strings "{effort}" and "{model}" in the template args are substituted
+// with the live override values. Returns nil when the override is empty
+// or the effort is not supported for this assistant.
+func (o SpawnOverride) extraArgsForAdapter(adapter agents.Adapter) []string {
+	effort := strings.TrimSpace(o.ReasoningEffort)
+	model := strings.TrimSpace(o.Model)
+	if effort == "" && model == "" {
+		return nil
+	}
+	var args []string
+	if effort != "" && effortSupported(adapter.Name, effort) {
+		for _, tmpl := range adapter.EffortArgs {
+			args = append(args, strings.ReplaceAll(tmpl, "{effort}", effort))
+		}
+	}
+	if model != "" {
+		for _, tmpl := range adapter.ModelArgs {
+			args = append(args, strings.ReplaceAll(tmpl, "{model}", model))
+		}
+	}
+	return args
+}
+
+// effectiveEffortForAdapter is the manifest-reading variant of
+// effectiveEffort. Behavior is identical — the effort validation still
+// uses effortSupported(adapter.Name, ...) — the only difference is that
+// the adapter default comes from adapter.ReasoningEffort instead of an
+// explicit argument.
+func (o SpawnOverride) effectiveEffortForAdapter(adapter agents.Adapter) string {
+	return o.effectiveEffort(adapter.Name, adapter.ReasoningEffort)
+}
+
+// applyPermissionModeFromManifest rewrites args for the named mode using
+// the adapter's PermissionModes map. If the mode is absent or blank the
+// args are returned unchanged (same as the hardcoded functions). The drop
+// is a filter-out (remove every occurrence of each drop_arg); the add is
+// appended.
+func applyPermissionModeFromManifest(args []string, adapter agents.Adapter, mode string) []string {
+	if strings.TrimSpace(mode) == "" {
+		return args
+	}
+	rule, ok := adapter.PermissionModes[mode]
+	if !ok {
+		return args
+	}
+	if len(rule.DropArgs) == 0 && len(rule.AddArgs) == 0 {
+		return args
+	}
+	drop := make(map[string]bool, len(rule.DropArgs))
+	for _, d := range rule.DropArgs {
+		drop[d] = true
+	}
+	out := make([]string, 0, len(args)+len(rule.AddArgs))
+	for _, a := range args {
+		if !drop[a] {
+			out = append(out, a)
+		}
+	}
+	return append(out, rule.AddArgs...)
 }

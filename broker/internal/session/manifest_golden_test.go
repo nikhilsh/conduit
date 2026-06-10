@@ -18,11 +18,13 @@ package session
 //   - allCredentialProviders (lifecycle.go)
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/nikhilsh/conduit/broker/internal/agents"
 	"github.com/nikhilsh/conduit/broker/internal/credentials"
 )
 
@@ -530,5 +532,69 @@ func TestGoldenAllCredentialProviders(t *testing.T) {
 	want := []string{"anthropic", "openai"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("allCredentialProviders() = %v, want %v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// credentialProvidersFromRegistry (lifecycle.go) — WS-1.2
+// ---------------------------------------------------------------------------
+
+// buildTestRegistry creates a minimal agents.Registry from the given TOML
+// bodies for golden tests. Panics on any error (test helper).
+func buildTestRegistry(t *testing.T, tomls map[string]string) *agents.Registry {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range tomls {
+		path := dir + "/" + name
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("writeFile %s: %v", name, err)
+		}
+	}
+	reg, err := agents.LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	return reg
+}
+
+func TestGoldenCredentialProvidersFromRegistry(t *testing.T) {
+	// Full claude+codex registry → same result as allCredentialProviders.
+	reg := buildTestRegistry(t, map[string]string{
+		"claude.toml": "name=\"claude\"\ncommand=[\"claude\"]\nworkdir=\"/w\"\n",
+		"codex.toml":  "name=\"codex\"\ncommand=[\"codex\"]\nworkdir=\"/w\"\n",
+	})
+	got := credentialProvidersFromRegistry(reg)
+	want := []string{"anthropic", "openai"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+
+	// Registry with an adapter that has no login_provider → omitted.
+	reg2 := buildTestRegistry(t, map[string]string{
+		"shell.toml": "name=\"shell\"\ncommand=[\"bash\"]\nworkdir=\"/w\"\n",
+	})
+	got2 := credentialProvidersFromRegistry(reg2)
+	// No providers → falls back to allCredentialProviders().
+	if !reflect.DeepEqual(got2, want) {
+		t.Fatalf("empty-provider fallback: got %v, want %v", got2, want)
+	}
+
+	// Registry with a custom login_provider → included.
+	reg3 := buildTestRegistry(t, map[string]string{
+		"myprovider.toml": "name=\"myprovider\"\ncommand=[\"myprovider\"]\nworkdir=\"/w\"\nlogin_provider=\"myprovider\"\n",
+	})
+	got3 := credentialProvidersFromRegistry(reg3)
+	if len(got3) != 1 || got3[0] != "myprovider" {
+		t.Fatalf("custom provider: got %v, want [myprovider]", got3)
+	}
+
+	// Duplicate providers (two adapters same login_provider) → deduplicated.
+	reg4 := buildTestRegistry(t, map[string]string{
+		"agent1.toml": "name=\"agent1\"\ncommand=[\"a1\"]\nworkdir=\"/w\"\nlogin_provider=\"shared\"\n",
+		"agent2.toml": "name=\"agent2\"\ncommand=[\"a2\"]\nworkdir=\"/w\"\nlogin_provider=\"shared\"\n",
+	})
+	got4 := credentialProvidersFromRegistry(reg4)
+	if len(got4) != 1 || got4[0] != "shared" {
+		t.Fatalf("dedup: got %v, want [shared]", got4)
 	}
 }

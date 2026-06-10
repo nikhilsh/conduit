@@ -173,6 +173,34 @@ func allCredentialProviders() []string {
 	return []string{"anthropic", "openai"}
 }
 
+// credentialProvidersFromRegistry derives the set of distinct non-empty
+// login_provider values from all registered adapters. Used by the manager
+// spawn path (WS-1.2) so a new adapter TOML with a new login_provider is
+// automatically included in the "mirror into every session HOME" walk
+// without a code change. The result has no duplicates and is in registry
+// order (sorted by adapter name via Names()). Falls back to
+// allCredentialProviders() when the registry yields no providers (e.g. in
+// tests with stub adapters).
+func credentialProvidersFromRegistry(reg *agents.Registry) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range reg.Names() {
+		a, err := reg.Get(name)
+		if err != nil {
+			continue
+		}
+		p := strings.TrimSpace(a.LoginProvider)
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return allCredentialProviders()
+	}
+	return out
+}
+
 // hostHomeDir returns the broker's real $HOME — the place where claude
 // / codex stash their per-user credentials when the operator runs them
 // interactively for the first login. Honours $CONDUIT_HOST_HOME for
