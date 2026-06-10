@@ -92,6 +92,94 @@ func TestCodexAppServerLive(t *testing.T) {
 	}
 }
 
+// TestCodexAppServerLiveApproval drives the REAL `codex app-server` through the
+// approval path: PermissionMode "plan" (read-only sandbox + on-request approvals)
+// + a turn that forces a file WRITE, so the command must escalate past read-only
+// and codex sends an item/commandExecution/requestApproval. The backend must
+// surface the approval card (pending-input chat event), AnswerApproval("Approve")
+// must send accept, and the file must end up written. Skipped unless
+// CONDUIT_CODEX_LIVE=1.
+//
+//	CONDUIT_CODEX_LIVE=1 go test ./internal/session/ -run TestCodexAppServerLiveApproval -v
+func TestCodexAppServerLiveApproval(t *testing.T) {
+	if os.Getenv("CONDUIT_CODEX_LIVE") != "1" {
+		t.Skip("set CONDUIT_CODEX_LIVE=1 to run against the real codex binary")
+	}
+	dir := t.TempDir()
+
+	events := make(chan []byte, 128)
+	threads := make(chan string, 4)
+	proc, err := newCodexAppServerProcess(
+		"codex", dir, os.Environ(),
+		SpawnOverride{PermissionMode: "plan"}, // read-only + on-request
+		func(p []byte) { events <- p },
+		nil, "",
+		func(id string) { threads <- id },
+	)
+	if err != nil {
+		t.Fatalf("spawn/handshake failed: %v", err)
+	}
+	defer proc.Close()
+
+	select {
+	case id := <-threads:
+		t.Logf("latched thread id: %s", id)
+	case <-time.After(20 * time.Second):
+		t.Fatal("timeout waiting for thread id latch")
+	}
+
+	if err := proc.Send("Create a file named hello.txt containing the word hi by running the shell command: echo hi > hello.txt. Actually run it now."); err != nil {
+		t.Fatalf("Send turn: %v", err)
+	}
+
+	// Wait for the approval card (pending-input sentinel) to surface.
+	deadline := time.After(90 * time.Second)
+	var sawCard bool
+	for !sawCard {
+		select {
+		case p := <-events:
+			r, c := chatEventRoleContent(p)
+			t.Logf("  event role=%s content=%.80q", r, c)
+			if r == "assistant" && strings.HasPrefix(c, pendingInputSentinel) {
+				sawCard = true
+				if !strings.Contains(c, codexApprovalApproveLabel) {
+					t.Fatalf("approval card missing Approve option:\n%s", c)
+				}
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for the approval card")
+		}
+	}
+
+	if _, ok := proc.PendingApprovalCard(); !ok {
+		t.Fatal("expected a pending approval after the card")
+	}
+
+	// Tap Approve → the command runs.
+	if !proc.AnswerApproval(codexApprovalApproveLabel) {
+		t.Fatal("AnswerApproval should report handled")
+	}
+
+	// Give the turn time to run the approved command + finish.
+	turnDone := time.After(60 * time.Second)
+	for {
+		select {
+		case p := <-events:
+			r, c := chatEventRoleContent(p)
+			t.Logf("  post-approve role=%s content=%.80q", r, c)
+		case <-turnDone:
+			goto check
+		case <-time.After(8 * time.Second):
+			goto check
+		}
+	}
+check:
+	if _, err := os.Stat(dir + "/hello.txt"); err != nil {
+		t.Fatalf("approved command did not create hello.txt: %v", err)
+	}
+	t.Log("approved command created hello.txt — approval accept path verified end to end")
+}
+
 // waitForRole drains chat view_events until one with the given role arrives,
 // returning its content. Fails the test on timeout.
 func waitForRole(t *testing.T, events <-chan []byte, role string, timeout time.Duration) string {

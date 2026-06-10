@@ -991,6 +991,16 @@ func (s *Session) SendChat(msg string) bool {
 			// a fresh agent and delivers the text as a plain user turn.
 		}
 	}
+	// The codex twin of the AskUserQuestion bridge: if the codex app-server
+	// backend is blocked on a command/file-change approval (a server→client
+	// request, see codexappserver.go), this message IS the user's tapped
+	// decision. Route it as the JSON-RPC approval response so the turn RESUMES
+	// (accept) or ends (deny) — not as a new prompt queued behind a blocked one.
+	if ar, ok := s.chat.(approvalAnswerer); ok {
+		if ar.AnswerApproval(agentMsg) {
+			return true
+		}
+	}
 	err := s.chat.Send(agentMsg)
 	if err != nil && s.chatRespawn != nil {
 		// The long-lived stream-json agent died underneath us (any send

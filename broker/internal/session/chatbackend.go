@@ -24,6 +24,20 @@ type chatBackend interface {
 	TurnActive() bool
 }
 
+// approvalAnswerer is an OPTIONAL chatBackend capability: a backend that can be
+// blocked on a server-side approval request (the codex app-server's
+// command/file-change approvals) and answer it from the user's next chat
+// message. SendChat type-asserts for it so the codex approval card's tap routes
+// to the JSON-RPC decision response instead of a new turn — the codex twin of
+// claude's pendingAsk bridge. Backends without it (claude, codex-exec) are
+// unaffected (the assertion just fails).
+type approvalAnswerer interface {
+	// AnswerApproval delivers the user's reply to a pending approval, returning
+	// true if it consumed an outstanding approval (false → nothing pending; the
+	// caller routes the message as a normal turn).
+	AnswerApproval(msg string) bool
+}
+
 // structuredChatBackend maps an adapter's chat_mode to the backend kind:
 //
 //	"stream-json"      → "claude"  (claude -p --input-format/--output-format stream-json)

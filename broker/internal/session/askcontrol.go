@@ -205,11 +205,25 @@ func (s *Session) handleAskControl(req controlRequest, cp *chatProcess) {
 func (s *Session) PendingAskChatContent() (string, bool) {
 	s.mu.Lock()
 	ask := s.pendingAsk
+	chat := s.chat
 	s.mu.Unlock()
-	if ask == nil {
-		return "", false
+	if ask != nil {
+		return askUserQuestionContent(ask.input)
 	}
-	return askUserQuestionContent(ask.input)
+	// Codex twin: a codex app-server backend blocked on an approval has its
+	// card live in the backend, not in pendingAsk. Re-surface it the same way
+	// so a reattaching client doesn't lose the approval prompt.
+	if rs, ok := chat.(approvalCardResurfacer); ok {
+		return rs.PendingApprovalCard()
+	}
+	return "", false
+}
+
+// approvalCardResurfacer is the OPTIONAL backend capability that lets a
+// reattaching client re-see an outstanding approval card (codex app-server).
+// Mirrors PendingAskChatContent's role for claude's pendingAsk.
+type approvalCardResurfacer interface {
+	PendingApprovalCard() (string, bool)
 }
 
 // takePendingAsk atomically consumes the stashed request, if any.
