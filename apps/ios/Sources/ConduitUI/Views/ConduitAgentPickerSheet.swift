@@ -35,6 +35,9 @@ extension ConduitUI {
         /// Agent the user tapped; pushes the directory picker. nil while
         /// on the agent-selection screen.
         @State private var pickedAgent: String?
+        /// WS-H.3: show the agent-login sheet when the user taps "Sign in"
+        /// on a not-signed-in readiness row.
+        @State private var showAgentLogin = false
 
         /// In cards mode (§3) the selected agent tints the whole sheet before
         /// the user commits with "Continue". Defaults to Claude (first card).
@@ -123,6 +126,22 @@ extension ConduitUI {
                                     .frame(maxWidth: .infinity, alignment: .center)
                                     .padding(.top, 4)
                             }
+                            // WS-H.3: post-pair readiness checklist — informational,
+                            // never blocking. Only shown when the broker sent a
+                            // readiness block (nil = old broker, silently omitted).
+                            if let readiness = store.brokerReadiness {
+                                let items = readinessCheckItems(
+                                    readiness: readiness,
+                                    descriptors: store.agentDescriptors
+                                )
+                                if !items.isEmpty {
+                                    sectionLabel("Box readiness")
+                                    ConduitUI.ReadinessChecklist(items: items) { _ in
+                                        // "Sign in" deep-links the existing agent-login flow.
+                                        showAgentLogin = true
+                                    }
+                                }
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 18)
@@ -194,7 +213,13 @@ extension ConduitUI {
                 // from the agent CLIs) so the cards' model line and the
                 // directory step's model/effort options reflect what the
                 // box actually serves. Failure = keep static fallbacks.
+                // WS-H.1: also parses readiness block for H.2/H.3 banners.
                 await store.refreshModelCatalog()
+            }
+            // WS-H.3: agent-login sheet launched from "Sign in" on a
+            // not-signed-in readiness row (informational, never blocking).
+            .sheet(isPresented: $showAgentLogin) {
+                ConduitUI.AgentLoginSheet()
             }
             .appearanceColorScheme()
         }

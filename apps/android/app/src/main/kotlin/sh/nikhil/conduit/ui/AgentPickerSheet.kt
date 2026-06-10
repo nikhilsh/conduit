@@ -48,6 +48,7 @@ import sh.nikhil.conduit.AgentDescriptor
 import sh.nikhil.conduit.RemoteDirectoryListing
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.descriptorFor
+import sh.nikhil.conduit.readinessCheckItems
 
 /**
  * Ordered agent list for the picker cards row. Known agents (claude, codex)
@@ -83,6 +84,9 @@ fun AgentPickerSheet(
     val harness by store.harness.collectAsState()
     val neon = LocalNeonTheme.current
     var pickedAgent by remember { mutableStateOf<String?>(null) }
+    // WS-H.3: agent-login sheet launched from "Sign in" on a not-signed-in
+    // readiness row (informational, never blocking).
+    var showAgentLogin by remember { mutableStateOf(false) }
     // Box the session should run on (round 3: "I can't choose where to
     // start the session in"). null = the currently connected box; an
     // explicit pick of a different box routes the create through
@@ -116,6 +120,7 @@ fun AgentPickerSheet(
                 selectedServerId = resolvedServerId,
                 onSelectServer = { selectedServerId = it },
                 onPick = { pickedAgent = it },
+                onSignIn = { showAgentLogin = true },
             )
         } else {
             DirectoryStep(
@@ -157,6 +162,11 @@ fun AgentPickerSheet(
             content()
         }
     }
+
+    // WS-H.3: agent-login sheet launched from a readiness "Sign in" tap.
+    if (showAgentLogin) {
+        AgentLoginSheet(store = store, onDismiss = { showAgentLogin = false })
+    }
 }
 
 @Composable
@@ -168,6 +178,7 @@ private fun AgentStep(
     selectedServerId: String?,
     onSelectServer: (String) -> Unit,
     onPick: (String) -> Unit,
+    onSignIn: (provider: String) -> Unit = {},
 ) {
     val neon = LocalNeonTheme.current
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
@@ -308,6 +319,16 @@ private fun AgentStep(
                     fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
                 )
+            }
+        }
+        // WS-H.3: post-pair readiness checklist — informational, never blocking.
+        // Only shown when the broker sent a readiness block (null = old broker).
+        val readiness by store.brokerReadiness.collectAsState()
+        readiness?.let { r ->
+            val items = readinessCheckItems(r, descriptors)
+            if (items.isNotEmpty()) {
+                SectionLabel("Box readiness")
+                ReadinessChecklist(items = items, onSignIn = onSignIn)
             }
         }
         Spacer(Modifier.height(8.dp))

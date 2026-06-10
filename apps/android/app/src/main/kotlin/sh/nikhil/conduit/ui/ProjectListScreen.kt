@@ -33,9 +33,12 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.HarnessState
+import sh.nikhil.conduit.MINIMUM_BROKER_VERSION
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.VisibleSession
+import sh.nikhil.conduit.brokerVersionStatus
+import sh.nikhil.conduit.BrokerVersionStatus
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -53,8 +56,11 @@ fun ProjectListScreen(
     val displayNames by store.displayNames.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
     val creationError by store.sessionCreationError.collectAsState()
+    val brokerReadiness by store.brokerReadiness.collectAsState()
     var showAgentPicker by remember { mutableStateOf(false) }
     var showAddServer by remember { mutableStateOf(false) }
+    // WS-H.2: SSH re-bootstrap sheet.
+    var showSshReBoot by remember { mutableStateOf(false) }
     // Long-press archive confirmation target. The drawer list previously
     // had no delete affordance (only HomeScreen did); we mirror that
     // long-press → confirm → store.archive flow here. Archiving ends the
@@ -111,6 +117,21 @@ fun ProjectListScreen(
                 IconButton(onClick = {
                     if (harness.canIssueCommands) showAgentPicker = true else showAddServer = true
                 }) { Icon(Icons.Default.Add, "New session", tint = neon.accent) }
+            }
+
+            // WS-H.2: broker-update banner — non-blocking, only when the broker
+            // reports an outdated version. "dev" / unparseable never show.
+            brokerReadiness?.brokerVersion?.let { bv ->
+                val vStatus = brokerVersionStatus(bv, MINIMUM_BROKER_VERSION)
+                if (vStatus is BrokerVersionStatus.UpdateAvailable) {
+                    val sshPaired = endpoint.url.contains("127.0.0.1")
+                    BrokerUpdateBanner(
+                        brokerVersion = bv,
+                        isSshPaired = sshPaired,
+                        onRebootstrap = { showSshReBoot = true },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
             }
 
             HarnessStatusStrip(
@@ -227,6 +248,10 @@ fun ProjectListScreen(
     }
     if (showAddServer) {
         AddServerSheet(store = store, onDismiss = { showAddServer = false })
+    }
+    // WS-H.2: SSH re-bootstrap sheet triggered from the broker-update banner.
+    if (showSshReBoot) {
+        SSHLoginSheet(store = store, onDismiss = { showSshReBoot = false })
     }
 }
 
