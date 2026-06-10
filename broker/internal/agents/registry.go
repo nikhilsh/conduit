@@ -127,11 +127,20 @@ func (a Adapter) Validate() error {
 // The defaults mirror today's hardcoded switch sites exactly — the golden
 // tests in manifest_golden_test.go pin this invariant.
 func applyLegacyDefaults(a *Adapter) {
+	// Protocol is the Phase-2 backend-routing key and a documented alias of
+	// chat_mode. It is derived ONLY from chat_mode — never from the adapter
+	// name — so routing matches the pre-Phase-2 chat_mode dispatch exactly: an
+	// adapter with no chat_mode (e.g. the legacy TUI-scrape path, or a dummy
+	// test adapter) gets protocol "" and routes to NO structured backend, just
+	// as structuredChatBackend("") used to. The real claude/codex TOMLs set
+	// chat_mode explicitly, so they get the right protocol; the name switch
+	// below only backfills the OTHER manifest fields (config_dir, cred_files,
+	// login_provider, arg templates, permission modes).
+	if a.Protocol == "" && a.ChatMode != "" {
+		a.Protocol = a.ChatMode
+	}
 	switch a.Name {
 	case "claude":
-		if a.Protocol == "" {
-			a.Protocol = "stream-json"
-		}
 		if a.ConfigDir == "" {
 			a.ConfigDir = ".claude"
 		}
@@ -162,9 +171,6 @@ func applyLegacyDefaults(a *Adapter) {
 			}
 		}
 	case "codex":
-		if a.Protocol == "" {
-			a.Protocol = "codex-app-server"
-		}
 		if a.ConfigDir == "" {
 			a.ConfigDir = ".codex"
 		}

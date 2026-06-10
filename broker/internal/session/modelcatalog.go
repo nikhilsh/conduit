@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nikhilsh/conduit/broker/internal/agents"
 )
 
 // This file implements dynamic model + effort discovery: at startup (and on a
@@ -333,16 +335,19 @@ func probeCodexCatalog(ctx context.Context, bin string) ([]ModelInfo, error) {
 	return nil, errors.New("codex catalog probe: stream ended without model/list response")
 }
 
-// catalogProbeFor maps an assistant name to its probe. Returns nil for
-// assistants without a discovery protocol (e.g. shell).
-func catalogProbeFor(assistant string) func(context.Context, string) ([]ModelInfo, error) {
-	switch assistant {
-	case "claude":
-		return probeClaudeCatalog
-	case "codex":
-		return probeCodexCatalog
-	default:
+// catalogProbeFor resolves an assistant's catalog probe via the protocol
+// backend registry (Phase 2): the assistant's adapter.Protocol selects the
+// AgentBackend whose CatalogProbe does the live discovery. Returns nil for
+// assistants with no registered backend (e.g. the hidden shell adapter, or a
+// legacy TUI-scrape adapter), so maybeRefreshCatalog skips them. reg is the
+// Manager's registry — needed to map assistant name → protocol.
+func catalogProbeFor(reg *agents.Registry, assistant string) func(context.Context, string) ([]ModelInfo, error) {
+	backend, err := backendForAssistant(reg, assistant)
+	if err != nil {
 		return nil
+	}
+	return func(ctx context.Context, bin string) ([]ModelInfo, error) {
+		return backend.CatalogProbe(ctx, bin)
 	}
 }
 
@@ -425,7 +430,7 @@ func (m *Manager) ModelCatalog() map[string][]ModelInfo {
 func (m *Manager) maybeRefreshCatalog(assistant string) {
 	probe := m.catalog.probe
 	if probe == nil {
-		std := catalogProbeFor(assistant)
+		std := catalogProbeFor(m.registry, assistant)
 		if std == nil {
 			return
 		}

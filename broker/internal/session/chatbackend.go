@@ -38,23 +38,7 @@ type approvalAnswerer interface {
 	AnswerApproval(msg string) bool
 }
 
-// structuredChatBackend maps an adapter's chat_mode to the backend kind:
-//
-//	"stream-json"      → "claude"  (claude -p --input-format/--output-format stream-json)
-//	"codex-exec"       → "codex"   (codex exec / exec resume — fallback path)
-//	"codex-app-server" → "codex"   (codex app-server JSON-RPC; persistent thread)
-//	anything else      → ""        (legacy TUI-scrape path: PTY agent + chatScraper)
-//
-// Both codex modes map to the "codex" branch; startChatBackend then picks the
-// concrete backend (exec vs app-server) by the raw chat_mode. Pure, so the
-// routing decision is unit-testable without spawning anything.
-func structuredChatBackend(chatMode string) string {
-	switch chatMode {
-	case "stream-json":
-		return "claude"
-	case "codex-exec", "codex-app-server":
-		return "codex"
-	default:
-		return ""
-	}
-}
+// Backend selection is now protocol-keyed via the registry in backend.go:
+// adapter.Protocol ("stream-json", "codex-app-server", "codex-exec") resolves
+// to a registered AgentBackend. An empty protocol (or one with no registered
+// backend) is the legacy TUI-scrape path. See backendFor / backendRegistry.

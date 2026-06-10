@@ -106,6 +106,7 @@ name = "claude"
 command = ["claude"]
 args = ["--dangerously-skip-permissions"]
 workdir = "/workspace"
+chat_mode = "stream-json"
 `)
 	reg, err := LoadDir(dir)
 	if err != nil {
@@ -157,6 +158,7 @@ name = "codex"
 command = ["codex"]
 args = ["--dangerously-bypass-approvals-and-sandbox"]
 workdir = "/workspace"
+chat_mode = "codex-app-server"
 `)
 	reg, err := LoadDir(dir)
 	if err != nil {

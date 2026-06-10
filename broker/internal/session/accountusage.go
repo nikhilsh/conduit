@@ -117,12 +117,18 @@ func (s *Session) AccountUsage() AccountUsage {
 // fetch error leaves the previous snapshot in place and broadcasts nothing.
 // Exported because the ws package calls it on connect + on the refresh message.
 func (s *Session) RefreshAccountUsage() {
-	// Account usage comes from an agent-specific endpoint: claude from the
-	// Anthropic OAuth usage endpoint, codex from the ChatGPT /wham/usage
-	// endpoint (see codexaccountusage.go). Both fold into the SAME AccountUsage
-	// (primary→5h, secondary→weekly), so the status frame + client card are
-	// agent-agnostic. Any other agent has no usage source — skip the doomed
-	// fetch so the session never blocks on a request that can't succeed.
+	// Account usage comes from an agent-specific endpoint, resolved via the
+	// protocol backend registry (Phase 2): claude's stream-json backend reads
+	// the Anthropic OAuth usage endpoint, codex's backends read the ChatGPT
+	// /wham/usage endpoint (see codexaccountusage.go). Both fold into the SAME
+	// AccountUsage (primary→5h, secondary→weekly), so the status frame + client
+	// card are agent-agnostic. A backend that reports ok=false (or an assistant
+	// with no backend) has no usage source — skip the doomed fetch so the
+	// session never blocks on a request that can't succeed.
+	backend, berr := backendFor(s.adapter.Protocol)
+	if berr != nil {
+		return
+	}
 	do := s.accountUsageDo
 	if do == nil {
 		do = http.DefaultClient.Do
@@ -130,19 +136,8 @@ func (s *Session) RefreshAccountUsage() {
 	ctx, cancel := context.WithTimeout(context.Background(), accountUsageTimeout)
 	defer cancel()
 
-	var (
-		u   AccountUsage
-		err error
-	)
-	switch s.Assistant {
-	case "claude":
-		u, err = fetchAccountUsage(ctx, do, s.agentHomeDir)
-	case "codex":
-		u, err = fetchCodexAccountUsage(ctx, do, s.agentHomeDir)
-	default:
-		return
-	}
-	if err != nil {
+	u, ok, err := backend.Usage(ctx, do, s.agentHomeDir)
+	if !ok || err != nil {
 		return
 	}
 	s.mu.Lock()

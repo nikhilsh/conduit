@@ -9,7 +9,6 @@
 package session
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -276,8 +275,8 @@ func New(id string, adapter agents.Adapter) (*Session, error) {
 
 func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Session, error) {
 	var cmd *exec.Cmd
-	if structuredChatBackend(adapter.ChatMode) != "" {
-		// B-i: a structured chat_mode runs the agent headless (started
+	if _, err := backendFor(adapter.Protocol); err == nil {
+		// B-i: a structured protocol runs the agent headless (started
 		// below as a chatBackend); the PTY hosts an interactive shell
 		// for the Terminal tab.
 		//
@@ -577,166 +576,68 @@ func (s *Session) startChatBackend(
 	// codexGen for codex), fall back to the other if its creds are missing,
 	// and nil — no generators — when neither agent has creds (the graceful
 	// skip that matches today's claude-no-creds behavior). Routing here is
-	// what gives CODEX sessions AI titles + quick replies for the first time
-	// (task WS-0.1); the claude path's request shape is unchanged.
+	// what gives CODEX sessions AI titles + quick replies (task WS-0.1); each
+	// backend wires them the way its protocol natively expects.
 	aiGen := s.selectAIGen(adapter.Name)
-	switch structuredChatBackend(adapter.ChatMode) {
-	case "claude":
-		// claude headless in stream-json. Publishes clean chat events via
-		// the same path the scraper used — no PTY scraping (scraper stays
-		// nil); the PTY (a shell) drains to the Terminal tab.
-		// AI quick replies (task #233): on each completed assistant turn,
-		// a best-effort one-shot completion suggests up to 4 tap-able user
-		// replies, emitted as a `view:"quick_replies"` view_event. nil when
-		// the feature is off or no provider has creds — turn-end no-ops.
-		gen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText)
-		// AI session titles (task: ai-session-titles): after the first
-		// meaningful exchange the generator mints a short human title from
-		// the conversation and emits a `view:"session_title"` view_event;
-		// the apps slot it BELOW a manual rename in the display name. nil
-		// when titling is off / no provider — turn-end then no-ops.
-		s.titleGen = newTitleGeneratorWithProvider(
-			s.ID,
-			aiGen,
-			s.firstPrompt,
-			s.applyAITitle,
-		)
-		// Recovery/switch hands us the prior conversation id — seed it so
-		// the FIRST spawn resumes, and persistMetadata keeps carrying it.
-		s.mu.Lock()
-		s.chatSessionID = resumeChatSessionID
-		s.mu.Unlock()
-		argsFor := func(resume string, continueLatest bool) []string {
-			baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsForAdapter(adapter)...)
-			// Apply the chosen permission mode (e.g. plan): for claude this
-			// may drop --dangerously-skip-permissions, so it must wrap the
-			// adapter args before the stream-json flags are appended.
-			baseArgs = applyPermissionModeFromManifest(baseArgs, adapter, s.override.PermissionMode)
-			return claudeStreamCommand(adapter.Command, baseArgs, resume, continueLatest)
-		}
-		chat, cerr := startChatProcess(
-			context.Background(),
-			argsFor(resumeChatSessionID, continueLatestChat),
-			s.commandEnv(nil),
-			s.workspaceDir,
-			s.PublishText,
-			gen,
-			s.titleGen,
-			s.accumulateUsage,
-			s.handleAskControl,
-			s.latchChatSessionID,
-		)
-		if cerr != nil {
-			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
-		} else {
-			// Wire the turn-idle hook for push notifications (session has the
-			// notifier by the time startChatBackend runs; chat was just spawned).
-			chat.setTurnIdleHook(s.maybeNotifyTurnEnd)
-			s.mu.Lock()
-			s.chat = chat
-			s.mu.Unlock()
-		}
-		// Same argv/env for the self-heal respawn in SendChat. The
-		// captured generators are per-session, not per-process, so the
-		// fresh agent keeps quick replies + titling.
-		s.chatRespawn = func() (chatBackend, error) {
-			// Resume the conversation the dead agent was holding — the
-			// latched id is the whole point of the respawn not being
-			// amnesiac. Falls back to a fresh conversation when no init
-			// line was ever captured.
-			s.mu.Lock()
-			resume := s.chatSessionID
-			s.mu.Unlock()
-			fresh, ferr := startChatProcess(
-				context.Background(),
-				argsFor(resume, false),
-				s.commandEnv(nil),
-				s.workspaceDir,
-				s.PublishText,
-				gen,
-				s.titleGen,
-				s.accumulateUsage,
-				s.handleAskControl,
-				s.latchChatSessionID,
-			)
-			if ferr == nil && fresh != nil {
-				fresh.setTurnIdleHook(s.maybeNotifyTurnEnd)
-			}
-			return fresh, ferr
-		}
-	case "codex":
-		// Two codex backends share this branch; the adapter's raw chat_mode
-		// picks the concrete one. Both publish via the same path; the PTY is
-		// a shell. The recovered/prior thread id (if any) is seeded so the
-		// first turn resumes codex's own conversation — the codex twin of the
-		// claude --resume fix.
-		s.mu.Lock()
-		s.codexThreadID = resumeCodexThreadID
-		s.chatRespawn = nil // codex has no long-lived-process self-heal respawn
-		s.mu.Unlock()
-		// Build the backend OUTSIDE s.mu: the app-server constructor runs the
-		// initialize/thread-start handshake synchronously and latches the
-		// thread id via s.latchCodexThreadID (which takes s.mu) — doing it
-		// under the lock would deadlock.
-		var backend chatBackend
-		if adapter.ChatMode == "codex-app-server" {
-			// codex app-server: one long-lived JSON-RPC subprocess (spawns +
-			// handshakes now). The persistent thread unlocks manual /compact
-			// (task #18). On a hard spawn failure, fall back to the exec
-			// backend so chat still works.
-			if proc, cerr := newCodexAppServerProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override, s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID); cerr == nil {
-				backend = proc
-			} else {
-				fmt.Fprintf(os.Stderr, "session %s: codex app-server spawn failed: %v (falling back to codex-exec)\n", s.ID, cerr)
-				backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsForAdapter(adapter), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
-			}
-		} else {
-			// codex-exec: per-turn exec/resume, constructed lazily (spawns on
-			// first Send).
-			backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsForAdapter(adapter), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
-		}
-		// AI niceties for codex (task WS-0.1): codex sessions now get the same
-		// AI titles + quick replies claude has always had. The generators are
-		// built from the per-session provider (aiGen) and driven by a turn-end
-		// hook on the codex backend — the codex twin of the claude path's
-		// startChatProcess(gen, titleGen). nil aiGen → nil generators → the
-		// hook no-ops, so a codex session with no creds behaves as before.
-		qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText)
-		s.titleGen = newTitleGeneratorWithProvider(s.ID, aiGen, s.firstPrompt, s.applyAITitle)
-		if qrGen != nil || s.titleGen != nil {
-			onTurn := func(lastAssistant, msgID string) {
-				qrGen.kickoff(lastAssistant, msgID)
-				s.titleGen.onTurnEnd(lastAssistant)
-			}
-			switch b := backend.(type) {
-			case *codexAppServerProcess:
-				b.setTurnHook(onTurn)
-			case *codexChatProcess:
-				b.setTurnHook(onTurn)
-			}
-		}
-		// Wire the turn-idle and pending-input hooks for push notifications.
-		switch b := backend.(type) {
-		case *codexAppServerProcess:
-			b.setTurnIdleHook(s.maybeNotifyTurnEnd)
-			b.setPendingInputHook(s.maybeNotifyPendingInput)
-		case *codexChatProcess:
-			b.setTurnIdleHook(s.maybeNotifyTurnEnd)
-			// codexChatProcess doesn't surface approval cards (exec path has
-			// no on-request approval flow), so no pendingInput hook needed.
-		}
-		s.mu.Lock()
-		s.chat = backend
-		s.mu.Unlock()
-	default:
-		// Legacy TUI-scrape path (no shipped adapter uses it). If a
-		// future adapter does, restart-continuity needs a per-agent
-		// resume command (swe-swe's ShellRestartCmd pattern).
+
+	// Resolve the protocol backend from the registry (Phase 2). An empty
+	// protocol — or one with no registered backend — falls through to the
+	// legacy TUI-scrape path. The big claude/codex switch this replaced is now
+	// the per-protocol Spawn moved into backend_streamjson.go / backend_codex.go.
+	backend, err := backendFor(adapter.Protocol)
+	if err != nil {
+		// Legacy TUI-scrape path (no shipped adapter uses it). If a future
+		// adapter does, restart-continuity needs a per-agent resume command
+		// (swe-swe's ShellRestartCmd pattern).
 		if s.scraper == nil {
 			s.scraper = newChatScraper(s.PublishText)
 			go s.scraper.run(s.closed)
 		}
+		return
 	}
+
+	res, serr := backend.Spawn(s, adapter, spawnRequest{
+		aiGen:               aiGen,
+		resumeChatSessionID: resumeChatSessionID,
+		continueLatestChat:  continueLatestChat,
+		resumeCodexThreadID: resumeCodexThreadID,
+	})
+	if serr != nil {
+		// Spawn already logged + surfaced the failure to chat; chat is
+		// disabled for this session but the PTY/Terminal tab is unaffected.
+		return
+	}
+
+	// Generic, backend-agnostic hook wiring (push notifications). A backend
+	// opts in by satisfying the optional interface; absent ones are skipped.
+	// The session has the notifier by the time startChatBackend runs.
+	if h, ok := res.backend.(turnIdleHooker); ok {
+		h.setTurnIdleHook(s.maybeNotifyTurnEnd)
+	}
+	if h, ok := res.backend.(pendingInputHooker); ok {
+		h.setPendingInputHook(s.maybeNotifyPendingInput)
+	}
+
+	s.mu.Lock()
+	s.chat = res.backend
+	if res.respawn != nil {
+		// Wrap the backend's self-heal respawn so the re-spawned process keeps
+		// the same push-notify wiring as the original.
+		base := res.respawn
+		s.chatRespawn = func() (chatBackend, error) {
+			fresh, ferr := base()
+			if ferr == nil && fresh != nil {
+				if h, ok := fresh.(turnIdleHooker); ok {
+					h.setTurnIdleHook(s.maybeNotifyTurnEnd)
+				}
+				if h, ok := fresh.(pendingInputHooker); ok {
+					h.setPendingInputHook(s.maybeNotifyPendingInput)
+				}
+			}
+			return fresh, ferr
+		}
+	}
+	s.mu.Unlock()
 }
 
 // Write sends bytes to the PTY input (terminal keystrokes).
@@ -1707,6 +1608,58 @@ func (m *Manager) AssistantNames() []string {
 func (m *Manager) HasAssistant(name string) bool {
 	_, err := m.registry.Get(name)
 	return err == nil
+}
+
+// AgentDescriptors returns the per-assistant capability descriptors served in
+// /api/capabilities `agents` (WS-2.3). One entry per non-hidden assistant
+// (Names() order). The supports flags fold the protocol backend's
+// BackendCapabilities with the manifest's plan-mode rule; the model slice
+// reuses the discovered catalog. An assistant with no registered backend
+// (legacy TUI-scrape adapter) is skipped — it has no structured capabilities
+// to declare. Returns nil when nothing qualifies (capabilities then omits the
+// "agents" key and the apps fall back to their built-in agent list).
+func (m *Manager) AgentDescriptors() map[string]AgentDescriptor {
+	catalog := m.ModelCatalog()
+	out := map[string]AgentDescriptor{}
+	for _, name := range m.registry.Names() {
+		adapter, err := m.registry.Get(name)
+		if err != nil {
+			continue
+		}
+		backend, err := backendFor(adapter.Protocol)
+		if err != nil {
+			continue // legacy TUI-scrape adapter: no structured descriptor
+		}
+		caps := backend.Capabilities()
+		_, planMode := adapter.PermissionModes["plan"]
+		out[name] = AgentDescriptor{
+			DisplayName:   agentDisplayName(name),
+			LoginProvider: adapter.LoginProvider,
+			Supports: AgentSupports{
+				Compact:         caps.Compact,
+				AskUserQuestion: caps.AskUserQuestion,
+				Effort:          caps.Effort,
+				PlanMode:        planMode,
+				Usage:           caps.Usage,
+			},
+			Models: catalog[name],
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// agentDisplayName derives a human display name from an assistant key. The
+// shipped agents have no display_name manifest field, so we Title-case the key
+// ("claude" → "Claude", "codex" → "Codex"); an unknown agent gets the same
+// treatment, which is the generic fallback the apps render.
+func agentDisplayName(name string) string {
+	if name == "" {
+		return name
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
 }
 
 // ConversationLog returns the persisted conversation transcript for a
