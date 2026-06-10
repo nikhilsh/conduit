@@ -72,6 +72,8 @@ import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Endpoint
+import sh.nikhil.conduit.push.PushSettingsSection
+import sh.nikhil.conduit.push.PushStore
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
 
@@ -105,6 +107,7 @@ import uniffi.conduit_core.SessionStatus
 @Composable
 fun SettingsScreen(
     store: SessionStore,
+    pushStore: PushStore? = null,
     onDismiss: () -> Unit,
     onOpenLicenses: () -> Unit = {},
     // When true, render inline as a tablet section pane (no bottom-sheet
@@ -175,6 +178,18 @@ fun SettingsScreen(
                 onAddAccount = { showAgentLogin = true },
                 onAddServer = { showAddServer = true },
             )
+
+            // Notifications (WS-P.3) — push settings section. Shown when a
+            // PushStore is provided (i.e. MainActivity wired it up). The
+            // endpoint is the currently-active broker endpoint; features is
+            // lazily probed by the BoxHealthScreen flow.
+            pushStore?.let { ps ->
+                PushSettingsSection(
+                    pushStore = ps,
+                    endpoint = endpoint,
+                    features = null, // Probed lazily; null = show registration UI
+                )
+            }
 
             // Usage & limits — account-wide, BOTH agents (claude + codex),
             // each with a 5-hour AND a weekly window.

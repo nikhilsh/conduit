@@ -191,6 +191,12 @@ targets:
         ENABLE_MODULE_VERIFIER: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SENTRY_DSN: ""
+        # WS-P.3: push notifications entitlement. The Conduit.entitlements
+        # file declares `aps-environment: production` so APNs tokens work in
+        # ad-hoc/TestFlight/App Store signed builds. The App ID capability
+        # (Push Notifications) must also be enabled in the Apple Developer
+        # portal — see PR body for that human step.
+        CODE_SIGN_ENTITLEMENTS: Sources/Conduit.entitlements
 
   # Widget app-extension that renders the Turn Live Activity on the
   # lock screen and Dynamic Island. The controller in

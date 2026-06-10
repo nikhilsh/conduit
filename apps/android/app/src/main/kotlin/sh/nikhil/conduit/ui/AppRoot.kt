@@ -23,10 +23,18 @@ import kotlinx.coroutines.launch
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.push.PushRegistrationState
+import sh.nikhil.conduit.push.PushStore
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppRoot(store: SessionStore) {
+fun AppRoot(
+    store: SessionStore,
+    pushStore: PushStore,
+    /** Called once when sessions first appear and push isn't yet registered.
+     *  The Activity uses this to request the notification permission + register. */
+    onFirstSessionForPush: (() -> Unit)? = null,
+) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScopeCompat()
     var showSettings by remember { mutableStateOf(false) }
@@ -72,6 +80,23 @@ fun AppRoot(store: SessionStore) {
     // takeover — onboarding handles the unpaired case).
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (endpoint.isComplete && harness is HarnessState.Disconnected) store.connect()
+    }
+
+    // Push registration trigger (WS-P.3): attempt registration after the
+    // first session exists — matches iOS timing (post-onboarding, never at
+    // app launch before the user has paired). Only fires once per install
+    // (when the push state is NotRegistered and sessions transitions 0 → ≥1).
+    val pushRegistrationState by pushStore.registrationState.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(sessions.isNotEmpty()) {
+        if (sessions.isNotEmpty() &&
+            pushRegistrationState is PushRegistrationState.NotRegistered &&
+            endpoint.isComplete
+        ) {
+            // The actual permission request + register is performed on the
+            // Activity (not a composable) because it needs the permission
+            // launcher. We delegate via a side-channel callback.
+            onFirstSessionForPush?.invoke()
+        }
     }
 
     val onNewSession: () -> Unit = {
@@ -177,6 +202,7 @@ fun AppRoot(store: SessionStore) {
     if (showSettings) {
         SettingsScreen(
             store = store,
+            pushStore = pushStore,
             onDismiss = { showSettings = false },
             onOpenLicenses = { showLicenses = true },
         )

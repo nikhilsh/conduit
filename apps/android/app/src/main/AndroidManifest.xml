@@ -5,6 +5,14 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!--
+      POST_NOTIFICATIONS is the Android 13+ (API 33+) runtime permission for
+      showing notifications. Declared here so the system knows we might ask;
+      we request it at push-registration time (not app launch) via
+      MainActivity.requestPushRegistration(). On API < 33 this permission is
+      automatically granted and the runtime request is skipped.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
@@ -61,5 +69,29 @@
                 <data android:scheme="conduit" android:host="oauth" />
             </intent-filter>
         </activity>
+
+        <!--
+          UnifiedPush receiver (WS-P.3).
+
+          The UnifiedPush android-connector library dispatches:
+            • org.unifiedpush.android.connector.NOTIFY         → onMessage
+            • org.unifiedpush.android.connector.NEW_ENDPOINT   → onNewEndpoint
+            • org.unifiedpush.android.connector.UNREGISTERED   → onUnregistered
+
+          android:exported="true" is required so the distributor app (ntfy,
+          Sunup, …) can deliver messages even when Conduit is in the
+          background. The receiver validates that every inbound intent carries
+          the UnifiedPush instance / token that we registered, so exported=true
+          does not open an arbitrary delivery surface.
+        -->
+        <receiver
+            android:name=".push.ConduitUnifiedPushReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.NOTIFY" />
+                <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+                <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

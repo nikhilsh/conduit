@@ -154,6 +154,24 @@ dependencies {
     // ZXing-embedded QR scanner. Ships its own activity + permission flow.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
+    // UnifiedPush android-connector — vendor-free push (WS-P.3).
+    // The device must have a distributor app installed (e.g. ntfy) for
+    // registration to succeed; the library is a ~20 kB connector only,
+    // no bundled distributor. Published on Maven Central.
+    // https://github.com/UnifiedPush/android-connector
+    //
+    // Pinned to 3.0.10: versions 3.1.x+ were compiled with Kotlin 2.2.x/2.3.x
+    // (metadata version mv=[2,1,0]) which is ahead of this project's Kotlin
+    // 2.0.0, causing "Incompatible classes were found in dependencies" and a
+    // cascade of phantom inference errors. 3.0.10 uses mv=[1,7,0] (compatible
+    // with any Kotlin 2.x consumer) and exposes the full v3 API (PushEndpoint,
+    // PushMessage, MessagingReceiver with instance-based callbacks).
+    // The tink exclude is still required: 3.0.10 lists com.google.crypto.tink:tink
+    // as a runtime dependency; Android builds must use tink-android only.
+    implementation("org.unifiedpush.android:connector:3.0.10") {
+        exclude(group = "com.google.crypto.tink", module = "tink")
+    }
+
     // Termux terminal stack — Apache-2.0, pinned to v0.118.3 (May 22
     // 2025 release; see docs/PLAN-TERMINAL-REWRITE.md Android section).
     // Published as a multi-module JitPack build under the parent

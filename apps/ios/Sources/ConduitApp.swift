@@ -2,6 +2,13 @@ import SwiftUI
 
 @main
 struct ConduitApp: App {
+    /// APNs token delivery + notification tap routing (Package WS-P.3).
+    /// The `@UIApplicationDelegateAdaptor` bridges the UIKit delegate
+    /// callbacks (didRegisterForRemoteNotificationsWithDeviceToken, etc.)
+    /// into our SwiftUI lifecycle. We inject `store` into it once the
+    /// App body has a live store reference.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     @State private var store = SessionStore()
     @State private var appearance = AppearanceStore()
     /// App-wide feature flags + the chat-shell-v2 A/B assignment (handoff
@@ -104,6 +111,19 @@ struct ConduitApp: App {
                                 sessionID: sessionID, decision: decision
                             )
                         }
+                        // WS-P.3: hand the live store reference to the
+                        // AppDelegate so tap-routing can set selectedSessionID.
+                        appDelegate.sessionStore = store
+                        // Probe push capabilities once we have a connected
+                        // endpoint. If the broker already has a token
+                        // registered (app restart), settingsState reflects it.
+                        Task { @MainActor in
+                            await PushNotificationManager.shared.probeCapabilities(
+                                endpoint: store.endpoint)
+                        }
+                        // Re-check push auth status in case the user changed
+                        // it in Settings while the app was suspended.
+                        PushNotificationManager.shared.refreshAuthStatus()
                     }
                     .onOpenURL { url in
                         if !applySessionURL(url) {
@@ -114,6 +134,31 @@ struct ConduitApp: App {
                         // Foreground, background, inactive — any wake is
                         // execution time; re-stamp the live activities.
                         liveActivity.refreshAll()
+                        // Re-check push auth status on every foreground — the
+                        // user might have changed it in iOS Settings.
+                        PushNotificationManager.shared.refreshAuthStatus()
+                    }
+                    // WS-P.3: request push permission after the user's FIRST
+                    // session exists — onboarding is accounts-free by design,
+                    // so we never prompt there. The moment `sessions` goes from
+                    // empty to non-empty is the right time: the user has
+                    // demonstrated intent (they started a session) and a push
+                    // from a future session would be useful to them immediately.
+                    .onChange(of: store.sessions.count) { old, new in
+                        if old == 0, new > 0 {
+                            Telemetry.breadcrumb("push", "first session exists — requesting authorization")
+                            PushNotificationManager.shared.requestAuthorizationIfNeeded()
+                        }
+                    }
+                    // Re-register with the new box when the active endpoint
+                    // changes (multi-box: user switches servers). V1 covers
+                    // the active box only; all-boxes registration is a follow-up.
+                    .onChange(of: store.endpoint) { _, newEndpoint in
+                        PushNotificationManager.shared.endpointChanged(to: newEndpoint)
+                        Task { @MainActor in
+                            await PushNotificationManager.shared.probeCapabilities(
+                                endpoint: newEndpoint)
+                        }
                     }
                     .sheet(item: hostKeyBinding) { prompt in
                         HostKeyPromptSheet(prompt: prompt) { accepted in
