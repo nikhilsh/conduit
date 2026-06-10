@@ -36,6 +36,40 @@ func TestParseControlRequest(t *testing.T) {
 	}
 }
 
+// Reattach re-surfacing (background→foreground bug): a client that reconnects
+// while an AskUserQuestion is outstanding must get the interactive card back.
+// PendingAskChatContent renders the current pending ask as the same
+// pending-input chat line the live path emits; nil when nothing is blocked.
+func TestPendingAskChatContent(t *testing.T) {
+	// No outstanding ask → nothing to re-surface.
+	s := &Session{ID: "s-noask"}
+	if _, ok := s.PendingAskChatContent(); ok {
+		t.Fatal("expected ok=false when no pending ask")
+	}
+
+	// With an outstanding ask, content matches the live-rendered card exactly.
+	req, ok := parseControlRequest([]byte(askControlLine))
+	if !ok {
+		t.Fatal("control_request should parse")
+	}
+	s.pendingAsk = &pendingAsk{requestID: req.RequestID, input: req.Input}
+	content, ok := s.PendingAskChatContent()
+	if !ok {
+		t.Fatal("expected ok=true with a pending ask")
+	}
+	if !strings.HasPrefix(content, pendingInputSentinel) {
+		t.Fatalf("content missing pending-input sentinel: %q", content)
+	}
+	if !strings.Contains(content, "Which colors?") || !strings.Contains(content, "1. Red") {
+		t.Fatalf("content missing question/options: %q", content)
+	}
+	// Must equal the live path's rendering so reattach and live agree.
+	want, _ := askUserQuestionContent(req.Input)
+	if content != want {
+		t.Fatalf("reattach content %q != live content %q", content, want)
+	}
+}
+
 func TestEncodeControlAllowUnchanged(t *testing.T) {
 	line := encodeControlAllow("req-9", json.RawMessage(`{"a":1}`))
 	var env struct {

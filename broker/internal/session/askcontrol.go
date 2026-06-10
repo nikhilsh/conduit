@@ -191,6 +191,27 @@ func (s *Session) handleAskControl(req controlRequest, cp *chatProcess) {
 	s.mu.Unlock()
 }
 
+// PendingAskChatContent renders the session's currently-outstanding
+// AskUserQuestion as the pending-input chat line (sentinel + numbered
+// options), or ok=false when nothing is blocked.
+//
+// Used to re-surface the interactive approval/options card to a client that
+// REATTACHES after a WS drop (e.g. the app was backgrounded long enough for
+// the socket to die). The card originally arrived as a live chat view_event;
+// the broker doesn't replay chat history on reattach and the Rust-core live
+// copy died with the socket, so without this the card vanishes while the
+// agent is still blocked on the question. Keys off the live `pendingAsk`, so
+// an already-answered question (consumed → nil) correctly stays gone.
+func (s *Session) PendingAskChatContent() (string, bool) {
+	s.mu.Lock()
+	ask := s.pendingAsk
+	s.mu.Unlock()
+	if ask == nil {
+		return "", false
+	}
+	return askUserQuestionContent(ask.input)
+}
+
 // takePendingAsk atomically consumes the stashed request, if any.
 func (s *Session) takePendingAsk() *pendingAsk {
 	s.mu.Lock()
