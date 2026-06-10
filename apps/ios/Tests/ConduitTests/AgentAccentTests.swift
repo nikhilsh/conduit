@@ -36,8 +36,10 @@ struct AgentAccentTests {
         expectRGB(ConduitTheme.accent(forAgent: "pi"), hex: "#3B82F6")
     }
 
-    @Test func opencodeIsOrange() {
-        expectRGB(ConduitTheme.accent(forAgent: "opencode"), hex: "#F97316")
+    @Test func opencodeIsLime() {
+        // opencode brand tint: lime (#A3E635 dark / #6B9A0F light), distinct
+        // from claude (orange) and codex (cyan). Matches NeonTheme.opencode.
+        expectRGB(ConduitTheme.accent(forAgent: "opencode"), hex: "#6B9A0F")
     }
 
     @Test func unknownFallsBackToNeutralGray() {

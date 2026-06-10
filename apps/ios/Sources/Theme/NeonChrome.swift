@@ -20,7 +20,7 @@ extension NeonTheme {
         case "codex":    return codex
         case "hermes":   return purple
         case "pi":       return blue
-        case "opencode": return claude
+        case "opencode": return opencode
         default:         return textDim
         }
     }

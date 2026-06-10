@@ -66,6 +66,7 @@ struct NeonThemeTests {
         let t = NeonTheme.resolve(palette: .ice, dark: true, glow: true)
         #expect(t.claude == Color(hex: "#ff9d4d"))
         #expect(t.codex == Color(hex: "#22d3ee"))      // fixed brand cyan
+        #expect(t.opencode == Color(hex: "#a3e635"))   // lime — distinct from claude/codex
         #expect(t.purple == Color(hex: "#b487ff"))
         #expect(t.blue == Color(hex: "#4f8cff"))        // == accent2
         #expect(t.green == Color(hex: "#3ef0a0"))
@@ -81,6 +82,7 @@ struct NeonThemeTests {
         let synth = NeonTheme.resolve(palette: .synth, dark: true, glow: true)
         #expect(synth.codex == Color(hex: "#22d3ee"))
         #expect(synth.claude == Color(hex: "#ff9d4d"))
+        #expect(synth.opencode == Color(hex: "#a3e635"))
         // sanity: synth's own accent is NOT cyan, so codex differs from accent
         #expect(synth.accent != synth.codex)
     }

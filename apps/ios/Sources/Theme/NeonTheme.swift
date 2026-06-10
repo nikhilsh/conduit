@@ -150,6 +150,7 @@ struct NeonTheme {
     // Brand / semantic
     let claude: Color
     let codex: Color
+    let opencode: Color
     let purple: Color
     let blue: Color
     let green: Color
@@ -236,6 +237,7 @@ struct NeonTheme {
         // and blend into the accent in non-ice palettes; device feedback.)
         let claude = dark ? Color(hex: "#ff9d4d") : Color(hex: "#d9731a")
         let codex = dark ? Color(hex: "#22d3ee") : Color(hex: "#0e90a8")
+        let opencode = dark ? Color(hex: "#a3e635") : Color(hex: "#6b9a0f")
         let purple = dark ? Color(hex: "#b487ff") : Color(hex: "#7a48d8")
         let blue = a2
         let green = dark ? Color(hex: "#3ef0a0") : Color(hex: "#12a866")
@@ -363,6 +365,7 @@ struct NeonTheme {
             accentBright: aBright,
             claude: claude,
             codex: codex,
+            opencode: opencode,
             purple: purple,
             blue: blue,
             green: green,

@@ -43,8 +43,10 @@ class AgentAccentTest {
         assertEquals(0xFF3B82F6L, ConduitTheme.accentForAgentLightRgb("pi"))
     }
 
-    @Test fun opencode_isOrange() {
-        assertEquals(0xFFF97316L, ConduitTheme.accentForAgentLightRgb("opencode"))
+    @Test fun opencode_isLime() {
+        // opencode brand tint: lime (#A3E635 dark / #6B9A0F light), distinct
+        // from claude (orange) and codex (cyan). Matches NeonTheme.opencode.
+        assertEquals(0xFF6B9A0FL, ConduitTheme.accentForAgentLightRgb("opencode"))
     }
 
     @Test fun unknown_fallsBackToNeutralGray() {

@@ -96,6 +96,7 @@ data class NeonTheme(
     // Brand / semantic
     val claude: Color,
     val codex: Color,
+    val opencode: Color,
     val purple: Color,
     val blue: Color,
     val green: Color,
@@ -190,6 +191,7 @@ data class NeonTheme(
             // device feedback.)
             val claude = if (dark) Color(0xFFFF9D4D) else Color(0xFFD9731A)
             val codex = if (dark) Color(0xFF22D3EE) else Color(0xFF0E90A8)
+            val opencode = if (dark) Color(0xFFA3E635) else Color(0xFF6B9A0F)
             val purple = if (dark) Color(0xFFB487FF) else Color(0xFF7A48D8)
             val blue = a2
             val green = if (dark) Color(0xFF3EF0A0) else Color(0xFF12A866)
@@ -326,6 +328,7 @@ data class NeonTheme(
                 accentBright = aBright,
                 claude = claude,
                 codex = codex,
+                opencode = opencode,
                 purple = purple,
                 blue = blue,
                 green = green,

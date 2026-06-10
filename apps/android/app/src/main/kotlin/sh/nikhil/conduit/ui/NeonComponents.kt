@@ -147,11 +147,12 @@ fun NeonGrid(modifier: Modifier = Modifier, color: Color, cellDp: Float = 28f) {
  */
 fun neonAgentColor(agent: String?, neon: NeonTheme): androidx.compose.ui.graphics.Color =
     when (agent?.lowercase()) {
-        "claude" -> neon.claude
-        "codex" -> neon.codex
-        "hermes" -> neon.purple
-        "pi" -> neon.blue
-        else -> neon.accent2
+        "claude"   -> neon.claude
+        "codex"    -> neon.codex
+        "opencode" -> neon.opencode
+        "hermes"   -> neon.purple
+        "pi"       -> neon.blue
+        else       -> neon.accent2
     }
 
 // endregion
