@@ -46,6 +46,11 @@ type codexAppServerProcess struct {
 	publish  func([]byte)
 	onUsage  func(usageDelta)
 	onThread func(string) // fires once when the thread id is first latched
+	// onTurn fires at each turn's NORMAL end with the turn's final assistant
+	// text + the id (ts) the apps tied it to — driving the AI niceties
+	// (titles + quick replies), the codex twin of claudechat.go's turn-end
+	// hook. nil when no AI provider is selected for the session.
+	onTurn func(lastAssistant, msgID string)
 
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
@@ -99,7 +104,20 @@ type codexAppServerProcess struct {
 	// Close/EOF can surface a "no reply" notice (mirrors codexchatproc.go's
 	// safety net) rather than leave the typing indicator spinning.
 	published bool
-	closed    bool
+	// turnLastAssistant / turnLastTS hold the active turn's most recent
+	// assistant prose + its event ts, handed to onTurn at the turn's end so
+	// the AI niceties see the same message the apps render. Reset at endTurn.
+	turnLastAssistant string
+	turnLastTS        string
+	closed            bool
+}
+
+// setTurnHook installs the AI-niceties turn-end callback (titles + quick
+// replies). Called once at wiring time, before any Send.
+func (c *codexAppServerProcess) setTurnHook(onTurn func(lastAssistant, msgID string)) {
+	c.mu.Lock()
+	c.onTurn = onTurn
+	c.mu.Unlock()
 }
 
 // codexAppServerClientVersion is the clientInfo.version reported on
@@ -354,6 +372,17 @@ func (c *codexAppServerProcess) endTurn() {
 			msg = "⚠️ codex error: " + snip
 		}
 		publishChatSystem(c.publish, msg)
+	}
+	// Drive the AI niceties (titles + quick replies) off the turn's final
+	// assistant message on a real, completed turn (not an intentional close
+	// or a user Stop). Snapshot + reset the latch under the lock.
+	c.mu.Lock()
+	hook := c.onTurn
+	lastAssistant, lastTS := c.turnLastAssistant, c.turnLastTS
+	c.turnLastAssistant, c.turnLastTS = "", ""
+	c.mu.Unlock()
+	if hook != nil && active && !intentional && !interrupting {
+		hook(lastAssistant, lastTS)
 	}
 }
 
@@ -612,13 +641,14 @@ func (c *codexAppServerProcess) routeTurnResponse(rawID, errRaw json.RawMessage)
 // emit publishes one chat view_event (assistant / tool / system) and marks the
 // turn as having produced output.
 func (c *codexAppServerProcess) emit(ev codexAppEvent) {
+	ts := claudeChatNow().UTC().Format(time.RFC3339Nano)
 	payload, err := json.Marshal(map[string]any{
 		"type": "view_event",
 		"view": "chat",
 		"event": map[string]any{
 			"role":    ev.role,
 			"content": ev.content,
-			"ts":      claudeChatNow().UTC().Format(time.RFC3339Nano),
+			"ts":      ts,
 			"files":   []any{},
 		},
 	})
@@ -627,6 +657,10 @@ func (c *codexAppServerProcess) emit(ev codexAppEvent) {
 	}
 	c.mu.Lock()
 	c.published = true
+	if ev.role == "assistant" {
+		// Latch the turn's final assistant message for the AI-niceties hook.
+		c.turnLastAssistant, c.turnLastTS = ev.content, ts
+	}
 	c.mu.Unlock()
 	c.publish(payload)
 }

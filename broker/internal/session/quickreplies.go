@@ -102,8 +102,14 @@ type quickReplyGenerator struct {
 	agentHomeDir string // session ephemeral $HOME (source of the OAuth token)
 	publish      func([]byte)
 	// httpDo issues the Messages API request. Defaults to a real HTTP
-	// client; tests inject a stub so CI never touches the network.
+	// client; tests inject a stub so CI never touches the network. Used only
+	// by the direct-Anthropic fallback when gen is nil.
 	httpDo httpDoFunc
+	// gen, when set, is the provider that runs the completion (anthropicGen
+	// for claude, codexGen for codex). nil = the legacy direct-Anthropic
+	// path via httpDo/agentHomeDir, kept so the existing unit tests (which
+	// construct the generator literal without a provider) stay byte-identical.
+	gen aiGenProvider
 }
 
 // newQuickReplyGenerator builds a generator for a claude stream-json
@@ -127,6 +133,21 @@ func newQuickReplyGenerator(sessionID, binary, agentHomeDir, dir string, env []s
 		agentHomeDir: agentHomeDir,
 		publish:      publish,
 		httpDo:       http.DefaultClient.Do,
+	}
+}
+
+// newQuickReplyGeneratorWithProvider builds a quick-reply generator routed
+// through an explicit aiGenProvider (anthropicGen / codexGen), used by both
+// backend branches of startChatBackend. Returns nil when generation is off
+// or the provider/publish sink is missing — keeping the call site branch-free.
+func newQuickReplyGeneratorWithProvider(sessionID string, gen aiGenProvider, publish func([]byte)) *quickReplyGenerator {
+	if !quickRepliesEnabled() || gen == nil || publish == nil {
+		return nil
+	}
+	return &quickReplyGenerator{
+		sessionID: sessionID,
+		publish:   publish,
+		gen:       gen,
 	}
 }
 
@@ -185,7 +206,15 @@ func (g *quickReplyGenerator) invoke(ctx context.Context, lastText string) ([]st
 			break
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, quickReplyAttemptTimeout)
-		text, err := anthropicMessages(attemptCtx, g.httpDo, g.agentHomeDir, prompt, quickReplyMaxTokens)
+		var text string
+		var err error
+		if g.gen != nil {
+			text, err = g.gen.Complete(attemptCtx, claudeCodeSystemPrompt, prompt, quickReplyMaxTokens)
+		} else {
+			// Legacy direct-Anthropic path (no provider injected, e.g. unit
+			// tests): byte-identical to before.
+			text, err = anthropicMessages(attemptCtx, g.httpDo, g.agentHomeDir, prompt, quickReplyMaxTokens)
+		}
 		cancel()
 		if err == nil {
 			return parseQuickReplies(text), nil

@@ -244,6 +244,17 @@ type Session struct {
 	// spawn before the session is shared; read-only after — drives the
 	// watchdog's stale-credential re-mirror (credfresh.go).
 	agentCredProvider string
+
+	// modelCatalog returns the Manager's discovered model catalog snapshot
+	// (Manager.ModelCatalog), used to pick the smallest codex model for the
+	// AI-niceties (titles + quick replies) codexGen. nil → no catalog, and
+	// codexGen falls back to codex's default model.
+	modelCatalog func() map[string][]ModelInfo
+
+	// codexBinary returns the codex CLI binary path (registry-resolved),
+	// used so a claude session with no anthropic creds can fall back to the
+	// codex AI-niceties provider. nil/"" → no codex fallback.
+	codexBinary func() string
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
@@ -306,6 +317,8 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		repoRoot:     opts.repoRoot,
 		conduitRoot:  opts.conduitRoot,
 		previewPort:  opts.previewPort,
+		modelCatalog: opts.modelCatalog,
+		codexBinary:  opts.codexBinary,
 		requestedCWD: strings.TrimSpace(opts.requestedCWD),
 		checkpointEvery: durationFromEnv(
 			"CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS",
@@ -516,6 +529,23 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	return s, nil
 }
 
+// selectAIGen picks the AI-niceties provider (titles + quick replies) for
+// this session: prefer the session's own agent's provider, fall back to the
+// other if its creds are missing, nil when neither has creds. Resolves the
+// codex binary + model catalog from the Manager-injected closures (nil in
+// tests that don't wire a Manager — which then never spawn a codexGen).
+func (s *Session) selectAIGen(assistant string) aiGenProvider {
+	codexBin := ""
+	if s.codexBinary != nil {
+		codexBin = s.codexBinary()
+	}
+	var catalog map[string][]ModelInfo
+	if s.modelCatalog != nil {
+		catalog = s.modelCatalog()
+	}
+	return selectAIGenProvider(assistant, s.agentHomeDir, codexBin, nil, catalog)
+}
+
 // startChatBackend builds the structured chat backend for `adapter` and
 // installs it on the session (s.chat / s.chatRespawn / generators). Used
 // at session create AND by switchToAdapter — the chat channel must follow
@@ -529,33 +559,32 @@ func (s *Session) startChatBackend(
 	continueLatestChat bool,
 	resumeCodexThreadID string,
 ) {
+	// AI niceties (titles + quick replies) provider, selected per session:
+	// prefer the session's own agent's provider (anthropicGen for claude,
+	// codexGen for codex), fall back to the other if its creds are missing,
+	// and nil — no generators — when neither agent has creds (the graceful
+	// skip that matches today's claude-no-creds behavior). Routing here is
+	// what gives CODEX sessions AI titles + quick replies for the first time
+	// (task WS-0.1); the claude path's request shape is unchanged.
+	aiGen := s.selectAIGen(adapter.Name)
 	switch structuredChatBackend(adapter.ChatMode) {
 	case "claude":
 		// claude headless in stream-json. Publishes clean chat events via
 		// the same path the scraper used — no PTY scraping (scraper stays
 		// nil); the PTY (a shell) drains to the Terminal tab.
 		// AI quick replies (task #233): on each completed assistant turn,
-		// a best-effort one-shot `claude -p` (cheap model) suggests up to
-		// 4 tap-able user replies, emitted as a `view:"quick_replies"`
-		// view_event. nil when the feature is off or there's no ephemeral
-		// HOME to copy creds from — the stream reader then no-ops turn-end.
-		gen := newQuickReplyGenerator(
-			s.ID,
-			adapter.Command[0],
-			s.agentHomeDir,
-			s.workspaceDir,
-			s.commandEnv(nil),
-			s.PublishText,
-		)
+		// a best-effort one-shot completion suggests up to 4 tap-able user
+		// replies, emitted as a `view:"quick_replies"` view_event. nil when
+		// the feature is off or no provider has creds — turn-end no-ops.
+		gen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText)
 		// AI session titles (task: ai-session-titles): after the first
 		// meaningful exchange the generator mints a short human title from
 		// the conversation and emits a `view:"session_title"` view_event;
 		// the apps slot it BELOW a manual rename in the display name. nil
-		// when titling is off / no ephemeral HOME — turn-end then no-ops.
-		s.titleGen = newTitleGenerator(
+		// when titling is off / no provider — turn-end then no-ops.
+		s.titleGen = newTitleGeneratorWithProvider(
 			s.ID,
-			adapter.Command[0],
-			s.agentHomeDir,
+			aiGen,
 			s.firstPrompt,
 			s.applyAITitle,
 		)
@@ -645,6 +674,26 @@ func (s *Session) startChatBackend(
 			// codex-exec: per-turn exec/resume, constructed lazily (spawns on
 			// first Send).
 			backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
+		}
+		// AI niceties for codex (task WS-0.1): codex sessions now get the same
+		// AI titles + quick replies claude has always had. The generators are
+		// built from the per-session provider (aiGen) and driven by a turn-end
+		// hook on the codex backend — the codex twin of the claude path's
+		// startChatProcess(gen, titleGen). nil aiGen → nil generators → the
+		// hook no-ops, so a codex session with no creds behaves as before.
+		qrGen := newQuickReplyGeneratorWithProvider(s.ID, aiGen, s.PublishText)
+		s.titleGen = newTitleGeneratorWithProvider(s.ID, aiGen, s.firstPrompt, s.applyAITitle)
+		if qrGen != nil || s.titleGen != nil {
+			onTurn := func(lastAssistant, msgID string) {
+				qrGen.kickoff(lastAssistant, msgID)
+				s.titleGen.onTurnEnd(lastAssistant)
+			}
+			switch b := backend.(type) {
+			case *codexAppServerProcess:
+				b.setTurnHook(onTurn)
+			case *codexChatProcess:
+				b.setTurnHook(onTurn)
+			}
 		}
 		s.mu.Lock()
 		s.chat = backend
@@ -1405,6 +1454,18 @@ type Manager struct {
 // SetCredentialStore wires the per-identity OAuth credential store into
 // the manager. Called from cmd/conduit-broker once the store is
 // constructed. nil clears it (mostly useful for tests).
+// codexBinary returns the registered codex adapter's CLI binary path, or ""
+// when codex isn't registered. Used as the fallback AI-niceties provider
+// binary for a claude session that lacks anthropic creds (and to detect the
+// codex binary at all). Resolves on every call so it tracks registry edits.
+func (m *Manager) codexBinary() string {
+	adapter, err := m.registry.Get("codex")
+	if err != nil || len(adapter.Command) == 0 {
+		return ""
+	}
+	return adapter.Command[0]
+}
+
 func (m *Manager) SetCredentialStore(s *credentials.Store) {
 	m.mu.Lock()
 	m.credStore = s
@@ -1702,6 +1763,8 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		credStore:     m.credStore,
 		override:      opts.Override,
 		previewPort:   previewPort,
+		modelCatalog:  m.ModelCatalog,
+		codexBinary:   m.codexBinary,
 	})
 	if err != nil {
 		return nil, false, err
@@ -1833,6 +1896,16 @@ type sessionOptions struct {
 	// resumeCodexThreadID seeds the codex chat backend's thread id on
 	// recovery so its first post-restart turn runs `exec resume <id>`.
 	resumeCodexThreadID string
+	// modelCatalog returns the Manager's discovered model catalog snapshot,
+	// used to pick the smallest codex model for the AI-niceties codexGen.
+	// Manager fills this in from its own ModelCatalog; tests typically leave
+	// it nil (codexGen then omits --model).
+	modelCatalog func() map[string][]ModelInfo
+	// codexBinary returns the codex CLI binary path (registry-resolved),
+	// needed so a claude session can FALL BACK to the codex AI-niceties
+	// provider when it has no anthropic creds (and vice-versa). "" when codex
+	// isn't a registered adapter. Manager fills this in; tests leave it nil.
+	codexBinary func() string
 }
 
 type sessionMetadata struct {

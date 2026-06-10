@@ -42,6 +42,11 @@ type codexChatProcess struct {
 	// broker restart resumes the SAME thread instead of starting an
 	// amnesiac one (the codex twin of claude's --resume fix).
 	onThread func(string)
+	// onTurn fires at each turn's end with the turn's FINAL assistant text
+	// and the id (ts) the apps tied that message to — driving the AI
+	// niceties (titles + quick replies), the codex twin of claudechat.go's
+	// turn-end hook. nil when no AI provider is selected for the session.
+	onTurn func(lastAssistant, msgID string)
 
 	mu       sync.Mutex
 	threadID string
@@ -58,6 +63,12 @@ func newCodexChatProcess(binary, dir string, env, extra []string, publish func([
 		publish:        publish, onUsage: onUsage,
 		onThread: onThread, threadID: seedThreadID,
 	}
+}
+
+// setTurnHook installs the AI-niceties turn-end callback (titles + quick
+// replies). Called once at wiring time, before any Send.
+func (c *codexChatProcess) setTurnHook(onTurn func(lastAssistant, msgID string)) {
+	c.onTurn = onTurn
 }
 
 // codexTurnArgv builds the argv for one turn. The first turn (empty
@@ -126,6 +137,10 @@ func (c *codexChatProcess) runTurn(argv []string) {
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	published := false
+	// Track the turn's final assistant prose + its event ts so the turn-end
+	// AI-niceties hook (titles + quick replies) sees the same message the
+	// apps render (mirrors claudechat.go's lastAssistantText/TS).
+	var lastAssistant, lastTS string
 	for sc.Scan() {
 		evs, tid, ok := parseCodexStreamLine(sc.Bytes())
 		if tid != "" {
@@ -163,13 +178,17 @@ func (c *codexChatProcess) runTurn(argv []string) {
 			default:
 				continue
 			}
+			ts := claudeChatNow().UTC().Format(time.RFC3339Nano)
+			if role == "assistant" {
+				lastAssistant, lastTS = content, ts
+			}
 			payload, perr := json.Marshal(map[string]any{
 				"type": "view_event",
 				"view": "chat",
 				"event": map[string]any{
 					"role":    role,
 					"content": content,
-					"ts":      claudeChatNow().UTC().Format(time.RFC3339Nano),
+					"ts":      ts,
 					"files":   []any{},
 				},
 			})
@@ -186,6 +205,14 @@ func (c *codexChatProcess) runTurn(argv []string) {
 		c.running = nil
 	}
 	c.mu.Unlock()
+
+	// Turn complete: drive the AI niceties (titles + quick replies) off the
+	// turn's final assistant message — the codex twin of claudechat.go's
+	// turn-end hook. Skipped on an intentional close (the user ended the
+	// session, not a real turn). nil-safe.
+	if c.onTurn != nil && !intentional {
+		c.onTurn(lastAssistant, lastTS)
+	}
 
 	// If the turn ended without emitting any assistant message (e.g. an
 	// auth failure or codex crash), the client's typing indicator would

@@ -61,8 +61,17 @@ type httpDoFunc func(*http.Request) (*http.Response, error)
 // session's OAuth access token and returns the assistant's concatenated
 // text. It never spawns a process and never writes the token, so it can't
 // race the live session's credential refresh. `prompt` is the single
-// user-turn content; `maxTokens` caps the model's output.
+// user-turn content; `maxTokens` caps the model's output. The system prompt
+// is pinned to the Claude Code identity the OAuth token is scoped to.
 func anthropicMessages(ctx context.Context, do httpDoFunc, agentHomeDir, prompt string, maxTokens int) (string, error) {
+	return anthropicMessagesSystem(ctx, do, agentHomeDir, claudeCodeSystemPrompt, prompt, maxTokens)
+}
+
+// anthropicMessagesSystem is anthropicMessages with an explicit system
+// prompt. anthropicMessages (and today's claude title/quick-reply callers)
+// delegate here with the pinned claudeCodeSystemPrompt, so the produced
+// request is byte-identical to before.
+func anthropicMessagesSystem(ctx context.Context, do httpDoFunc, agentHomeDir, system, prompt string, maxTokens int) (string, error) {
 	token, err := readClaudeOAuthToken(agentHomeDir)
 	if err != nil {
 		return "", err
@@ -71,7 +80,7 @@ func anthropicMessages(ctx context.Context, do httpDoFunc, agentHomeDir, prompt 
 	body, err := json.Marshal(map[string]any{
 		"model":      aiGenModel,
 		"max_tokens": maxTokens,
-		"system":     claudeCodeSystemPrompt,
+		"system":     system,
 		"messages": []map[string]any{
 			{"role": "user", "content": prompt},
 		},
@@ -143,6 +152,92 @@ func readClaudeOAuthToken(agentHomeDir string) (string, error) {
 		}
 	}
 	return tok, nil
+}
+
+// aiGenProvider is the per-session backend for the best-effort AI niceties
+// (session titles + quick replies). It abstracts WHICH model service runs
+// the tiny summarize/suggest completions so codex sessions get the same
+// niceties claude sessions have always had. Implementations are best-effort:
+// any error / timeout / malformed output is the caller's cue to emit nothing.
+//
+//	Complete runs one completion of `user` (with `system` as the system
+//	prompt) and returns the model's text, capped at `maxTokens` output.
+type aiGenProvider interface {
+	Complete(ctx context.Context, system, user string, maxTokens int) (string, error)
+}
+
+// anthropicGen is the provider backed by the direct Anthropic Messages API
+// path (anthropicMessages), authorized by the session's Claude Code OAuth
+// token. For claude sessions this is the unchanged behavior: anthropicGen's
+// request is byte-identical to today's direct anthropicMessages call.
+type anthropicGen struct {
+	agentHomeDir string // session ephemeral $HOME (source of the OAuth token)
+	httpDo       httpDoFunc
+}
+
+func (g *anthropicGen) Complete(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	return anthropicMessagesSystem(ctx, g.httpDo, g.agentHomeDir, system, user, maxTokens)
+}
+
+// anthropicCredsPresent reports whether the session's ephemeral HOME carries
+// claude OAuth credentials. Used for provider SELECTION only (presence, not
+// freshness): an expired-but-present token still selects anthropicGen, which
+// then skips cleanly at completion time — matching the pre-existing claude
+// behavior where the generator is attached and only no-ops at invoke.
+func anthropicCredsPresent(agentHomeDir string) bool {
+	if agentHomeDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(agentHomeDir, ".claude", ".credentials.json"))
+	return err == nil
+}
+
+// codexCredsPresent reports whether the session's ephemeral HOME carries
+// codex OAuth credentials (.codex/auth.json — the same file codex login
+// writes and accountusage reads).
+func codexCredsPresent(agentHomeDir string) bool {
+	if agentHomeDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(agentHomeDir, ".codex", "auth.json"))
+	return err == nil
+}
+
+// selectAIGenProvider chooses the AI-niceties backend for a session. It
+// prefers the session's OWN agent's provider; if that provider's creds are
+// missing it falls back to the other; if neither agent has creds it returns
+// nil so the caller attaches no generators (graceful skip — same outcome as
+// the pre-existing claude path when no creds were materialized).
+//
+// `catalog` is the discovered model catalog (Manager.ModelCatalog snapshot),
+// nil when discovery is off — codexGen then omits --model and uses codex's
+// default. claude always routes through anthropicGen so its behavior stays
+// byte-identical.
+func selectAIGenProvider(assistant, agentHomeDir, codexBinary string, httpDo httpDoFunc, catalog map[string][]ModelInfo) aiGenProvider {
+	if httpDo == nil {
+		httpDo = http.DefaultClient.Do
+	}
+	anth := func() aiGenProvider {
+		if !anthropicCredsPresent(agentHomeDir) {
+			return nil
+		}
+		return &anthropicGen{agentHomeDir: agentHomeDir, httpDo: httpDo}
+	}
+	cdx := func() aiGenProvider {
+		if codexBinary == "" || !codexCredsPresent(agentHomeDir) {
+			return nil
+		}
+		return &codexGen{binary: codexBinary, model: smallestCodexModel(catalog)}
+	}
+	// Order the two by the session's own agent so we prefer it.
+	primary, secondary := anth, cdx
+	if assistant == "codex" {
+		primary, secondary = cdx, anth
+	}
+	if p := primary(); p != nil {
+		return p
+	}
+	return secondary()
 }
 
 // extractMessageText pulls the assistant text out of a Messages API

@@ -89,8 +89,14 @@ type titleGenerator struct {
 	// on a successful, non-empty generation.
 	setTitle func(string)
 	// httpDo issues the Messages API request. Defaults to a real HTTP
-	// client; tests inject a stub so CI never touches the network.
+	// client; tests inject a stub so CI never touches the network. Used only
+	// by the direct-Anthropic fallback when gen is nil.
 	httpDo httpDoFunc
+	// gen, when set, is the provider that runs the completion (anthropicGen
+	// for claude, codexGen for codex). nil = the legacy direct-Anthropic
+	// path via httpDo/agentHomeDir, kept so the existing unit tests (which
+	// construct the generator literal without a provider) stay byte-identical.
+	gen aiGenProvider
 
 	mu          sync.Mutex
 	gens        int // generations performed so far (cap: maxTitleGenerations)
@@ -114,6 +120,22 @@ func newTitleGenerator(sessionID, binary, agentHomeDir string, firstPrompt func(
 		firstPrompt:  firstPrompt,
 		setTitle:     setTitle,
 		httpDo:       http.DefaultClient.Do,
+	}
+}
+
+// newTitleGeneratorWithProvider builds a title generator routed through an
+// explicit aiGenProvider (anthropicGen / codexGen), used by both backend
+// branches of startChatBackend. Returns nil when titling is off or the
+// provider/closures are missing — keeping the call site branch-free.
+func newTitleGeneratorWithProvider(sessionID string, gen aiGenProvider, firstPrompt func() string, setTitle func(string)) *titleGenerator {
+	if !titlesEnabled() || gen == nil || firstPrompt == nil || setTitle == nil {
+		return nil
+	}
+	return &titleGenerator{
+		sessionID:   sessionID,
+		gen:         gen,
+		firstPrompt: firstPrompt,
+		setTitle:    setTitle,
 	}
 }
 
@@ -189,7 +211,16 @@ func (g *titleGenerator) generate(lastAssistant string) {
 // invoke makes a direct Anthropic Messages API call and returns the
 // cleaned title (or "" when the model produced nothing usable).
 func (g *titleGenerator) invoke(ctx context.Context, prompt, lastAssistant string) (string, error) {
-	text, err := anthropicMessages(ctx, g.httpDo, g.agentHomeDir, titlePrompt(prompt, lastAssistant), titleMaxTokens)
+	user := titlePrompt(prompt, lastAssistant)
+	var text string
+	var err error
+	if g.gen != nil {
+		text, err = g.gen.Complete(ctx, claudeCodeSystemPrompt, user, titleMaxTokens)
+	} else {
+		// Legacy direct-Anthropic path (no provider injected, e.g. unit
+		// tests): byte-identical to before.
+		text, err = anthropicMessages(ctx, g.httpDo, g.agentHomeDir, user, titleMaxTokens)
+	}
 	if err != nil {
 		return "", err
 	}
