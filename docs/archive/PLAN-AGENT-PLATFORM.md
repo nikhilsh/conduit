@@ -1,5 +1,7 @@
 # PLAN: Agent Platform — protocol-keyed backends, manifest-driven adapters, descriptor-driven apps
 
+> ARCHIVED 2026-06-10 — shipped; see docs/ROADMAP.md.
+
 Status: approved plan, 2026-06-10. Owner: Nikhil. Implementation: Claude subagents
 (per-workstream model recommendation in each spec — `sonnet` = mechanical/well-mapped,
 `opus` = protocol/design work).
@@ -10,7 +12,7 @@ Make onboarding a NEW agent (gemini-cli, opencode, pi, …) cost **one TOML mani
 at most one Go protocol package**, instead of edits to ~13 hardcoded `switch` sites in
 the broker and ~82 name-switches in the apps. Codex becomes a first-class citizen
 (today it lacks AI titles, quick replies, and AskUserQuestion). Push notifications are
-specced separately in `docs/PLAN-PUSH.md`.
+specced separately in `docs/archive/PLAN-PUSH.md`.
 
 ## Principles
 

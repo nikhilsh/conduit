@@ -1,5 +1,7 @@
 # conduit finish plan
 
+> ARCHIVED 2026-06-10 — superseded; see docs/ROADMAP.md.
+
 Prioritised work remaining after the 2026-05-29 session (PRs #261–#264 in
 review). Phases are sequenced by verifiability: CI-only work first, then
 device-test batches, then feature completions, then parked futures.
