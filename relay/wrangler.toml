@@ -1,6 +1,9 @@
 name = "conduit-push"
 main = "src/index.ts"
 compatibility_date = "2026-06-10"
+routes = [
+  { pattern = "push.conduit.nikhil.sh", custom_domain = true }
+]
 
 # Rate-limit counters + per-install auth hashes. Create the namespace with
 #   wrangler kv namespace create RATE_LIMIT
@@ -8,7 +11,7 @@ compatibility_date = "2026-06-10"
 # placeholder so the repo never carries a live namespace binding.
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "a0ea236a6ca64f86ad67679db5337fbe"
 
 # Secrets are NEVER stored in this file — set them with `wrangler secret put`:
 #   APNS_KEY            (.p8 PEM contents, multi-line)
@@ -17,3 +20,4 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 #   APNS_TOPIC          (bundle id, e.g. sh.nikhil.conduit)
 #   FCM_SERVICE_ACCOUNT (Firebase service-account JSON, full file contents)
 # See relay/README.md for the full provisioning runbook.
+
