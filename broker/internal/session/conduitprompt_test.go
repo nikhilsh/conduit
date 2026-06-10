@@ -1,0 +1,151 @@
+package session
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+// TestConduitAwarenessEnabled pins the kill-switch semantics: default ON,
+// falsey values OFF, anything else ON.
+func TestConduitAwarenessEnabled(t *testing.T) {
+	cases := []struct {
+		val  string
+		set  bool
+		want bool
+	}{
+		{set: false, want: true}, // unset → default ON
+		{val: "", set: true, want: true},
+		{val: "1", set: true, want: true},
+		{val: "on", set: true, want: true},
+		{val: "true", set: true, want: true},
+		{val: "anything", set: true, want: true},
+		{val: "0", set: true, want: false},
+		{val: "off", set: true, want: false},
+		{val: "OFF", set: true, want: false},
+		{val: "false", set: true, want: false},
+		{val: "no", set: true, want: false},
+		{val: "disabled", set: true, want: false},
+		{val: " off ", set: true, want: false}, // trimmed
+	}
+	for _, c := range cases {
+		if c.set {
+			t.Setenv(conduitAwarenessEnv, c.val)
+		} else {
+			// t.Setenv can't unset; rely on the env being unset in CI. Guard so
+			// a leaked value from the runner doesn't flake the default case.
+			if _, ok := os.LookupEnv(conduitAwarenessEnv); ok {
+				continue
+			}
+		}
+		if got := conduitAwarenessEnabled(); got != c.want {
+			t.Errorf("conduitAwarenessEnabled(val=%q set=%v) = %v, want %v", c.val, c.set, got, c.want)
+		}
+	}
+}
+
+// TestConduitAwarenessPromptContent asserts the prompt names every affordance
+// and stays ASCII-only (it is passed verbatim on claude's command line).
+func TestConduitAwarenessPromptContent(t *testing.T) {
+	p := conduitAwarenessPrompt()
+	for _, want := range []string{
+		"Conduit",
+		"$PORT",
+		"$CONDUIT_PREVIEW_PORT",
+		"uploads/<session>/",
+		"AskUserQuestion",
+		".conduit/memory/",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q\nprompt: %s", want, p)
+		}
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] > 127 {
+			t.Fatalf("prompt has non-ASCII byte at %d (curly quote / em-dash?): %q", i, p)
+		}
+	}
+}
+
+// TestClaudeAppendSystemPrompt pins the on/off behavior of the merged
+// --append-system-prompt value.
+func TestClaudeAppendSystemPrompt(t *testing.T) {
+	t.Run("off is legacy byte-identical", func(t *testing.T) {
+		t.Setenv(conduitAwarenessEnv, "off")
+		if got := claudeAppendSystemPrompt(); got != askUserQuestionNudge {
+			t.Fatalf("off value = %q, want bare askUserQuestionNudge", got)
+		}
+	})
+	t.Run("on merges both, nudge first", func(t *testing.T) {
+		t.Setenv(conduitAwarenessEnv, "on")
+		got := claudeAppendSystemPrompt()
+		if !strings.HasPrefix(got, askUserQuestionNudge) {
+			t.Fatalf("on value should start with the nudge; got %q", got)
+		}
+		if !strings.Contains(got, conduitAwarenessPrompt()) {
+			t.Fatalf("on value should contain the awareness prompt; got %q", got)
+		}
+	})
+}
+
+// TestUpsertConduitAwarenessSection pins the AGENTS.md upsert: insert into
+// empty/existing, replace-in-place (idempotent), and append below user content.
+func TestUpsertConduitAwarenessSection(t *testing.T) {
+	section := conduitAwarenessAgentsMDSection()
+
+	t.Run("empty yields just the section", func(t *testing.T) {
+		got := upsertConduitAwarenessSection("")
+		if got != section+"\n" {
+			t.Fatalf("empty upsert = %q", got)
+		}
+	})
+
+	t.Run("appends below existing content", func(t *testing.T) {
+		existing := "# My Project\n\nBuild with make.\n"
+		got := upsertConduitAwarenessSection(existing)
+		if !strings.HasPrefix(got, "# My Project") {
+			t.Fatalf("user content not preserved: %q", got)
+		}
+		if !strings.Contains(got, agentsMDSectionBegin) || !strings.Contains(got, agentsMDSectionEnd) {
+			t.Fatalf("section markers missing: %q", got)
+		}
+	})
+
+	t.Run("idempotent: replace-in-place keeps one copy", func(t *testing.T) {
+		once := upsertConduitAwarenessSection("# P\n\nhi\n")
+		twice := upsertConduitAwarenessSection(once)
+		if once != twice {
+			t.Fatalf("not idempotent:\nonce:  %q\ntwice: %q", once, twice)
+		}
+		if strings.Count(twice, agentsMDSectionBegin) != 1 {
+			t.Fatalf("expected exactly one managed block, got %d", strings.Count(twice, agentsMDSectionBegin))
+		}
+	})
+
+	t.Run("replaces stale block content in place", func(t *testing.T) {
+		stale := "# P\n\n" + agentsMDSectionBegin + "\n\nOLD TEXT\n\n" + agentsMDSectionEnd + "\n\ntrailer\n"
+		got := upsertConduitAwarenessSection(stale)
+		if strings.Contains(got, "OLD TEXT") {
+			t.Fatalf("stale content not replaced: %q", got)
+		}
+		if !strings.Contains(got, "trailer") {
+			t.Fatalf("trailing user content lost: %q", got)
+		}
+		if strings.Count(got, agentsMDSectionBegin) != 1 {
+			t.Fatalf("expected one block after replace, got %d", strings.Count(got, agentsMDSectionBegin))
+		}
+	})
+}
+
+func TestIsCodexProtocol(t *testing.T) {
+	for _, p := range []string{"codex-app-server", "codex-exec"} {
+		if !isCodexProtocol(p) {
+			t.Errorf("isCodexProtocol(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"", "stream-json", "opencode-server", "codex"} {
+		if isCodexProtocol(p) {
+			t.Errorf("isCodexProtocol(%q) = true, want false", p)
+		}
+	}
+}

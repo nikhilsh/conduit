@@ -143,7 +143,11 @@ extension ConduitUI {
                         agentKind: kind,
                         agentTint: neon.agentTint(forAgent: kind),
                         initialPrompt: initialPrompt,
-                        onCreate: { cwd, model, effort, permissionMode in
+                        onCreate: { cwd, model, effort, permissionMode, seedPrompt in
+                            // Part B: a "Set up agent harness" tap passes the
+                            // bootstrap prompt as seedPrompt; otherwise fall
+                            // back to the sheet's initialPrompt (voice transcript).
+                            let seed = seedPrompt ?? initialPrompt
                             if let target = resolvedServer, target.endpoint != store.endpoint {
                                 // Session targeted at a different box:
                                 // switch endpoint → connect → create.
@@ -154,7 +158,7 @@ extension ConduitUI {
                                     reasoningEffort: effort,
                                     model: model,
                                     permissionMode: permissionMode,
-                                    initialPrompt: initialPrompt
+                                    initialPrompt: seed
                                 )
                             } else {
                                 store.createSession(
@@ -163,7 +167,7 @@ extension ConduitUI {
                                     reasoningEffort: effort,
                                     model: model,
                                     permissionMode: permissionMode,
-                                    initialPrompt: initialPrompt
+                                    initialPrompt: seed
                                 )
                             }
                             // Defer the dismiss one runloop tick. createSession
@@ -509,9 +513,11 @@ extension ConduitUI {
         /// Called with the absolute path to cd into (or nil to start with no
         /// working directory), the selected model alias (nil = inherit the
         /// agent's default model), the chosen reasoning effort (nil = the
-        /// agent's default effort), and the agent mode (nil = Auto / full-auto
-        /// default; "plan" = read-only planning).
-        let onCreate: (String?, String?, String?, String?) -> Void
+        /// agent's default effort), the agent mode (nil = Auto / full-auto
+        /// default; "plan" = read-only planning), and an optional seed prompt
+        /// override (Part B: the "Set up agent harness" bootstrap prompt; nil
+        /// falls back to the sheet's own initialPrompt, e.g. a voice transcript).
+        let onCreate: (String?, String?, String?, String?, String?) -> Void
 
         @Environment(SessionStore.self) private var store
         @Environment(FeatureFlags.self) private var flags
@@ -524,6 +530,13 @@ extension ConduitUI {
         @State private var loadError: String?
         /// Path currently being browsed. nil = the harness default (home).
         @State private var currentPath: String?
+        /// Part B: whether the currently-browsed dir already has CLAUDE.md /
+        /// AGENTS.md. nil = unknown / not yet checked (default: don't nag).
+        /// Refetched alongside each listing in load().
+        @State private var harnessStatus: RemoteHarnessStatus?
+        /// User dismissed the "Set up agent harness" chip for this session —
+        /// keep it hidden for the rest of the sheet (honest, non-nagging).
+        @State private var harnessChipDismissed = false
         /// Selected model option. `ForkOptions.inheritModel` (empty string)
         /// means "no override — use the agent's default model", which is the
         /// default and keeps the start path identical to before.
@@ -541,7 +554,7 @@ extension ConduitUI {
             agentKind: String,
             agentTint: Color? = nil,
             initialPrompt: String? = nil,
-            onCreate: @escaping (String?, String?, String?, String?) -> Void
+            onCreate: @escaping (String?, String?, String?, String?, String?) -> Void
         ) {
             self.agentKind = agentKind
             self.agentTint = agentTint
@@ -834,7 +847,7 @@ extension ConduitUI {
                 VStack(spacing: 6) {
                     ForEach(store.recentDirectories, id: \.self) { path in
                         Button {
-                            onCreate(path, selectedModel, selectedEffort, selectedPermissionMode)
+                            onCreate(path, selectedModel, selectedEffort, selectedPermissionMode, nil)
                         } label: {
                             ConduitUI.ListRow(
                                 icon: "clock.arrow.circlepath",
@@ -945,11 +958,14 @@ extension ConduitUI {
 
         private var bottomBar: some View {
             VStack(spacing: 10) {
+                if showHarnessChip {
+                    harnessChip
+                }
                 if flags.newSessionLaunchLine {
                     launchLine
                 }
                 Button {
-                    onCreate(listing?.path, selectedModel, selectedEffort, selectedPermissionMode)
+                    onCreate(listing?.path, selectedModel, selectedEffort, selectedPermissionMode, nil)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
@@ -970,7 +986,7 @@ extension ConduitUI {
                 .opacity(listing == nil ? 0.5 : 1.0)
 
                 Button {
-                    onCreate(nil, selectedModel, selectedEffort, selectedPermissionMode)
+                    onCreate(nil, selectedModel, selectedEffort, selectedPermissionMode, nil)
                 } label: {
                     Text("Start without a folder")
                         .font(neon.sans(13).weight(.medium))
@@ -1028,6 +1044,58 @@ extension ConduitUI {
             .padding(.horizontal, 2)
         }
 
+        /// Part B: a tasteful, dismissible suggestion shown only when the
+        /// chosen folder has neither CLAUDE.md nor AGENTS.md. Tapping seeds the
+        /// session with the curated bootstrap prompt (audit repo → write
+        /// CLAUDE.md + AGENTS.md with verified gates, ask before committing)
+        /// and starts cd'd into the folder. An x dismisses it for the session.
+        private var harnessChip: some View {
+            HStack(spacing: 10) {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Set up agent harness")
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                    Text("No CLAUDE.md or AGENTS.md here. Have the agent audit the repo and write them.")
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    harnessChipDismissed = true
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(neon.textFaint)
+                        .padding(6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss harness suggestion")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(tint.opacity(0.10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onCreate(
+                    listing?.path, selectedModel, selectedEffort,
+                    selectedPermissionMode, SessionStore.harnessBootstrapPrompt)
+            }
+            .accessibilityIdentifier("ConduitDirectoryPicker.harnessChip")
+        }
+
         // MARK: Helpers
 
         private var canGoUp: Bool {
@@ -1052,11 +1120,24 @@ extension ConduitUI {
             isLoading = true
             loadError = nil
             do {
-                listing = try await store.listDirectories(path: currentPath)
+                let result = try await store.listDirectories(path: currentPath)
+                listing = result
+                // Part B: refresh the harness check for the resolved path the
+                // broker actually listed (currentPath may be nil = home).
+                // Best-effort — nil leaves the chip hidden.
+                harnessStatus = await store.harnessStatus(path: result.path)
             } catch {
                 loadError = "Couldn't list this folder."
             }
             isLoading = false
+        }
+
+        /// Part B: show the "Set up agent harness" chip only when the broker
+        /// confirmed BOTH CLAUDE.md and AGENTS.md are absent, and the user
+        /// hasn't dismissed it for this session.
+        private var showHarnessChip: Bool {
+            guard let status = harnessStatus, !status.has_harness else { return false }
+            return !harnessChipDismissed && listing != nil
         }
     }
 }

@@ -92,6 +92,49 @@ func (s *Server) serveFSList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// fsHarnessStatusResponse reports whether a directory already carries the two
+// agent-harness files the "Set up agent harness" chip keys off. The chip shows
+// only when BOTH are absent (has_harness=false); see Part B of the harness
+// bootstrap feature.
+type fsHarnessStatusResponse struct {
+	Path        string `json:"path"`
+	HasClaudeMD bool   `json:"has_claude_md"`
+	HasAgentsMD bool   `json:"has_agents_md"`
+	// HasHarness is true when EITHER file exists — i.e. the project already
+	// has some agent harness, so the chip should NOT nag. The app keys the
+	// suggestion off !has_harness.
+	HasHarness bool `json:"has_harness"`
+}
+
+// serveFSHarnessStatus reports the presence of CLAUDE.md / AGENTS.md at a path.
+// fs/list intentionally returns directories only, so the app cannot detect
+// these files from a listing — this is the lightweight file check Part B needs.
+func (s *Server) serveFSHarnessStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	target := normalizeFSPath(r.URL.Query().Get("path"))
+	info, err := os.Stat(target)
+	if err != nil || !info.IsDir() {
+		writeAPIError(w, http.StatusBadRequest, "invalid_path", "path must be an existing directory")
+		return
+	}
+	hasClaude := fileExists(filepath.Join(target, "CLAUDE.md"))
+	hasAgents := fileExists(filepath.Join(target, "AGENTS.md"))
+	writeJSON(w, http.StatusOK, fsHarnessStatusResponse{
+		Path:        target,
+		HasClaudeMD: hasClaude,
+		HasAgentsMD: hasAgents,
+		HasHarness:  hasClaude || hasAgents,
+	})
+}
+
+// fileExists reports whether path names an existing regular (non-dir) file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 func normalizeFSPath(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" || trimmed == "~" {
