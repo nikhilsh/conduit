@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Conduit — Firebase / FCM push setup (Nikhil's runbook)</title>
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #0e1014;
+    --panel: #161a21;
+    --panel-2: #1c222b;
+    --ink: #e7ebf0;
+    --ink-dim: #9aa4b2;
+    --line: #2a323d;
+    --accent: #6ea8fe;
+    --accent-2: #7ee0b8;
+    --warn: #ffcf6b;
+    --code-bg: #0a0c10;
+    --done: #2f7d52;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f8fa; --panel: #ffffff; --panel-2: #f0f2f5; --ink: #1a1f26;
+      --ink-dim: #5b6573; --line: #dfe3e8; --accent: #2563eb; --accent-2: #0f9d6b;
+      --warn: #9a6b00; --code-bg: #f0f2f5; --done: #2f7d52;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 0 0 6rem;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 2rem 1.25rem; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 1.25rem; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.7rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.25rem; margin: 2.2rem 0 .6rem; padding-top: .4rem; }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .4rem; }
+  .sub { color: var(--ink-dim); margin: 0; }
+  a { color: var(--accent); }
+  code, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+  p code, li code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.1rem; margin: 1rem 0; }
+  .panel.tight { padding: .8rem 1rem; }
+  .note { border-left: 3px solid var(--accent); }
+  .warn { border-left: 3px solid var(--warn); }
+  .ok { border-left: 3px solid var(--accent-2); }
+  .agent { border-left: 3px solid var(--accent-2); background: var(--panel-2); }
+  .pre-wrap { position: relative; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: .9rem 1rem; overflow-x: auto; margin: .5rem 0; font-size: .85rem; line-height: 1.5;
+  }
+  .copybtn {
+    position: absolute; top: .5rem; right: .5rem; background: var(--panel-2);
+    color: var(--ink); border: 1px solid var(--line); border-radius: 6px;
+    padding: .25rem .55rem; font-size: .72rem; cursor: pointer; opacity: .85;
+  }
+  .copybtn:hover { opacity: 1; border-color: var(--accent); }
+  .copybtn.copied { color: var(--accent-2); border-color: var(--accent-2); }
+  ol.steps { counter-reset: step; list-style: none; padding-left: 0; }
+  ol.steps > li {
+    counter-increment: step; position: relative; padding: .15rem 0 .15rem 2.4rem; margin: 1.4rem 0;
+  }
+  ol.steps > li::before {
+    content: counter(step); position: absolute; left: 0; top: .05rem;
+    width: 1.7rem; height: 1.7rem; border-radius: 50%; background: var(--accent);
+    color: #0a0c10; font-weight: 700; font-size: .85rem; display: grid; place-items: center;
+  }
+  .checklist { list-style: none; padding-left: 0; margin: .5rem 0; }
+  .checklist li { padding: .35rem 0; display: flex; gap: .6rem; align-items: flex-start; }
+  .checklist input { margin-top: .35rem; width: 1.05rem; height: 1.05rem; accent-color: var(--done); flex: 0 0 auto; }
+  .checklist label { cursor: pointer; }
+  .checklist input:checked + label { color: var(--ink-dim); text-decoration: line-through; }
+  .pill { display: inline-block; background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: .1rem .6rem; font-size: .75rem; color: var(--ink-dim); }
+  .kv { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .kv td, .kv th { border: 1px solid var(--line); padding: .5rem .65rem; text-align: left; vertical-align: top; }
+  .kv th { background: var(--panel-2); }
+  details { border: 1px solid var(--line); border-radius: 8px; padding: .4rem .9rem; margin: .6rem 0; background: var(--panel); }
+  details summary { cursor: pointer; font-weight: 600; padding: .3rem 0; }
+  .toc { font-size: .92rem; }
+  .toc a { display: block; padding: .15rem 0; color: var(--ink-dim); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+  .progress-bar { height: 6px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin: .6rem 0 0; }
+  .progress-fill { height: 100%; width: 0; background: var(--accent-2); transition: width .25s ease; }
+  .muted { color: var(--ink-dim); }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2rem 0; }
+  .resetbtn { background: none; border: 1px solid var(--line); color: var(--ink-dim); border-radius: 6px; padding: .2rem .55rem; font-size: .72rem; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Conduit — Android push via Firebase / FCM</h1>
+  <p class="sub">A read-later runbook of <strong>the human-only steps</strong>. Everything here is yours to do once; the agent picks up the rest.</p>
+  <div class="panel tight note" style="margin-top:1rem">
+    <strong>What you'll need:</strong> a Google account, ~15 minutes, and the ability to run two terminal commands on this box (the relay secret + the gh secret).
+    <span class="muted">No credit card. No Play Console. Cloudflare Workers free tier covers the relay.</span>
+  </div>
+  <div class="progress-bar"><div class="progress-fill" id="pf"></div></div>
+  <p class="muted" style="font-size:.85rem;margin:.4rem 0 0">
+    <span id="progress-text">0 / 0 done</span> · progress is saved in this browser (localStorage) — close the tab and come back anytime.
+    <button class="resetbtn" id="reset">reset checklist</button>
+  </p>
+</header>
+
+<div class="panel toc">
+  <strong>Contents</strong>
+  <a href="#why">0 · Why Firebase at all? (read this first)</a>
+  <a href="#part1">Part 1 · Firebase project + Android app → google-services.json</a>
+  <a href="#part2">Part 2 · Minimal service account + JSON key (the relay secret)</a>
+  <a href="#part3">Part 3 · Land the credentials on this box</a>
+  <a href="#agent">Part 4 · Hand off to the agent (what we automate)</a>
+  <a href="#play">Part 5 · Google Play specifics (only when you ship there)</a>
+  <a href="#faq">FAQ — what's secret, what isn't, and the UnifiedPush alternative</a>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="why">0 · Why Firebase at all?</h2>
+<div class="panel">
+<p>Conduit's push design (<code>docs/PLAN-PUSH.md</code>) is <strong>self-hosted-first</strong>. The primary Android path is <strong>UnifiedPush</strong> — your own ntfy/Sunup distributor on the same VPS as the broker, with <em>zero</em> vendor involvement and <em>zero</em> Firebase. That path already works today (shipped in PR #442).</p>
+<p><strong>FCM is only the fallback</strong> — for Android users who don't run a distributor. You only need to do this setup if you want that fallback to work. If you (and your users) are happy running ntfy, you can skip this entire document.</p>
+<p>When the fallback fires, the broker never touches Google directly. It POSTs to our stateless Cloudflare relay (<code>conduit-push</code> at <code>push.conduit.nikhil.sh</code>), which holds the service-account key and forwards to the FCM HTTP v1 endpoint. The relay code already exists (<code>relay/src/fcm.ts</code>); it just needs the <code>FCM_SERVICE_ACCOUNT</code> secret you'll create below.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="part1">Part 1 · Firebase project + Android app</h2>
+<p class="muted">Outcome: a Firebase project and a <code>google-services.json</code> config file. This file is <strong>not a secret</strong> — it ships inside the public APK. It only contains non-secret project/app identifiers.</p>
+
+<ol class="steps">
+  <li>
+    <strong>Create (or reuse) a Firebase project.</strong><br>
+    Go to <a href="https://console.firebase.google.com" target="_blank">console.firebase.google.com</a> → <strong>Add project</strong>. Name it e.g. <code>conduit</code>. Google Analytics is optional — you can disable it (FCM works without it; Analytics only adds delivery-reporting). Note the <strong>Project ID</strong> that gets generated.
+  </li>
+  <li>
+    <strong>Add an Android app to the project.</strong><br>
+    In the project, click the Android icon (<em>Add app → Android</em>). For <strong>Android package name</strong> enter exactly:
+    <div class="pre-wrap"><pre id="c-pkg">sh.nikhil.conduit</pre><button class="copybtn" data-copy="c-pkg">copy</button></div>
+    <span class="muted">(Verified against <code>apps/android/app/build.gradle.kts</code> — both <code>namespace</code> and <code>applicationId</code> are <code>sh.nikhil.conduit</code>.)</span><br>
+    App nickname and the debug SHA-1 are <strong>optional</strong> — leave SHA blank. <strong>FCM messaging does not use the SHA fingerprint</strong> (see FAQ). Click <em>Register app</em>.
+  </li>
+  <li>
+    <strong>Download <code>google-services.json</code>.</strong><br>
+    The wizard offers it on the next screen. (You can always re-download later: <a href="https://console.firebase.google.com/project/_/settings/general/" target="_blank">Project settings → General</a> → your Android app card → <em>google-services.json</em>. See <a href="https://support.google.com/firebase/answer/7015592?hl=en" target="_blank">Google's note</a> confirming it holds non-secret identifiers.)<br>
+    Save it somewhere you can scp/upload to this box. You'll hand it to the agent in Part 3 — its final home is <code>apps/android/app/google-services.json</code>.
+  </li>
+  <li>
+    <strong>Skip the SDK/gradle wizard steps in the console.</strong><br>
+    The console will walk you through adding the gradle plugin and the messaging dependency. <strong>Don't do that by hand</strong> — the agent applies those exact edits (the stub from PR #442 is already in the tree). Just grab the JSON and move on.
+  </li>
+</ol>
+
+<div class="panel ok">
+<strong>Part 1 checklist</strong>
+<ul class="checklist" data-group="part1">
+  <li><input type="checkbox" id="p1a"><label for="p1a">Firebase project created; Project ID noted</label></li>
+  <li><input type="checkbox" id="p1b"><label for="p1b">Android app added with package <code>sh.nikhil.conduit</code></label></li>
+  <li><input type="checkbox" id="p1c"><label for="p1c"><code>google-services.json</code> downloaded</label></li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="part2">Part 2 · Minimal service account + JSON key</h2>
+<p class="muted">Outcome: a JSON key for a <strong>dedicated, least-privilege</strong> service account. This <strong>is</strong> a secret — it's the credential the relay uses to send. Treat it like a password.</p>
+
+<div class="panel warn">
+<strong>Use a dedicated minimal account — not the default Firebase Admin SDK account.</strong>
+The default <em>firebase-adminsdk</em> account can do far more than send messages (Realtime DB, Auth admin, Storage, etc.). A dedicated account scoped to just FCM sending limits the blast radius if the key ever leaks, and you can disable/rotate it independently.
+</div>
+
+<ol class="steps">
+  <li>
+    <strong>Open IAM Service Accounts</strong> for your project (same Google project that backs Firebase):<br>
+    <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank">console.cloud.google.com/iam-admin/serviceaccounts</a> → make sure the project picker (top bar) is set to your Firebase project.
+  </li>
+  <li>
+    <strong>Create service account.</strong> Click <em>+ Create service account</em>. Name it e.g. <code>conduit-fcm-relay</code>. Click <em>Create and continue</em>.
+  </li>
+  <li>
+    <strong>Grant the single minimal role.</strong><br>
+    In "Grant this service account access", add one role:
+    <div class="pre-wrap"><pre id="c-role">Firebase Cloud Messaging API Admin
+(role id: roles/firebasecloudmessaging.admin)</pre><button class="copybtn" data-copy="c-role">copy</button></div>
+    This is the minimal <em>predefined</em> role that grants <code>cloudmessaging.messages.create</code> (the FCM v1 send permission). <span class="muted">Per <a href="https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging" target="_blank">Google's IAM reference</a>, there is no narrower predefined "send-only" role — this is the floor unless you author a custom role granting only <code>cloudmessaging.messages.create</code>.</span> Click <em>Continue → Done</em>.
+  </li>
+  <li>
+    <strong>Generate a JSON key.</strong><br>
+    Click the new account → <em>Keys</em> tab → <em>Add key → Create new key → JSON → Create</em>. A <code>*.json</code> file downloads. <strong>This is the only copy</strong> — Google won't show it again. The relay reads <code>client_email</code>, <code>private_key</code>, and <code>project_id</code> from it (see <code>relay/src/fcm.ts</code>).
+  </li>
+</ol>
+
+<div class="panel ok">
+<strong>Part 2 checklist</strong>
+<ul class="checklist" data-group="part2">
+  <li><input type="checkbox" id="p2a"><label for="p2a">Dedicated service account <code>conduit-fcm-relay</code> created</label></li>
+  <li><input type="checkbox" id="p2b"><label for="p2b">Role <code>roles/firebasecloudmessaging.admin</code> granted (and nothing broader)</label></li>
+  <li><input type="checkbox" id="p2c"><label for="p2c">JSON key downloaded and kept somewhere safe</label></li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="part3">Part 3 · Land the credentials on this box</h2>
+<p class="muted">Two files, two homes. Do these from this dev box (or hand the files to the agent and let it run the commands — your call).</p>
+
+<h3>3a · The secret service-account JSON</h3>
+<p>Store it locally (chmod 600), matching the existing token convention (<code>/root/.cloudflare-token</code>):</p>
+<div class="pre-wrap"><pre id="c-store">mkdir -p /root/.firebase
+mv ~/Downloads/conduit-fcm-relay-*.json /root/.firebase/fcm-service-account.json
+chmod 600 /root/.firebase/fcm-service-account.json</pre><button class="copybtn" data-copy="c-store">copy</button></div>
+
+<p>Push it to the Cloudflare relay as the <code>FCM_SERVICE_ACCOUNT</code> secret (the exact name <code>relay/src/fcm.ts</code> reads). Run from <code>relay/</code>; paste the <em>whole file contents</em> when prompted:</p>
+<div class="pre-wrap"><pre id="c-wrangler">cd relay && npx wrangler secret put FCM_SERVICE_ACCOUNT &lt; /root/.firebase/fcm-service-account.json</pre><button class="copybtn" data-copy="c-wrangler">copy</button></div>
+<p class="muted">Needs wrangler auth first: <code>npx wrangler login</code>, or <code>export CLOUDFLARE_API_TOKEN=$(cat /root/.cloudflare-token)</code>. Full relay provisioning (APNs key, KV namespace, deploy) is in <code>relay/README.md</code>.</p>
+
+<p>Optionally also stash it as a GitHub repo secret (mirrors how <code>APNS_KEY_ID</code> et al. are stored) so CI / future automation can reach it:</p>
+<div class="pre-wrap"><pre id="c-ghsecret">gh secret set FCM_SERVICE_ACCOUNT &lt; /root/.firebase/fcm-service-account.json</pre><button class="copybtn" data-copy="c-ghsecret">copy</button></div>
+
+<h3>3b · The non-secret google-services.json</h3>
+<p>This one ships in the APK, so it lives <em>in the repo</em> at the app module root. Hand it to the agent, or drop it yourself:</p>
+<div class="pre-wrap"><pre id="c-gsj">mv ~/Downloads/google-services.json apps/android/app/google-services.json</pre><button class="copybtn" data-copy="c-gsj">copy</button></div>
+<p class="muted">The agent wires the gradle plugin + dependency that consume it (Part 4).</p>
+
+<div class="panel ok">
+<strong>Part 3 checklist</strong>
+<ul class="checklist" data-group="part3">
+  <li><input type="checkbox" id="p3a"><label for="p3a">JSON saved at <code>/root/.firebase/fcm-service-account.json</code> (chmod 600)</label></li>
+  <li><input type="checkbox" id="p3b"><label for="p3b"><code>wrangler secret put FCM_SERVICE_ACCOUNT</code> run against the relay</label></li>
+  <li><input type="checkbox" id="p3c"><label for="p3c">(optional) <code>gh secret set FCM_SERVICE_ACCOUNT</code></label></li>
+  <li><input type="checkbox" id="p3d"><label for="p3d"><code>google-services.json</code> at <code>apps/android/app/google-services.json</code></label></li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="agent">Part 4 · Hand off to the agent</h2>
+<div class="panel agent">
+<p><strong>Once the JSON files land, tell the agent: "FCM credentials are in place — flip the Android FCM stub live."</strong> Here is exactly what we automate (no human steps inside this part):</p>
+<ol>
+  <li><strong>Relay:</strong> confirm <code>FCM_SERVICE_ACCOUNT</code> is set and redeploy the worker if needed (<code>cd relay &amp;&amp; npx wrangler deploy</code>); smoke-test <code>/v1/send</code> with <code>platform:"fcm"</code>.</li>
+  <li><strong>Android build wiring</strong> (the enable steps baked into PR #442's <code>FcmPushProvider</code> stub):
+    <ul>
+      <li>add <code>id("com.google.gms.google-services")</code> to the <code>plugins {}</code> block in <code>apps/android/app/build.gradle.kts</code> (+ the classpath/plugin declaration at the project level);</li>
+      <li>add <code>implementation("com.google.firebase:firebase-messaging:&lt;current&gt;")</code>;</li>
+      <li>replace <code>FcmPushProvider.isAvailable = false</code> with the real <code>FirebaseMessaging.getInstance().token</code> logic. <code>PushProviders.forContext()</code> already prefers UnifiedPush and falls back to FCM automatically.</li>
+    </ul>
+  </li>
+  <li><strong>PR:</strong> open a build-wiring PR; CI verifies it compiles. (Reminder: per repo policy, on-device push delivery still needs a real device test — CI green ≠ runtime verified.)</li>
+</ol>
+<p class="muted">The seam (PushProvider / FcmPushProvider / UnifiedPushProvider / PushStore / receiver) already merged in PR #442; only the four edits above flip FCM from "unavailable" to live.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="play">Part 5 · Google Play specifics (only when you ship there)</h2>
+<div class="panel">
+<p><strong>FCM itself needs nothing from Play.</strong> Push works identically for a Play-installed app and a sideloaded APK — there is no Play Console requirement for FCM. The server side authenticates with the service-account key (Part 2); the client side just needs <code>google-services.json</code> baked into the build. Neither depends on how the app was distributed.</p>
+<p><strong>The Play App Signing nuance:</strong> when you publish on Play, Google re-signs the app with its own managed key, so the delivered APK's signature differs from your upload key. This <em>only</em> matters for Firebase services that authenticate the client by certificate fingerprint — <strong>Google Sign-In, App Check, Dynamic Links, phone auth</strong> (per <a href="https://developers.google.com/android/guides/client-auth" target="_blank">Google's client-auth guide</a>). <strong>FCM messaging is not one of them</strong> — it doesn't check the app's SHA. So you can leave SHA fingerprints out of Firebase entirely for a push-only integration. (If you later add Sign-In etc., register the Play App Signing SHA-256 from Play Console → App Integrity, plus your debug/upload SHAs.)</p>
+<p><strong>Data safety form (does matter on Play):</strong> the <code>firebase-messaging</code> SDK collects a <strong>Firebase Installation ID</strong> and device metadata (OS version, model, SDK versions) — see <a href="https://firebase.google.com/docs/android/play-data-disclosure" target="_blank">Firebase's Play data-disclosure guidance</a>. When you fill the Play Console <em>Data safety</em> form you'll declare a <strong>Device or other IDs</strong> data type, collected (not shared with third parties beyond Google subprocessors), purpose: <em>app functionality</em> (delivering notifications). Note the 2025+ policy treating Android-ID-class identifiers explicitly as device identifiers. If you don't enable Analytics or BigQuery delivery export, that's the extent of it.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="faq">FAQ</h2>
+
+<details>
+<summary>Do I even need Firebase? What's the UnifiedPush alternative?</summary>
+<p>No, not strictly. UnifiedPush (ntfy/Sunup distributor on your VPS) is the primary, vendor-free path and ships already. FCM is purely the fallback for users with no distributor. If your audience runs ntfy, skip all of this. See <code>docs/PLAN-PUSH.md</code> and the "purity ladder": UnifiedPush → relay→FCM (Android) / relay→APNs (iOS).</p>
+</details>
+
+<details>
+<summary>What's secret here, and what isn't?</summary>
+<table class="kv">
+  <tr><th>Artifact</th><th>Secret?</th><th>Where it lives</th></tr>
+  <tr><td><code>google-services.json</code></td><td><strong>Not secret</strong> — ships in the APK; non-secret identifiers only</td><td>In the repo: <code>apps/android/app/google-services.json</code></td></tr>
+  <tr><td>Service-account JSON key</td><td><strong>Secret</strong> — full send credential</td><td><code>/root/.firebase/</code> (chmod 600) + Cloudflare secret + optional gh secret. <strong>Never</strong> committed.</td></tr>
+</table>
+</details>
+
+<details>
+<summary>Why a dedicated service account instead of the default one?</summary>
+<p>Least privilege. The default <em>firebase-adminsdk</em> account can administer most of Firebase. A dedicated account with only <code>roles/firebasecloudmessaging.admin</code> can do nothing but send messages, so a leaked key can't touch your data, and you can disable/rotate it without affecting anything else.</p>
+</details>
+
+<details>
+<summary>Why route through a relay instead of giving the broker the key?</summary>
+<p>The broker is self-hosted and distributed; embedding a send credential in it means one extraction lets anyone push to every install, and revoking breaks push for everyone at once. The stateless Cloudflare relay holds the key centrally (like Bitwarden / Home Assistant / ntfy do). The broker only ever sends <code>{token, payload}</code> to the relay. See <code>relay/README.md</code>.</p>
+</details>
+
+<details>
+<summary>Does sideloading vs Play change FCM behaviour?</summary>
+<p>No. FCM delivery is identical either way. The only distribution-dependent thing is the app's signing certificate fingerprint, which FCM messaging doesn't use (see Part 5).</p>
+</details>
+
+<details>
+<summary>Can I rotate or kill the key later?</summary>
+<p>Yes. In IAM → the service account → Keys, delete the key (kills it everywhere) and create a new one, then re-run <code>wrangler secret put FCM_SERVICE_ACCOUNT</code>. The relay caches OAuth tokens keyed by <code>client_email</code>, so a rotation invalidates the cache automatically.</p>
+</details>
+
+<hr>
+<p class="muted" style="font-size:.85rem">
+Verified against the repo on 2026-06-10: package <code>sh.nikhil.conduit</code> (<code>apps/android/app/build.gradle.kts</code>), relay secret name <code>FCM_SERVICE_ACCOUNT</code> + FCM v1 endpoint (<code>relay/src/fcm.ts</code>), Android stub enable steps (PR #442, branch <code>ws-p-3-android-push</code>), architecture (<code>docs/PLAN-PUSH.md</code>, <code>relay/README.md</code>). Console flows verified current as of June 2026 — see sources in the markdown twin (<code>firebase-push-setup.md</code>).
+</p>
+</div>
+
+<script>
+(function () {
+  var KEY = "conduit-fcm-setup-v1";
+  function load() { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; } }
+  function save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+  var state = load();
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('.checklist input[type=checkbox]'));
+  var pf = document.getElementById('pf');
+  var ptext = document.getElementById('progress-text');
+  function refresh() {
+    var done = boxes.filter(function (b) { return b.checked; }).length;
+    var pct = boxes.length ? Math.round(done / boxes.length * 100) : 0;
+    pf.style.width = pct + '%';
+    ptext.textContent = done + ' / ' + boxes.length + ' done';
+  }
+  boxes.forEach(function (b) {
+    if (state[b.id]) b.checked = true;
+    b.addEventListener('change', function () {
+      state[b.id] = b.checked; save(state); refresh();
+    });
+  });
+  refresh();
+  document.getElementById('reset').addEventListener('click', function () {
+    state = {}; save(state); boxes.forEach(function (b) { b.checked = false; }); refresh();
+  });
+
+  document.querySelectorAll('.copybtn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var el = document.getElementById(btn.getAttribute('data-copy'));
+      if (!el) return;
+      var text = el.innerText;
+      var done = function () {
+        var old = btn.textContent; btn.textContent = 'copied'; btn.classList.add('copied');
+        setTimeout(function () { btn.textContent = old; btn.classList.remove('copied'); }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () {});
+      } else {
+        var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>
