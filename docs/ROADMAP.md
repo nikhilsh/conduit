@@ -65,9 +65,12 @@ documented in the frozen contracts above and the archived plans.
   chip plus a broker conduit-awareness system prompt injected via
   `--append-system-prompt` / `AGENTS.md`, riding the existing `on_start` hook.
 - **Reboot durability for flow-1** — survive a box reboot via user-systemd +
-  `loginctl enable-linger`.
+  `loginctl enable-linger`. *(in review — branch `ssh-bootstrap-hardening`;
+  needs on-device VPS test before merge)*
 - **Agent-CLI auto-install** in `scripts/remote-bootstrap.sh` (install `claude`
-  / `codex` / `opencode` if missing during bootstrap).
+  / `codex` if missing during bootstrap; gated on `CONDUIT_AUTOINSTALL_AGENT`).
+  *(in review — branch `ssh-bootstrap-hardening`; needs on-device VPS test
+  before merge)*
 
 ### Later
 
