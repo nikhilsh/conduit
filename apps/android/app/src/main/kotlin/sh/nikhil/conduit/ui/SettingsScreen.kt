@@ -1,7 +1,5 @@
 package sh.nikhil.conduit.ui
 
-// TODO(nikhil): Replace with your real Buy Me a Coffee / donation URL before shipping.
-private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/nikhilsh"
 
 import sh.nikhil.conduit.BuildConfig
 import androidx.compose.foundation.background
@@ -84,6 +82,9 @@ import sh.nikhil.conduit.push.PushSettingsSection
 import sh.nikhil.conduit.push.PushStore
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
+
+// TODO(nikhil): Replace with your real Buy Me a Coffee / donation URL before shipping.
+private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/nikhilsh"
 
 /**
  * Settings — Conduit redesign IA (handoff Part A), mirror of iOS
