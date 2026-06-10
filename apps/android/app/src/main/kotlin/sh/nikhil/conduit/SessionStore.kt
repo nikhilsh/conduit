@@ -342,6 +342,21 @@ fun <T> List<T>.sortedByConversationTs(ts: (T) -> String): List<T> =
         .map { it.value }
 
 /**
+ * Remove the broker's pending-input sentinel line from raw transcript content
+ * (the HTTP [SessionStore.fetchConversation] replay bypasses the core
+ * classifier, which strips it on the live path). Byte-identical to the broker /
+ * core constant; mirrors core `strip_pending_sentinel` and iOS
+ * `SessionStore.stripPendingSentinel`.
+ */
+fun stripPendingSentinel(text: String): String {
+    val sentinel = sh.nikhil.conduit.ui.PendingQuestions.PENDING_INPUT_SENTINEL
+    if (!text.contains(sentinel)) return text
+    return text.split("\n")
+        .filter { it.trim() != sentinel }
+        .joinToString("\n")
+}
+
+/**
  * v1 store: wraps ConduitClient and bridges Rust delegate callbacks back onto
  * the main dispatcher as StateFlow updates. Replaced by Hilt-style DI in v2.
  */
@@ -2082,6 +2097,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     val e = arr.getJSONObject(i)
                     val role = e.optString("role", "")
                     val kind = if (role.lowercase() == "tool") "tool" else "message"
+                    // Strip the broker's pending-input sentinel: the live path
+                    // runs the core classifier (which strips it), but this raw
+                    // HTTP replay does not — so without this the sentinel line
+                    // both shows as raw chat text AND fails to dedupe against
+                    // the live, stripped card (different role+content), leaving
+                    // a duplicate card body under the real card on reattach.
+                    val content = stripPendingSentinel(e.optString("content", ""))
                     val filesArr = e.optJSONArray("files") ?: JSONArray()
                     val files = buildList {
                         for (j in 0 until filesArr.length()) {
@@ -2100,7 +2122,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                             role = role,
                             kind = kind,
                             status = "done",
-                            content = e.optString("content", ""),
+                            content = content,
                             ts = e.optString("ts", ""),
                             files = files,
                             toolName = null,

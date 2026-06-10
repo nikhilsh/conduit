@@ -97,8 +97,12 @@ Result: the command ran, `hello.txt` was created, the turn completed normally.
 - `command` and `cwd` may be `null` (schema), so render defensively.
 - `availableDecisions` lists what the server will accept; `accept` and `cancel`
   are always present. `decline` is offered for some requests but **not all** —
-  this capture omitted it from `availableDecisions`. **For deny, respond with
-  `cancel`** (always available; ends the turn cleanly).
+  this capture omitted it from `availableDecisions`. **For deny, the broker
+  prefers `decline` when this request offers it** (the turn CONTINUES and the
+  agent acknowledges the denial) and **falls back to `cancel`** when it doesn't
+  (always available; interrupts the turn). The broker parses the string entries
+  of `availableDecisions` to decide; object entries (e.g.
+  `acceptWithExecpolicyAmendment`) are ignored.
 - After the response, the server emits a `serverRequest/resolved` notification
   (`{threadId, requestId}`) — a non-actionable confirmation.
 
@@ -130,9 +134,13 @@ string-only subset: `accept` / `acceptForSession` / `decline` / `cancel`.
 - `{"decision":"cancel"}` → **turn ends** with `turn/completed` status
   `interrupted`. No file created.
 
-The broker maps a denied tap → `cancel` (clean turn end, mirrors how a denied
-claude AskUserQuestion does not leave the turn spinning), and an approved tap →
-`accept`.
+The broker maps an approved tap → `accept`. A denied tap → `decline` **when the
+request offered it** (the turn continues so the agent acknowledges the denial
+and can adapt — device feedback: a deny→`cancel` left the agent silent because
+`cancel` interrupts the whole turn), otherwise → `cancel` (always available; a
+deny must never leave the turn spinning, mirroring claude's AskUserQuestion-deny
+posture). Timeout / disconnect / close always use `cancel` (the turn can't
+continue regardless).
 
 ### Timeout / disconnect
 
