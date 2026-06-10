@@ -46,7 +46,7 @@ extension ConduitUI {
         @State private var showAgentLogin = false
         /// Per-agent signed-in + plan snapshot for the Connection group.
         /// Refreshed on appear and whenever the login sheet closes.
-        @State private var agentAccounts: [AgentAccountStatus] = AgentAccountStatus.current()
+        @State private var agentAccounts: [AgentAccountStatus] = []
         /// Account whose Manage dialog (re-auth / sign out) is open.
         @State private var manageTarget: AgentAccountStatus?
 
@@ -96,7 +96,7 @@ extension ConduitUI {
                 .sheet(isPresented: $showAgentLogin, onDismiss: {
                     // Re-read the Keychain so a fresh sign-in flips the
                     // agent rows to `● signed in` immediately.
-                    agentAccounts = AgentAccountStatus.current()
+                    agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
                 }) {
                     ConduitUI.AgentLoginSheet()
                 }
@@ -115,7 +115,7 @@ extension ConduitUI {
                     }
                     Button("Sign out", role: .destructive) {
                         OAuthCredentialStore.clear(provider: account.provider)
-                        agentAccounts = AgentAccountStatus.current()
+                        agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
                         manageTarget = nil
                     }
                     Button("Cancel", role: .cancel) { manageTarget = nil }
@@ -187,7 +187,7 @@ extension ConduitUI {
                 }
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
             }
-            .onAppear { agentAccounts = AgentAccountStatus.current() }
+            .onAppear { agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors) }
         }
 
         /// Active server row — `103.107.51.48:1977` · `Live · default

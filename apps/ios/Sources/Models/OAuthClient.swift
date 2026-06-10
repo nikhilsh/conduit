@@ -39,6 +39,17 @@ enum OAuthProvider: String, Sendable {
     case openai
     case anthropic
 
+    /// Map a broker `login_provider` string (from `AgentDescriptor`) to a
+    /// known `OAuthProvider`. Returns nil for unknown/empty values so callers
+    /// can skip agents with unsupported login flows gracefully.
+    init?(loginProvider: String) {
+        switch loginProvider.lowercased() {
+        case "anthropic": self = .anthropic
+        case "openai":    self = .openai
+        default:          return nil
+        }
+    }
+
     var config: OAuthConfig {
         switch self {
         case .openai:

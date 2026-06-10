@@ -70,9 +70,21 @@ extension ConduitUI {
                             }
                             sectionLabel("Agent", tint: flags.newSessionAgentCards ? sheetTint : nil)
                             if flags.newSessionAgentCards {
-                                HStack(alignment: .top, spacing: 11) {
-                                    agentCard(kind: "claude")
-                                    agentCard(kind: "codex")
+                                // Two-column grid: hardcoded cards first, then
+                                // any generic agents from the descriptor map
+                                // that aren't already covered.
+                                let allKinds = allAgentKinds
+                                LazyVGrid(
+                                    columns: [
+                                        GridItem(.flexible(), spacing: 11),
+                                        GridItem(.flexible(), spacing: 11),
+                                    ],
+                                    alignment: .top,
+                                    spacing: 11
+                                ) {
+                                    ForEach(allKinds, id: \.self) { kind in
+                                        agentCard(kind: kind)
+                                    }
                                 }
                             } else {
                                 agentRow(
@@ -85,6 +97,15 @@ extension ConduitUI {
                                     label: "Codex",
                                     subtitle: "Powered by OpenAI"
                                 )
+                                // Generic rows for any extra descriptors.
+                                ForEach(extraAgentKinds, id: \.self) { kind in
+                                    let meta = agentMeta(kind)
+                                    agentRow(
+                                        kind: kind,
+                                        label: meta.name,
+                                        subtitle: meta.blurb
+                                    )
+                                }
                             }
                             // Always show where the session will run — even
                             // with one box. Device feedback round 4: with the
@@ -211,7 +232,7 @@ extension ConduitUI {
         /// the selected agent. Tint tracks the selected card (§3 acceptance:
         /// switching agent recolors the Start/Continue button).
         private var continueBar: some View {
-            let meta = Self.agentMeta(selectedAgentKind)
+            let meta = agentMeta(selectedAgentKind)
             return Button {
                 pickedAgent = selectedAgentKind
             } label: {
@@ -269,6 +290,22 @@ extension ConduitUI {
         /// The agent tint that recolors the sheet in cards mode (§3).
         private var sheetTint: Color { neon.agentTint(forAgent: selectedAgentKind) }
 
+        /// Hardcoded agent kinds that have first-class branded cards.
+        private static let hardcodedKinds: Set<String> = ["claude", "codex"]
+
+        /// Agents from the broker's descriptor map that don't have a
+        /// hardcoded card. Sorted alphabetically for stable ordering.
+        private var extraAgentKinds: [String] {
+            store.agentDescriptors.keys
+                .filter { !Self.hardcodedKinds.contains($0.lowercased()) }
+                .sorted()
+        }
+
+        /// All agent kinds to show in the picker: hardcoded first, then extras.
+        private var allAgentKinds: [String] {
+            ["claude", "codex"] + extraAgentKinds
+        }
+
         /// Side-by-side agent card (§3, `02-ns`). Carries the agent's brand
         /// color, model name, and a one-line character note. Selecting a card
         /// tints the whole sheet (labels + Continue button) with its color.
@@ -276,7 +313,7 @@ extension ConduitUI {
             let canIssue = store.harness.canIssueCommands
             let tint = neon.agentTint(forAgent: kind)
             let selected = selectedAgentKind == kind
-            let meta = Self.agentMeta(kind)
+            let meta = agentMeta(kind)
             // Live default-model name from the discovered catalog ("GPT-5.5",
             // "Opus 4.8") — the static meta.model is only the offline
             // fallback, so the card never pins a stale model name.
@@ -330,14 +367,24 @@ extension ConduitUI {
         }
 
         /// Brand metadata for the agent cards (§3). Mirrors `imp-newsession`.
-        private static func agentMeta(_ kind: String) -> (name: String, model: String, blurb: String) {
-            switch kind {
+        /// For hardcoded agents (claude / codex) uses static copy. For generic
+        /// agents, falls back to the descriptor's display_name and a neutral
+        /// blurb — needs on-device verification.
+        private func agentMeta(_ kind: String) -> (name: String, model: String, blurb: String) {
+            switch kind.lowercased() {
             case "codex":
                 return ("Codex", "gpt-5-codex", "Terse and fast on well-scoped code tasks.")
-            default:
+            case "claude":
                 return ("Claude", "Sonnet 4.6", "Careful, conversational — best for ambiguous work.")
+            default:
+                // Generic agent: pull display_name from the descriptor if available.
+                let desc = store.agentDescriptors[kind.lowercased()]
+                let name = (desc?.displayName.isEmpty == false) ? desc!.displayName : kind.capitalized
+                let modelTitle = ConduitUI.ForkOptions.defaultModelTitle(forCatalog: store.modelCatalog[kind]) ?? ""
+                return (name, modelTitle, "Runs on this box.")
             }
         }
+
 
         /// One row per paired box; the session is created on the checked
         /// one. "This device" on the home Boxes list is display-only — a
@@ -530,6 +577,11 @@ extension ConduitUI {
             store.modelCatalog[agentKind]
         }
 
+        /// Broker-served descriptor for this agent, if any.
+        private var descriptor: AgentDescriptor? {
+            store.agentDescriptors[agentKind.lowercased()]
+        }
+
         private var modelOptions: [String] {
             ConduitUI.ForkOptions.models(forAssistant: agentKind, catalog: catalog)
         }
@@ -537,8 +589,12 @@ extension ConduitUI {
         /// Effort options for the SELECTED model (catalog is per-model:
         /// sonnet lacks xhigh, haiku has none). Empty = the model has no
         /// effort control → the effort UI hides and no override is sent.
+        /// Also returns empty when the descriptor signals supports.effort =
+        /// false — the whole effort section is hidden for agents like
+        /// opencode that have no effort concept at all.
         private var effortOptions: [String] {
-            ConduitUI.ForkOptions.efforts(forAssistant: agentKind, model: model, catalog: catalog)
+            if let d = descriptor, !d.supports.effort { return [] }
+            return ConduitUI.ForkOptions.efforts(forAssistant: agentKind, model: model, catalog: catalog)
         }
 
         /// The model to hand to onCreate: the sentinel maps to nil.

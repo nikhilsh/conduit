@@ -112,14 +112,12 @@ extension ConduitUI {
             // (they otherwise only refresh on connect + the card's manual
             // button — feedback: "tap refresh to update"). Best-effort: the
             // call is a no-op for agents without a usage source and when
-            // there's no connected client. Gated to claude/codex (the only
-            // agents with a usage endpoint) to match the limits card. `content`
-            // backs BOTH the phone sheet and the tablet Info pane, so this
-            // covers both. `.task(id:)` re-fires if the pane rebinds to a
-            // different session.
+            // there's no connected client. Gate via descriptor supports.usage
+            // when available; fall back to the legacy claude/codex hardcoding
+            // for old brokers. `content` backs BOTH the phone sheet and the
+            // tablet Info pane. `.task(id:)` re-fires if the pane rebinds.
             .task(id: session.id) {
-                let agent = liveAssistant.lowercased()
-                if ["claude", "codex"].contains(agent) {
+                if agentSupportsUsage {
                     store.refreshAccountUsage(sessionID: session.id)
                 }
             }
@@ -129,6 +127,28 @@ extension ConduitUI {
 
         private var liveAssistant: String {
             store.statusBySession[session.id]?.assistant ?? session.assistant
+        }
+
+        /// Broker-served descriptor for this session's agent, if any.
+        /// nil on old brokers; consumers fall back to static name-based gates.
+        private var agentDescriptor: AgentDescriptor? {
+            store.agentDescriptors[liveAssistant.lowercased()]
+        }
+
+        /// Whether the account-usage / limits card has a data source for
+        /// this agent. With a descriptor, uses supports.usage; without one
+        /// falls back to the legacy hardcoded claude/codex set.
+        private var agentSupportsUsage: Bool {
+            if let d = agentDescriptor { return d.supports.usage }
+            return ["claude", "codex"].contains(liveAssistant.lowercased())
+        }
+
+        /// Whether the in-session /compact button should appear.
+        /// With a descriptor, uses supports.compact; without, the legacy
+        /// `.contains("claude")` gate.
+        private var agentSupportsCompact: Bool {
+            if let d = agentDescriptor { return d.supports.compact }
+            return liveAssistant.lowercased().contains("claude")
         }
 
         /// True when the session is still live (not exited/failed) and the
@@ -297,16 +317,12 @@ extension ConduitUI {
                             }
                         }
                         .font(neon.mono(12.5).weight(.medium))
-                        // Context management. Claude exposes a user-
-                        // triggered `/compact` (a pass-through; the broker
-                        // surfaces progress and the gauge drops next turn).
-                        // Codex has NO manual compact in `exec` mode — it
-                        // compacts AUTOMATICALLY at its token limit (verified:
-                        // `codex exec "/compact"` is treated as a literal
-                        // message). So we show the button for claude and an
-                        // honest auto-compact note for codex.
+                        // Context management. Agents that support /compact
+                        // (supports.compact in the descriptor, or legacy
+                        // claude name-gate) get a manual button; codex-exec
+                        // compacts automatically (no manual compact).
                         let agentLower = liveAssistant.lowercased()
-                        if agentLower.contains("claude"), sessionIsLive {
+                        if agentSupportsCompact, sessionIsLive {
                             Rectangle().fill(neon.border).frame(height: 1)
                             Button {
                                 store.sendChat(sessionID: session.id, message: "/compact")
@@ -382,11 +398,10 @@ extension ConduitUI {
 
         @ViewBuilder
         private var limitsSection: some View {
-            // Claude maps from the Anthropic OAuth usage endpoint, codex
-            // from ChatGPT /wham/usage; other agents have no source, so the
-            // card would read "tap refresh" forever — gate to the two.
-            let agent = liveAssistant.lowercased()
-            if ["claude", "codex"].contains(agent) {
+            // Gate via supports.usage from the descriptor when available;
+            // fall back to the hardcoded claude/codex set on old brokers.
+            if agentSupportsUsage {
+                let agent = liveAssistant.lowercased()
                 ConduitUI.AccountUsageCard(
                     session: session,
                     heading: "\(agent) limits · 5h & weekly"

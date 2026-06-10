@@ -50,8 +50,18 @@ extension ConduitUI {
             store.modelCatalog[session.assistant]
         }
 
+        /// Broker-served descriptor for this session's agent, if any.
+        private var descriptor: AgentDescriptor? {
+            store.agentDescriptors[session.assistant.lowercased()]
+        }
+
         private var effortOptions: [String] {
-            ForkOptions.efforts(forAssistant: session.assistant, model: model, catalog: catalog)
+            // When a descriptor is present and supports.effort is false the
+            // agent has no effort control at all — return empty so the section
+            // hides. Without a descriptor, fall through to catalog/static list
+            // (today's behaviour preserved on old brokers).
+            if let d = descriptor, !d.supports.effort { return [] }
+            return ForkOptions.efforts(forAssistant: session.assistant, model: model, catalog: catalog)
         }
 
         private var modelOptions: [String] {

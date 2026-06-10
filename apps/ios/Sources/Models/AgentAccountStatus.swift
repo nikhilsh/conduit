@@ -32,12 +32,39 @@ struct AgentAccountStatus: Identifiable, Equatable {
     /// Signed in AND usable — what the green dot should actually mean.
     var usable: Bool { signedIn && !expired }
 
-    /// Current status for both agent accounts, Claude first (stable order,
-    /// matches the usage surfaces).
-    static func current() -> [AgentAccountStatus] {
-        [
+    /// Current status for agent accounts that have an OAuth login provider.
+    ///
+    /// When `descriptors` is non-empty (broker PR #440+), the list is built
+    /// from the agents that advertise a `login_provider` in their descriptor,
+    /// using each descriptor's `display_name`. Claude appears first for
+    /// display stability; unknown providers are skipped (no credential type).
+    ///
+    /// When `descriptors` is nil/empty the static two-agent hardcoding is
+    /// used so behaviour is unchanged on old brokers (WS-3.1 fallback rule).
+    static func current(descriptors: [String: AgentDescriptor]? = nil) -> [AgentAccountStatus] {
+        // Descriptor-driven path (new broker).
+        if let descriptors, !descriptors.isEmpty {
+            let pairs: [(agent: String, displayName: String, loginProvider: String)] = descriptors
+                .compactMap { (key, desc) in
+                    guard !desc.loginProvider.isEmpty else { return nil }
+                    let name = desc.displayName.isEmpty ? key.capitalized : desc.displayName
+                    return (agent: key, displayName: name, loginProvider: desc.loginProvider)
+                }
+                // Claude first, then alphabetical for stable ordering.
+                .sorted { a, b in
+                    if a.agent == "claude" { return true }
+                    if b.agent == "claude" { return false }
+                    return a.agent < b.agent
+                }
+            return pairs.compactMap { pair in
+                guard let provider = OAuthProvider(loginProvider: pair.loginProvider) else { return nil }
+                return load(agent: pair.agent, displayName: pair.displayName, provider: provider)
+            }
+        }
+        // Static fallback (old broker or no descriptors yet).
+        return [
             load(agent: "claude", displayName: "Claude", provider: .anthropic),
-            load(agent: "codex", displayName: "Codex", provider: .openai),
+            load(agent: "codex",  displayName: "Codex",  provider: .openai),
         ]
     }
 

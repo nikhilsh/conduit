@@ -29,8 +29,9 @@ struct SlashCommandMatch: Equatable {
     let command: SlashCommand
     /// Everything after the command token, trimmed (e.g. `opus` for `/model opus`).
     let args: String
-    /// False when a pass-through command is used on a non-Claude agent —
-    /// the caller surfaces an in-chat "not supported with this agent" note.
+    /// False when a pass-through command is used on an agent that doesn't
+    /// support it — the caller surfaces an in-chat "not supported with this
+    /// agent" note.
     let supported: Bool
 }
 
@@ -56,16 +57,33 @@ enum SlashCommandRegistry {
     }
 
     /// Classify `input` for a session running `agent` ("claude" / "codex" / …).
+    /// `descriptor` is the broker-served AgentDescriptor for this agent; when
+    /// absent the legacy `claudeOnly` flag is the fallback (old-broker parity).
     /// Returns nil when `input` isn't a recognised slash command (so the
     /// caller sends it as a normal chat message).
-    static func classify(_ input: String, agent: String) -> SlashCommandMatch? {
+    static func classify(
+        _ input: String,
+        agent: String,
+        descriptor: AgentDescriptor? = nil
+    ) -> SlashCommandMatch? {
         let trimmed = input.drop(while: { $0 == " " || $0 == "\t" })
         guard trimmed.first == "/" else { return nil }
         let body = trimmed.dropFirst()
         let name = String(body.prefix(while: { !$0.isWhitespace }))
         guard !name.isEmpty, let cmd = lookup(name) else { return nil }
         let args = String(body.dropFirst(name.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        let supported = !(cmd.claudeOnly && agent.lowercased() != "claude")
+        let supported: Bool
+        if cmd.clazz == .passThrough, cmd.claudeOnly {
+            if let descriptor {
+                // Descriptor present: /compact is supported iff supports.compact.
+                supported = descriptor.supports.compact
+            } else {
+                // Fallback: legacy name-based gate (old broker / no descriptor).
+                supported = agent.lowercased() == "claude"
+            }
+        } else {
+            supported = true
+        }
         return SlashCommandMatch(command: cmd, args: args, supported: supported)
     }
 
