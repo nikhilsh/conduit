@@ -246,6 +246,97 @@ struct ConversationNotFoundError: LocalizedError {
 
 extension StoredEndpoint: Codable {}
 
+// MARK: - AgentDescriptor (WS-3.1)
+//
+// Per-assistant capability descriptor from `GET /api/capabilities` `agents`
+// map (broker PR #440). Mirrors `broker/internal/session.AgentDescriptor`.
+// All fields are optional-with-defaults so older brokers that omit them
+// silently fall back to today's hardcoded behaviour.
+
+struct AgentDescriptorSupports: Decodable, Equatable {
+    /// Whether `/compact` is available for this agent.
+    var compact: Bool
+    /// Whether `ask_user_question` is supported.
+    var askUserQuestion: Bool
+    /// Whether the reasoning-effort dial / picker should be shown.
+    var effort: Bool
+    /// Whether plan-mode (`--permission-mode plan`) is available.
+    var planMode: Bool
+    /// Whether the account-usage / limits card has a data source.
+    var usage: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case compact
+        case askUserQuestion = "ask_user_question"
+        case effort
+        case planMode = "plan_mode"
+        case usage
+    }
+
+    init(
+        compact: Bool = false,
+        askUserQuestion: Bool = false,
+        effort: Bool = true,
+        planMode: Bool = false,
+        usage: Bool = false
+    ) {
+        self.compact = compact
+        self.askUserQuestion = askUserQuestion
+        self.effort = effort
+        self.planMode = planMode
+        self.usage = usage
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        compact         = try c.decodeIfPresent(Bool.self, forKey: .compact)         ?? false
+        askUserQuestion = try c.decodeIfPresent(Bool.self, forKey: .askUserQuestion) ?? false
+        effort          = try c.decodeIfPresent(Bool.self, forKey: .effort)          ?? true
+        planMode        = try c.decodeIfPresent(Bool.self, forKey: .planMode)        ?? false
+        usage           = try c.decodeIfPresent(Bool.self, forKey: .usage)           ?? false
+    }
+}
+
+struct AgentDescriptor: Decodable, Equatable {
+    /// Human-readable name ("Claude", "Codex"). May differ from the
+    /// registry key ("claude") used throughout the app.
+    var displayName: String
+    /// OAuth provider key ("anthropic" / "openai" / ""). Empty = no
+    /// provider-based login for this agent.
+    var loginProvider: String
+    var supports: AgentDescriptorSupports
+    /// Model list embedded in the descriptor (same as the top-level
+    /// `models[name]` list; may be empty for agents with no catalog).
+    var models: [ConduitUI.AgentModel]
+
+    enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
+        case loginProvider = "login_provider"
+        case supports
+        case models
+    }
+
+    init(
+        displayName: String = "",
+        loginProvider: String = "",
+        supports: AgentDescriptorSupports = AgentDescriptorSupports(),
+        models: [ConduitUI.AgentModel] = []
+    ) {
+        self.displayName = displayName
+        self.loginProvider = loginProvider
+        self.supports = supports
+        self.models = models
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        displayName   = try c.decodeIfPresent(String.self,                     forKey: .displayName)   ?? ""
+        loginProvider = try c.decodeIfPresent(String.self,                     forKey: .loginProvider) ?? ""
+        supports      = try c.decodeIfPresent(AgentDescriptorSupports.self,    forKey: .supports)      ?? AgentDescriptorSupports()
+        models        = try c.decodeIfPresent([ConduitUI.AgentModel].self,      forKey: .models)        ?? []
+    }
+}
+
 /// UI-level status for the SSH-bootstrap flow. Independent of `HarnessState`
 /// because bootstrap runs *before* we have an endpoint to connect to: the
 /// progress line ("Starting harness…") lives in the SSH login sheet, not
@@ -701,11 +792,20 @@ final class SessionStore {
     /// refresh never downgrades an already-populated picker.
     private(set) var modelCatalog: [String: [ConduitUI.AgentModel]] = [:]
 
-    /// Refresh `modelCatalog` from the active endpoint's capabilities.
-    /// Old brokers (no "models" key) and failures are no-ops.
+    /// Per-assistant capability descriptors from the broker (WS-3.1,
+    /// `agents` key in `GET /api/capabilities`). Empty until the first
+    /// successful fetch — consumers fall back to static defaults when absent
+    /// so behaviour is pixel-identical to today on older brokers.
+    /// Shape mirrors `broker/internal/session.AgentDescriptor`.
+    private(set) var agentDescriptors: [String: AgentDescriptor] = [:]
+
+    /// Refresh both `modelCatalog` and `agentDescriptors` from the active
+    /// endpoint's capabilities. ONE request; old brokers (no `agents` key)
+    /// are a silent no-op for the descriptor path only.
     func refreshModelCatalog() async {
         struct Envelope: Decodable {
             let models: [String: [ConduitUI.AgentModel]]?
+            let agents: [String: AgentDescriptor]?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -718,19 +818,29 @@ final class SessionStore {
                 data: ["host": endpoint.displayHost])
             return
         }
-        guard let models = caps.models, !models.isEmpty else {
+        if let models = caps.models, !models.isEmpty {
+            modelCatalog = models
+            Telemetry.breadcrumb(
+                "model_catalog", "refreshed",
+                data: [
+                    "assistants": models.keys.sorted().joined(separator: ","),
+                    "counts": models.map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ","),
+                ])
+        } else {
             Telemetry.breadcrumb(
                 "model_catalog", "no models in capabilities (old broker or discovery pending)",
                 data: ["host": endpoint.displayHost])
-            return
         }
-        modelCatalog = models
-        Telemetry.breadcrumb(
-            "model_catalog", "refreshed",
-            data: [
-                "assistants": models.keys.sorted().joined(separator: ","),
-                "counts": models.map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ","),
-            ])
+        if let agents = caps.agents, !agents.isEmpty {
+            agentDescriptors = agents
+            Telemetry.breadcrumb(
+                "agent_descriptors", "refreshed",
+                data: ["agents": agents.keys.sorted().joined(separator: ",")])
+        } else {
+            Telemetry.breadcrumb(
+                "agent_descriptors", "no agents in capabilities (old broker)",
+                data: ["host": endpoint.displayHost])
+        }
     }
 
     /// Probe `GET /api/capabilities` on a specific saved endpoint (works
@@ -1693,10 +1803,12 @@ final class SessionStore {
     /// command, or is a supported pass-through to deliver verbatim.
     private func handleSlashCommand(sessionID: String, message: String) -> Bool {
         let agent = sessions.first(where: { $0.id == sessionID })?.assistant ?? "claude"
-        guard let match = SlashCommandRegistry.classify(message, agent: agent) else { return false }
+        let descriptor = agentDescriptors[agent.lowercased()]
+        guard let match = SlashCommandRegistry.classify(message, agent: agent, descriptor: descriptor) else { return false }
         if match.command.clazz == .passThrough {
             if match.supported { return false } // deliver verbatim to the agent
-            postSystemMessage(sessionID, "“/\(match.command.name)” only works with Claude — this session is running \(agent).")
+            let reason = descriptor.map { $0.displayName.isEmpty ? agent : $0.displayName } ?? agent
+            postSystemMessage(sessionID, "\u{201C}/\(match.command.name)\u{201D} is not supported by \(reason).")
             return true
         }
         switch match.command.name {
@@ -1707,22 +1819,22 @@ final class SessionStore {
                 postSystemMessage(sessionID, "Usage: /model <name> — forks this session onto a different model.")
             } else {
                 forkSession(sessionID: sessionID, model: match.args)
-                postSystemMessage(sessionID, "Forking onto model “\(match.args)”…")
+                postSystemMessage(sessionID, "Forking onto model \u{201C}\(match.args)\u{201D}…")
             }
         case "effort":
             if match.args.isEmpty {
                 postSystemMessage(sessionID, "Usage: /effort <minimal|low|medium|high> — forks with a different reasoning effort.")
             } else {
                 forkSession(sessionID: sessionID, reasoningEffort: match.args)
-                postSystemMessage(sessionID, "Forking with reasoning effort “\(match.args)”…")
+                postSystemMessage(sessionID, "Forking with reasoning effort \u{201C}\(match.args)\u{201D}…")
             }
         // The live repeat-a-prompt loop is intentionally not wired yet — an
         // untested auto-sender hammering the agent is a bad blind ship.
         // Lands in a follow-up with on-device verification.
         case "loop":
-            postSystemMessage(sessionID, "“/loop” is recognised; the repeat-a-prompt loop ships in a follow-up update.")
+            postSystemMessage(sessionID, "\u{201C}/loop\u{201D} is recognised; the repeat-a-prompt loop ships in a follow-up update.")
         case "usage", "context":
-            postSystemMessage(sessionID, "“/\(match.command.name)” is a Claude Code terminal-only panel — it isn’t available in chat yet.")
+            postSystemMessage(sessionID, "\u{201C}/\(match.command.name)\u{201D} is a Claude Code terminal-only panel — it isn’t available in chat yet.")
         default:
             return false
         }
