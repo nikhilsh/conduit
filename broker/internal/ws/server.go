@@ -260,6 +260,28 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		// re-emit a size-correct snapshot.
 		c.snapshotRows, c.snapshotCols = initRows, initCols
 		c.snapshotSent = true
+
+		// Re-surface an outstanding interactive question (AskUserQuestion) to
+		// the reattaching client. The pending-input card arrived as a live
+		// chat event that died with the dropped socket; the broker doesn't
+		// replay chat on reattach, so without this the agent stays blocked
+		// with no visible prompt after the app is backgrounded and reopened.
+		// Sent ONLY to this client (a direct frame, NOT PublishText) so it is
+		// not re-persisted to the transcript or re-broadcast to clients that
+		// already show it. Keys off the live pending ask, so an
+		// already-answered question correctly stays gone.
+		if content, ok := sess.PendingAskChatContent(); ok {
+			_ = c.writeJSON(map[string]any{
+				"type": "view_event",
+				"view": "chat",
+				"event": map[string]any{
+					"role":    "assistant",
+					"content": content,
+					"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+					"files":   []any{},
+				},
+			})
+		}
 	}
 
 	sub := sess.Subscribe()
