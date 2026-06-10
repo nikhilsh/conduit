@@ -315,28 +315,39 @@ extension ConduitUI {
         }
 
         /// Display label for a model option, preferring the agent's own
-        /// display name. For the default/inherit entry (id "" or displayName
-        /// starting with "Default") the raw "Default (recommended)" label
-        /// hides the actual model — so we surface the resolved model name
-        /// instead: "<Model Name> (recommended)" e.g. "Opus 4.8 (recommended)".
-        /// This keeps the default entry identifiable as Opus (or whatever the
-        /// broker's default is) after the user has selected another model and
-        /// wants to come back to it. Resolution reuses `defaultModelTitle` so
-        /// the same "first ·-chunk, strip ' with ...'" logic is shared and
-        /// no model name is hardcoded here.
+        /// display name. For the default/inherit row the raw sentinel label
+        /// ("Default (inherit)" or "Default (recommended)") hides the actual
+        /// model — so we surface the resolved model name instead:
+        /// "<Model Name> (recommended)" e.g. "Opus 4.8 (recommended)".
+        /// Two cases:
+        ///   Claude — catalog has a literal "" entry with displayName
+        ///   "Default (recommended)". The entry is found directly and its
+        ///   displayName triggers the resolved-name path.
+        ///   Codex — catalog has NO "" entry (isDefault entry is "gpt-5.5").
+        ///   No exact match for "", so we fall through to the inherit-sentinel
+        ///   path: resolve via catalogEntry(for:"",in:) which returns the
+        ///   isDefault entry, and show "<that displayName> (recommended)".
+        /// This means every agent's inherit row shows the real model it will
+        /// use, with no hardcoded names.
         static func modelLabel(_ option: String, catalog: [AgentModel]?) -> String {
             guard let catalog, !catalog.isEmpty else { return modelLabel(option) }
-            guard let entry = catalog.first(where: { $0.id == option }) else {
-                return modelLabel(option)
-            }
-            // Default/inherit entry: show the resolved model name so it's
-            // discoverable even after another model was selected.
-            if entry.displayName.lowercased().hasPrefix("default") || entry.id == inheritModel {
-                if let resolved = defaultModelTitle(forCatalog: catalog) {
-                    return "\(resolved) (recommended)"
+            if let entry = catalog.first(where: { $0.id == option }) {
+                // Exact match found (e.g. claude's literal "" entry).
+                // Default/inherit entry: show the resolved model name.
+                if entry.displayName.lowercased().hasPrefix("default") || entry.id == inheritModel {
+                    if let resolved = defaultModelTitle(forCatalog: catalog) {
+                        return "\(resolved) (recommended)"
+                    }
                 }
+                return entry.displayName.isEmpty ? modelLabel(option) : entry.displayName
             }
-            return entry.displayName.isEmpty ? modelLabel(option) : entry.displayName
+            // No exact match. For the inherit sentinel (codex-style catalogs
+            // that have no "" entry), resolve through the isDefault entry.
+            if option == inheritModel,
+               let resolved = defaultModelTitle(forCatalog: catalog) {
+                return "\(resolved) (recommended)"
+            }
+            return modelLabel(option)
         }
 
         /// One-line detail for a model option (the agent's own description,
