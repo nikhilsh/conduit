@@ -159,7 +159,12 @@ dependencies {
     // registration to succeed; the library is a ~20 kB connector only,
     // no bundled distributor. Published on Maven Central.
     // https://github.com/UnifiedPush/android-connector
-    implementation("org.unifiedpush.android:connector:3.3.3")
+    implementation("org.unifiedpush.android:connector:3.3.3") {
+        // The connector pulls JVM tink, which duplicates classes with the
+        // tink-android already on the classpath (CheckDuplicatesRunnable
+        // broke the debug build). Android builds must use tink-android only.
+        exclude(group = "com.google.crypto.tink", module = "tink")
+    }
 
     // Termux terminal stack — Apache-2.0, pinned to v0.118.3 (May 22
     // 2025 release; see docs/PLAN-TERMINAL-REWRITE.md Android section).
