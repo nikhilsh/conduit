@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -142,10 +143,31 @@ func runUp(args []string) int {
 	oauthMgr := oauth.NewManager()
 	srv.WithOAuth(oauthMgr)
 	log.Printf("oauth: server-side login manager wired (providers: openai, anthropic)")
-	// Package 5: device-token registry for push notifications. The
-	// register_push_token WS handler fills it; the APNs/FCM senders +
-	// event triggers land in follow-ups.
-	srv.WithPush(push.NewRegistry())
+	// Package 5: push notification registry + senders + dispatcher.
+	// The registry is persisted under ~/.conduit/push-tokens.json so
+	// tokens survive broker restarts.
+	conduitRoot := conduitRootDir()
+	pushReg := push.NewRegistryWithPersistence(homeDir(".conduit", "push-tokens.json"))
+	srv.WithPush(pushReg)
+
+	pushSenders := map[push.Platform]push.Sender{}
+	relayURL := strings.TrimSpace(os.Getenv("CONDUIT_PUSH_RELAY_URL"))
+	if relayURL != "" {
+		installCredFile := filepath.Join(conduitRoot, "push-install.json")
+		relaySender, err := push.NewRelaySender(relayURL, installCredFile)
+		if err != nil {
+			log.Printf("push relay: init failed: %v (relay disabled)", err)
+		} else if relaySender != nil {
+			pushSenders[push.PlatformAPNs] = relaySender
+			pushSenders[push.PlatformFCM] = relaySender
+			log.Printf("push relay: configured relay=%s", relayURL)
+		}
+	}
+	pushSenders[push.PlatformUnifiedPush] = push.NewUnifiedPushSender()
+	dispatcher := push.NewDispatcher(pushReg, pushSenders)
+	srv.WithDispatcher(dispatcher)
+	srv.WithPushRelayConfigured(relayURL != "")
+	log.Printf("push: registry loaded; relay=%v; unifiedpush=always", relayURL != "")
 	// Replay HTTP surface lives on the same mux as the WS server.
 	// Secret = bearer token: anyone who can already attach to the WS
 	// can mint a replay URL, but external observers cannot enumerate.
@@ -416,6 +438,20 @@ func joinPath(parts ...string) string {
 		}
 	}
 	return out
+}
+
+// conduitRootDir returns the ~/.conduit directory (creating it with mode
+// 0700 if needed). Falls back to os.TempDir() if the home directory
+// cannot be resolved — that case only happens in tests/containers without
+// a real home.
+func conduitRootDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return os.TempDir()
+	}
+	dir := filepath.Join(home, ".conduit")
+	_ = os.MkdirAll(dir, 0o700)
+	return dir
 }
 
 // defaultReplayBase returns the documented default replay directory

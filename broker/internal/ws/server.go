@@ -75,6 +75,14 @@ type Server struct {
 	// (pushIdentity); per-identity keying in the registry is forward
 	// compat for a future multi-tenant broker.
 	Push *push.Registry
+	// Dispatcher fans out Payload to every registered device via the
+	// per-platform senders. Nil-safe: POST /api/push/test returns 503
+	// when nil. Set via WithDispatcher.
+	Dispatcher *push.Dispatcher
+	// PushRelayConfigured is true when CONDUIT_PUSH_RELAY_URL is set
+	// (relay sender is wired for APNs + FCM). Reported in capabilities
+	// so the app can show the honest path (relay vs. direct).
+	PushRelayConfigured bool
 }
 
 func New(a *auth.Store, m *session.Manager) *Server {
@@ -108,6 +116,23 @@ func (s *Server) WithOAuth(mgr *oauth.Manager) *Server {
 // control messages are ignored.
 func (s *Server) WithPush(reg *push.Registry) *Server {
 	s.Push = reg
+	return s
+}
+
+// WithDispatcher wires the push Dispatcher into the server. The
+// Dispatcher fans out Payload to every registered device. Exposed here
+// so the session event triggers (turn-complete, pending-input — landed
+// in a follow-up) can call s.Dispatcher.Notify without a separate
+// lookup. Also enables POST /api/push/test.
+func (s *Server) WithDispatcher(d *push.Dispatcher) *Server {
+	s.Dispatcher = d
+	return s
+}
+
+// WithPushRelayConfigured records whether the relay sender is active.
+// Reported in /api/capabilities so the app shows the honest push path.
+func (s *Server) WithPushRelayConfigured(v bool) *Server {
+	s.PushRelayConfigured = v
 	return s
 }
 
@@ -156,6 +181,10 @@ func (s *Server) Handler() http.Handler {
 	// (longer prefix) patterns win under ServeMux longest-match, so this
 	// prefix only catches the bare `/api/session/<id>` delete path.
 	mux.HandleFunc("/api/session/", s.serveSessionDelete)
+	// Package 5: push notification registration + test-push endpoint.
+	mux.HandleFunc("/api/push/register", s.servePushRegister)
+	mux.HandleFunc("/api/push/unregister", s.servePushUnregister)
+	mux.HandleFunc("/api/push/test", s.servePushTest)
 	return mux
 }
 

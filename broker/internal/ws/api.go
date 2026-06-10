@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nikhilsh/conduit/broker/internal/hostmetrics"
+	"github.com/nikhilsh/conduit/broker/internal/push"
 	"github.com/nikhilsh/conduit/broker/internal/session"
 )
 
@@ -102,6 +104,14 @@ type capabilitiesResponse struct {
 		// ShellSessions: the hidden `shell` adapter exists, so the app may
 		// create a plain terminal session on this box (Box health → SSH).
 		ShellSessions bool `json:"shell_sessions"`
+		// Push: broker supports POST /api/push/register + /api/push/unregister
+		// + /api/push/test. Always true from this version forward; UnifiedPush
+		// needs no relay, so the endpoint is always present.
+		Push bool `json:"push"`
+		// PushRelayConfigured: the CONDUIT_PUSH_RELAY_URL env var is set, so
+		// APNs (iOS) and FCM (Android fallback) delivery is active. False means
+		// only UnifiedPush (Android self-hosted) is wired.
+		PushRelayConfigured bool `json:"push_relay_configured"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -131,6 +141,8 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.TokenInQueryParam = true
 	resp.Features.HostMetrics = hostmetrics.Available()
 	resp.Features.ShellSessions = s.Sessions.HasAssistant("shell")
+	resp.Features.Push = true
+	resp.Features.PushRelayConfigured = s.PushRelayConfigured
 	resp.Models = s.Sessions.ModelCatalog()
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -351,6 +363,126 @@ func (s *Server) serveSessionDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": id,
 		"deleted":    true,
+	})
+}
+
+// pushRegisterRequest is the body for POST /api/push/register.
+type pushRegisterRequest struct {
+	Platform string `json:"platform"`
+	Token    string `json:"token"`
+}
+
+// servePushRegister handles POST /api/push/register.
+// The caller must supply a valid bearer token (requireAuth).
+// Identity = pushIdentity (single-operator broker).
+func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req pushRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	platform := push.Platform(strings.TrimSpace(req.Platform))
+	token := strings.TrimSpace(req.Token)
+	if !push.ValidPlatform(platform) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_platform", "platform must be apns, fcm, or unifiedpush")
+		return
+	}
+	if token == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_token", "token is required")
+		return
+	}
+	if s.Push == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "push_unavailable", "push registry not configured")
+		return
+	}
+	dt := push.DeviceToken{Platform: platform, Token: token}
+	s.Push.Register(pushIdentity, dt)
+	log.Printf("push: registered %s token for %s", platform, pushIdentity)
+	writeJSON(w, http.StatusOK, map[string]any{"registered": true, "platform": string(platform)})
+}
+
+// servePushUnregister handles POST /api/push/unregister.
+func (s *Server) servePushUnregister(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req pushRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	platform := push.Platform(strings.TrimSpace(req.Platform))
+	token := strings.TrimSpace(req.Token)
+	if s.Push == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"unregistered": true})
+		return
+	}
+	dt := push.DeviceToken{Platform: platform, Token: token}
+	s.Push.Unregister(pushIdentity, dt)
+	writeJSON(w, http.StatusOK, map[string]any{"unregistered": true, "platform": string(platform)})
+}
+
+// pushTestRequest is the body for POST /api/push/test.
+type pushTestRequest struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+// servePushTest handles POST /api/push/test — sends a test push to all
+// tokens registered for the caller's identity. This is the end-to-end
+// verification path: pair a device, register its token, hit this endpoint,
+// and confirm the notification arrives on the device.
+func (s *Server) servePushTest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req pushTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	if s.Dispatcher == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "push_unavailable", "push dispatcher not configured")
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "Conduit test push"
+	}
+	body := strings.TrimSpace(req.Body)
+	if body == "" {
+		body = "Push notifications are working"
+	}
+	payload := push.Payload{
+		Title: title,
+		Body:  body,
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.Dispatcher.Notify(ctx, pushIdentity, payload); err != nil {
+		log.Printf("push test: notify error: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "push_send_failed", err.Error())
+		return
+	}
+	tokens := s.Push.TokensFor(pushIdentity)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sent":        true,
+		"token_count": len(tokens),
 	})
 }
 
