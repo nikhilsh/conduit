@@ -18,6 +18,65 @@ on credentials.
 > / `--dangerously-bypass-approvals-and-sandbox`). Self-host on a box you
 > own, for your own use. Treat the bearer like an SSH key.
 
+## Zero-install SSH bootstrap (flow-1)
+
+When the mobile app pairs via SSH (`Settings → Add server → SSH`), it runs
+`scripts/remote-bootstrap.sh` on your VPS over SSH. The script installs the
+broker binary and starts it, then prints a pairing line the app parses. You
+do not need to pre-install anything on the VPS — the script handles it.
+
+### Reboot durability
+
+If your VPS has user-level systemd (most Debian/Ubuntu/Fedora VPS images do),
+the script automatically installs a
+`~/.config/systemd/user/conduit-broker.service` unit and runs
+`loginctl enable-linger` so the broker survives logout and reboots.
+`CONDUIT_TOKEN` is pinned in the unit so re-pairing is not required after a
+reboot.
+
+Falls back to the original detached-process (pidfile/nohup) launch when:
+
+- `systemctl --user` is unavailable (containers, non-systemd distros)
+- `loginctl enable-linger` fails (no permission on the host)
+- `systemctl --user enable --now` fails for any other reason
+
+The fallback is fully functional; it simply does not survive a reboot.
+
+To inspect the unit after pairing:
+
+```bash
+systemctl --user status conduit-broker
+journalctl --user -u conduit-broker -f
+```
+
+### Agent-CLI auto-install
+
+If neither `claude` nor `codex` is on `PATH` when the bootstrap script runs,
+it attempts a best-effort user-space install in this order:
+
+1. **claude** — `curl -fsSL https://claude.ai/install.sh | bash`
+   (installs to `~/.local/bin/claude`; auto-updates in the background)
+2. **codex** — `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
+   (installs to `~/.local/bin/codex`)
+3. **codex via npm** — `npm install -g @openai/codex`
+   (fallback for hosts with npm but no direct download)
+
+Progress is printed to stderr (visible as status in the app); stdout keeps the
+`OK …` / `ERR …` contract intact.
+
+To **disable** auto-install (and get `ERR 17` as before):
+
+```sh
+CONDUIT_AUTOINSTALL_AGENT=0
+```
+
+Export this in your VPS shell profile to permanently disable auto-install on
+that host, or pass it inline:
+
+```sh
+CONDUIT_AUTOINSTALL_AGENT=0 remote-bootstrap.sh "$TOKEN"
+```
+
 ## Install the broker
 
 ```bash
@@ -46,7 +105,9 @@ apt update && apt install -y claude-code
 # auto-updates in background):
 #   curl -fsSL https://claude.ai/install.sh | bash
 
-# Codex still ships via npm only:
+# Codex via official install script (installs to ~/.local/bin/codex):
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+# Or via npm:
 npm install -g @openai/codex
 
 # Bring the broker up. --local enables mDNS so the app auto-discovers it
