@@ -79,7 +79,6 @@ extension ConduitUI {
                                         GridItem(.flexible(), spacing: 11),
                                         GridItem(.flexible(), spacing: 11),
                                     ],
-                                    alignment: .top,
                                     spacing: 11
                                 ) {
                                     ForEach(allKinds, id: \.self) { kind in
