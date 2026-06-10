@@ -110,6 +110,21 @@ type codexAppServerProcess struct {
 	turnLastAssistant string
 	turnLastTS        string
 	closed            bool
+	// pendingApprovalID is the server→client approval REQUEST's id (echoed
+	// back verbatim in the response — codex's RequestId is string|integer, and
+	// the approval id is a server-side counter starting at 0, independent of our
+	// client request ids). Non-nil while an approval card is awaiting the user's
+	// tap. The card surfaced as a chat view_event; the user's NEXT chat message
+	// (AnswerApproval) carries the decision. Guarded by c.mu.
+	pendingApprovalID json.RawMessage
+	// pendingApprovalCard is the rendered card content for the outstanding
+	// approval, kept so a reattaching client can re-see it (PendingApprovalCard,
+	// the codex twin of PendingAskChatContent). "" when none is pending.
+	pendingApprovalCard string
+	// approvalTimer auto-denies an unanswered approval after askAnswerTimeout
+	// (mirrors claude's askcontrol.go give-up timer), so a never-tapped card
+	// can't wedge the turn forever. nil when no approval is pending.
+	approvalTimer *time.Timer
 }
 
 // setTurnHook installs the AI-niceties turn-end callback (titles + quick
@@ -353,6 +368,17 @@ func (c *codexAppServerProcess) finishTurn() (active, published, intentional, in
 	interrupting = c.interrupting
 	c.interrupting = false
 	c.stopTurnWatchdogLocked()
+	// A turn can't end with an approval still outstanding (the request blocks
+	// the turn). If the turn ended another way (e.g. interrupt, error) while a
+	// card was up, drop the stash + timer — a later tap would have no live
+	// request to answer. Best-effort response is skipped here (we hold c.mu and
+	// the turn is already over); the abandoned approval simply clears.
+	c.pendingApprovalID = nil
+	c.pendingApprovalCard = ""
+	if c.approvalTimer != nil {
+		c.approvalTimer.Stop()
+		c.approvalTimer = nil
+	}
 	return true, c.published, c.closed, interrupting
 }
 
@@ -474,6 +500,20 @@ func (c *codexAppServerProcess) readLoop(stdout io.Reader, resp chan<- json.RawM
 		if err := json.Unmarshal(line, &env); err != nil {
 			continue
 		}
+		// A server→client REQUEST carries BOTH an id AND a method (e.g. an
+		// approval request). It expects a response echoing the id. Demux it
+		// before the response/notification cases — a response has an id but NO
+		// method, a notification a method but NO id.
+		if env.ID != nil && env.Method != "" {
+			// Copy: the params alias the scanner's reused buffer and the
+			// handler stashes them past this iteration.
+			pcopy := make(json.RawMessage, len(env.Params))
+			copy(pcopy, env.Params)
+			idcopy := make(json.RawMessage, len(env.ID))
+			copy(idcopy, env.ID)
+			c.handleServerRequest(idcopy, env.Method, pcopy)
+			continue
+		}
 		// A response carries an id and no method. If it correlates to the
 		// active turn, the reader owns it (an error response ends the turn);
 		// otherwise forward a copy — the scanner reuses its buffer — to the
@@ -494,8 +534,10 @@ func (c *codexAppServerProcess) readLoop(stdout io.Reader, resp chan<- json.RawM
 			c.handleNotification(env.Method, env.Params)
 		}
 	}
-	// EOF: the app-server exited. Close out any in-flight turn and, if not an
+	// EOF: the app-server exited. Drop any pending approval (its response
+	// channel — stdin — is gone) and close out any in-flight turn; if not an
 	// intentional Close, tell the user.
+	c.clearPendingApproval()
 	c.mu.Lock()
 	intentional := c.closed
 	active := c.turnActive
@@ -610,6 +652,152 @@ func (c *codexAppServerProcess) handleErrorNotification(params json.RawMessage) 
 	c.failTurn("⚠️ codex: " + msg)
 }
 
+// handleServerRequest routes a server→client REQUEST (one carrying both an id
+// AND a method). Approval requests (item/{commandExecution,fileChange}/
+// requestApproval) become a tappable approval card — the same view_event shape
+// claude's AskUserQuestion produces — and the request id is stashed so the
+// user's NEXT chat message (AnswerApproval) sends the JSON-RPC decision back.
+// Any OTHER server request is auto-replied with an empty result so it doesn't
+// block codex (it never expects a card from us). A pending approval counts as
+// turn activity (pushes the silence watchdog out).
+func (c *codexAppServerProcess) handleServerRequest(rawID json.RawMessage, method string, params json.RawMessage) {
+	c.mu.Lock()
+	if c.turnActive {
+		c.lastActivity = claudeChatNow()
+	}
+	c.mu.Unlock()
+
+	if !codexIsApprovalMethod(method) {
+		// Unknown server request — acknowledge with an empty result rather than
+		// leave codex blocked waiting for us. (item/tool/requestUserInput,
+		// mcpServer/elicitation/request, attestation/generate, etc.)
+		fmt.Fprintf(os.Stderr, "codex app-server: unhandled server request %q (id %s) — replying empty\n", method, string(rawID))
+		c.respondServerRequest(rawID, map[string]any{})
+		return
+	}
+
+	req, ok := parseCodexApprovalRequest(method, params)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "codex app-server: unparseable approval request %q — denying\n", method)
+		c.respondApproval(rawID, "cancel")
+		return
+	}
+	content, ok := codexApprovalCardContent(req)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "codex app-server: approval request %q with empty summary — denying\n", method)
+		c.respondApproval(rawID, "cancel")
+		return
+	}
+
+	// Stash the request id and arm the give-up timer BEFORE emitting the card,
+	// so a fast tap (AnswerApproval) always finds the pending approval. A prior
+	// unanswered approval is superseded (codex blocks one at a time per turn).
+	c.mu.Lock()
+	if c.approvalTimer != nil {
+		c.approvalTimer.Stop()
+	}
+	idForTimer := make(json.RawMessage, len(rawID))
+	copy(idForTimer, rawID)
+	c.pendingApprovalID = idForTimer
+	c.pendingApprovalCard = content
+	c.approvalTimer = time.AfterFunc(askAnswerTimeout, func() { c.expireApproval(idForTimer) })
+	c.mu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "codex app-server: approval request %q (id %s): %s\n", method, string(rawID), req.summary)
+	c.emit(codexAppEvent{role: "assistant", content: content})
+}
+
+// AnswerApproval delivers the user's tap/reply to a pending approval: it sends
+// the JSON-RPC decision response and reports handled=true so SendChat skips the
+// normal turn send (the message WAS the answer, not a new prompt). handled=false
+// when nothing is pending — SendChat then routes the message as a normal turn.
+// The approve label → accept; anything else → cancel (deny).
+func (c *codexAppServerProcess) AnswerApproval(msg string) bool {
+	id := c.takePendingApproval()
+	if id == nil {
+		return false
+	}
+	decision := codexApprovalDecisionFor(msg)
+	fmt.Fprintf(os.Stderr, "codex app-server: approval answered (id %s) → %s\n", string(id), decision)
+	c.respondApproval(id, decision)
+	return true
+}
+
+// takePendingApproval atomically consumes the stashed approval id (and stops its
+// timer), or nil when none is pending.
+func (c *codexAppServerProcess) takePendingApproval() json.RawMessage {
+	c.mu.Lock()
+	id := c.pendingApprovalID
+	c.pendingApprovalID = nil
+	c.pendingApprovalCard = ""
+	if c.approvalTimer != nil {
+		c.approvalTimer.Stop()
+		c.approvalTimer = nil
+	}
+	c.mu.Unlock()
+	return id
+}
+
+// PendingApprovalCard returns the rendered card for an outstanding approval (and
+// true), or ok=false when none is pending — the codex twin of
+// PendingAskChatContent, for re-surfacing the card to a reattaching client.
+func (c *codexAppServerProcess) PendingApprovalCard() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pendingApprovalID == nil || c.pendingApprovalCard == "" {
+		return "", false
+	}
+	return c.pendingApprovalCard, true
+}
+
+// clearPendingApproval denies any outstanding approval (cancel) on EOF/Close so
+// the turn doesn't wedge waiting for a tap that can never arrive. No-op when
+// nothing is pending. Safe to call after stdin is gone — respondApproval's write
+// just errors harmlessly.
+func (c *codexAppServerProcess) clearPendingApproval() {
+	if id := c.takePendingApproval(); id != nil {
+		fmt.Fprintf(os.Stderr, "codex app-server: pending approval (id %s) abandoned — denying (cancel)\n", string(id))
+		c.respondApproval(id, "cancel")
+	}
+}
+
+// expireApproval auto-denies an approval the user never answered (the give-up
+// timer fired). Guarded against a race with AnswerApproval: only acts if the
+// still-pending id matches (an answered/superseded approval already cleared it).
+func (c *codexAppServerProcess) expireApproval(rawID json.RawMessage) {
+	c.mu.Lock()
+	if c.pendingApprovalID == nil || !bytes.Equal(c.pendingApprovalID, rawID) {
+		c.mu.Unlock()
+		return
+	}
+	c.pendingApprovalID = nil
+	c.pendingApprovalCard = ""
+	c.approvalTimer = nil
+	c.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "codex app-server: approval (id %s) timed out — denying (cancel)\n", string(rawID))
+	c.respondApproval(rawID, "cancel")
+}
+
+// respondApproval sends the JSON-RPC decision response for an approval request
+// ({"id":<echo>,"result":{"decision":<accept|cancel|…>}}).
+func (c *codexAppServerProcess) respondApproval(rawID json.RawMessage, decision string) {
+	c.respondServerRequest(rawID, map[string]any{"decision": decision})
+}
+
+// respondServerRequest writes a JSON-RPC result response echoing the request id.
+// Best-effort: a write error (stdin gone) is logged, not surfaced — the turn's
+// own terminus handling covers a dead app-server.
+func (c *codexAppServerProcess) respondServerRequest(rawID json.RawMessage, result any) {
+	line, err := encodeCodexResponse(rawID, result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "codex app-server: encode server-request response: %v\n", err)
+		return
+	}
+	if err := c.writeLine(line); err != nil {
+		fmt.Fprintf(os.Stderr, "codex app-server: write server-request response: %v\n", err)
+	}
+}
+
 // routeTurnResponse handles a JSON-RPC response correlated to the active
 // turn/compact request. Returns true when it owns the response (so the reader
 // won't also forward it to the handshake waiter). A turn response carrying a
@@ -698,6 +886,20 @@ func (c *codexAppServerProcess) Close() error {
 		return nil
 	}
 	c.closed = true
+	// Deny any outstanding approval before stdin closes (best-effort: the write
+	// may race the close, which is fine — the dead app-server can't act on it).
+	if c.pendingApprovalID != nil {
+		id := c.pendingApprovalID
+		c.pendingApprovalID = nil
+		c.pendingApprovalCard = ""
+		if c.approvalTimer != nil {
+			c.approvalTimer.Stop()
+			c.approvalTimer = nil
+		}
+		if line, err := encodeCodexResponse(id, map[string]any{"decision": "cancel"}); err == nil && c.stdin != nil {
+			_, _ = c.stdin.Write(line)
+		}
+	}
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}

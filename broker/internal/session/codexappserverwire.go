@@ -52,6 +52,23 @@ func encodeCodexRequest(id int, method string, params any) ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
+// encodeCodexResponse builds one JSON-RPC RESULT response line for a
+// server→client request (the approval path). The id is echoed back verbatim as
+// a RawMessage because codex's RequestId is `string | integer` — the approval
+// request carries a server-side counter id (starts at 0, independent of our
+// client request-id space), and the response MUST echo it exactly. Newline-
+// terminated.
+func encodeCodexResponse(rawID json.RawMessage, result any) ([]byte, error) {
+	b, err := json.Marshal(map[string]any{
+		"id":     rawID,
+		"result": result,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
+}
+
 // encodeCodexNotification builds one JSON-RPC notification line (no id).
 func encodeCodexNotification(method string, params any) ([]byte, error) {
 	b, err := json.Marshal(map[string]any{
@@ -366,6 +383,115 @@ func codexNotificationToEvent(method string, params json.RawMessage) (codexAppEv
 		}
 	}
 	return codexAppEvent{}, false
+}
+
+// codexApprovalMethods is the set of server→client REQUEST methods that ask the
+// user to approve (or deny) an action codex wants to take during a turn. These
+// fire only under approvalPolicy on-request/untrusted/on-failure (plan mode uses
+// on-request). They are the codex twin of claude's AskUserQuestion: an id-bearing
+// request that BLOCKS the turn until the client responds with a decision.
+//
+// Verified live (codex-cli 0.132.0, docs/CODEX-APPSERVER-PROTOCOL.md):
+//   - item/commandExecution/requestApproval — a shell command needs approval.
+//   - item/fileChange/requestApproval — a file edit/patch needs approval.
+//
+// The EXPERIMENTAL item/tool/requestUserInput and mcpServer/elicitation/request
+// (generic question / MCP elicitation) are NOT handled here — they need specific
+// tool/MCP conditions to fire and are a documented follow-up.
+func codexIsApprovalMethod(method string) bool {
+	switch method {
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+		return true
+	}
+	return false
+}
+
+// codexApprovalRequest is a parsed approval request: the human-facing summary
+// (command line or file-change description) for the card, plus the working
+// directory for context. Both `command` and `cwd` are nullable on the wire, so
+// they degrade to "".
+type codexApprovalRequest struct {
+	summary string // the command line, or a file-change summary
+	cwd     string
+}
+
+// parseCodexApprovalRequest decodes an approval request's params into the bits
+// the card needs. ok=false when params don't decode at all (the caller then
+// denies with cancel so the turn doesn't wedge).
+func parseCodexApprovalRequest(method string, params json.RawMessage) (codexApprovalRequest, bool) {
+	var p struct {
+		Command string `json:"command"`
+		Cwd     string `json:"cwd"`
+		// file-change requests don't carry `command`; surface a generic summary.
+		Changes []struct {
+			Path string `json:"path"`
+		} `json:"changes"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return codexApprovalRequest{}, false
+	}
+	summary := strings.TrimSpace(p.Command)
+	if summary == "" && method == "item/fileChange/requestApproval" {
+		switch {
+		case len(p.Changes) == 1 && strings.TrimSpace(p.Changes[0].Path) != "":
+			summary = "edit " + strings.TrimSpace(p.Changes[0].Path)
+		case len(p.Changes) > 1:
+			summary = fmt.Sprintf("apply changes to %d files", len(p.Changes))
+		default:
+			summary = "apply file changes"
+		}
+	}
+	return codexApprovalRequest{summary: summary, cwd: strings.TrimSpace(p.Cwd)}, true
+}
+
+// codexApprovalApproveLabel / codexApprovalDenyLabel are the tappable option
+// labels rendered in the approval card. The user's tap sends the label back as
+// the next chat message; codexApprovalDecisionFor maps it to a JSON-RPC decision.
+const (
+	codexApprovalApproveLabel = "Approve"
+	codexApprovalDenyLabel    = "Deny"
+)
+
+// codexApprovalCardContent renders an approval request as the SAME
+// pending-input-shaped chat line claude's AskUserQuestion uses
+// (askUserQuestionContent): the deterministic sentinel, a question, and a
+// numbered Approve/Deny menu. That is exactly the shape core's classifier
+// (core/src/conversation.rs) turns into a tappable approval card — so the iOS /
+// Android approval UI renders it with ZERO app changes. ok=false on an empty
+// summary (caller falls back to auto-deny rather than a blank card).
+func codexApprovalCardContent(req codexApprovalRequest) (string, bool) {
+	summary := strings.TrimSpace(req.summary)
+	if summary == "" {
+		return "", false
+	}
+	var b strings.Builder
+	b.WriteString(pendingInputSentinel)
+	b.WriteString("\nAllow codex to run this command?\n\n")
+	b.WriteString(summary)
+	if req.cwd != "" {
+		b.WriteString("\nin ")
+		b.WriteString(req.cwd)
+	}
+	b.WriteString("\n\n1. ")
+	b.WriteString(codexApprovalApproveLabel)
+	b.WriteString("\n2. ")
+	b.WriteString(codexApprovalDenyLabel)
+	return b.String(), true
+}
+
+// codexApprovalDecisionFor maps the user's tapped label (or typed reply) to a
+// CommandExecutionApprovalDecision / FileChangeApprovalDecision string.
+//
+// Approve → "accept" (run it). Anything else → "cancel" (deny): cancel is ALWAYS
+// in availableDecisions and ends the turn cleanly, whereas "decline" is offered
+// only for some requests (verified: this capture's availableDecisions omitted
+// decline). Defaulting unknown/typed replies to cancel mirrors claude's
+// AskUserQuestion-deny posture — a deny must never leave the turn spinning.
+func codexApprovalDecisionFor(answer string) string {
+	if strings.EqualFold(strings.TrimSpace(answer), codexApprovalApproveLabel) {
+		return "accept"
+	}
+	return "cancel"
 }
 
 // isCodexCompactCommand reports whether the user's composer text is exactly the
