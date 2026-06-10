@@ -29,8 +29,9 @@ data class ReplyHapticsModel(
      *  mid-turn open (already busy) does NOT fire — we only fire on a
      *  transition we witnessed. */
     private val lastBusy: Boolean? = null,
-    /** Monotonic ms of the last event we emitted (for debounce). */
-    private val lastFiredMs: Long = Long.MIN_VALUE,
+    /** Monotonic ms of the last event we emitted (for debounce); null means
+     *  never fired, avoiding Long.MIN_VALUE overflow in the subtraction. */
+    private val lastFiredMs: Long? = null,
     private val minIntervalMs: Long = DEFAULT_MIN_INTERVAL_MS,
 ) {
     /**
@@ -54,7 +55,7 @@ data class ReplyHapticsModel(
             return copy(lastBusy = busy) to null
         }
         // Debounce: swallow flips within minIntervalMs of the last emit.
-        if (nowMs - lastFiredMs < minIntervalMs) {
+        if (lastFiredMs != null && nowMs - lastFiredMs < minIntervalMs) {
             return copy(lastBusy = busy) to null
         }
         return copy(lastBusy = busy, lastFiredMs = nowMs) to event
