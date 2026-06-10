@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.descriptorFor
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
@@ -103,6 +104,16 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     var showEndConfirm by remember { mutableStateOf(false) }
     var renameDraft by remember { mutableStateOf(name) }
 
+    // Descriptor-driven capability flags (WS-3.2). Collected unconditionally
+    // before any conditional state so Compose doesn't see composable call
+    // count changes. Falls back to static claude/codex behavior when the
+    // broker is old (no agents map).
+    val agentDescriptorsMap by store.agentDescriptors.collectAsState()
+
+    val agent = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant
+    val tint = neonAgentColor(agent, neon)
+    val agentDescriptor = descriptorFor(agent, agentDescriptorsMap)
+
     // Fork chooser state. Model + effort options come from the broker's
     // live per-agent catalog when available (per-model effort ranges, live
     // display names) and fall back to the static lists otherwise.
@@ -110,7 +121,9 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     val catalog = catalogs[session.assistant]
     var forkModel by remember(showFork) { mutableStateOf(forkModelInherit) }
     val modelOptions = forkModelOptions(session.assistant, catalog)
-    val effortOptions = forkEffortOptions(session.assistant, forkModel, catalog)
+    // Per-model effort options, then gated at the agent level (WS-3.2).
+    val modelEffortOptions = forkEffortOptions(session.assistant, forkModel, catalog)
+    val effortOptions = if (descriptorFor(session.assistant, agentDescriptorsMap).supportsEffort) modelEffortOptions else emptyList()
     val currentEffort = status?.reasoningEffort ?: session.reasoningEffort
     var forkEffort by remember(showFork) {
         mutableStateOf(
@@ -131,18 +144,15 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     // read-only planning. The sentinel "" maps to null into forkSession.
     var forkMode by remember(showFork) { mutableStateOf("") }
 
-    val agent = status?.assistant?.takeIf { it.isNotBlank() } ?: session.assistant
-    val tint = neonAgentColor(agent, neon)
-
     // Refresh the 5h/weekly limits on appear so they don't read stale (they
     // otherwise only refresh on connect + the card's manual button — feedback:
     // "tap refresh to update"). Best-effort: the broker call is a no-op for
-    // agents without a usage source and when no client is connected. Gated to
-    // claude/codex (the only agents with a usage endpoint) to match the limits
-    // card. Keyed on session.id so it re-fires if the pane (phone sheet or
-    // tablet Info pane) rebinds to a different session.
+    // agents without a usage source and when no client is connected. Gated on
+    // the descriptor's supportsUsage flag so third-party agents don't trigger
+    // a spurious call. Keyed on session.id so it re-fires if the pane (phone
+    // sheet or tablet Info pane) rebinds to a different session.
     LaunchedEffect(session.id) {
-        if (agent.lowercase() in listOf("claude", "codex")) {
+        if (agentDescriptor.supportsUsage) {
             store.refreshAccountUsage(session.id)
         }
         // Pull the live model catalog so the fork chooser's model/effort
@@ -310,8 +320,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                             val sessionLive = lifecycle !is SessionLifecycle.Exited &&
                                 lifecycle !is SessionLifecycle.FailedToStart &&
                                 store.harness.collectAsState().value.canIssueCommands
-                            val agentLower = agent.lowercase()
-                            if (agentLower.contains("claude") && sessionLive) {
+                            if (agentDescriptor.supportsCompact && sessionLive) {
                                 Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
                                 var compacted by remember { mutableStateOf(false) }
                                 TextButton(
@@ -332,10 +341,10 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                         color = neon.accent,
                                     )
                                 }
-                            } else if (agentLower.contains("codex")) {
+                            } else if (!agentDescriptor.supportsCompact && sessionLive) {
                                 Box(Modifier.fillMaxWidth().height(1.dp).background(neon.border))
                                 Text(
-                                    "Codex compacts context automatically",
+                                    "${agentDescriptor.displayName} compacts context automatically",
                                     fontFamily = neon.mono,
                                     color = neon.textFaint,
                                     style = MaterialTheme.typography.bodySmall,
@@ -347,10 +356,10 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 }
             }
 
-            // 3 · Limits (this session's agent only). Claude maps from the
-            // Anthropic OAuth usage endpoint, codex from ChatGPT /wham/usage;
-            // other agents have no source, so gate to the two.
-            if (agent.lowercase() in setOf("claude", "codex")) {
+            // 3 · Limits (this session's agent only). Gate on the descriptor's
+            // supportsUsage flag — broker tells us which agents have a usage
+            // endpoint; static fallback preserves claude/codex today.
+            if (agentDescriptor.supportsUsage) {
                 NeonAccountUsageCard(
                     fivePct = status?.account5hPct ?: session.account5hPct,
                     fiveResetsAt = status?.account5hResetsAt ?: session.account5hResetsAt,

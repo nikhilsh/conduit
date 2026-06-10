@@ -1711,7 +1711,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
      */
     private fun handleSlashCommand(sessionId: String, msg: String): Boolean {
         val agent = _sessions.value.firstOrNull { it.id == sessionId }?.assistant ?: "claude"
-        val match = SlashCommandRegistry.classify(msg, agent) ?: return false
+        // When we have live descriptors, pass the explicit supportsCompact flag so
+        // the registry uses the broker's answer rather than the static name check.
+        // null = fall back to the static "agent == claude" check (old broker).
+        val supportsCompact = _agentDescriptors.value
+            .takeIf { it.isNotEmpty() }
+            ?.let { descriptorFor(agent, it).supportsCompact }
+        val match = SlashCommandRegistry.classify(msg, agent, supportsCompact) ?: return false
         if (match.command.clazz == SlashCommandClass.PASS_THROUGH) {
             if (match.supported) return false // deliver verbatim to the agent
             postSystemMessage(sessionId, "“/${match.command.name}” only works with Claude — this session is running $agent.")
@@ -1901,8 +1907,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val modelCatalog: StateFlow<Map<String, List<AgentModel>>> = _modelCatalog.asStateFlow()
 
     /**
-     * Refresh [modelCatalog] from the active endpoint's capabilities.
-     * Old brokers (no "models" key) and failures are no-ops.
+     * Per-assistant capability descriptors from the active broker (PR #440).
+     * Empty until [refreshModelCatalog] succeeds on a broker that serves the
+     * `agents` map — callers fall back to [staticAgentDescriptors] via
+     * [descriptorFor]. Kept across failures so a flaky refresh never loses
+     * a previously-populated descriptor set.
+     */
+    private val _agentDescriptors = MutableStateFlow<Map<String, AgentDescriptor>>(emptyMap())
+    val agentDescriptors: StateFlow<Map<String, AgentDescriptor>> = _agentDescriptors.asStateFlow()
+
+    /**
+     * Refresh [modelCatalog] and [agentDescriptors] from the active
+     * endpoint's capabilities in one request. Old brokers (missing keys)
+     * and failures are no-ops for the affected flow.
      */
     suspend fun refreshModelCatalog() = withContext(Dispatchers.IO) {
         val ep = _endpoint.value
@@ -1912,19 +1929,34 @@ class SessionStore : ViewModel(), ConduitDelegate {
             Telemetry.breadcrumb("model_catalog", "capabilities fetch failed", mapOf("host" to ep.displayHost))
             return@withContext
         }
+        // Parse model catalog (existing).
         val parsed = runCatching { parseModelCatalog(raw) }.getOrNull()
         if (parsed.isNullOrEmpty()) {
             Telemetry.breadcrumb(
                 "model_catalog", "no models in capabilities (old broker or discovery pending)",
                 mapOf("host" to ep.displayHost),
             )
-            return@withContext
+        } else {
+            _modelCatalog.value = parsed
+            Telemetry.breadcrumb(
+                "model_catalog", "refreshed",
+                mapOf("counts" to parsed.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value.size}" }),
+            )
         }
-        _modelCatalog.value = parsed
-        Telemetry.breadcrumb(
-            "model_catalog", "refreshed",
-            mapOf("counts" to parsed.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value.size}" }),
-        )
+        // Parse agent descriptors (PR #440 — agents map).
+        val descriptors = runCatching { parseAgentDescriptors(raw) }.getOrNull()
+        if (descriptors.isNullOrEmpty()) {
+            Telemetry.breadcrumb(
+                "agent_descriptors", "no agents in capabilities (old broker)",
+                mapOf("host" to ep.displayHost),
+            )
+        } else {
+            _agentDescriptors.value = descriptors
+            Telemetry.breadcrumb(
+                "agent_descriptors", "refreshed",
+                mapOf("agents" to descriptors.keys.sorted().joinToString(",")),
+            )
+        }
     }
 
     /**

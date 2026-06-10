@@ -63,6 +63,20 @@ class SlashCommandRegistryTest {
         assertEquals("compact", SlashCommandRegistry.classify("/COMPACT", "CLAUDE")!!.command.name)
     }
 
+    @Test fun supportsCompactDescriptorGatesClaudeOnly() {
+        // supportsCompact=true → compact supported on any agent (descriptor says so).
+        val onCodexWithDescriptor = SlashCommandRegistry.classify("/compact", "codex", supportsCompact = true)!!
+        assertTrue(onCodexWithDescriptor.supported)
+
+        // supportsCompact=false → compact unsupported even on claude (descriptor override).
+        val onClaudeWithoutDescriptor = SlashCommandRegistry.classify("/compact", "claude", supportsCompact = false)!!
+        assertFalse(onClaudeWithoutDescriptor.supported)
+
+        // supportsCompact=null → fall back to static "agent == claude" check.
+        assertTrue(SlashCommandRegistry.classify("/compact", "claude", null)!!.supported)
+        assertFalse(SlashCommandRegistry.classify("/compact", "codex", null)!!.supported)
+    }
+
     @Test fun autocompleteFiltersByPrefix() {
         // "/c" → compact, clear, context, (cost alias of usage)
         val names = SlashCommandRegistry.autocomplete("/c").map { it.name }

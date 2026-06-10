@@ -44,8 +44,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sh.nikhil.conduit.AgentDescriptor
 import sh.nikhil.conduit.RemoteDirectoryListing
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.descriptorFor
+
+/**
+ * Ordered agent list for the picker cards row. Known agents (claude, codex)
+ * come first in declaration order; extra agents from the broker are appended
+ * alphabetically. Falls back to [claude, codex] when no live descriptors are
+ * available. Internal so [AgentDescriptorTest] can exercise it.
+ */
+internal fun agentListFor(descriptors: Map<String, AgentDescriptor>): List<String> {
+    if (descriptors.isEmpty()) return listOf("claude", "codex")
+    val known = listOf("claude", "codex").filter { it in descriptors }
+    val extras = (descriptors.keys - known.toSet()).sorted()
+    return known + extras
+}
 
 /**
  * Compose mirror of `apps/ios/Sources/ConduitUI/Views/ConduitAgentPickerSheet.swift`.
@@ -196,34 +211,28 @@ private fun AgentStep(
                 }
             }
         }
+        // Hoist state collection unconditionally (Compose scoping rule:
+        // collectAsState must not move in/out of conditional blocks).
+        val catalogs by store.modelCatalog.collectAsState()
+        val descriptors by store.agentDescriptors.collectAsState()
         if (useCards) {
             // Live default-model names from the discovered catalog
             // ("GPT-5.5", "Opus 4.8") — the static strings are only the
             // offline fallback, so the cards never pin a stale model name.
-            val catalogs by store.modelCatalog.collectAsState()
+            // Unknown agents (e.g. "opencode") get a generic card.
+            val agentList = agentListFor(descriptors)
             Row(horizontalArrangement = Arrangement.spacedBy(11.dp), modifier = Modifier.fillMaxWidth()) {
-                AgentCard(
-                    assistant = "claude",
-                    name = "Claude",
-                    model = defaultModelTitle(catalogs["claude"]) ?: "Sonnet 4.6",
-                    blurb = "Careful, conversational — best for ambiguous work.",
-                    tint = neon.claude,
-                    selected = selectedAgent == "claude",
-                    enabled = canIssue,
-                    onTap = { selectedAgent = "claude" },
-                    modifier = Modifier.weight(1f),
-                )
-                AgentCard(
-                    assistant = "codex",
-                    name = "Codex",
-                    model = defaultModelTitle(catalogs["codex"]) ?: "gpt-5-codex",
-                    blurb = "Terse and fast on well-scoped code tasks.",
-                    tint = neon.codex,
-                    selected = selectedAgent == "codex",
-                    enabled = canIssue,
-                    onTap = { selectedAgent = "codex" },
-                    modifier = Modifier.weight(1f),
-                )
+                agentList.forEach { agent ->
+                    AgentCardForAssistant(
+                        assistant = agent,
+                        descriptor = descriptors[agent],
+                        catalog = catalogs[agent],
+                        selected = selectedAgent == agent,
+                        enabled = canIssue,
+                        onTap = { selectedAgent = agent },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         } else {
             AgentTile(
@@ -295,7 +304,7 @@ private fun AgentStep(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    "Continue with ${if (selectedAgent == "codex") "Codex" else "Claude"}",
+                    "Continue with ${descriptors[selectedAgent]?.displayName ?: selectedAgent.replaceFirstChar { it.uppercaseChar() }}",
                     fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -303,6 +312,43 @@ private fun AgentStep(
         }
         Spacer(Modifier.height(8.dp))
     }
+}
+
+/**
+ * Dispatches to the branded [AgentCard] for known agents (claude/codex) or
+ * a generic card for any other assistant the broker reports. Descriptor-
+ * driven so a third agent ("opencode") renders without a code change.
+ */
+@Composable
+private fun AgentCardForAssistant(
+    assistant: String,
+    descriptor: AgentDescriptor?,
+    catalog: List<sh.nikhil.conduit.SessionStore.AgentModel>?,
+    selected: Boolean,
+    enabled: Boolean,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val neon = LocalNeonTheme.current
+    val name = descriptor?.displayName ?: assistant.replaceFirstChar { it.uppercaseChar() }
+    val model = defaultModelTitle(catalog) ?: ""
+    val tint = neonAgentColor(assistant, neon)
+    val blurb = when (assistant.lowercase()) {
+        "claude" -> "Careful, conversational — best for ambiguous work."
+        "codex"  -> "Terse and fast on well-scoped code tasks."
+        else     -> descriptor?.displayName?.let { "Powered by $it." } ?: "A third-party agent."
+    }
+    AgentCard(
+        assistant = assistant,
+        name = name,
+        model = model,
+        blurb = blurb,
+        tint = tint,
+        selected = selected,
+        enabled = enabled,
+        onTap = onTap,
+        modifier = modifier,
+    )
 }
 
 /**
@@ -355,7 +401,9 @@ private fun AgentCard(
             }
         }
         Text(name, fontFamily = neon.sans, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = neon.text)
-        Text(model, fontFamily = neon.mono, fontSize = 11.5.sp, color = if (selected) tint else neon.textFaint)
+        if (model.isNotEmpty()) {
+            Text(model, fontFamily = neon.mono, fontSize = 11.5.sp, color = if (selected) tint else neon.textFaint)
+        }
         Text(blurb, fontFamily = neon.sans, fontSize = 12.5.sp, color = neon.textDim)
     }
 }
@@ -385,10 +433,14 @@ private fun DirectoryStep(
     // Reasoning effort. Options come from the broker's live catalog for the
     // SELECTED model when available (per-model: sonnet lacks xhigh, haiku
     // has none — empty list hides the effort UI and sends no override);
-    // static per-assistant fallback otherwise.
+    // static per-assistant fallback otherwise. Also gated on the agent-level
+    // `supports.effort` descriptor (PR #440 WS-3.2).
     val catalogs by store.modelCatalog.collectAsState()
     val catalog = catalogs[assistant]
-    val effortOptions = forkEffortOptions(assistant, model, catalog)
+    val descriptorsForEffort by store.agentDescriptors.collectAsState()
+    val agentSupportsEffort = descriptorFor(assistant, descriptorsForEffort).supportsEffort
+    val modelEffortOptions = forkEffortOptions(assistant, model, catalog)
+    val effortOptions = if (agentSupportsEffort) modelEffortOptions else emptyList()
     var effort by remember(assistant) {
         // Honour the last dial choice if this agent supports it (§3), else
         // the agent default ("medium" when offered).
