@@ -494,6 +494,23 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		log.Printf("session %s: model override applied (%s): %v", id, adapter.Name, extra)
 	}
 	s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID)
+	// Render the handoff file so on_start hooks (e.g. "conduit memory
+	// render") find their context at CONDUIT_HANDOFF_PATH. Mirrors what
+	// switchToAdapter does before running on_swap. Non-fatal: a write
+	// failure is logged but never blocks the spawn.
+	if _, statErr := os.Stat(s.memoryPath); statErr == nil {
+		if err := s.renderHandoffFile(); err != nil {
+			fmt.Fprintf(os.Stderr, "session %s: renderHandoffFile (on_start): %v\n", s.ID, err)
+		}
+	}
+	// Invoke the on_start hook after the PTY/backend is running but before
+	// the session is exposed. Non-fatal: a hook failure is logged and a
+	// Sentry breadcrumb is recorded, but the session continues normally.
+	if hookErr := s.runHook(s.hooks.OnStart, map[string]string{
+		"AGENT_NAME": s.Assistant,
+	}); hookErr != nil {
+		fmt.Fprintf(os.Stderr, "session %s: on_start hook: %v (session continues)\n", s.ID, hookErr)
+	}
 	go s.drain(f)
 	s.startBackgroundLoops()
 	return s, nil
