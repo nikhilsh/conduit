@@ -57,6 +57,73 @@ func TestParseOpencodeEvent(t *testing.T) {
 	}
 }
 
+// TestParseOpencodeEvent_SessionError parses the session.error frame captured
+// VERBATIM from live opencode 1.17.0 (a bad-model turn). The backend needs the
+// error name + message to surface the failure and end the turn.
+func TestParseOpencodeEvent_SessionError(t *testing.T) {
+	// Verbatim from the live capture (model-not-found → UnknownError).
+	frame := `{"id":"evt_eb19a7df1001fQ44f5i0iaLE0N","type":"session.error","properties":{"sessionID":"ses_14e658248ffeG94ov6WrHxpYOX","error":{"name":"UnknownError","data":{"message":"Model not found: anthropic/claude-nonexistent-99. Did you mean: claude-3-5-haiku-latest, claude-fable-5, claude-haiku-4-5?"}}}}`
+	ev, ok := parseOpencodeEvent([]byte(frame))
+	if !ok || ev.Type != "session.error" {
+		t.Fatalf("parse: ev=%+v ok=%v", ev, ok)
+	}
+	if ev.Properties.SessionID != "ses_14e658248ffeG94ov6WrHxpYOX" {
+		t.Fatalf("sessionID = %q", ev.Properties.SessionID)
+	}
+	if ev.Properties.Error == nil {
+		t.Fatal("error payload not parsed")
+	}
+	if ev.Properties.Error.Name != "UnknownError" {
+		t.Fatalf("error name = %q", ev.Properties.Error.Name)
+	}
+	if got := ev.Properties.Error.message(); got != "UnknownError: Model not found: anthropic/claude-nonexistent-99. Did you mean: claude-3-5-haiku-latest, claude-fable-5, claude-haiku-4-5?" {
+		t.Fatalf("message = %q", got)
+	}
+}
+
+func TestOpencodeError_Message(t *testing.T) {
+	cases := []struct {
+		name string
+		e    *opencodeError
+		want string
+	}{
+		{"nil", nil, "the agent reported an error"},
+		{"name+msg", &opencodeError{Name: "ProviderAuthError"}, "ProviderAuthError"},
+		{
+			"trims-stack-to-first-line",
+			func() *opencodeError {
+				e := &opencodeError{Name: "UnknownError"}
+				e.Data.Message = "ProviderModelNotFoundError: \n    at <anonymous> (/$bunfs/root/chunk.js:1:2)"
+				return e
+			}(),
+			"UnknownError: ProviderModelNotFoundError:",
+		},
+		{
+			"msg-only",
+			func() *opencodeError { e := &opencodeError{}; e.Data.Message = "boom"; return e }(),
+			"boom",
+		},
+		{"empty", &opencodeError{}, "the agent reported an error"},
+	}
+	for _, c := range cases {
+		if got := c.e.message(); got != c.want {
+			t.Errorf("%s: message = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestOpencodeError_IsAbort(t *testing.T) {
+	if (&opencodeError{Name: "MessageAbortedError"}).isAbort() != true {
+		t.Error("MessageAbortedError should be an abort")
+	}
+	if (&opencodeError{Name: "APIError"}).isAbort() != false {
+		t.Error("APIError is not an abort")
+	}
+	if (*opencodeError)(nil).isAbort() != false {
+		t.Error("nil is not an abort")
+	}
+}
+
 func TestOpencodeUsageFromTokens(t *testing.T) {
 	tok := opencodeTokens{Total: 8593, Input: 8578, Output: 3, Reasoning: 12}
 	tok.Cache.Read = 5

@@ -225,6 +225,31 @@ Verbatim key frames:
   user `message.updated`; end = `session.status {type:"idle"}` immediately
   followed by `session.idle` (terminal). `session.idle` is the cleanest
   "turn done" trigger (one per session, no payload beyond `sessionID`).
+- **Failure terminus — `session.error` (added; the no-reply-hang fix).** A turn
+  that fails emits `session.error` and is **NOT guaranteed** to be followed by a
+  `session.idle`. The backend MUST treat `session.error` as a turn terminus too,
+  or the composer's typing indicator spins forever with no reply (the
+  device-reported v0.0.133 hang — `session.idle` was the only recognized end).
+  Shape (live, opencode 1.17.0):
+
+  ```json
+  {"id":"evt_…","type":"session.error","properties":{
+    "sessionID":"ses_…",
+    "error":{"name":"UnknownError","data":{
+      "message":"Model not found: anthropic/claude-nonexistent-99. Did you mean: …"}}}}
+  ```
+
+  `error` is a tagged union by `name`: `ProviderAuthError`
+  (`data.{providerID,message}`), `UnknownError` (`data.{message,ref}`),
+  `APIError` (`data.{message,statusCode,isRetryable,…}`), `ContextOverflowError`,
+  `MessageOutputLengthError` (no `data`), `StructuredOutputError`, and
+  `MessageAbortedError` (`data.message`) — the abort terminus, which the
+  interrupt/Stop path already handled, so the backend ends the turn **quietly**
+  for that one and surfaces a Chat-tab notice for the rest. opencode may pack a
+  `$bunfs` JS stack trace into `data.message`; the backend keeps only the first
+  line for the user-facing notice. (Observed: a *model-not-found* error WAS
+  followed by `idle`, but error classes that fail mid-stream are not — endTurn
+  is idempotent, so handling both is safe.)
 - **Token usage** rides the `step-finish` part and the final assistant
   `message.updated` (`tokens{total,input,output,reasoning,cache{read,write}}`,
   plus `cost`). On the free zen models `cost` is `0`. This is the Usage source
@@ -517,10 +542,13 @@ The driver curls + the captured SSE/JSON live in the job tmp dir
   should be identical (same engine, same events), but **tool-call frames,
   reasoning blocks on bigger models, and provider-specific errors are
   unverified.** No real key was on the box (`env | grep -c ANTHROPIC` = 0).
-- **Tool / shell / file-edit parts.** The "PONG" turn produced only
-  `reasoning`+`text` parts. The `part.type` values for tool calls, command
-  execution, file edits, and todos (`/session/{id}/todo`, `/session/{id}/shell`)
-  were **not** captured — a code-touching prompt is needed to surface them.
+- **Tool / shell / file-edit parts.** A code-touching prompt ("create a file…")
+  was later driven live: the turn is multi-step (`step-start` → `reasoning` →
+  `tool` parts with `{tool,callID,state}` → `step-finish`, then a second step
+  with the final `text`), interleaved with top-level `file.edited` /
+  `file.watcher.updated` events, and still terminates with a single
+  `session.idle`. The backend drops `tool`/`step-*`/`file.*` for prose and folds
+  only `text` parts, so a tool turn maps to one assistant bubble + a clean end.
 - **Permission / approval flow.** Endpoints exist
   (`/session/{id}/permissions/{id}`, `/permission/{requestID}/reply`,
   `permission` SSE events) but no approval fired (free model, no real tools).

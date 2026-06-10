@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,6 +102,23 @@ func (s *stubOpencodeServer) scriptTurn() {
 	}
 }
 
+// scriptErrorTurn pushes a turn that fails: busy → session.error (verbatim
+// shape from live opencode 1.17.0) with NO trailing session.idle. This is the
+// "typing forever, no reply" hang — the backend must end the turn on the error
+// frame, not wait for an idle that never comes.
+func (s *stubOpencodeServer) scriptErrorTurn() {
+	sid := s.sid
+	frames := []string{
+		fmt.Sprintf(`{"type":"session.status","properties":{"sessionID":%q,"status":{"type":"busy"}}}`, sid),
+		// Verbatim error shape: properties.error.{name,data.message}. No idle follows.
+		fmt.Sprintf(`{"type":"session.error","properties":{"sessionID":%q,"error":{"name":"APIError","data":{"message":"upstream model is overloaded","statusCode":529}}}}`, sid),
+	}
+	for _, fr := range frames {
+		s.push(fr)
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func (s *stubOpencodeServer) close() { s.srv.Close() }
 
 // newTestOpencodeProcess builds an opencodeServerProcess pointed at the stub's
@@ -167,6 +185,72 @@ func TestOpencodeBackend_TurnEndToEnd(t *testing.T) {
 
 	// Turn cleared after idle.
 	waitFor(t, 2*time.Second, func() bool { return !proc.TurnActive() })
+}
+
+// TestOpencodeBackend_SessionErrorEndsTurn is the regression for the
+// device-reported "typing forever, no reply" hang: a turn that goes busy then
+// emits session.error with NO trailing session.idle must (1) clear turn_active
+// so the composer's typing indicator stops, and (2) surface the error cause in
+// the Chat tab as a system message — not silently spin.
+func TestOpencodeBackend_SessionErrorEndsTurn(t *testing.T) {
+	stub := newStubOpencodeServer("ses_err")
+	defer stub.close()
+
+	events := make(chan []byte, 64)
+	proc := newTestOpencodeProcess(t, stub.srv.URL, func(p []byte) { events <- p }, func(string) {})
+	defer proc.Close()
+
+	stub.scriptErrorTurn()
+
+	// The turn must clear despite no session.idle ever arriving.
+	waitFor(t, 2*time.Second, func() bool { return !proc.TurnActive() })
+
+	// And the cause must surface as a system bubble (not silence, not assistant).
+	deadline := time.After(2 * time.Second)
+	var sysContent string
+	for sysContent == "" {
+		select {
+		case p := <-events:
+			role, content := chatEventRoleContent(p)
+			if role == "assistant" {
+				t.Fatalf("unexpected assistant bubble for an errored turn: %q", content)
+			}
+			if role == "system" {
+				sysContent = content
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for the error system message")
+		}
+	}
+	if !strings.Contains(sysContent, "APIError") || !strings.Contains(sysContent, "overloaded") {
+		t.Fatalf("system message = %q, want it to carry the error name + cause", sysContent)
+	}
+}
+
+// TestOpencodeBackend_AbortErrorIsQuiet: a MessageAbortedError (the abort
+// terminus) must end the turn WITHOUT a scary error bubble — the Stop button
+// already gave the user feedback.
+func TestOpencodeBackend_AbortErrorIsQuiet(t *testing.T) {
+	stub := newStubOpencodeServer("ses_abort")
+	defer stub.close()
+
+	events := make(chan []byte, 64)
+	proc := newTestOpencodeProcess(t, stub.srv.URL, func(p []byte) { events <- p }, func(string) {})
+	defer proc.Close()
+
+	stub.push(`{"type":"session.status","properties":{"sessionID":"ses_abort","status":{"type":"busy"}}}`)
+	waitFor(t, 2*time.Second, func() bool { return proc.TurnActive() })
+	stub.push(`{"type":"session.error","properties":{"sessionID":"ses_abort","error":{"name":"MessageAbortedError","data":{"message":"aborted"}}}}`)
+	waitFor(t, 2*time.Second, func() bool { return !proc.TurnActive() })
+
+	select {
+	case p := <-events:
+		if role, content := chatEventRoleContent(p); role == "system" {
+			t.Fatalf("abort should be quiet, got system bubble: %q", content)
+		}
+	case <-time.After(200 * time.Millisecond):
+		// good — no bubble
+	}
 }
 
 func TestOpencodeBackend_Interrupt(t *testing.T) {

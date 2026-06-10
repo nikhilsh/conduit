@@ -43,6 +43,55 @@ type opencodeEventProperties struct {
 	Delta     string               `json:"delta"`     // message.part.delta
 	Part      *opencodePart        `json:"part"`      // message.part.updated
 	Info      *opencodeMessageInfo `json:"info"`      // message.updated
+	Error     *opencodeError       `json:"error"`     // session.error
+}
+
+// opencodeError is the session.error payload. opencode emits this when a turn
+// fails (bad/unconnected model, provider auth, context overflow, API error,
+// aborted, …) — a tagged union {name, data}. `name` is the error class
+// (ProviderAuthError / UnknownError / APIError / MessageAbortedError / …) and
+// `data.message` is the human string (absent on MessageOutputLengthError). The
+// backend MUST treat this as a turn terminus: a real provider can emit
+// session.error WITHOUT a following session.idle, which is the "typing forever,
+// no reply" hang — only session.idle was recognized before.
+type opencodeError struct {
+	Name string `json:"name"`
+	Data struct {
+		Message    string `json:"message"`
+		ProviderID string `json:"providerID"` // ProviderAuthError
+	} `json:"data"`
+}
+
+// isAbort reports whether the error is a user/agent abort (MessageAbortedError),
+// which the interrupt path already handles quietly — no scary error bubble.
+func (e *opencodeError) isAbort() bool {
+	return e != nil && e.Name == "MessageAbortedError"
+}
+
+// message renders a session.error into a user-facing one-liner for the Chat
+// tab. Falls back to the error class name when no message string is present
+// (e.g. MessageOutputLengthError carries no data), and to a generic notice when
+// even the name is empty.
+func (e *opencodeError) message() string {
+	if e == nil {
+		return "the agent reported an error"
+	}
+	msg := strings.TrimSpace(e.Data.Message)
+	// opencode sometimes packs a JS stack trace into the message; keep only the
+	// first line so the Chat tab shows a readable cause, not a $bunfs trace.
+	if i := strings.IndexAny(msg, "\r\n"); i >= 0 {
+		msg = strings.TrimSpace(msg[:i])
+	}
+	switch {
+	case msg != "" && e.Name != "":
+		return e.Name + ": " + msg
+	case msg != "":
+		return msg
+	case e.Name != "":
+		return e.Name
+	default:
+		return "the agent reported an error"
+	}
 }
 
 // opencodeStatus is the session.status payload: {"type":"busy"|"idle"}.
