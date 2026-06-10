@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/nikhilsh/conduit/broker/internal/agents"
 )
 
 func (m *Manager) sessionOnDisk(id string) bool {
@@ -67,8 +70,16 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	if !hasAgentConversation {
 		resumeID = ""
 	}
+	// The CodexThreadID meta slot doubles as the generic "agent's own
+	// conversation id" for protocol backends that resume by id (codex's
+	// thread, opencode's ses_). Gate it on the backing store still existing so
+	// a wiped home with a stale id doesn't make every respawn fast-exit.
+	// Server-backed agents (opencode) persist conversations in a data store
+	// (a single global SQLite DB under DataDir) rather than per-session
+	// conversation files, so gate those on the store; the rest gate on the
+	// codex conversation files as before.
 	codexThreadID := meta.CodexThreadID
-	if !chatConversationOnDisk(sessionDir, ".codex") {
+	if !agentResumeStoreOnDisk(sessionDir, adapter) {
 		codexThreadID = ""
 	}
 	s, err := newSession(id, adapter, sessionOptions{
@@ -182,6 +193,21 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		m.mu.Unlock()
 	}()
 	return s, nil
+}
+
+// agentResumeStoreOnDisk reports whether the resume id's backing store still
+// lives in the session's persistent agent-home. For a server-backed agent
+// with a DataDir (opencode), resume hangs off a single global session store
+// (opencode.db) under that dir, so any file under agent-home/<DataDir>
+// counts. For the rest (codex), it falls back to the codex conversation-file
+// gate. Used by recovery to avoid seeding a stale resume id whose store is
+// gone (wiped home → the agent can't find the conversation).
+func agentResumeStoreOnDisk(sessionDir string, adapter agents.Adapter) bool {
+	if dir := strings.TrimSpace(adapter.DataDir); dir != "" {
+		matches, _ := filepath.Glob(filepath.Join(sessionDir, "agent-home", dir, "*"))
+		return len(matches) > 0
+	}
+	return chatConversationOnDisk(sessionDir, ".codex")
 }
 
 // chatConversationOnDisk reports whether the session's persistent

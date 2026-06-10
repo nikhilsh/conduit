@@ -1,0 +1,25 @@
+name                = "opencode"
+command             = ["opencode"]
+args                = ["serve", "--hostname", "127.0.0.1"]   # backend appends --port=<alloc>
+# opencode has no API-key flag; provider keys flow via env (the provider's
+# `env` field) — pass through what credentials-materialization exports.
+env_passthrough     = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_API_KEY"]
+workdir             = "/workspace"
+
+# --- Phase 1: manifest-driven fields (WS-1.1) ---
+protocol            = "opencode-server"           # new backend dispatch key (WS-4.2)
+# ~/.config/opencode (config.json / opencode.jsonc) — resolved under the
+# session's ephemeral $HOME via XDG defaults.
+config_dir          = ".config/opencode"
+# on-disk creds (optional; env materialization is the primary path).
+cred_files          = [".local/share/opencode/auth.json"]
+# Session store is a single global SQLite DB (opencode.db) under data_dir, not
+# per-session conversation files. data_dir must persist across broker restarts
+# for resume — the backend keeps prompting the same ses_ id after relaunch.
+data_dir            = ".local/share/opencode"
+resume_args         = []                            # server resumes via the global DB, no flag
+continue_args       = []                            # CLI fallback: ["run","--continue"]
+model_args          = []                            # model is a prompt-body field, not a flag
+effort_args         = []                            # effort unsupported (Capabilities flag off)
+login_provider      = "opencode"                    # built-in zen free provider; anthropic/openai via env
+hidden              = false
