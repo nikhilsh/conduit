@@ -1808,7 +1808,7 @@ final class SessionStore {
         if match.command.clazz == .passThrough {
             if match.supported { return false } // deliver verbatim to the agent
             let reason = descriptor.map { $0.displayName.isEmpty ? agent : $0.displayName } ?? agent
-            postSystemMessage(sessionID, ""/\(match.command.name)" is not supported by \(reason).")
+            postSystemMessage(sessionID, "\u{201C}/\(match.command.name)\u{201D} is not supported by \(reason).")
             return true
         }
         switch match.command.name {
