@@ -52,11 +52,7 @@ func (s *unifiedPushSender) Send(ctx context.Context, token DeviceToken, payload
 		return ErrTokenGone
 	}
 
-	body := unifiedPushPayload{
-		Title:     payload.Title,
-		Body:      payload.Body,
-		SessionID: payload.SessionID,
-	}
+	body := unifiedPushPayload(payload)
 
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
