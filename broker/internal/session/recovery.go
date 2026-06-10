@@ -161,6 +161,9 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		}
 		return s.Switch(nextAdapter)
 	}
+	if m.pushNotifier != nil {
+		s.SetPushNotifier(m.pushNotifier, m.pushIdentity)
+	}
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)
 	go func() {

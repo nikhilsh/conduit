@@ -31,6 +31,10 @@ type chatProcess struct {
 	// doesn't have to guess "is the agent working" from the trailing log
 	// role. Guarded by mu.
 	turnActive bool
+	// onTurnIdle, when non-nil, fires after each turn ends (after
+	// markTurnActive(false)). Used by the session to fire push notifications
+	// when no client is attached. Set once at wiring time.
+	onTurnIdle func()
 }
 
 // errChatProcessClosed is returned by Send after the process has been
@@ -94,7 +98,15 @@ func startChatProcess(
 		// envelope; do it BEFORE the usage fold so the status broadcast
 		// that rides accumulateUsage carries turn_active=false.
 		_ = processClaudeStreamOutput(stdout, publish, gen, titleGen, onUsage, onControl, onInit,
-			func() { cp.markTurnActive(false) })
+			func() {
+				cp.markTurnActive(false)
+				cp.mu.Lock()
+				idle := cp.onTurnIdle
+				cp.mu.Unlock()
+				if idle != nil {
+					idle()
+				}
+			})
 		// EOF / agent exit: whatever turn was in flight is over.
 		cp.markTurnActive(false)
 		werr := cmd.Wait()
@@ -114,6 +126,15 @@ func startChatProcess(
 		}
 	}()
 	return cp, nil
+}
+
+// setTurnIdleHook installs the turn-end notification callback. Called once at
+// wiring time (manager.go), before any Send. The hook fires after the turn-active
+// latch is cleared so the session's SubscriberCount check is accurate.
+func (c *chatProcess) setTurnIdleHook(fn func()) {
+	c.mu.Lock()
+	c.onTurnIdle = fn
+	c.mu.Unlock()
 }
 
 // Send writes the user's composer text to the agent as one stream-json

@@ -51,6 +51,16 @@ type codexAppServerProcess struct {
 	// (titles + quick replies), the codex twin of claudechat.go's turn-end
 	// hook. nil when no AI provider is selected for the session.
 	onTurn func(lastAssistant, msgID string)
+	// onTurnIdle fires after any turn end (completed, interrupted, or failed)
+	// once turnActive is cleared. Used by the session to fire push
+	// notifications when no client is attached. nil = no-op. Set once at
+	// wiring time before any Send.
+	onTurnIdle func()
+	// onPendingInput fires when an approval card is stashed (the agent is
+	// now blocked on a decision). Used by the session to push a "Needs your
+	// input" notification when no client is attached. nil = no-op. Set once
+	// at wiring time.
+	onPendingInput func()
 
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
@@ -132,6 +142,24 @@ type codexAppServerProcess struct {
 func (c *codexAppServerProcess) setTurnHook(onTurn func(lastAssistant, msgID string)) {
 	c.mu.Lock()
 	c.onTurn = onTurn
+	c.mu.Unlock()
+}
+
+// setTurnIdleHook installs the turn-idle push-notification callback. Called
+// once at wiring time before any Send. Fires on ALL turn termini
+// (completed, interrupted, failed) once turnActive is cleared.
+func (c *codexAppServerProcess) setTurnIdleHook(fn func()) {
+	c.mu.Lock()
+	c.onTurnIdle = fn
+	c.mu.Unlock()
+}
+
+// setPendingInputHook installs the pending-input push-notification callback.
+// Called once at wiring time before any Send. Fires when an approval card
+// is stashed and the agent is waiting for the user's decision.
+func (c *codexAppServerProcess) setPendingInputHook(fn func()) {
+	c.mu.Lock()
+	c.onPendingInput = fn
 	c.mu.Unlock()
 }
 
@@ -404,11 +432,19 @@ func (c *codexAppServerProcess) endTurn() {
 	// or a user Stop). Snapshot + reset the latch under the lock.
 	c.mu.Lock()
 	hook := c.onTurn
+	idleHook := c.onTurnIdle
 	lastAssistant, lastTS := c.turnLastAssistant, c.turnLastTS
 	c.turnLastAssistant, c.turnLastTS = "", ""
 	c.mu.Unlock()
 	if hook != nil && active && !intentional && !interrupting {
 		hook(lastAssistant, lastTS)
+	}
+	// Fire the session-level idle hook for push notifications. Fires on all
+	// NORMAL and interrupted termini (not intentional Close), so the device
+	// gets a notification when the agent finishes — even on interrupted turns
+	// where the user tapped Stop and then backgrounded.
+	if idleHook != nil && active && !intentional {
+		idleHook()
 	}
 }
 
@@ -421,12 +457,30 @@ func (c *codexAppServerProcess) failTurn(msg string) {
 	if active && !intentional && !interrupting {
 		publishChatSystem(c.publish, msg)
 	}
+	// Fire the idle hook on a terminal failure too — the user needs to know
+	// the agent stopped, even if it stopped with an error.
+	if active && !intentional {
+		c.mu.Lock()
+		idleHook := c.onTurnIdle
+		c.mu.Unlock()
+		if idleHook != nil {
+			idleHook()
+		}
+	}
 }
 
 // endTurnQuiet ends the active turn without any notice — for an interrupted
 // turn, where the composer just needs to unlock.
 func (c *codexAppServerProcess) endTurnQuiet() {
-	c.finishTurn()
+	active, _, intentional, _ := c.finishTurn()
+	if active && !intentional {
+		c.mu.Lock()
+		idleHook := c.onTurnIdle
+		c.mu.Unlock()
+		if idleHook != nil {
+			idleHook()
+		}
+	}
 }
 
 // beginTurnWatchdogLocked (re)starts the silence watchdog for a freshly-started
@@ -705,6 +759,14 @@ func (c *codexAppServerProcess) handleServerRequest(rawID json.RawMessage, metho
 
 	fmt.Fprintf(os.Stderr, "codex app-server: approval request %q (id %s): %s\n", method, string(rawID), req.summary)
 	c.emit(codexAppEvent{role: "assistant", content: content})
+	// Notify the device that the agent is awaiting a decision. Fires only
+	// when no client is attached (onPendingInput guards via maybeNotifyPendingInput).
+	c.mu.Lock()
+	pendingHook := c.onPendingInput
+	c.mu.Unlock()
+	if pendingHook != nil {
+		pendingHook()
+	}
 }
 
 // AnswerApproval delivers the user's tap/reply to a pending approval: it sends

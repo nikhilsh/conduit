@@ -47,6 +47,10 @@ type codexChatProcess struct {
 	// niceties (titles + quick replies), the codex twin of claudechat.go's
 	// turn-end hook. nil when no AI provider is selected for the session.
 	onTurn func(lastAssistant, msgID string)
+	// onTurnIdle fires after each completed turn (success or failure, but
+	// not on intentional Close). Used by the session to fire push
+	// notifications when no client is attached. nil = no-op.
+	onTurnIdle func()
 
 	mu       sync.Mutex
 	threadID string
@@ -69,6 +73,12 @@ func newCodexChatProcess(binary, dir string, env, extra []string, publish func([
 // replies). Called once at wiring time, before any Send.
 func (c *codexChatProcess) setTurnHook(onTurn func(lastAssistant, msgID string)) {
 	c.onTurn = onTurn
+}
+
+// setTurnIdleHook installs the turn-idle push-notification callback. Called
+// once at wiring time before any Send.
+func (c *codexChatProcess) setTurnIdleHook(fn func()) {
+	c.onTurnIdle = fn
 }
 
 // codexTurnArgv builds the argv for one turn. The first turn (empty
@@ -212,6 +222,10 @@ func (c *codexChatProcess) runTurn(argv []string) {
 	// session, not a real turn). nil-safe.
 	if c.onTurn != nil && !intentional {
 		c.onTurn(lastAssistant, lastTS)
+	}
+	// Fire the session-level idle hook for push notifications.
+	if c.onTurnIdle != nil && !intentional {
+		c.onTurnIdle()
 	}
 
 	// If the turn ended without emitting any assistant message (e.g. an
