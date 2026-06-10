@@ -90,6 +90,8 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		// resolves this session's own newest conversation.
 		continueLatestChat:  resumeID == "" && hasClaudeConversation,
 		resumeCodexThreadID: codexThreadID,
+		modelCatalog:        m.ModelCatalog,
+		codexBinary:         m.codexBinary,
 	})
 	if err != nil {
 		return nil, err
