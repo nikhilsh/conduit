@@ -210,6 +210,21 @@ dictionary SshBootstrapResult {
     boolean reused;
 };
 
+// Owned SSH local-forward tunnel. The app holds this for the lifetime of the
+// pairing: dial `ws://127.0.0.1:<local_port>` with the existing transport,
+// observe `is_alive()`, and `stop()` on logout/teardown. See
+// docs/PLAN-SSH-TUNNEL.md.
+interface SshTunnel {
+    u16 local_port();
+    boolean is_alive();
+    void stop();
+};
+
+dictionary SshTunnelBootstrap {
+    SshBootstrapResult result;
+    SshTunnel tunnel;
+};
+
 [Error]
 enum SshError {
     "Dial",
@@ -233,6 +248,19 @@ callback interface SshHostKeyDelegate {
 namespace conduit_core {
     [Async, Throws=SshError]
     SshBootstrapResult ssh_bootstrap(
+        SshCredentials credentials,
+        string pre_allocated_token,
+        string anthropic_api_key,
+        string openai_api_key,
+        string? image_ref,
+        SshHostKeyDelegate host_key_delegate
+    );
+
+    // Tunneled variant — returns the owned SshTunnel handle so the app can
+    // observe is_alive() and stop() on logout. Preferred path; see
+    // docs/PLAN-SSH-TUNNEL.md.
+    [Async, Throws=SshError]
+    SshTunnelBootstrap ssh_bootstrap_tunneled(
         SshCredentials credentials,
         string pre_allocated_token,
         string anthropic_api_key,

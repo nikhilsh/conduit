@@ -20,9 +20,11 @@
 mod bootstrap;
 mod connect;
 mod port_forward;
+mod tunnel;
 mod types;
 
-pub use types::{SshAuth, SshBootstrapResult, SshCredentials, SshError};
+pub use tunnel::SshTunnel;
+pub use types::{SshAuth, SshBootstrapResult, SshCredentials, SshError, SshTunnelBootstrap};
 
 pub use connect::HostKeyCallback;
 use connect::SshClient;
@@ -39,6 +41,12 @@ const REMOTE_BOOTSTRAP_SH: &str = include_str!("../../../scripts/remote-bootstra
 /// localhost TCP port that's now SSH-forwarded to the harness container
 /// inside the user's server. Mobile transport calls
 /// `connect("ws://127.0.0.1:{local_port}", token)` and is on the air.
+///
+/// Back-compat shape: this spawns a fire-and-forget tunnel and **drops** the
+/// owning [`SshTunnel`] handle, matching the pre-tunnel-handle behaviour. The
+/// accept loop + russh session stay alive (the spawned tasks hold their own
+/// `Arc`s), so the forward keeps working — but the caller gets no way to stop
+/// it or observe liveness. Prefer [`ssh_bootstrap_tunneled`] for new code.
 pub async fn ssh_bootstrap(
     creds: SshCredentials,
     pre_allocated_token: String,
@@ -47,6 +55,38 @@ pub async fn ssh_bootstrap(
     image_ref: Option<String>,
     host_key_cb: HostKeyCallback,
 ) -> Result<SshBootstrapResult, SshError> {
+    let bootstrap = ssh_bootstrap_tunneled(
+        creds,
+        pre_allocated_token,
+        anthropic_api_key,
+        openai_api_key,
+        image_ref,
+        host_key_cb,
+    )
+    .await?;
+    // Detach the tunnel: forget the handle so the accept loop / watcher keep
+    // running for the process lifetime (legacy behaviour). std::mem::forget
+    // would leak the Arc; instead we deliberately leak only the strong ref by
+    // converting into the raw Arc and forgetting it, so Drop (which aborts the
+    // tasks) never fires.
+    std::mem::forget(bootstrap.tunnel);
+    Ok(bootstrap.result)
+}
+
+/// Bootstrap **and** return the owned [`SshTunnel`] so the caller controls its
+/// lifecycle: hold the handle for the pairing's lifetime, observe
+/// [`SshTunnel::is_alive`], and call [`SshTunnel::stop`] on logout/teardown.
+///
+/// This is the path the apps should migrate to (see
+/// `docs/PLAN-SSH-TUNNEL.md`).
+pub async fn ssh_bootstrap_tunneled(
+    creds: SshCredentials,
+    pre_allocated_token: String,
+    anthropic_api_key: String,
+    openai_api_key: String,
+    image_ref: Option<String>,
+    host_key_cb: HostKeyCallback,
+) -> Result<SshTunnelBootstrap, SshError> {
     if pre_allocated_token.len() < 16 {
         return Err(SshError::BootstrapParse(
             "pre_allocated_token must be at least 16 chars".into(),
@@ -63,53 +103,23 @@ pub async fn ssh_bootstrap(
     )
     .await?;
 
-    // Bind a local listener — port chosen by the kernel — and spawn an
-    // accept loop that forwards each accept onto a direct-tcpip channel
-    // to the remote harness port.
+    // Bind a local listener — port chosen by the kernel — and spawn the owned
+    // tunnel (accept loop forwards each accept onto a direct-tcpip channel to
+    // the remote harness port; a watcher trips teardown if the session dies).
     let (listener, local_port) = port_forward::bind_random_local().await?;
     let handle = std::sync::Arc::clone(&client.handle);
     let remote_port = parsed.port;
-    tokio::spawn(async move {
-        loop {
-            let (sock, peer) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            // Acquire the SSH multiplexer briefly to open one channel.
-            // Holding the lock across the full proxy_connection would
-            // serialize every forwarded connection — we only need it
-            // for the open-channel call itself; the Channel<Msg> we
-            // get back is independent and proxy_connection can drive
-            // it without re-locking.
-            let guard = handle.lock().await;
-            let channel = match guard
-                .channel_open_direct_tcpip("127.0.0.1", remote_port as u32, "127.0.0.1", 0)
-                .await
-            {
-                Ok(c) => c,
-                Err(_) => {
-                    drop(guard);
-                    drop(sock);
-                    continue;
-                }
-            };
-            drop(guard);
-            tokio::spawn(port_forward::proxy_connection(
-                sock,
-                channel,
-                peer,
-                local_port,
-                remote_port,
-            ));
-        }
-    });
+    let tunnel = SshTunnel::spawn(handle, listener, local_port, remote_port);
 
-    Ok(SshBootstrapResult {
-        remote_port: parsed.port,
-        local_port,
-        token: parsed.token,
-        host_key_fingerprint: client.host_key_fingerprint,
-        reused: parsed.reused,
+    Ok(SshTunnelBootstrap {
+        result: SshBootstrapResult {
+            remote_port: parsed.port,
+            local_port,
+            token: parsed.token,
+            host_key_fingerprint: client.host_key_fingerprint,
+            reused: parsed.reused,
+        },
+        tunnel,
     })
 }
 
