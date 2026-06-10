@@ -35,10 +35,14 @@ class FcmPushProvider(private val ctx: Context) : PushProvider {
     override val isAvailable: Boolean
         get() = try {
             FirebaseApp.getInstance() != null
-        } catch (_: IllegalStateException) {
-            // FirebaseApp.getInstance() throws if no default app has been
-            // initialised (e.g. google-services.json is missing or the plugin
-            // didn't run). Treat as unavailable — same as the old stub.
+        } catch (_: RuntimeException) {
+            // FirebaseApp.getInstance() throws IllegalStateException when no
+            // default app has been initialised (e.g. google-services.json
+            // missing or the plugin didn't run). In plain JVM unit tests the
+            // Android stubs throw RuntimeException("Method … not mocked") for
+            // any Android API touch inside getInstance(). Both cases mean
+            // Firebase is not available; catching the common supertype covers
+            // production and test consistently without swallowing Errors.
             false
         }
 
