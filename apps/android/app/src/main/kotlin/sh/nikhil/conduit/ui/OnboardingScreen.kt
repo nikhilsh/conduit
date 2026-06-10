@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +41,29 @@ import sh.nikhil.conduit.AppearanceStore
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
+
+// ---------------------------------------------------------------------------
+// Onboarding funnel breadcrumb step name constants.
+// Must mirror iOS OnboardingStep exactly so Sentry funnels line up.
+// ---------------------------------------------------------------------------
+object OnboardingStep {
+    const val SCREEN_SHOWN          = "screen_shown"
+    const val WELCOME_SHOWN         = "welcome_shown"
+    const val INSTALL_SHOWN         = "install_shown"
+    const val PAIR_SHOWN            = "pair_shown"
+    const val PAIR_QR_STARTED       = "pair_qr_started"
+    const val PAIR_SSH_STARTED      = "pair_ssh_started"
+    const val PAIR_MANUAL_STARTED   = "pair_manual_started"
+    const val PAIR_DISCOVER_STARTED = "pair_discover_started"
+    const val PAIRING_SUCCEEDED     = "pairing_succeeded"
+    const val CAPABILITIES_FETCHED  = "capabilities_fetched"
+    const val AGENT_PICKER_OPENED   = "agent_picker_opened"
+    const val FIRST_SESSION_CREATED = "first_session_created"
+    const val FIRST_TURN_SENT       = "first_turn_sent"
+    const val FIRST_REPLY_RECEIVED  = "first_reply_received"
+    const val DONE_SHOWN            = "done_shown"
+}
 
 /**
  * First-run onboarding (handoff §5 / onb-flow.jsx): Welcome → Install → Pair.
@@ -68,10 +93,25 @@ fun OnboardingScreen(store: SessionStore, onFinish: () -> Unit) {
     }
     var showAddServer by remember { mutableStateOf(false) }
 
+    // Funnel: screen shown on first composition.
+    LaunchedEffect(Unit) {
+        Telemetry.breadcrumb("onboarding", OnboardingStep.SCREEN_SHOWN,
+            mapOf("step" to step.toString(), "route" to "full"))
+    }
+
     fun go(target: Int) {
         step = target
         appearance.setOnboardingFurthestStep(maxOf(furthest, target))
         if (target == FeatureFlags.Step.WELCOME) appearance.setOnboardingSeenWelcome(true)
+        // Funnel: step transition.
+        val stepName = when (target) {
+            FeatureFlags.Step.WELCOME -> OnboardingStep.WELCOME_SHOWN
+            FeatureFlags.Step.INSTALL -> OnboardingStep.INSTALL_SHOWN
+            FeatureFlags.Step.PAIR    -> OnboardingStep.PAIR_SHOWN
+            FeatureFlags.Step.DONE    -> OnboardingStep.DONE_SHOWN
+            else                      -> "step_$target"
+        }
+        Telemetry.breadcrumb("onboarding", stepName)
     }
 
     Box(
@@ -88,7 +128,12 @@ fun OnboardingScreen(store: SessionStore, onFinish: () -> Unit) {
             when (step) {
                 FeatureFlags.Step.WELCOME -> OnbWelcome(neon, onPair = { go(FeatureFlags.Step.INSTALL) }, onCode = { go(FeatureFlags.Step.PAIR) })
                 FeatureFlags.Step.INSTALL -> OnbInstall(neon, guide, onNext = { go(FeatureFlags.Step.PAIR) })
-                else -> OnbPair(neon, guide, onPair = { showAddServer = true })
+                else -> OnbPair(neon, guide, onPair = {
+                    // Each specific transport method logs its own crumb
+                    // inside AddServerSheet (QR/SSH/LAN/manual). No coarse
+                    // crumb here to avoid a misleading label.
+                    showAddServer = true
+                })
             }
         }
     }

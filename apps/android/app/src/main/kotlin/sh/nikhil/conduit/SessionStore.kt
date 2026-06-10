@@ -732,6 +732,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun applyDeepLink(raw: String) {
         val parsed = sh.nikhil.conduit.PairingURL.parse(raw) ?: return
         val ep = Endpoint(url = parsed.endpoint, token = parsed.token)
+        Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.PAIRING_SUCCEEDED,
+            mapOf("transport" to "deep_link", "host" to ep.displayHost))
         setEndpoint(ep.url, ep.token)
         upsertSavedServer(name = ep.displayHost, endpoint = ep, makeDefault = true)
         disconnect()
@@ -989,6 +991,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
             try {
                 withContext(Dispatchers.IO) { c.connect(this@SessionStore) }
                 _harness.value = HarnessState.Linked
+                Telemetry.breadcrumb("onboarding", "endpoint_connected",
+                    mapOf("host" to _endpoint.value.displayHost,
+                          "first_server" to (_savedServers.value.size == 1).toString()))
                 refreshSessions()
             } catch (t: Throwable) {
                 val detail = describe(t)
@@ -1184,6 +1189,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 adoptSshTunnel(tunnel)
                 connect()
                 _sshBootstrap.value = SshBootstrapState.Idle
+                Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.PAIRING_SUCCEEDED,
+                    mapOf("transport" to "ssh", "host" to host))
             } catch (e: SshException) {
                 val detail = describeSsh(e)
                 _sshBootstrap.value = SshBootstrapState.Failed(detail)
@@ -1511,6 +1518,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
+                // Funnel: first-ever session creation (no prior sessions on any launch).
+                if (_sessions.value.isEmpty()) {
+                    Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_SESSION_CREATED,
+                        mapOf("assistant" to assistant, "host" to _endpoint.value.displayHost))
+                }
                 // Record the explicit --model override for the title menu's
                 // identity header (inherit stays absent on purpose).
                 pickedModel?.let { picked -> _modelBySession.value = _modelBySession.value + (id to picked) }
@@ -1796,6 +1808,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     fun sendChat(sessionId: String, msg: String) {
+        // Funnel: first ever turn sent — first session, no prior server-side conversation items.
+        val priorItems = _conversationLog.value[sessionId].orEmpty().filter { !it.id.startsWith("local-") }
+        if (_sessions.value.size <= 1 && priorItems.isEmpty()) {
+            Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_TURN_SENT,
+                mapOf("session" to sessionId, "chars" to msg.length.toString()))
+        }
         // The user has answered — clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233). Done before the
         // client guard so the chips drop even mid-reconnect.
@@ -2108,6 +2126,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
             )
         } else {
             _modelCatalog.value = parsed
+            Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.CAPABILITIES_FETCHED,
+                mapOf("host" to ep.displayHost,
+                      "agents" to parsed.keys.sorted().joinToString(",")))
             Telemetry.breadcrumb(
                 "model_catalog", "refreshed",
                 mapOf("counts" to parsed.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value.size}" }),
@@ -2543,6 +2564,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     override fun onChatEvent(sessionId: String, event: ChatEvent) {
+        // Funnel: first assistant reply on the very first session.
+        if (event.role == "assistant") {
+            val priorAssistant = _chatLog.value[sessionId].orEmpty().filter { it.role == "assistant" }
+            if (_sessions.value.size <= 1 && priorAssistant.isEmpty()) {
+                Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_REPLY_RECEIVED,
+                    mapOf("session" to sessionId, "chars" to event.content.length.toString()))
+            }
+        }
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
         }

@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.AgentDescriptor
 import sh.nikhil.conduit.RemoteDirectoryListing
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.descriptorFor
 
 /**
@@ -102,7 +103,14 @@ fun AgentPickerSheet(
     // agent CLIs) so the cards' model line and the directory step's
     // model/effort options reflect what the box actually serves. Failure =
     // keep static fallbacks.
-    LaunchedEffect(Unit) { store.refreshModelCatalog() }
+    LaunchedEffect(Unit) {
+        store.refreshModelCatalog()
+        // Funnel: agent picker opened (new-session flow or post-pair deep link).
+        val isFirstSession = store.sessions.value.isEmpty()
+        Telemetry.breadcrumb("onboarding", OnboardingStep.AGENT_PICKER_OPENED,
+            mapOf("first_session" to isFirstSession.toString(),
+                  "host" to store.endpoint.value.displayHost))
+    }
 
     // Container-agnostic content — both presentations render the same flow.
     val content: @Composable () -> Unit = {
