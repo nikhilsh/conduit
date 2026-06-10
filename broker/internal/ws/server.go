@@ -120,12 +120,14 @@ func (s *Server) WithPush(reg *push.Registry) *Server {
 }
 
 // WithDispatcher wires the push Dispatcher into the server. The
-// Dispatcher fans out Payload to every registered device. Exposed here
-// so the session event triggers (turn-complete, pending-input — landed
-// in a follow-up) can call s.Dispatcher.Notify without a separate
-// lookup. Also enables POST /api/push/test.
+// Dispatcher fans out Payload to every registered device. Also wires the
+// Dispatcher as the session Manager's Notifier so turn-complete and
+// pending-input events fire pushes when no client is attached.
 func (s *Server) WithDispatcher(d *push.Dispatcher) *Server {
 	s.Dispatcher = d
+	if s.Sessions != nil && d != nil {
+		s.Sessions.SetPushNotifier(d, pushIdentity)
+	}
 	return s
 }
 

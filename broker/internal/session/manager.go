@@ -27,6 +27,7 @@ import (
 
 	"github.com/nikhilsh/conduit/broker/internal/agents"
 	"github.com/nikhilsh/conduit/broker/internal/credentials"
+	"github.com/nikhilsh/conduit/broker/internal/push"
 	"github.com/nikhilsh/conduit/broker/internal/replay"
 	"github.com/nikhilsh/conduit/broker/internal/termgrid"
 )
@@ -198,6 +199,11 @@ type Session struct {
 	// pendingAsk is a blocked AskUserQuestion control request waiting
 	// for the user's answer (askcontrol.go). Guarded by mu.
 	pendingAsk *pendingAsk
+
+	// pushState holds the per-session push-notification state (notifier,
+	// identity, and debounce latches). See push_notify.go. Has its own
+	// mutex so the push path never nests under s.mu.
+	pushState pushNotifyState
 	// chatSessionID is the claude CLI's OWN conversation id, latched
 	// from the stream-json init line and persisted (meta.json) so a
 	// respawned agent --resumes the conversation instead of starting
@@ -616,6 +622,9 @@ func (s *Session) startChatBackend(
 		if cerr != nil {
 			fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
 		} else {
+			// Wire the turn-idle hook for push notifications (session has the
+			// notifier by the time startChatBackend runs; chat was just spawned).
+			chat.setTurnIdleHook(s.maybeNotifyTurnEnd)
 			s.mu.Lock()
 			s.chat = chat
 			s.mu.Unlock()
@@ -631,7 +640,7 @@ func (s *Session) startChatBackend(
 			s.mu.Lock()
 			resume := s.chatSessionID
 			s.mu.Unlock()
-			return startChatProcess(
+			fresh, ferr := startChatProcess(
 				context.Background(),
 				argsFor(resume, false),
 				s.commandEnv(nil),
@@ -643,6 +652,10 @@ func (s *Session) startChatBackend(
 				s.handleAskControl,
 				s.latchChatSessionID,
 			)
+			if ferr == nil && fresh != nil {
+				fresh.setTurnIdleHook(s.maybeNotifyTurnEnd)
+			}
+			return fresh, ferr
 		}
 	case "codex":
 		// Two codex backends share this branch; the adapter's raw chat_mode
@@ -694,6 +707,16 @@ func (s *Session) startChatBackend(
 			case *codexChatProcess:
 				b.setTurnHook(onTurn)
 			}
+		}
+		// Wire the turn-idle and pending-input hooks for push notifications.
+		switch b := backend.(type) {
+		case *codexAppServerProcess:
+			b.setTurnIdleHook(s.maybeNotifyTurnEnd)
+			b.setPendingInputHook(s.maybeNotifyPendingInput)
+		case *codexChatProcess:
+			b.setTurnIdleHook(s.maybeNotifyTurnEnd)
+			// codexChatProcess doesn't surface approval cards (exec path has
+			// no on-request approval flow), so no pendingInput hook needed.
 		}
 		s.mu.Lock()
 		s.chat = backend
@@ -1459,6 +1482,13 @@ type Manager struct {
 	// from the agent CLIs (modelcatalog.go). Has its own lock; never
 	// touched under mu.
 	catalog modelCatalogCache
+
+	// pushNotifier and pushIdentity are wired from cmd/conduit-broker via
+	// SetPushNotifier. When set, every new session is handed the notifier so
+	// it can fire turn-end / pending-input pushes. nil = push disabled (unit
+	// tests, brokers without a relay or UnifiedPush client).
+	pushNotifier push.Notifier
+	pushIdentity string
 }
 
 // SetCredentialStore wires the per-identity OAuth credential store into
@@ -1479,6 +1509,19 @@ func (m *Manager) codexBinary() string {
 func (m *Manager) SetCredentialStore(s *credentials.Store) {
 	m.mu.Lock()
 	m.credStore = s
+	m.mu.Unlock()
+}
+
+// SetPushNotifier wires the push Notifier (and single-operator identity
+// bucket) into the Manager so every NEW session receives it. Existing
+// sessions are NOT retroactively updated — the manager creates sessions
+// before the WS server finishes startup wiring. Called from ws.Server
+// via WithNotifier after WithDispatcher. nil notifier disables push for
+// sessions spawned after the call (useful in tests).
+func (m *Manager) SetPushNotifier(n push.Notifier, identity string) {
+	m.mu.Lock()
+	m.pushNotifier = n
+	m.pushIdentity = identity
 	m.mu.Unlock()
 }
 
@@ -1785,6 +1828,11 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 			return err
 		}
 		return s.Switch(nextAdapter)
+	}
+	// Wire the push notifier so turn-end / pending-input events can fire
+	// notifications when no client is attached. nil notifier is a no-op.
+	if m.pushNotifier != nil {
+		s.SetPushNotifier(m.pushNotifier, m.pushIdentity)
 	}
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)

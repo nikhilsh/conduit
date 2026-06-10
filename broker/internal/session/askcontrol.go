@@ -189,6 +189,11 @@ func (s *Session) handleAskControl(req controlRequest, cp *chatProcess) {
 	}
 	s.pendingAsk = &pendingAsk{requestID: req.RequestID, input: req.Input, cp: cp, timer: timer}
 	s.mu.Unlock()
+	// Notify the device that the agent is waiting for input. Only fires
+	// when no client is currently attached (maybeNotifyPendingInput guards
+	// this). Runs after the stash is set so a racing client reattach sees
+	// the pending ask and the push is coalesced / skipped.
+	s.maybeNotifyPendingInput()
 }
 
 // PendingAskChatContent renders the session's currently-outstanding
