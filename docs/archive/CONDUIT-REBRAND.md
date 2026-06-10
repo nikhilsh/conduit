@@ -1,5 +1,7 @@
 # Conduit Rebrand — Migration Plan
 
+> ARCHIVED 2026-06-10 — shipped; see docs/ROADMAP.md.
+
 Rename the app from **swe-kitty** to **Conduit**, removing every reference to
 "swe" and "kitty" across all four components (Rust core, Go broker, iOS,
 Android) plus repo/infra. Decided **2026-05-31**.

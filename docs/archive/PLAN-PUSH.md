@@ -1,7 +1,9 @@
 # PLAN: Push notifications — self-hosted-first delivery
 
+> ARCHIVED 2026-06-10 — shipped; see docs/ROADMAP.md.
+
 Status: approved plan, 2026-06-10. Owner: Nikhil. Independent of
-`docs/PLAN-AGENT-PLATFORM.md`; can run in parallel.
+`docs/archive/PLAN-AGENT-PLATFORM.md`; can run in parallel.
 
 Events to deliver: **turn complete** and **agent needs your input** (approval card /
 AskUserQuestion pending). Low volume, user-personal, latency target: seconds.
