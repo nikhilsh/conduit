@@ -9,6 +9,51 @@ Operating principles for Claude agents working in this repo.
 | Surgical Changes       | Orthogonal edits, touching code you shouldn't           | Touch only what you must. Clean up only your own mess.       |
 | Goal-Driven Execution  | Vague plans with no verification                        | Define success criteria. Loop until verified.                |
 
+## Operating model
+
+A one-liner task should run start-to-end without re-explaining cleanliness,
+roadmap, subagent choice, or CI-watching. The orchestrator (session model) PLANS
+and ORCHESTRATES; opus/sonnet agents EXECUTE. Playbooks: `/ship` (one-liner →
+done), `/merge-when-green`, `/cut-release`, `/broker-redeploy`.
+
+**Delegation + model tiers** (`.claude/agents/`; honest roster — model tier was
+rarely the failure point, footgun checklists + 1-2 CI round-trips were):
+- **opus** — `researcher` (protocol capture / web research / coupling
+  inventories) and `architect` (interface/protocol design, risky refactors;
+  where a wrong abstraction is expensive AND silent).
+- **sonnet** — `broker-engineer`, `app-engineer`, `ci-fixer`, `doc-writer` (the
+  bulk; mechanical-but-careful, well-mapped work).
+- **orchestrator keeps**: planning, merge-gating, CI-watching, redeploy, tag,
+  and TRULY trivial 1-liners (spawning costs more than doing them).
+- Cap concurrency ~3 (box RAM). Every agent's scaffold (already in its file):
+  verify `pwd` (Bash starts in the SHARED checkout — leaked files twice),
+  run gates, **end at push + PR open, do NOT watch CI**.
+
+**CI gating is the orchestrator's job, not the agent's.** Agents end at push+PR.
+The orchestrator watches to green and merges using the pending-count pattern:
+`gh pr checks <N>` exits NON-ZERO on any failure, so capture with `|| true` and
+decide from the OUTPUT (pending/failed counts), **never the exit code** (bit us
+twice). **Never `gh pr merge` before reading the failure count** (merged two red
+PRs once). Known flakes (rerun, don't fix): ghostty-spm 502/404; broker
+conformance_test.go i/o-timeout. See `/merge-when-green`.
+
+**Definition of Done** (every task self-applies before claiming done):
+- [ ] local gates green (broker/core); iOS/Android flagged needs-device-verify
+- [ ] CI watched to GREEN via the `gh pr checks || true` pending-count pattern
+- [ ] `docs/ROADMAP.md` updated if scope shifted
+- [ ] memory updated (new footgun/decision → note + index entry)
+- [ ] SHARED checkout clean: no leaked untracked files; finished worktrees
+      removed (`git worktree list`)
+- [ ] broker redeployed IF `broker/` changed and it must be live (tagging does
+      NOT deploy the broker)
+
+**Compaction:** Claude Code has NO automatic new-task detection. Convention:
+`/clear` when switching to UNRELATED work (fresh context, cheapest); `/compact`
+mid-task to summarize while continuing; add focus via `/compact <instructions>`
+or a "Compact instructions" block in this file. Auto-compaction only fires near
+the context limit. The SessionStart hook surfaces this reminder. Activate the
+harness hooks once with `/hooks`; see `docs/OPERATING-HARNESS.md`.
+
 ## Working in this repo
 
 **Standing order: instrument everything that can fail with Sentry breadcrumbs.**

@@ -1,0 +1,17 @@
+{
+  "$comment": "Operating-harness hooks proposal. AUTO = enabled here (safe, cheap, non-blocking). OPT-IN hooks (broker-gate on push; Stop cleanliness reminder) are NOT enabled by default — copy their blocks from docs/OPERATING-HARNESS.md into the matching event array to turn them on. Run /hooks after editing to load. Schema verified against Claude Code 2.1.170.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/session-start-index.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
