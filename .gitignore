@@ -57,7 +57,14 @@ core/generated/kotlin/
 .DS_Store
 .idea/
 .vscode/
-.claude/
+# Shared operating-harness config (.claude/agents, commands, hooks, settings.json)
+# IS tracked; only local/secret/transient bits are ignored. See docs/OPERATING-HARNESS.md.
+.claude/*
+!.claude/agents/
+!.claude/commands/
+!.claude/hooks/
+!.claude/settings.json
+.claude/settings.local.json
 *.swp
 *~
 
