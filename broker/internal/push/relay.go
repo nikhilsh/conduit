@@ -31,8 +31,8 @@ import (
 //	  "payload": {
 //	    "title":      "...",
 //	    "body":       "...",
-//	    "session_id": "...",
-//	    "category":   ""
+//	    "session_id": "...",   // omitted when empty
+//	    "category":   "..."   // omitted when empty; relay accepts "alert"|"liveactivity"
 //	  }
 //	}
 type relaySender struct {
@@ -55,8 +55,8 @@ type relaySendBody struct {
 type relayInner struct {
 	Title     string `json:"title"`
 	Body      string `json:"body"`
-	SessionID string `json:"session_id"`
-	Category  string `json:"category"`
+	SessionID string `json:"session_id,omitempty"`
+	Category  string `json:"category,omitempty"`
 }
 
 // NewRelaySender builds a relaySender. relayURL is the base URL of the
@@ -93,7 +93,6 @@ func (s *relaySender) Send(ctx context.Context, token DeviceToken, payload Paylo
 			Title:     payload.Title,
 			Body:      payload.Body,
 			SessionID: payload.SessionID,
-			Category:  "",
 		},
 	}
 
