@@ -760,13 +760,25 @@ extension ConduitUI {
 
         private var conversationSection: some View {
             @Bindable var appearance = appearance
+            @Bindable var flags = flags
             return sectionCard(title: "Conversation") {
-                ConduitUI.toggleRow(
-                    icon: "arrow.up.arrow.down",
-                    title: "Collapse Turns",
-                    subtitle: "Start command cards collapsed by default",
-                    isOn: $appearance.collapseTurns
-                )
+                VStack(spacing: 0) {
+                    ConduitUI.toggleRow(
+                        icon: "arrow.up.arrow.down",
+                        title: "Collapse Turns",
+                        subtitle: "Start command cards collapsed by default",
+                        isOn: $appearance.collapseTurns
+                    )
+                    Divider()
+                        .background(neon.border)
+                        .padding(.leading, 46)
+                    ConduitUI.toggleRow(
+                        icon: "hand.tap",
+                        title: "Reply Haptics",
+                        subtitle: "Tap when a reply starts and finishes",
+                        isOn: $flags.replyHaptics
+                    )
+                }
             }
         }
 

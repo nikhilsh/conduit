@@ -91,6 +91,15 @@ struct FeatureFlagsTests {
         #expect(second.newSessionEffortDial == false)
     }
 
+    @Test func replyHapticsDefaultsOnAndPersists() {
+        let defaults = freshDefaults()
+        let first = FeatureFlags(defaults: defaults)
+        #expect(first.replyHaptics)
+        first.replyHaptics = false
+        let second = FeatureFlags(defaults: defaults)
+        #expect(second.replyHaptics == false)
+    }
+
     @Test func lastEffortPersists() {
         let defaults = freshDefaults()
         let first = FeatureFlags(defaults: defaults)

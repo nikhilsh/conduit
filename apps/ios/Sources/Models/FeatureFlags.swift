@@ -61,6 +61,7 @@ final class FeatureFlags {
         static let onboardingSeenWelcome = "conduit.flags.onboarding.seenWelcome"
         static let onboardingFurthestStep = "conduit.flags.onboarding.furthestStep"
         static let onboardingGuide = "conduit.flags.onboarding.guide"
+        static let replyHaptics = "conduit.flags.chat.replyHaptics"
     }
 
     // MARK: - New-session flags (§3) — default ON (this is the shipping design)
@@ -78,6 +79,16 @@ final class FeatureFlags {
     /// Live mono **launch line** above Start (`will run claude · medium · …`).
     var newSessionLaunchLine: Bool {
         didSet { defaults.set(newSessionLaunchLine, forKey: Keys.newSessionLaunchLine) }
+    }
+
+    // MARK: - Chat reply haptics — default ON
+
+    /// Play a tasteful haptic tap when an agent reply **starts** (light
+    /// impact) and **finishes** (success notification). ChatGPT-style but
+    /// without the continuous buzz-while-generating. Default ON; surfaced in
+    /// Settings → Conversation. See `ReplyHaptics.swift`.
+    var replyHaptics: Bool {
+        didSet { defaults.set(replyHaptics, forKey: Keys.replyHaptics) }
     }
 
     /// Last reasoning-effort the user picked on the effort dial (§3
@@ -148,6 +159,8 @@ final class FeatureFlags {
         self.onboardingSeenWelcome = defaults.object(forKey: Keys.onboardingSeenWelcome) as? Bool ?? false
         self.onboardingFurthestStep = defaults.object(forKey: Keys.onboardingFurthestStep) as? Int ?? 0
         self.onboardingGuide = defaults.object(forKey: Keys.onboardingGuide) as? Bool ?? true
+
+        self.replyHaptics = defaults.object(forKey: Keys.replyHaptics) as? Bool ?? true
 
         self.chatStylePreference = (defaults.string(forKey: Keys.chatStylePreference)
             .flatMap(ChatStylePreference.init(rawValue:))) ?? .auto

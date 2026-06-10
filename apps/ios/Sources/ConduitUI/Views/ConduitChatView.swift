@@ -157,6 +157,13 @@ extension ConduitUI {
         // start at the top, it should be at the bottom"). One-shot per session.
         @State private var didInitialScroll = false
 
+        // Reply haptics (ChatGPT-style start/finish taps). The pure model
+        // decides which tap to fire on each busy-state flip; the player is the
+        // impure Taptic side. Re-seeded per session in `.onChange(of:
+        // session.id)` so a stale busy state doesn't fire on session switch.
+        @State private var replyHapticsModel = ReplyHapticsModel()
+        @State private var replyHapticsPlayer = ReplyHapticsPlayer()
+
         var body: some View {
             // The composer + suggestion cluster is hosted via
             // `.safeAreaInset(edge: .bottom)` on the messages `ScrollView`
@@ -748,13 +755,32 @@ extension ConduitUI {
                     scrollToBottomOnOpen(proxy)
                 }
                 .onDisappear { composerFocused = false }
+                // Reply haptics: tap on the busy false→true (turn start) and
+                // true→false (turn finish) flips. Suppressed when the chat
+                // isn't the active tab/foreground (`isActive`) or the flag is
+                // off — the model still tracks the flip so the NEXT real
+                // transition is computed correctly, it just doesn't play.
+                .onChange(of: isAgentWorking) { _, busy in
+                    let event = replyHapticsModel.observe(
+                        busy: busy,
+                        enabled: flags.replyHaptics && isActive && !isReadOnly,
+                        now: Date()
+                    )
+                    if let event { replyHapticsPlayer.play(event) }
+                }
                 // History often streams in just after appear (empty → populated);
                 // pin the bottom on that first population too.
                 .onChange(of: events.count) { old, new in
                     if old == 0 && new > 0 { scrollToBottomOnOpen(proxy) }
                 }
                 // Switching sessions reuses this view — re-arm for the next one.
-                .onChange(of: session.id) { _, _ in didInitialScroll = false }
+                .onChange(of: session.id) { _, _ in
+                    didInitialScroll = false
+                    // Fresh haptics state: the next session's first observed
+                    // busy flip shouldn't inherit this one's last state (which
+                    // would fire a spurious start/finish on switch).
+                    replyHapticsModel = ReplyHapticsModel()
+                }
                 // The view stays mounted across tab switches now, so drive
                 // keyboard state off the active flag rather than appear/
                 // disappear: drop focus + the keyboard when hidden behind
