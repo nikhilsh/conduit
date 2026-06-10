@@ -72,6 +72,16 @@ type Adapter struct {
 	// by lifecycle.go to derive credential paths.
 	ConfigDir string `toml:"config_dir"`
 
+	// DataDir is the agent's per-user data directory (relative to the
+	// session's ephemeral $HOME, e.g. ".local/share/opencode"). Unlike
+	// ConfigDir (config files), this holds the agent's session/conversation
+	// STORE — for opencode a single global SQLite DB (opencode.db). It is the
+	// resume hinge for server-backed agents that persist conversations in a
+	// data store rather than per-session conversation files: recovery.go gates
+	// the resume id on this dir's store existing. "" for agents (claude/codex)
+	// that key resume off ConfigDir conversation files instead.
+	DataDir string `toml:"data_dir"`
+
 	// CredFiles lists the credential files the agent stores under its
 	// config dir in the host HOME. Used by mirrorHostCredentials to copy
 	// the right files into each session's ephemeral HOME.
