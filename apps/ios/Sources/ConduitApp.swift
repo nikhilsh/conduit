@@ -130,13 +130,28 @@ struct ConduitApp: App {
                             applyPairingURL(url)
                         }
                     }
-                    .onChange(of: scenePhase) { _, _ in
+                    .onChange(of: scenePhase) { _, newPhase in
                         // Foreground, background, inactive — any wake is
                         // execution time; re-stamp the live activities.
                         liveActivity.refreshAll()
                         // Re-check push auth status on every foreground — the
                         // user might have changed it in iOS Settings.
                         PushNotificationManager.shared.refreshAuthStatus()
+                        // Prompt existing-session users who were never asked:
+                        // the 0->1 session-count trigger fires only on first
+                        // session creation; users who already had sessions at
+                        // install / upgrade silently fell through with
+                        // .notDetermined. On the FIRST .active foreground,
+                        // request if we have >= 1 session and are still
+                        // notDetermined. requestAuthorizationIfNeeded() is
+                        // guarded — it no-ops if auth != .notDetermined, so
+                        // this cannot re-show a prompt the user already acted on.
+                        if newPhase == .active,
+                           !store.sessions.isEmpty,
+                           PushNotificationManager.shared.settingsState.auth == .notDetermined {
+                            Telemetry.breadcrumb("push", "active with existing sessions — requesting authorization")
+                            PushNotificationManager.shared.requestAuthorizationIfNeeded()
+                        }
                     }
                     // WS-P.3: request push permission after the user's FIRST
                     // session exists — onboarding is accounts-free by design,

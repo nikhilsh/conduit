@@ -151,3 +151,51 @@ struct PushSettingsStateTests {
         }
     }
 }
+
+// MARK: - "Prompt existing users on active" guard tests
+//
+// The scene-phase .active hook fires requestAuthorizationIfNeeded() only when
+// BOTH conditions hold: sessions is non-empty AND auth is .notDetermined.
+// This suite validates that guard function independently of UIKit/async so it
+// can run on any host.
+
+/// Pure helper that mirrors the scene-phase guard in ConduitApp.swift.
+/// Returns true when the manager should be asked to request authorization.
+private func shouldPromptOnActive(sessionCount: Int, auth: PushAuthState) -> Bool {
+    sessionCount > 0 && auth == .notDetermined
+}
+
+@Suite("Push notification — existing-user active prompt guard")
+struct PushActivePromptGuardTests {
+
+    @Test func promptsWhenSessionsExistAndNotDetermined() {
+        #expect(shouldPromptOnActive(sessionCount: 1, auth: .notDetermined) == true)
+        #expect(shouldPromptOnActive(sessionCount: 5, auth: .notDetermined) == true)
+    }
+
+    @Test func doesNotPromptWhenNoSessions() {
+        #expect(shouldPromptOnActive(sessionCount: 0, auth: .notDetermined) == false)
+    }
+
+    @Test func doesNotPromptWhenAlreadyAuthorized() {
+        #expect(shouldPromptOnActive(sessionCount: 1, auth: .authorized) == false)
+        #expect(shouldPromptOnActive(sessionCount: 3, auth: .authorized) == false)
+    }
+
+    @Test func doesNotPromptWhenDenied() {
+        // Denied users cannot be re-prompted; they must go to iOS Settings.
+        #expect(shouldPromptOnActive(sessionCount: 1, auth: .denied) == false)
+    }
+
+    @Test func doesNotPromptWhenPending() {
+        // Pending means we already called registerForRemoteNotifications.
+        #expect(shouldPromptOnActive(sessionCount: 1, auth: .pending) == false)
+    }
+
+    @Test func doesNotPromptWhenNoSessionsAndAllAuthStates() {
+        for auth: PushAuthState in [.notDetermined, .authorized, .denied, .pending] {
+            #expect(shouldPromptOnActive(sessionCount: 0, auth: auth) == false,
+                    "Should not prompt with 0 sessions, auth=\(auth)")
+        }
+    }
+}
