@@ -46,6 +46,10 @@ import sh.nikhil.conduit.auth.AgentLoginCoordinator
 import uniffi.conduit_core.ConduitDelegate
 import uniffi.conduit_core.ViewEventFile
 import uniffi.conduit_core.sshBootstrap as ffiSshBootstrap
+import uniffi.conduit_core.sshBootstrapTunneled as ffiSshBootstrapTunneled
+import uniffi.conduit_core.SshTunnel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import java.util.concurrent.CountDownLatch
 
 /**
@@ -445,6 +449,28 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _sshBootstrap = MutableStateFlow<SshBootstrapState>(SshBootstrapState.Idle)
     val sshBootstrap: StateFlow<SshBootstrapState> = _sshBootstrap.asStateFlow()
 
+    /**
+     * Live SSH tunnel for an SSH-bootstrapped session (core #451). Held for
+     * the session's lifetime so the russh session — and therefore the loopback
+     * port-forward the WS dials — stays up. It's an AutoCloseable-style
+     * object; we [SshTunnel.stop] + release it on disconnect / re-bootstrap so
+     * we never leak the russh session. `null` for token-paired boxes and when
+     * the SSH-tunnel flag is off (legacy fire-and-forget path).
+     */
+    private var sshTunnel: SshTunnel? = null
+
+    /** Liveness watcher for [sshTunnel]; cancelled when the tunnel is replaced. */
+    private var sshTunnelWatcher: Job? = null
+
+    /**
+     * True once the held tunnel reported `isAlive() == false` (the SSH session
+     * died: network flap, server reboot, idle kill, app suspend). Drives a
+     * "connection lost — reconnect" affordance. Reset on a fresh tunnel.
+     * Token-paired boxes never set this (no tunnel).
+     */
+    private val _sshTunnelLost = MutableStateFlow(false)
+    val sshTunnelLost: StateFlow<Boolean> = _sshTunnelLost.asStateFlow()
+
     /** Outstanding TOFU prompt; MainActivity observes this and shows a dialog. */
     private val _pendingHostKey = MutableStateFlow<HostKeyPrompt?>(null)
     val pendingHostKey: StateFlow<HostKeyPrompt?> = _pendingHostKey.asStateFlow()
@@ -815,6 +841,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         reachability?.stop()
         reachability = null
+        // Never leak the russh session / loopback listener when the VM dies.
+        teardownSshTunnel()
     }
 
     fun setEndpoint(url: String, token: String) {
@@ -976,14 +1004,107 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     fun disconnect() {
+        disconnectClient()
+        // Tear down any held SSH tunnel so we never leak the russh session /
+        // loopback listener. No-op for token-paired boxes (tunnel is null).
+        teardownSshTunnel()
+    }
+
+    /**
+     * Tear down only the WS client, leaving any held SSH tunnel intact. Used
+     * by [reconnect] so a WS-only blip on an SSH-tunneled box re-dials the
+     * SAME live loopback port instead of killing (and leaking) the russh
+     * session it depends on.
+     */
+    private fun disconnectClient() {
         client?.disconnect()
         client = null
         _harness.value = HarnessState.Disconnected
     }
 
+    /**
+     * Re-establish the link using the currently stored endpoint.
+     *
+     * If an SSH tunnel is held AND still alive, this is a WS-only restart: the
+     * tunnel is preserved so we re-dial the same live loopback port rather
+     * than tearing down (and leaking) the russh session the endpoint depends
+     * on. Otherwise (token-paired box, or a dead tunnel) fall back to a full
+     * disconnect — a dead tunnel can only be fixed by re-running
+     * [connectViaSSH] (TOFU-gated), not a plain reconnect.
+     */
     fun reconnect() {
-        disconnect()
-        connect()
+        val tunnel = sshTunnel
+        if (tunnel != null && tunnel.isAlive()) {
+            disconnectClient()
+            connect()
+        } else {
+            disconnect()
+            connect()
+        }
+    }
+
+    // MARK: - SSH tunnel lifecycle (core #451)
+
+    /** Whether SSH-paired boxes route through the held tunnel. Default ON;
+     *  flip off to fall back to the legacy public path for one release. */
+    private fun sshTunnelTransportEnabled(): Boolean =
+        prefs?.getBoolean(KEY_SSH_TUNNEL, true) ?: true
+
+    /**
+     * Install a freshly-bootstrapped tunnel (or clear to the legacy path when
+     * null) and start the liveness watcher. Always stops the prior tunnel
+     * first so a re-bootstrap never leaks the old russh session.
+     */
+    private fun adoptSshTunnel(tunnel: SshTunnel?) {
+        teardownSshTunnel()
+        sshTunnel = tunnel
+        _sshTunnelLost.value = false
+        if (tunnel == null) return
+        startSshTunnelWatcher()
+    }
+
+    /** Stop + release the held tunnel and cancel its watcher. Idempotent. */
+    private fun teardownSshTunnel() {
+        sshTunnelWatcher?.cancel()
+        sshTunnelWatcher = null
+        sshTunnel?.let { tunnel ->
+            Telemetry.breadcrumb("ssh_tunnel", "tunnel stop", mapOf("local_port" to tunnel.localPort().toInt().toString()))
+            tunnel.stop()
+            tunnel.close()
+        }
+        sshTunnel = null
+    }
+
+    /**
+     * Poll the held tunnel's `isAlive()` on a slow cadence. On the first
+     * `false` (SSH session died) flip [sshTunnelLost] so the UI can surface a
+     * "connection lost — reconnect" affordance, drop the harness to Failed,
+     * and exit (no busy loop). The user re-runs [connectViaSSH], which
+     * re-bootstraps through the TOFU gate (never a silent re-accept).
+     */
+    private fun startSshTunnelWatcher() {
+        sshTunnelWatcher = viewModelScope.launch {
+            // ~3s cadence: cheap, non-blocking `is_closed()` check. The WS
+            // reconnect worker usually notices the dead loopback dial first;
+            // this is the authoritative SSH-level signal.
+            while (isActive) {
+                delay(3_000)
+                val tunnel = sshTunnel ?: return@launch
+                if (!withContext(Dispatchers.IO) { tunnel.isAlive() }) {
+                    val portStr = tunnel.localPort().toInt().toString()
+                    Telemetry.breadcrumb("ssh_tunnel", "tunnel lost", mapOf("local_port" to portStr))
+                    Telemetry.capture(
+                        error = IllegalStateException("ssh tunnel lost"),
+                        message = "Android SSH tunnel lost",
+                        tags = mapOf("surface" to "android", "phase" to "ssh_tunnel"),
+                        extras = mapOf("local_port" to portStr),
+                    )
+                    _sshTunnelLost.value = true
+                    _harness.value = HarnessState.Failed("Connection to your server was lost. Reconnect to continue.")
+                    return@launch
+                }
+            }
+        }
     }
 
     // MARK: - SSH bootstrap
@@ -1010,15 +1131,45 @@ class SessionStore : ViewModel(), ConduitDelegate {
             val preToken = java.util.UUID.randomUUID().toString()
             try {
                 _sshBootstrap.value = SshBootstrapState.Running("Starting server on $host…")
-                val result = withContext(Dispatchers.IO) {
-                    ffiSshBootstrap(
-                        credentials,
-                        preToken,
-                        anthropicApiKey,
-                        openaiApiKey,
-                        imageRef,
-                        bridge,
+
+                // SSH-tunnel transport (core #451): hold the returned
+                // [SshTunnel] for the session's lifetime so the bearer token
+                // rides the SSH-encrypted channel and the box needs no public
+                // port. Gated behind a flag so the legacy fire-and-forget path
+                // stays available as a one-release fallback. Token-paired boxes
+                // never reach here — this is the SSH-bootstrap flow only.
+                val useTunnel = sshTunnelTransportEnabled()
+                var tunnel: SshTunnel? = null
+                val result = if (useTunnel) {
+                    Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", mapOf("host" to host))
+                    val bootstrap = withContext(Dispatchers.IO) {
+                        ffiSshBootstrapTunneled(
+                            credentials,
+                            preToken,
+                            anthropicApiKey,
+                            openaiApiKey,
+                            imageRef,
+                            bridge,
+                        )
+                    }
+                    tunnel = bootstrap.tunnel
+                    Telemetry.breadcrumb(
+                        "ssh_tunnel",
+                        "tunnel open",
+                        mapOf("host" to host, "local_port" to bootstrap.tunnel.localPort().toInt().toString()),
                     )
+                    bootstrap.result
+                } else {
+                    withContext(Dispatchers.IO) {
+                        ffiSshBootstrap(
+                            credentials,
+                            preToken,
+                            anthropicApiKey,
+                            openaiApiKey,
+                            imageRef,
+                            bridge,
+                        )
+                    }
                 }
                 val url = "ws://127.0.0.1:${result.localPort.toInt()}"
                 val token = result.token
@@ -1027,6 +1178,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 setEndpoint(url, token)
                 upsertSavedServer(name = name, endpoint = endpoint, makeDefault = true)
                 disconnect()
+                // `disconnect()` stops + releases any prior tunnel; install the
+                // new one (if tunneled) and start watching its liveness before
+                // dialing so a drop during connect is observed.
+                adoptSshTunnel(tunnel)
                 connect()
                 _sshBootstrap.value = SshBootstrapState.Idle
             } catch (e: SshException) {
@@ -2621,6 +2776,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
         private const val KEY_BROKER_TITLES = "conduit.session_broker_titles"
         private const val KEY_DELETED_IDS = "conduit.deleted_session_ids"
         private const val KEY_SAVED_SESSIONS = "conduit.saved_sessions"
+
+        /** SSH-tunnel transport toggle (connection-critical). Default ON;
+         *  flip off to fall back to the legacy public path for one release. */
+        private const val KEY_SSH_TUNNEL = "conduit.transport.ssh_tunnel"
 
         /** Upper bound on retained delete tombstones. */
         private const val TOMBSTONE_CAP = 500

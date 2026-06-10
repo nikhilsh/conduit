@@ -439,6 +439,26 @@ final class SessionStore {
     /// SSH-bootstrap progress. Observed by the SSH login sheet.
     var sshBootstrapState: SshBootstrapState = .idle
 
+    /// Live SSH tunnel for an SSH-bootstrapped session (core #451). Held for
+    /// the session's lifetime so the russh session — and therefore the
+    /// loopback port-forward the WS dials — stays up. Dropping this would
+    /// tear the SSH session down and kill the tunnel, so it is `stop()`ed and
+    /// released only on disconnect / re-bootstrap. `nil` for token-paired
+    /// (`conduit://`) boxes and when the SSH-tunnel flag is off (legacy path).
+    private var sshTunnel: SshTunnel?
+
+    /// True once the held tunnel has reported `isAlive() == false` (the SSH
+    /// session died: network flap, server reboot, idle kill, iOS suspend).
+    /// Drives a "connection to your server was lost — reconnect" affordance.
+    /// Reset whenever a fresh tunnel is established. Token-paired boxes never
+    /// set this (no tunnel).
+    var sshTunnelLost: Bool = false
+
+    /// Background liveness watcher for the held tunnel. Polls `isAlive()` and,
+    /// on first `false`, flips `sshTunnelLost` and surfaces the re-pair state.
+    /// Cancelled when the tunnel is replaced or stopped.
+    private var sshTunnelWatcher: Task<Void, Never>?
+
     /// Active TOFU prompt. ConduitApp observes this and presents a sheet.
     var pendingHostKey: HostKeyPrompt?
 
@@ -727,16 +747,95 @@ final class SessionStore {
     }
 
     func disconnect() {
+        disconnectClient()
+        // Tear down any held SSH tunnel so we never leak the russh session /
+        // loopback listener. No-op for token-paired boxes (tunnel is nil).
+        teardownSshTunnel()
+    }
+
+    /// Tear down only the WS client, leaving any held SSH tunnel intact. Used
+    /// by `reconnect()` so a WS-only blip on an SSH-tunneled box re-dials the
+    /// SAME live loopback port instead of killing (and leaking) the russh
+    /// session it depends on.
+    private func disconnectClient() {
         client?.disconnect()
         client = nil
         delegate = nil
         harness = .disconnected
     }
 
+    // MARK: - SSH tunnel lifecycle (core #451)
+
+    /// Install a freshly-bootstrapped tunnel (or clear to the legacy path when
+    /// `nil`) and start the liveness watcher. Always stops the prior tunnel
+    /// first so a re-bootstrap never leaks the old russh session.
+    private func adoptSshTunnel(_ tunnel: SshTunnel?) {
+        teardownSshTunnel()
+        sshTunnel = tunnel
+        sshTunnelLost = false
+        guard tunnel != nil else { return }
+        startSshTunnelWatcher()
+    }
+
+    /// Stop + release the held tunnel and cancel its watcher. Idempotent.
+    private func teardownSshTunnel() {
+        sshTunnelWatcher?.cancel()
+        sshTunnelWatcher = nil
+        if let tunnel = sshTunnel {
+            Telemetry.breadcrumb("ssh_tunnel", "tunnel stop", data: ["local_port": "\(tunnel.localPort())"])
+            tunnel.stop()
+        }
+        sshTunnel = nil
+    }
+
+    /// Poll the held tunnel's `isAlive()` on a slow cadence. On the first
+    /// `false` (SSH session died) flip `sshTunnelLost` so the UI can surface a
+    /// "connection lost — reconnect" affordance, drop the harness to failed,
+    /// and exit (no busy loop). The user re-runs `connectViaSSH`, which
+    /// re-bootstraps through the TOFU gate (never a silent re-accept).
+    private func startSshTunnelWatcher() {
+        sshTunnelWatcher = Task { [weak self] in
+            // ~3s cadence: cheap, non-blocking `is_closed()` check. The WS
+            // reconnect worker usually notices the dead loopback dial first;
+            // this is the authoritative SSH-level signal.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if Task.isCancelled { return }
+                guard let self, let tunnel = self.sshTunnel else { return }
+                if !tunnel.isAlive() {
+                    Telemetry.breadcrumb("ssh_tunnel", "tunnel lost", data: [
+                        "local_port": "\(tunnel.localPort())",
+                    ])
+                    Telemetry.capture(
+                        error: NSError(domain: "ios.ssh_tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "tunnel lost"]),
+                        message: "iOS SSH tunnel lost",
+                        tags: ["surface": "ios", "phase": "ssh_tunnel"],
+                        extras: ["local_port": "\(tunnel.localPort())"]
+                    )
+                    self.sshTunnelLost = true
+                    self.harness = .failed("Connection to your server was lost. Reconnect to continue.")
+                    return
+                }
+            }
+        }
+    }
+
     /// Re-establish the link using the currently stored endpoint.
+    ///
+    /// If an SSH tunnel is held AND still alive, this is a WS-only restart:
+    /// the tunnel is preserved so we re-dial the same live loopback port
+    /// rather than tearing down (and leaking) the russh session the endpoint
+    /// depends on. If there's no tunnel (token-paired box) or the tunnel is
+    /// dead, fall back to a full disconnect — a dead tunnel can only be fixed
+    /// by re-running `connectViaSSH` (TOFU-gated), not a plain reconnect.
     func reconnect() {
-        disconnect()
-        connect()
+        if let tunnel = sshTunnel, tunnel.isAlive() {
+            disconnectClient()
+            connect()
+        } else {
+            disconnect()
+            connect()
+        }
     }
 
     func listDirectories(path: String?) async throws -> RemoteDirectoryListing {
@@ -1155,14 +1254,42 @@ final class SessionStore {
             let bridge = SshHostKeyBridge(store: self, host: host, port: port)
             do {
                 self.sshBootstrapState = .running(message: "Starting server on \(host)…")
-                let result = try await sshBootstrap(
-                    credentials: credentials,
-                    preAllocatedToken: preToken,
-                    anthropicApiKey: anthropicApiKey,
-                    openaiApiKey: openaiApiKey,
-                    imageRef: imageRef,
-                    hostKeyDelegate: bridge
-                )
+
+                // SSH-tunnel transport (core #451): hold the returned
+                // `SshTunnel` for the session's lifetime so the token rides
+                // the SSH-encrypted channel and the box needs no public port.
+                // Gated behind a flag so the legacy fire-and-forget path stays
+                // available as a one-release fallback. Token-paired boxes never
+                // reach here — this is the SSH-bootstrap flow only.
+                let useTunnel = FeatureFlags.sshTunnelTransportEnabled()
+                let result: SshBootstrapResult
+                var tunnel: SshTunnel?
+                if useTunnel {
+                    Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", data: ["host": host])
+                    let bootstrap = try await sshBootstrapTunneled(
+                        credentials: credentials,
+                        preAllocatedToken: preToken,
+                        anthropicApiKey: anthropicApiKey,
+                        openaiApiKey: openaiApiKey,
+                        imageRef: imageRef,
+                        hostKeyDelegate: bridge
+                    )
+                    result = bootstrap.result
+                    tunnel = bootstrap.tunnel
+                    Telemetry.breadcrumb("ssh_tunnel", "tunnel open", data: [
+                        "host": host,
+                        "local_port": "\(bootstrap.tunnel.localPort())",
+                    ])
+                } else {
+                    result = try await sshBootstrap(
+                        credentials: credentials,
+                        preAllocatedToken: preToken,
+                        anthropicApiKey: anthropicApiKey,
+                        openaiApiKey: openaiApiKey,
+                        imageRef: imageRef,
+                        hostKeyDelegate: bridge
+                    )
+                }
                 let endpoint = StoredEndpoint(
                     url: "ws://127.0.0.1:\(result.localPort)",
                     token: result.token
@@ -1173,12 +1300,21 @@ final class SessionStore {
                 self.endpoint = endpoint
                 self.upsertSavedServer(name: name, endpoint: endpoint, makeDefault: true)
                 self.disconnect()
+                // `disconnect()` stops + releases any prior tunnel; install the
+                // new one (if tunneled) and start watching its liveness BEFORE
+                // dialing so a drop during connect is observed.
+                self.adoptSshTunnel(tunnel)
                 self.connect()
                 self.sshBootstrapState = .idle
                 Telemetry.capture(
                     error: NSError(domain: "ios.ssh_bootstrap", code: 0, userInfo: [NSLocalizedDescriptionKey: "ok"]),
                     message: "iOS SSH bootstrap success",
-                    tags: ["surface": "ios", "phase": "ssh_bootstrap", "reused": result.reused ? "1" : "0"],
+                    tags: [
+                        "surface": "ios",
+                        "phase": "ssh_bootstrap",
+                        "reused": result.reused ? "1" : "0",
+                        "tunneled": useTunnel ? "1" : "0",
+                    ],
                     extras: [
                         "host": host,
                         "remote_port": "\(result.remotePort)",
