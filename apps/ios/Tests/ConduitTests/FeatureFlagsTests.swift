@@ -100,6 +100,29 @@ struct FeatureFlagsTests {
         #expect(second.replyHaptics == false)
     }
 
+    // MARK: - SSH tunnel transport (connection-critical)
+
+    @Test func sshTunnelTransportDefaultsOnAndPersists() {
+        let defaults = freshDefaults()
+        let first = FeatureFlags(defaults: defaults)
+        #expect(first.sshTunnelTransport)
+        first.sshTunnelTransport = false
+        let second = FeatureFlags(defaults: defaults)
+        #expect(second.sshTunnelTransport == false)
+    }
+
+    @Test func sshTunnelStaticAccessorMirrorsInstance() {
+        let defaults = freshDefaults()
+        // Unset → defaults ON (matches the instance default).
+        #expect(FeatureFlags.sshTunnelTransportEnabled(defaults: defaults))
+        // Flip via the instance; the static read must observe the same store.
+        let flags = FeatureFlags(defaults: defaults)
+        flags.sshTunnelTransport = false
+        #expect(FeatureFlags.sshTunnelTransportEnabled(defaults: defaults) == false)
+        flags.sshTunnelTransport = true
+        #expect(FeatureFlags.sshTunnelTransportEnabled(defaults: defaults))
+    }
+
     @Test func lastEffortPersists() {
         let defaults = freshDefaults()
         let first = FeatureFlags(defaults: defaults)
