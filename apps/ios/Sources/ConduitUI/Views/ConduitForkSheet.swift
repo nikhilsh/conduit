@@ -44,12 +44,18 @@ extension ConduitUI {
             self._model = State(initialValue: ForkOptions.inheritModel)
         }
 
+        /// The assistant's live model catalog (broker-discovered); nil/empty
+        /// falls back to the static ForkOptions lists.
+        private var catalog: [AgentModel]? {
+            store.modelCatalog[session.assistant]
+        }
+
         private var effortOptions: [String] {
-            ForkOptions.efforts(forAssistant: session.assistant)
+            ForkOptions.efforts(forAssistant: session.assistant, model: model, catalog: catalog)
         }
 
         private var modelOptions: [String] {
-            ForkOptions.models(forAssistant: session.assistant)
+            ForkOptions.models(forAssistant: session.assistant, catalog: catalog)
         }
 
         var body: some View {
@@ -61,24 +67,26 @@ extension ConduitUI {
                             .font(.caption2)
                             .foregroundStyle(ConduitUI.Palette.textMuted.color)
 
-                        sectionLabel("Reasoning effort")
-                        Picker("Reasoning effort", selection: $effort) {
-                            ForEach(effortOptions, id: \.self) { level in
-                                Text(level.capitalized).tag(level)
+                        if !effortOptions.isEmpty {
+                            sectionLabel("Reasoning effort")
+                            Picker("Reasoning effort", selection: $effort) {
+                                ForEach(effortOptions, id: \.self) { level in
+                                    Text(ForkOptions.effortLabel(level)).tag(level)
+                                }
                             }
+                            .pickerStyle(.segmented)
                         }
-                        .pickerStyle(.segmented)
 
                         sectionLabel("Model (optional)")
                         Menu {
                             Picker("Model", selection: $model) {
                                 ForEach(modelOptions, id: \.self) { option in
-                                    Text(ForkOptions.modelLabel(option)).tag(option)
+                                    Text(ForkOptions.modelLabel(option, catalog: catalog)).tag(option)
                                 }
                             }
                         } label: {
                             HStack {
-                                Text(ForkOptions.modelLabel(model))
+                                Text(ForkOptions.modelLabel(model, catalog: catalog))
                                     .foregroundStyle(ConduitUI.Palette.textPrimary.color)
                                 Spacer()
                                 Image(systemName: "chevron.up.chevron.down")
@@ -90,7 +98,8 @@ extension ConduitUI {
                             .conduitGlassRoundedRect(cornerRadius: 14)
                         }
                         .neonAccentTint()
-                        Text("Default keeps the current model. Pick an alias to fork onto a different one.")
+                        Text(ForkOptions.modelDetail(model, catalog: catalog)
+                            ?? "Default keeps the current model. Pick an alias to fork onto a different one.")
                             .font(.caption2)
                             .foregroundStyle(ConduitUI.Palette.textMuted.color)
 
@@ -121,13 +130,31 @@ extension ConduitUI {
                         Button("Fork") {
                             store.forkSession(
                                 sessionID: session.id,
-                                reasoningEffort: effort,
+                                reasoningEffort: effort.isEmpty ? nil : effort,
                                 model: model.isEmpty ? nil : model,
                                 permissionMode: permissionMode.isEmpty ? nil : permissionMode
                             )
                             dismiss()
                         }
                     }
+                }
+            }
+            // A model switch can change the supported effort range
+            // (catalog is per-model: sonnet lacks xhigh, haiku has none) —
+            // snap an out-of-range selection back to the model's default.
+            .onChange(of: model) {
+                if !effortOptions.contains(effort) {
+                    effort = ForkOptions.defaultEffort(
+                        forAssistant: session.assistant, model: model, catalog: catalog)
+                }
+            }
+            .task {
+                // Refresh the live catalog (no-op UI-wise if unchanged), then
+                // re-validate the effort seeded in init from the static list.
+                await store.refreshModelCatalog()
+                if !effortOptions.isEmpty, !effortOptions.contains(effort) {
+                    effort = ForkOptions.defaultEffort(
+                        forAssistant: session.assistant, model: model, catalog: catalog)
                 }
             }
             .appearanceColorScheme()
@@ -141,9 +168,60 @@ extension ConduitUI {
         }
     }
 
-    /// Per-assistant fork option lists. Mirrors the broker's validated
-    /// effort levels (broker/internal/session/override.go) so the UI never
-    /// offers a level the agent would silently drop.
+    /// One model an agent advertises, discovered live by the broker from
+    /// the agent CLI (capabilities "models", broker modelcatalog.go) and
+    /// fetched into `SessionStore.modelCatalog`. `id` is the value sent as
+    /// the session-create model override; "" is the inherit/default
+    /// sentinel (the broker normalizes claude's own "default" entry to it).
+    struct AgentModel: Equatable, Identifiable, Decodable {
+        var id: String
+        var displayName: String
+        var description: String
+        var isDefault: Bool
+        var defaultEffort: String
+        var efforts: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case displayName = "display_name"
+            case description
+            case isDefault = "is_default"
+            case defaultEffort = "default_effort"
+            case efforts
+        }
+
+        init(
+            id: String,
+            displayName: String,
+            description: String = "",
+            isDefault: Bool = false,
+            defaultEffort: String = "",
+            efforts: [String] = []
+        ) {
+            self.id = id
+            self.displayName = displayName
+            self.description = description
+            self.isDefault = isDefault
+            self.defaultEffort = defaultEffort
+            self.efforts = efforts
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+            displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+            description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+            isDefault = try c.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+            defaultEffort = try c.decodeIfPresent(String.self, forKey: .defaultEffort) ?? ""
+            efforts = try c.decodeIfPresent([String].self, forKey: .efforts) ?? []
+        }
+    }
+
+    /// Per-assistant fork option lists. The static lists mirror the broker's
+    /// validated effort levels (broker/internal/session/override.go) and are
+    /// the FALLBACK; when the broker has discovered the agent's live catalog
+    /// (`catalog:` overloads) the options come from the agent itself, so new
+    /// models and effort levels appear without an app release.
     enum ForkOptions {
         /// Sentinel for the "keep the current model" option. Sent to
         /// forkSession as nil so the spawn carries no --model override —
@@ -198,6 +276,118 @@ extension ConduitUI {
         /// "inherit" affordance; everything else shows its alias verbatim.
         static func modelLabel(_ option: String) -> String {
             option.isEmpty ? "Default (inherit)" : option
+        }
+
+        // MARK: Catalog-aware overloads
+        //
+        // Each takes the assistant's discovered catalog
+        // (`store.modelCatalog[assistant]`) and falls back to the static
+        // lists above whenever it's nil/empty (old broker, discovery still
+        // running, offline).
+
+        /// The catalog entry a model option resolves to. The inherit
+        /// sentinel resolves to the agent's default entry so its effort
+        /// range / description follow the model the session would really run.
+        static func catalogEntry(for option: String, in catalog: [AgentModel]?) -> AgentModel? {
+            guard let catalog, !catalog.isEmpty else { return nil }
+            if let exact = catalog.first(where: { $0.id == option }) { return exact }
+            guard option == inheritModel else { return nil }
+            return catalog.first(where: { $0.isDefault }) ?? catalog.first
+        }
+
+        /// Model options from the discovered catalog (inherit sentinel
+        /// first), or the static list when no catalog is available.
+        static func models(forAssistant assistant: String, catalog: [AgentModel]?) -> [String] {
+            guard let catalog, !catalog.isEmpty else { return models(forAssistant: assistant) }
+            var ids = catalog.map(\.id)
+            if !ids.contains(inheritModel) { ids.insert(inheritModel, at: 0) }
+            return ids
+        }
+
+        /// Display label for a model option, preferring the agent's own
+        /// display name ("Fable", "GPT-5.5", "Default (recommended)").
+        static func modelLabel(_ option: String, catalog: [AgentModel]?) -> String {
+            if let entry = catalog?.first(where: { $0.id == option }), !entry.displayName.isEmpty {
+                return entry.displayName
+            }
+            return modelLabel(option)
+        }
+
+        /// One-line detail for a model option (the agent's own description,
+        /// e.g. "Sonnet 4.6 · Efficient for routine tasks"). nil without a
+        /// catalog — the caller hides the caption.
+        static func modelDetail(_ option: String, catalog: [AgentModel]?) -> String? {
+            guard let entry = catalogEntry(for: option, in: catalog) else { return nil }
+            return entry.description.isEmpty ? nil : entry.description
+        }
+
+        /// Effort levels for the chosen model from the discovered catalog
+        /// (per-model: claude sonnet lacks xhigh, haiku has none at all);
+        /// static per-assistant list when no catalog. An EMPTY result means
+        /// the model has no effort control — hide the effort UI and send no
+        /// override.
+        static func efforts(forAssistant assistant: String, model: String, catalog: [AgentModel]?) -> [String] {
+            guard let catalog, !catalog.isEmpty else { return efforts(forAssistant: assistant) }
+            return catalogEntry(for: model, in: catalog)?.efforts ?? []
+        }
+
+        /// The effort to preselect for a model: the agent's own default when
+        /// advertised, else "medium" when offered, else the first level.
+        /// "" when the model has no effort control.
+        static func defaultEffort(forAssistant assistant: String, model: String = inheritModel, catalog: [AgentModel]? = nil) -> String {
+            let options = efforts(forAssistant: assistant, model: model, catalog: catalog)
+            if options.isEmpty { return "" }
+            if let entry = catalogEntry(for: model, in: catalog),
+               !entry.defaultEffort.isEmpty, options.contains(entry.defaultEffort) {
+                return entry.defaultEffort
+            }
+            return options.contains("medium") ? "medium" : options[0]
+        }
+
+        /// Friendly dial label for a raw effort level. Unknown levels fall
+        /// back to their capitalized raw value so a future agent-side
+        /// addition still renders.
+        static func effortLabel(_ value: String) -> String {
+            switch value {
+            case "low": return "Fast"
+            case "medium": return "Balanced"
+            case "high": return "Deep"
+            case "xhigh": return "X-High"
+            case "max": return "Max"
+            default: return value.capitalized
+            }
+        }
+
+        /// Consequence line shown under the effort dial.
+        static func effortDescription(_ value: String) -> String {
+            switch value {
+            case "low": return "Quick passes, minimal deliberation"
+            case "medium": return "Reasons before it acts — the default"
+            case "high": return "Plans hard and checks itself, slower"
+            case "xhigh": return "Extra-high reasoning depth for hard problems"
+            case "max": return "Maximum reasoning depth — slowest, most thorough"
+            default: return "Reasoning depth: \(value)"
+            }
+        }
+
+        /// The model name to show on the agent card: the discovered default
+        /// model's display name ("GPT-5.5"); for claude's "Default
+        /// (recommended)" alias entry, the resolved model is the first
+        /// "·"-chunk of its description ("Opus 4.8 with 1M context" →
+        /// "Opus 4.8"). nil without a catalog — caller keeps its static
+        /// label.
+        static func defaultModelTitle(forCatalog catalog: [AgentModel]?) -> String? {
+            guard let entry = catalog?.first(where: { $0.isDefault }) ?? catalog?.first else { return nil }
+            var name = entry.displayName
+            if name.lowercased().hasPrefix("default") || name.isEmpty {
+                name = entry.description
+                    .components(separatedBy: "·").first?
+                    .trimmingCharacters(in: .whitespaces) ?? name
+                if let r = name.range(of: " with ") {
+                    name = String(name[..<r.lowerBound])
+                }
+            }
+            return name.isEmpty ? nil : name
         }
     }
 }

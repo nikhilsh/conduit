@@ -1378,6 +1378,11 @@ type Manager struct {
 	// created. Manager owns the pointer because the WS layer wires
 	// it in at startup; sessions read it through commandEnv.
 	credStore *credentials.Store
+
+	// catalog caches the per-assistant model+effort catalogs discovered
+	// from the agent CLIs (modelcatalog.go). Has its own lock; never
+	// touched under mu.
+	catalog modelCatalogCache
 }
 
 // SetCredentialStore wires the per-identity OAuth credential store into

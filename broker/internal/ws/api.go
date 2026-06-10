@@ -103,6 +103,11 @@ type capabilitiesResponse struct {
 		// create a plain terminal session on this box (Box health → SSH).
 		ShellSessions bool `json:"shell_sessions"`
 	} `json:"features"`
+	// Models is the per-assistant model+effort catalog discovered live from
+	// the agent CLIs (claude control-protocol initialize, codex app-server
+	// model/list). Omitted while discovery hasn't completed (or on older
+	// brokers) — the apps then fall back to their built-in lists.
+	Models map[string][]session.ModelInfo `json:"models,omitempty"`
 }
 
 func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +131,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.TokenInQueryParam = true
 	resp.Features.HostMetrics = hostmetrics.Available()
 	resp.Features.ShellSessions = s.Sessions.HasAssistant("shell")
+	resp.Models = s.Sessions.ModelCatalog()
 	writeJSON(w, http.StatusOK, resp)
 }
 

@@ -124,14 +124,14 @@ func (o SpawnOverride) extraArgsFor(assistant string) []string {
 	var args []string
 	switch assistant {
 	case "claude":
-		if effort != "" && claudeEfforts[effort] {
+		if effort != "" && effortSupported(assistant, effort) {
 			args = append(args, "--effort", effort)
 		}
 		if model != "" {
 			args = append(args, "--model", model)
 		}
 	case "codex":
-		if effort != "" && codexEfforts[effort] {
+		if effort != "" && effortSupported(assistant, effort) {
 			args = append(args, "-c", "model_reasoning_effort="+effort)
 		}
 		if model != "" {
@@ -152,12 +152,8 @@ func (o SpawnOverride) effectiveEffort(assistant, adapterDefault string) string 
 		return adapterDefault
 	}
 	switch assistant {
-	case "claude":
-		if claudeEfforts[effort] {
-			return effort
-		}
-	case "codex":
-		if codexEfforts[effort] {
+	case "claude", "codex":
+		if effortSupported(assistant, effort) {
 			return effort
 		}
 	}

@@ -166,12 +166,12 @@ func codexTurnStartParams(threadID, text string, o SpawnOverride) map[string]any
 }
 
 // codexEffortParam validates a reasoning-effort label against the labels codex
-// accepts (low/medium/high — matching codexEfforts, a subset of the schema's
-// ReasoningEffort enum none/minimal/low/medium/high/xhigh). An empty or unknown
-// value returns "" (dropped).
+// accepts: the static codexEfforts fallback plus whatever the discovered model
+// catalog advertises (so a newly shipped level like "xhigh" passes through
+// without a broker release). An empty or unknown value returns "" (dropped).
 func codexEffortParam(effort string) string {
 	effort = strings.TrimSpace(effort)
-	if effort != "" && codexEfforts[effort] {
+	if effort != "" && effortSupported("codex", effort) {
 		return effort
 	}
 	return ""

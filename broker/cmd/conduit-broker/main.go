@@ -93,6 +93,10 @@ func runUp(args []string) int {
 	}
 	log.Printf("adapters: source=%s names=%v", regSource, registry.Names())
 	mgr := session.NewManager(registry)
+	// Discover each agent's live model+effort catalog in the background
+	// (served via /api/capabilities "models"; also widens effort
+	// validation to whatever the agents actually advertise).
+	mgr.EnableModelDiscovery()
 	// Enable replay recording before Recover() — recovered sessions
 	// thus pick up the recorder on their drain loop too, so a
 	// post-restart session continues writing to the same replay.json.
