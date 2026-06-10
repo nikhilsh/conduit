@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
         // Persists the initial endpoint, then re-persists whenever it changes
         // (box switch, new pairing).
         pushStore.persistBrokerEndpoint(store.endpoint.value)
-        androidx.lifecycle.lifecycleScope.launch {
+        lifecycleScope.launch {
             store.endpoint.collect { ep ->
                 pushStore.persistBrokerEndpoint(ep)
             }
