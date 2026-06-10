@@ -23,10 +23,14 @@
 //   - bind any network port itself — the CLI does its own binding;
 //     the broker only Dials its own localhost to ferry the callback.
 //
-// Stage 0 scope (this file): codex CLI happy path + table-tested
-// stdout parser + port detection. The `claude auth login` branch
-// (which may not use a loopback at all, see PLAN §K) is a Stage 2
-// follow-up; the Provider abstraction below is the seam.
+// Two delivery modes are supported (see Delivery):
+//   - codex: loopback — the CLI binds 127.0.0.1:<port> and the broker
+//     forwards the callback by HTTP GET to that loopback.
+//   - claude: stdin code-paste — the CLI has NO loopback; it reads a
+//     `code#state` line from stdin. The broker derives that line from
+//     the phone's captured callback and writes it to the CLI's stdin.
+//     Validated against CLI 2.1.170 (PLAN-AGENT-OAUTH.md "Stage 2
+//     validation 2026-06-10").
 package oauth
 
 import (
@@ -97,17 +101,46 @@ type Session struct {
 	doneCh     chan struct{}
 	httpClient *http.Client
 
+	// provider is retained so Forward can dispatch on the provider's
+	// delivery mode (loopback HTTP vs stdin code-paste).
+	provider Provider
+
+	// stdin is the CLI's stdin pipe, populated only when the provider
+	// uses the code-paste delivery mode (claude). nil for loopback
+	// providers (codex), which never need to write to the CLI.
+	stdin io.WriteCloser
+
 	mu      sync.Mutex
 	closed  bool
 	exitErr error
 }
 
+// Delivery is how the broker hands the captured callback back to the
+// CLI subprocess. The two production providers differ here: codex runs
+// its own loopback HTTP listener (the broker Dials it), while claude's
+// flow has no loopback at all — it blocks reading a pasted `code#state`
+// line from its stdin (validated against CLI 2.1.170, see
+// PLAN-AGENT-OAUTH.md "Stage 2 validation 2026-06-10").
+type Delivery int
+
+const (
+	// DeliveryLoopback: the CLI bound a 127.0.0.1:<port> callback
+	// listener (port lives in the authorize URL's redirect_uri). The
+	// broker forwards by HTTP GET to that loopback. Used by codex.
+	DeliveryLoopback Delivery = iota
+	// DeliveryStdinPaste: the CLI has no loopback; it reads the
+	// authorization code from stdin (a "paste code here" prompt). The
+	// broker writes `<code>#<state>\n` to the CLI's stdin. Used by
+	// claude.
+	DeliveryStdinPaste
+)
+
 // Provider describes how to launch a CLI's login subcommand and how
 // to read its stdout. The two production providers — codex and
 // claude — share the same launch shape (an exec.Cmd + a stdout-line
 // scanner), so the Provider interface only abstracts the parts that
-// actually differ: the executable + args, and the URL-extraction
-// predicate.
+// actually differ: the executable + args, the URL-extraction
+// predicate, and how the captured callback is ferried back to the CLI.
 type Provider interface {
 	// Name returns the canonical provider identifier. Must match
 	// ProviderOpenAI or ProviderAnthropic; the WS layer also compares
@@ -127,6 +160,23 @@ type Provider interface {
 	// Returning ("", false) means "not the line we want" and the
 	// scanner advances. The first matching line wins.
 	ExtractURL(line string) (string, bool)
+
+	// Delivery declares how Forward ferries the phone's captured
+	// callback back to the CLI: loopback HTTP (codex) or stdin paste
+	// (claude). See Delivery.
+	Delivery() Delivery
+}
+
+// pasteFormatter is the optional capability a code-paste Provider
+// implements: turn the phone's captured callback (a `?code=…&state=…`
+// query string, OR a pre-joined `code#state` blob) into the exact line
+// the CLI expects on stdin. Loopback providers (codex) don't implement
+// this — their callback goes over HTTP, not stdin.
+type pasteFormatter interface {
+	// FormatPaste returns the line to write to the CLI's stdin
+	// (without trailing newline) given whatever the phone sent in the
+	// `agent_login_callback` query_string field.
+	FormatPaste(queryOrCode string) (string, error)
 }
 
 // codexProvider implements Provider for `codex login`. Spawns the CLI
@@ -165,16 +215,24 @@ func (codexProvider) ExtractURL(line string) (string, bool) {
 	return trimmed, true
 }
 
-// claudeProvider implements Provider for `claude auth login`.
+func (codexProvider) Delivery() Delivery { return DeliveryLoopback }
+
+// claudeProvider implements Provider for `claude auth login --claudeai`.
 //
-// Stage 0 only ships a stub — the URL-extraction predicate hasn't been
-// validated end-to-end on the harness host yet (the codex one was, see
-// PLAN §K), and Anthropic's flow may not use a loopback at all. The
-// predicate below matches lines that look like a claude.ai authorize
-// URL; the broker will surface the URL to the phone but the loopback
-// port will be 0, signalling the code-paste fallback. Stage 2 will
-// either replace this with a real loopback extractor or pivot to the
-// `agent_login_code` paste path documented in PLAN §K.
+// Validated end-to-end against CLI 2.1.170 (PLAN-AGENT-OAUTH.md "Stage 2
+// validation 2026-06-10"). The claude flow is **code-paste, not
+// loopback**:
+//
+//   - The CLI prints the authorize URL *inline* after a "visit:" prefix:
+//     `Opening browser to sign in…`
+//     `If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?…&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&…`
+//   - `redirect_uri` is the *remote* `platform.claude.com/oauth/code/callback`
+//     page, which displays a `code#state` string for the user to copy. There
+//     is no localhost loopback, so LoopbackPort stays 0.
+//   - The CLI then blocks reading a `code#state` line from stdin
+//     (`Paste code here if prompted > `). The broker writes that line to
+//     the CLI's stdin; the CLI performs the token exchange and writes
+//     ~/.claude/.credentials.json.
 type claudeProvider struct{}
 
 func (claudeProvider) Name() string { return ProviderAnthropic }
@@ -183,20 +241,81 @@ func (claudeProvider) Command() (string, []string) {
 	return "claude", []string{"auth", "login", "--claudeai"}
 }
 
+// claudeAuthMarkers are the substrings that identify the authorize URL
+// inside the CLI's stdout line. The current CLI emits
+// `claude.com/cai/oauth/authorize` (which 302s to claude.ai); older /
+// alternate flows used `claude.ai/oauth` or `platform.claude.com`. We
+// accept any of them so a host rotation doesn't silently break login.
+var claudeAuthMarkers = []string{
+	"claude.com/cai/oauth",
+	"claude.ai/oauth",
+	"platform.claude.com/v1/oauth/authorize",
+	"platform.claude.com/oauth/authorize",
+}
+
 func (claudeProvider) ExtractURL(line string) (string, bool) {
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "https://") {
-		return "", false
+	// Unlike codex (whole-line URL), the claude CLI prints the URL
+	// *inline* after `If the browser didn't open, visit: `. Scan for an
+	// embedded https:// authorize URL rather than requiring the trimmed
+	// line to *be* the URL.
+	for _, marker := range claudeAuthMarkers {
+		idx := strings.Index(line, marker)
+		if idx < 0 {
+			continue
+		}
+		// Walk back to the start of the https:// scheme so we ship a
+		// clean URL, not the "visit:" prefix.
+		start := strings.LastIndex(line[:idx], "https://")
+		if start < 0 {
+			continue
+		}
+		// The URL runs to the first whitespace (or end of line).
+		rest := line[start:]
+		if sp := strings.IndexAny(rest, " \t"); sp >= 0 {
+			rest = rest[:sp]
+		}
+		return strings.TrimRight(rest, "\r\n"), true
 	}
-	// Accept either claude.ai or platform.claude.com authorize URLs —
-	// the CLI's exact host hasn't been pinned yet (see PLAN §K), so
-	// we cast a wide net. The phone never gets to forge this URL: the
-	// CLI generates it from its embedded client_id + PKCE pair.
-	if !(strings.Contains(trimmed, "claude.ai/oauth") ||
-		strings.Contains(trimmed, "platform.claude.com")) {
-		return "", false
+	return "", false
+}
+
+func (claudeProvider) Delivery() Delivery { return DeliveryStdinPaste }
+
+// FormatPaste turns the phone's captured callback into the `code#state`
+// line the claude CLI expects on stdin. The phone may send either:
+//
+//   - a query string captured off the redirect page:
+//     `?code=AUTHCODE&state=STATE` (or without the leading `?`), or
+//   - a pre-joined `code#state` blob the user copied verbatim.
+//
+// Both normalize to `AUTHCODE#STATE` (no trailing newline — Forward
+// adds it). The CLI splits on `#` and rejects either half being empty
+// (`Invalid code. Please make sure the full code was copied`), so we
+// validate both halves are present before handing it over.
+func (claudeProvider) FormatPaste(queryOrCode string) (string, error) {
+	s := strings.TrimSpace(queryOrCode)
+	if s == "" {
+		return "", errors.New("oauth: empty login callback")
 	}
-	return trimmed, true
+	// Case 1: already a bare `code#state` paste (no query params).
+	if !strings.ContainsAny(s, "?&=") && strings.Contains(s, "#") {
+		code, state, _ := strings.Cut(s, "#")
+		if code == "" || state == "" {
+			return "", errors.New("oauth: claude paste missing code or state")
+		}
+		return code + "#" + state, nil
+	}
+	// Case 2: a query string — parse out code + state.
+	q, err := url.ParseQuery(strings.TrimPrefix(s, "?"))
+	if err != nil {
+		return "", fmt.Errorf("oauth: parse login callback: %w", err)
+	}
+	code := q.Get("code")
+	state := q.Get("state")
+	if code == "" || state == "" {
+		return "", errors.New("oauth: claude callback missing code or state")
+	}
+	return code + "#" + state, nil
 }
 
 // ProviderFor returns the registered Provider for `name`, or nil if
@@ -232,6 +351,15 @@ func Start(ctx context.Context, provider string) (*Session, error) {
 	if p == nil {
 		return nil, fmt.Errorf("oauth: unknown provider %q", provider)
 	}
+	return startProvider(ctx, p)
+}
+
+// startProvider is the provider-injected launch path. Start resolves the
+// Provider from a wire-string name and delegates here; tests inject a
+// stub Provider (pointing Command() at a fake binary) to exercise the
+// full spawn → URL-capture → Forward machinery without the real CLI.
+func startProvider(ctx context.Context, p Provider) (*Session, error) {
+	provider := p.Name()
 	token, err := newSessionToken()
 	if err != nil {
 		return nil, fmt.Errorf("oauth: session token: %w", err)
@@ -265,6 +393,19 @@ func Start(ctx context.Context, provider string) (*Session, error) {
 		return nil, fmt.Errorf("oauth: stderr pipe: %w", err)
 	}
 
+	// Code-paste providers (claude) read the authorization code from
+	// stdin; grab the pipe so Forward can write `code#state` to it.
+	// Loopback providers (codex) never read stdin — leaving it unset is
+	// fine (the CLI's loopback listener is the callback channel).
+	var stdin io.WriteCloser
+	if p.Delivery() == DeliveryStdinPaste {
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			cancelFn()
+			return nil, fmt.Errorf("oauth: stdin pipe: %w", err)
+		}
+	}
+
 	if err := cmd.Start(); err != nil {
 		cancelFn()
 		return nil, fmt.Errorf("oauth: start %s: %w", exe, err)
@@ -276,6 +417,8 @@ func Start(ctx context.Context, provider string) (*Session, error) {
 		cmd:          cmd,
 		cancelFn:     cancelFn,
 		doneCh:       make(chan struct{}),
+		provider:     p,
+		stdin:        stdin,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -343,12 +486,20 @@ func Start(ctx context.Context, provider string) (*Session, error) {
 // exited before we delivered), returns a wrapped error and leaves the
 // subprocess dead (Forward implies "we're done with the session").
 func (s *Session) Forward(queryString string) error {
+	// Code-paste providers (claude) get the callback via stdin, not a
+	// loopback Dial. Dispatch on the provider's declared delivery mode
+	// rather than on LoopbackPort==0 alone, so a loopback provider that
+	// (mis)parsed a 0 port still fails loudly instead of being routed
+	// to the wrong path.
+	if s.provider != nil && s.provider.Delivery() == DeliveryStdinPaste {
+		return s.forwardStdinPaste(queryString)
+	}
+
 	if s.LoopbackPort == 0 {
-		// Anthropic code-paste branch — the broker doesn't have a
-		// loopback to forward to. Stage 2 will replace this with the
-		// `agent_login_code` ferrying path. For now we reject so the
-		// WS layer doesn't silently no-op.
-		return errors.New("oauth: provider has no loopback (code-paste flow not yet implemented)")
+		// Loopback provider but no port was extracted — the authorize
+		// URL didn't advertise a 127.0.0.1 redirect_uri. Nothing to
+		// Dial; reject so the WS layer surfaces an agent_login_failed.
+		return errors.New("oauth: loopback provider has no callback port")
 	}
 
 	cbPath := extractCallbackPath(s.AuthorizeURL)
@@ -376,6 +527,48 @@ func (s *Session) Forward(queryString string) error {
 	// Wait for the CLI to exit (token exchange + on-disk write +
 	// graceful shutdown). Bounded — if the CLI hangs, we don't want
 	// the WS reply to hang forever.
+	return s.waitForExit()
+}
+
+// forwardStdinPaste handles the claude code-paste delivery: it derives
+// the `code#state` line the CLI's "Paste code here" prompt expects from
+// the phone's captured callback, writes it to the CLI's stdin, closes
+// the pipe (signals EOF so the CLI's readline returns), and waits for
+// the CLI to complete the token exchange and exit.
+//
+// The CLI splits the line on `#` into (code, state); see
+// PLAN-AGENT-OAUTH.md "Stage 2 validation 2026-06-10".
+func (s *Session) forwardStdinPaste(queryString string) error {
+	if s.stdin == nil {
+		s.terminate()
+		return errors.New("oauth: code-paste provider has no stdin pipe")
+	}
+	pf, ok := s.provider.(pasteFormatter)
+	if !ok {
+		s.terminate()
+		return errors.New("oauth: code-paste provider does not format paste input")
+	}
+	line, err := pf.FormatPaste(queryString)
+	if err != nil {
+		s.terminate()
+		return fmt.Errorf("oauth: format paste: %w", err)
+	}
+	if _, err := io.WriteString(s.stdin, line+"\n"); err != nil {
+		s.terminate()
+		return fmt.Errorf("oauth: write code to CLI stdin: %w", err)
+	}
+	// Close stdin so the CLI's readline sees EOF after the line — the
+	// CLI is done reading input once it has the code.
+	_ = s.stdin.Close()
+
+	return s.waitForExit()
+}
+
+// waitForExit blocks until the CLI subprocess exits or a 30s deadline
+// fires. Returns the CLI's exit error (wrapped) on a non-zero exit, nil
+// on clean exit, or a timeout error (after terminating the subprocess)
+// if the CLI hangs.
+func (s *Session) waitForExit() error {
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer waitCancel()
 	select {
