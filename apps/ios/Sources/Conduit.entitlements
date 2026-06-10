@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- APNs push notifications. The provisioning profiles used for
+	     ad-hoc/TestFlight/App Store builds must have the Push Notifications
+	     capability enabled in the Apple Developer portal (App ID:
+	     sh.nikhil.conduit). This is a human step — xcodegen generates the
+	     .entitlements file from this, but the App ID capability must be
+	     toggled in https://developer.apple.com/account/resources/identifiers/
+	     before a signed build will actually receive APNs tokens at runtime.
+	     See PR body for the full checklist. -->
+	<key>aps-environment</key>
+	<string>production</string>
+</dict>
+</plist>

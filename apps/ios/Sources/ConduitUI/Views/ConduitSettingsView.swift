@@ -50,6 +50,14 @@ extension ConduitUI {
         /// Account whose Manage dialog (re-auth / sign out) is open.
         @State private var manageTarget: AgentAccountStatus?
 
+        // WS-P.3: push notification settings state — observed from the
+        // shared PushNotificationManager so the row updates live when the
+        // token arrives or the user changes system settings.
+        @State private var pushManager = PushNotificationManager.shared
+        /// Feedback string shown after a "Send test notification" tap.
+        @State private var testPushResult: String?
+        @State private var testPushInFlight = false
+
         var body: some View {
             @Bindable var appearance = appearance
 
@@ -62,6 +70,7 @@ extension ConduitUI {
                             connectionSection
                             usageLimitsSection
                             appearanceSection
+                            notificationsSection
                             conversationSection
                             labsSection
                             aboutSection
@@ -623,6 +632,128 @@ extension ConduitUI {
                     endPoint: .trailing
                 )
             )
+        }
+
+        // MARK: Notifications (WS-P.3)
+
+        /// Push notification settings: honest-state row showing
+        ///   · "box doesn't support push" — old broker, no relay wired
+        ///   · "disabled in Settings" — system permission denied
+        ///   · "authorized · registered with box" — all good
+        ///   · "authorized · not registered" — token pending or reg failed
+        ///   · "not set up" — not yet determined
+        /// Plus a "Send test notification" button to end-to-end verify.
+        private var notificationsSection: some View {
+            sectionCard(title: "Notifications") {
+                VStack(spacing: 0) {
+                    pushStateRow
+                    if pushManager.settingsState.auth == .authorized
+                        && pushManager.settingsState.brokerSupported {
+                        Divider()
+                            .background(neon.border)
+                            .padding(.leading, 46)
+                        testPushRow
+                    }
+                }
+                .onAppear {
+                    // Refresh both auth and capabilities when this section
+                    // appears (e.g. user returns from iOS Settings).
+                    pushManager.refreshAuthStatus()
+                    let ep = store.endpoint
+                    Task { await PushNotificationManager.shared.probeCapabilities(endpoint: ep) }
+                }
+            }
+        }
+
+        private var pushStateRow: some View {
+            let state = pushManager.settingsState
+            let (icon, iconTint, subtitle): (String, Color, String) = {
+                if !state.brokerSupported {
+                    return ("bell.slash", neon.textFaint, "box doesn't support push")
+                }
+                switch state.auth {
+                case .notDetermined:
+                    return ("bell", neon.textDim, "not set up")
+                case .denied:
+                    return ("bell.slash.fill", neon.yellow, "disabled in iOS Settings")
+                case .pending:
+                    return ("bell.badge", neon.accent, "waiting for system token…")
+                case .authorized:
+                    return state.registered
+                        ? ("bell.badge.fill", neon.green, "authorized · registered with box")
+                        : ("bell.badge", neon.accent, "authorized · not registered")
+                }
+            }()
+            return ConduitUI.ListRow(
+                icon: icon,
+                title: "Push notifications",
+                subtitle: subtitle,
+                iconTint: iconTint
+            ) {
+                // If permission is denied, offer a shortcut to Settings.
+                if state.auth == .denied {
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.accent)
+                }
+            }
+        }
+
+        private var testPushRow: some View {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.up.message")
+                    .font(.body)
+                    .frame(width: 20)
+                    .foregroundStyle(neon.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Send test notification")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(neon.text)
+                    if let result = testPushResult {
+                        Text(result)
+                            .font(neon.mono(11.5))
+                            .foregroundStyle(result.hasPrefix("Sent") ? neon.green : neon.yellow)
+                    }
+                }
+                Spacer(minLength: 8)
+                if testPushInFlight {
+                    ProgressView()
+                        .tint(neon.accent)
+                        .scaleEffect(0.8)
+                } else {
+                    Button("Send") {
+                        sendTestPush()
+                    }
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.accent)
+                    .disabled(testPushInFlight)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+
+        private func sendTestPush() {
+            testPushInFlight = true
+            testPushResult = nil
+            let ep = store.endpoint
+            Task {
+                let err = await PushNotificationManager.shared.sendTestPush(
+                    endpoint: ep,
+                    title: "Conduit test",
+                    body: "Push notifications are working"
+                )
+                testPushInFlight = false
+                testPushResult = err == nil ? "Sent — check your device" : "Error: \(err!)"
+                // Clear the result after a few seconds
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                testPushResult = nil
+            }
         }
 
         // MARK: Conversation
