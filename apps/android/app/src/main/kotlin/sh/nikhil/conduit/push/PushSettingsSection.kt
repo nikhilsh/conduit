@@ -118,7 +118,7 @@ fun PushSettingsSection(
                     },
                     supportingContent = {
                         Text(
-                            "via Conduit relay (FCM)",
+                            "via Google (FCM)",
                             color = neon.textDim,
                             fontFamily = neon.sans,
                             fontSize = 12.sp,

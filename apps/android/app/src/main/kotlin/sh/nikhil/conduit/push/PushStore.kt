@@ -156,6 +156,28 @@ class PushStore : ViewModel() {
     }
 
     /**
+     * Called from [ConduitFcmService.onNewToken] when FCM rotates the token.
+     * Re-registers the new token with the broker so the relay's copy stays live.
+     * No-op when no broker endpoint is known yet (deferred until first session).
+     */
+    fun onNewFcmToken(token: String, endpoint: Endpoint?) {
+        Telemetry.breadcrumb(
+            "push", "FCM onNewToken",
+            mapOf("hasActiveBroker" to (endpoint != null).toString()),
+        )
+        prefs?.edit()
+            ?.putString(KEY_ENDPOINT_URL, token)
+            ?.putString(KEY_PLATFORM, "fcm")
+            ?.apply()
+        _registeredEndpointUrl.value = token
+
+        val ep = endpoint ?: return
+        appScope.launch {
+            registerWithBroker(ep, token, "fcm")
+        }
+    }
+
+    /**
      * Called from [ConduitUnifiedPushReceiver.onNewEndpoint].
      */
     fun updateEndpoint(endpointUrl: String, endpoint: Endpoint?) {

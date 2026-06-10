@@ -71,7 +71,7 @@
         </activity>
 
         <!--
-          UnifiedPush receiver (WS-P.3).
+          UnifiedPush receiver (WS-P.3 primary path).
 
           The UnifiedPush android-connector library dispatches:
             • org.unifiedpush.android.connector.NOTIFY         → onMessage
@@ -93,5 +93,28 @@
                 <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          FCM service (WS-P.3 fallback path).
+
+          ConduitFcmService handles two FCM callbacks:
+            • onMessageReceived — delivers foreground push messages and shows
+              the local notification + session deep-link (background messages
+              are auto-displayed by the FCM SDK from the notification block,
+              with data extras passed to the tap intent).
+            • onNewToken        — re-registers the new token with the broker
+              when FCM rotates the device token.
+
+          android:exported="false": the FCM system component dispatches to this
+          service via the SDK's internal intent mechanism; no external callers
+          should be able to address it directly.
+        -->
+        <service
+            android:name=".push.ConduitFcmService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>
