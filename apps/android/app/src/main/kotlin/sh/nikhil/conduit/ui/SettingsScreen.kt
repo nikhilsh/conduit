@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -124,6 +125,7 @@ fun SettingsScreen(
     val fontFamily by appearance.fontFamily.collectAsState()
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
+    val replyHaptics by appearance.replyHaptics.collectAsState()
     val chatStylePref by appearance.chatStylePreference.collectAsState()
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
@@ -385,6 +387,13 @@ fun SettingsScreen(
                     subtitle = "Show only summaries; tap to expand",
                     isOn = collapseTurns,
                     onChange = { appearance.setCollapseTurns(it) },
+                )
+                ToggleRow(
+                    icon = Icons.Filled.Vibration,
+                    title = "Reply Haptics",
+                    subtitle = "Tap when a reply starts and finishes",
+                    isOn = replyHaptics,
+                    onChange = { appearance.setReplyHaptics(it) },
                 )
             }
 

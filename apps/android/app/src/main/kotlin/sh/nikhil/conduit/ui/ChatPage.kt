@@ -490,6 +490,47 @@ fun ChatPage(
     }
     val showTyping = !readOnly && (typing.isStreaming(typingTick) || agentWorking)
 
+    // Reply haptics (ChatGPT-style start/finish taps; iOS `ReplyHaptics`
+    // parity). The pure model decides which tap to fire on each `showTyping`
+    // busy-state flip; `View.performHapticFeedback` plays it and honours the
+    // system haptic-feedback-enabled setting. Suppressed when read-only or the
+    // flag is off — the model still tracks the flip so the NEXT real
+    // transition is computed correctly. Re-seeded per session so a stale busy
+    // state doesn't fire a spurious tap on session switch.
+    val replyHapticsView = androidx.compose.ui.platform.LocalView.current
+    val appearanceStore = sh.nikhil.conduit.LocalAppearanceStore.current
+    val replyHapticsEnabled by appearanceStore.replyHaptics.collectAsState()
+    var replyHaptics by remember(session.id) { mutableStateOf(ReplyHapticsModel()) }
+    LaunchedEffect(showTyping, replyHapticsEnabled, session.id) {
+        val (next, event) = replyHaptics.observe(
+            busy = showTyping,
+            enabled = replyHapticsEnabled && !readOnly,
+            nowMs = System.currentTimeMillis(),
+        )
+        replyHaptics = next
+        if (event != null) {
+            val constant = when (event) {
+                // CONTEXT_CLICK (API 23) — a light, immediate tick: "a turn
+                // began". Available on our whole min-26 range.
+                ReplyHapticEvent.TurnStart ->
+                    android.view.HapticFeedbackConstants.CONTEXT_CLICK
+                // CONFIRM (API 30) — a completion tick: "the turn finished".
+                // Falls back to CONTEXT_CLICK on API 26–29 (a tap is better
+                // than silence; CONFIRM no-ops there anyway).
+                ReplyHapticEvent.TurnFinish ->
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
+                        android.view.HapticFeedbackConstants.CONFIRM
+                    else
+                        android.view.HapticFeedbackConstants.CONTEXT_CLICK
+            }
+            replyHapticsView.performHapticFeedback(constant)
+            sh.nikhil.conduit.Telemetry.breadcrumb(
+                "haptics", "reply tap",
+                mapOf("event" to if (event == ReplyHapticEvent.TurnStart) "start" else "finish"),
+            )
+        }
+    }
+
     // Follow the stream + new messages + the typing row appearing. While
     // not scrolled up, re-pin the absolute bottom. Keyed on `showTyping`
     // too so the indicator stays visible above the composer when pinned.
