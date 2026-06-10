@@ -299,6 +299,17 @@ jobs:
         if: steps.detect.outputs.skip != 'true' && hashFiles('apps/android/app/src/test/**/*.kt') != ''
         working-directory: apps/android
         run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - name: gradle lintVitalRelease
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: apps/android
+        # Hard gate: mirrors the exact lint task the release pipeline runs
+        # (assembleRelease → lintVitalRelease, FATAL-only). Using lintDebug
+        # instead ran the full error set and tripped on [NewApi] errors in
+        # generated UniFFI bindings (e.g. Cleaner#create requires API 33,
+        # min 26) which lintVitalRelease correctly ignores as non-fatal.
+        # lintVitalRelease needs no signing secrets — lint only analyzes
+        # sources; it does not sign or produce an APK.
+        run: ./gradlew :app:lintVitalRelease --no-daemon
       - name: Upload test + Roborazzi reports on failure
         if: failure() && steps.detect.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
