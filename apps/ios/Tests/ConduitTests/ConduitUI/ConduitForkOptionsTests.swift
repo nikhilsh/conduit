@@ -130,7 +130,14 @@ struct ConduitForkOptionsCatalogTests {
 
     @Test func modelLabelAndDetailComeFromCatalog() {
         #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5")
-        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: claudeCatalog) == "Default (recommended)")
+        // Fix A: the default/inherit entry shows the resolved model name so
+        // Opus is discoverable after the user has switched to another model.
+        // claude: catalog has an entry with id "" and displayName
+        // "Default (recommended)" → resolved to "Opus 4.8 (recommended)".
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: claudeCatalog) == "Opus 4.8 (recommended)")
+        // codex: no catalog entry with id "" → falls back to the no-catalog
+        // static label "Default (inherit)".
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "Default (inherit)")
         // Unknown id (stale selection) falls back to verbatim.
         #expect(ConduitUI.ForkOptions.modelLabel("opus", catalog: codexCatalog) == "opus")
         #expect(ConduitUI.ForkOptions.modelDetail("sonnet", catalog: claudeCatalog)
@@ -139,6 +146,24 @@ struct ConduitForkOptionsCatalogTests {
         #expect(ConduitUI.ForkOptions.modelDetail("", catalog: codexCatalog)
             == "Frontier model for complex coding.")
         #expect(ConduitUI.ForkOptions.modelDetail("opus", catalog: nil) == nil)
+    }
+
+    // Fix A: default entry label surfaces the resolved model name so the
+    // option is identifiable after another model is selected. No hardcoding
+    // of "opus" — derived from the catalog description's first ·-chunk.
+    @Test func defaultModelLabelSurfacesResolvedName() {
+        // claude: catalog entry id "" has displayName "Default (recommended)"
+        // → resolved to "Opus 4.8 (recommended)" via defaultModelTitle.
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: claudeCatalog) == "Opus 4.8 (recommended)")
+        // Non-default entries retain their verbatim display name.
+        #expect(ConduitUI.ForkOptions.modelLabel("claude-fable-5[1m]", catalog: claudeCatalog) == "Fable")
+        #expect(ConduitUI.ForkOptions.modelLabel("sonnet", catalog: claudeCatalog) == "Sonnet")
+        // Without a catalog: falls back to the static no-catalog label.
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: nil) == "Default (inherit)")
+        // Empty catalog: also falls back to static label.
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: []) == "Default (inherit)")
+        // Unknown id with catalog: no matching entry → falls back to verbatim.
+        #expect(ConduitUI.ForkOptions.modelLabel("unknown-model", catalog: claudeCatalog) == "unknown-model")
     }
 
     @Test func defaultModelTitleResolvesCardLabel() {
@@ -151,10 +176,13 @@ struct ConduitForkOptionsCatalogTests {
         #expect(ConduitUI.ForkOptions.defaultModelTitle(forCatalog: []) == nil)
     }
 
+    // Fix B: effort labels must be the REAL level names so the dial and
+    // the raw-value chip agree. "Deep" was wrong for "high"; "Fast" /
+    // "Balanced" were renamed to "Low" / "Medium" to match broker values.
     @Test func effortLabelsCoverKnownLevelsAndFallBack() {
-        #expect(ConduitUI.ForkOptions.effortLabel("low") == "Fast")
-        #expect(ConduitUI.ForkOptions.effortLabel("medium") == "Balanced")
-        #expect(ConduitUI.ForkOptions.effortLabel("high") == "Deep")
+        #expect(ConduitUI.ForkOptions.effortLabel("low") == "Low")
+        #expect(ConduitUI.ForkOptions.effortLabel("medium") == "Medium")
+        #expect(ConduitUI.ForkOptions.effortLabel("high") == "High")
         #expect(ConduitUI.ForkOptions.effortLabel("xhigh") == "X-High")
         #expect(ConduitUI.ForkOptions.effortLabel("max") == "Max")
         #expect(ConduitUI.ForkOptions.effortLabel("turbo") == "Turbo")

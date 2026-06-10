@@ -315,12 +315,28 @@ extension ConduitUI {
         }
 
         /// Display label for a model option, preferring the agent's own
-        /// display name ("Fable", "GPT-5.5", "Default (recommended)").
+        /// display name. For the default/inherit entry (id "" or displayName
+        /// starting with "Default") the raw "Default (recommended)" label
+        /// hides the actual model — so we surface the resolved model name
+        /// instead: "<Model Name> (recommended)" e.g. "Opus 4.8 (recommended)".
+        /// This keeps the default entry identifiable as Opus (or whatever the
+        /// broker's default is) after the user has selected another model and
+        /// wants to come back to it. Resolution reuses `defaultModelTitle` so
+        /// the same "first ·-chunk, strip ' with ...'" logic is shared and
+        /// no model name is hardcoded here.
         static func modelLabel(_ option: String, catalog: [AgentModel]?) -> String {
-            if let entry = catalog?.first(where: { $0.id == option }), !entry.displayName.isEmpty {
-                return entry.displayName
+            guard let catalog, !catalog.isEmpty else { return modelLabel(option) }
+            guard let entry = catalog.first(where: { $0.id == option }) else {
+                return modelLabel(option)
             }
-            return modelLabel(option)
+            // Default/inherit entry: show the resolved model name so it's
+            // discoverable even after another model was selected.
+            if entry.displayName.lowercased().hasPrefix("default") || entry.id == inheritModel {
+                if let resolved = defaultModelTitle(forCatalog: catalog) {
+                    return "\(resolved) (recommended)"
+                }
+            }
+            return entry.displayName.isEmpty ? modelLabel(option) : entry.displayName
         }
 
         /// One-line detail for a model option (the agent's own description,
@@ -354,14 +370,15 @@ extension ConduitUI {
             return options.contains("medium") ? "medium" : options[0]
         }
 
-        /// Friendly dial label for a raw effort level. Unknown levels fall
-        /// back to their capitalized raw value so a future agent-side
-        /// addition still renders.
+        /// Friendly dial label for a raw effort level. Labels match the
+        /// actual level names so the dial and the raw-value chip agree.
+        /// Unknown levels fall back to their capitalized raw value so a
+        /// future agent-side addition still renders.
         static func effortLabel(_ value: String) -> String {
             switch value {
-            case "low": return "Fast"
-            case "medium": return "Balanced"
-            case "high": return "Deep"
+            case "low": return "Low"
+            case "medium": return "Medium"
+            case "high": return "High"
             case "xhigh": return "X-High"
             case "max": return "Max"
             default: return value.capitalized
