@@ -1819,22 +1819,22 @@ final class SessionStore {
                 postSystemMessage(sessionID, "Usage: /model <name> — forks this session onto a different model.")
             } else {
                 forkSession(sessionID: sessionID, model: match.args)
-                postSystemMessage(sessionID, "Forking onto model "\(match.args)"…")
+                postSystemMessage(sessionID, "Forking onto model \u{201C}\(match.args)\u{201D}…")
             }
         case "effort":
             if match.args.isEmpty {
                 postSystemMessage(sessionID, "Usage: /effort <minimal|low|medium|high> — forks with a different reasoning effort.")
             } else {
                 forkSession(sessionID: sessionID, reasoningEffort: match.args)
-                postSystemMessage(sessionID, "Forking with reasoning effort "\(match.args)"…")
+                postSystemMessage(sessionID, "Forking with reasoning effort \u{201C}\(match.args)\u{201D}…")
             }
         // The live repeat-a-prompt loop is intentionally not wired yet — an
         // untested auto-sender hammering the agent is a bad blind ship.
         // Lands in a follow-up with on-device verification.
         case "loop":
-            postSystemMessage(sessionID, ""/loop" is recognised; the repeat-a-prompt loop ships in a follow-up update.")
+            postSystemMessage(sessionID, "\u{201C}/loop\u{201D} is recognised; the repeat-a-prompt loop ships in a follow-up update.")
         case "usage", "context":
-            postSystemMessage(sessionID, ""/\(match.command.name)" is a Claude Code terminal-only panel — it isn’t available in chat yet.")
+            postSystemMessage(sessionID, "\u{201C}/\(match.command.name)\u{201D} is a Claude Code terminal-only panel — it isn’t available in chat yet.")
         default:
             return false
         }
