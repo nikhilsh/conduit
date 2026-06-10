@@ -66,30 +66,6 @@ func fakeAdapter(name, provider string, envPassthrough ...string) agents.Adapter
 	return a
 }
 
-// stubRegistry implements registryLister for tests.
-type stubRegistry struct {
-	names    []string
-	adapters map[string]agents.Adapter
-}
-
-func newStubRegistry(adapters ...agents.Adapter) *stubRegistry {
-	sr := &stubRegistry{adapters: make(map[string]agents.Adapter, len(adapters))}
-	for _, a := range adapters {
-		sr.adapters[a.Name] = a
-		sr.names = append(sr.names, a.Name)
-	}
-	return sr
-}
-
-func (s *stubRegistry) Names() []string { return s.names }
-func (s *stubRegistry) Get(name string) (agents.Adapter, error) {
-	a, ok := s.adapters[name]
-	if !ok {
-		return agents.Adapter{}, fmt.Errorf("unknown adapter %q", name)
-	}
-	return a, nil
-}
-
 // ---------- agentSignInState table tests ----------
 
 // TestAgentSignInState covers the matrix of (cli present/absent ×
