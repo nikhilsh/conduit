@@ -299,6 +299,15 @@ jobs:
         if: steps.detect.outputs.skip != 'true' && hashFiles('apps/android/app/src/test/**/*.kt') != ''
         working-directory: apps/android
         run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - name: gradle lintDebug
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: apps/android
+        # Hard gate: any lint error fails the PR. lintDebug needs no signing
+        # secrets and applies the same rule set as the lintVitalRelease that
+        # runs implicitly inside assembleRelease. This catches release-only
+        # lint errors (e.g. InvalidFragmentVersionForActivityResult from
+        # v0.0.132) at PR time before they reach the tag pipeline.
+        run: ./gradlew :app:lintDebug --no-daemon
       - name: Upload test + Roborazzi reports on failure
         if: failure() && steps.detect.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
