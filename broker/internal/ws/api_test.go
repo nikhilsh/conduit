@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nikhilsh/conduit/broker/internal/agents"
 	"github.com/nikhilsh/conduit/broker/internal/auth"
 	"github.com/nikhilsh/conduit/broker/internal/session"
 )
@@ -81,6 +82,96 @@ func TestCapabilitiesIncludesDiscoveredModels(t *testing.T) {
 	}
 	if len(claude[1].Efforts) != 0 {
 		t.Fatalf("haiku should carry no efforts, got %v", claude[1].Efforts)
+	}
+}
+
+// TestCapabilitiesIncludesAgentDescriptors verifies the WS-2.3 per-assistant
+// `agents` descriptor map: each structured-backend assistant carries a
+// display_name, login_provider, the protocol's supports{} flags (folded with
+// the manifest plan-mode rule), and reuses the discovered model catalog. The
+// top-level `models` map stays present alongside it for one release.
+func TestCapabilitiesIncludesAgentDescriptors(t *testing.T) {
+	a := auth.NewStore()
+	tok := a.Mint()
+
+	// Build a registry with real protocols set (the production TOMLs do this).
+	dir := t.TempDir()
+	writeAdapter(t, dir, "claude.toml", `
+name = "claude"
+command = ["cat"]
+workdir = "."
+chat_mode = "stream-json"
+`)
+	writeAdapter(t, dir, "codex.toml", `
+name = "codex"
+command = ["cat"]
+workdir = "."
+chat_mode = "codex-exec"
+`)
+	reg, err := agents.LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	m := session.NewManager(reg)
+	m.SetModelCatalog("claude", []session.ModelInfo{{ID: "haiku", DisplayName: "Haiku"}})
+	srv := httptest.NewServer(New(a, m).Handler())
+	t.Cleanup(func() { srv.Close(); m.Close() })
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET capabilities: %v", err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Models map[string]json.RawMessage         `json:"models"`
+		Agents map[string]session.AgentDescriptor `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// claude: stream-json backend supports everything incl. plan_mode (claude
+	// manifest backfills a plan permission mode); descriptor reuses the catalog.
+	claude, ok := body.Agents["claude"]
+	if !ok {
+		t.Fatalf("agents missing claude: %+v", body.Agents)
+	}
+	if claude.DisplayName != "Claude" {
+		t.Errorf("claude display_name = %q, want Claude", claude.DisplayName)
+	}
+	if claude.LoginProvider != "anthropic" {
+		t.Errorf("claude login_provider = %q, want anthropic", claude.LoginProvider)
+	}
+	if !claude.Supports.Compact || !claude.Supports.AskUserQuestion || !claude.Supports.Effort ||
+		!claude.Supports.PlanMode || !claude.Supports.Usage {
+		t.Errorf("claude supports = %+v, want all true", claude.Supports)
+	}
+	if len(claude.Models) != 1 || claude.Models[0].ID != "haiku" {
+		t.Errorf("claude models = %+v, want [haiku]", claude.Models)
+	}
+
+	// codex-exec: no /compact, no ask_user_question (the exec fallback path).
+	codex, ok := body.Agents["codex"]
+	if !ok {
+		t.Fatalf("agents missing codex: %+v", body.Agents)
+	}
+	if codex.LoginProvider != "openai" {
+		t.Errorf("codex login_provider = %q, want openai", codex.LoginProvider)
+	}
+	if codex.Supports.Compact {
+		t.Errorf("codex-exec must not support compact")
+	}
+	if codex.Supports.AskUserQuestion {
+		t.Errorf("codex-exec must not support ask_user_question")
+	}
+	if !codex.Supports.Effort || !codex.Supports.Usage {
+		t.Errorf("codex supports = %+v, want effort+usage true", codex.Supports)
+	}
+
+	// The legacy top-level models map is still served alongside the descriptors.
+	if _, present := body.Models["claude"]; !present {
+		t.Errorf("top-level models[claude] must stay present for one release")
 	}
 }
 

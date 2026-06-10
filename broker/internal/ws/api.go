@@ -117,7 +117,18 @@ type capabilitiesResponse struct {
 	// the agent CLIs (claude control-protocol initialize, codex app-server
 	// model/list). Omitted while discovery hasn't completed (or on older
 	// brokers) — the apps then fall back to their built-in lists.
+	//
+	// KEPT for one release alongside the richer per-assistant `agents`
+	// descriptors below: current apps still read this top-level map. Deprecate
+	// after the descriptor-driven apps (Phase 3) ship.
 	Models map[string][]session.ModelInfo `json:"models,omitempty"`
+	// Agents is the per-assistant capability descriptor map (WS-2.3):
+	// display_name, login_provider, supports{...} (from the protocol backend's
+	// BackendCapabilities + the manifest's plan-mode rule), and the same
+	// ModelInfo slice as Models[name]. The apps render from these with a static
+	// fallback; an unknown agent degrades to a generic look. Omitted when no
+	// assistant has a structured backend (only the legacy scrape path).
+	Agents map[string]session.AgentDescriptor `json:"agents,omitempty"`
 }
 
 func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +155,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.Push = true
 	resp.Features.PushRelayConfigured = s.PushRelayConfigured
 	resp.Models = s.Sessions.ModelCatalog()
+	resp.Agents = s.Sessions.AgentDescriptors()
 	writeJSON(w, http.StatusOK, resp)
 }
 

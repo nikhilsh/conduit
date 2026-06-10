@@ -318,20 +318,34 @@ func (claudeProvider) FormatPaste(queryOrCode string) (string, error) {
 	return code + "#" + state, nil
 }
 
-// ProviderFor returns the registered Provider for `name`, or nil if
-// the broker doesn't know how to drive that provider's CLI. Callers
-// (the WS layer) map the WS-message `provider` field through this and
-// emit an `agent_login_failed` view_event when nil — same shape as
-// the credentials.ValidProvider gate.
-func ProviderFor(name string) Provider {
-	switch name {
-	case ProviderOpenAI:
-		return codexProvider{}
-	case ProviderAnthropic:
-		return claudeProvider{}
-	default:
-		return nil
+// providerRegistry maps a provider key (adapter.LoginProvider — "anthropic",
+// "openai", …) to its login Provider. Populated in init() by each provider so
+// onboarding a new agent whose CLI speaks one of these login flows costs no
+// edit here (the WS-2.2 self-registration seam). Resolution is by key only.
+var providerRegistry = map[string]Provider{}
+
+// registerProvider records a Provider under its Name() key. Called from
+// provider init()s; panics on a duplicate key (a programming error).
+func registerProvider(p Provider) {
+	name := p.Name()
+	if _, dup := providerRegistry[name]; dup {
+		panic("oauth: duplicate provider for " + name)
 	}
+	providerRegistry[name] = p
+}
+
+func init() {
+	registerProvider(codexProvider{})
+	registerProvider(claudeProvider{})
+}
+
+// ProviderFor returns the registered Provider for `name` (the agent's
+// adapter.LoginProvider), or nil if the broker doesn't know how to drive that
+// provider's CLI. Callers (the WS layer) map the WS-message `provider` field
+// through this and emit an `agent_login_failed` view_event when nil — same
+// shape as the credentials.ValidProvider gate.
+func ProviderFor(name string) Provider {
+	return providerRegistry[name]
 }
 
 // Start launches the CLI login subprocess and blocks until either the
