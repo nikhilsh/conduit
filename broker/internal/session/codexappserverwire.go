@@ -413,6 +413,12 @@ func codexIsApprovalMethod(method string) bool {
 type codexApprovalRequest struct {
 	summary string // the command line, or a file-change summary
 	cwd     string
+	// declineAvailable is true when this request's availableDecisions includes
+	// the string `decline`. `decline` blocks just this command and lets the turn
+	// CONTINUE (the agent acknowledges and can retry/give up); `cancel` interrupts
+	// the whole turn. `decline` is offered only for SOME requests, so deny prefers
+	// it when present and falls back to `cancel` (always available) otherwise.
+	declineAvailable bool
 }
 
 // parseCodexApprovalRequest decodes an approval request's params into the bits
@@ -426,6 +432,11 @@ func parseCodexApprovalRequest(method string, params json.RawMessage) (codexAppr
 		Changes []struct {
 			Path string `json:"path"`
 		} `json:"changes"`
+		// availableDecisions is a heterogeneous array: plain strings ("accept",
+		// "cancel", "decline") AND objects ({"acceptWithExecpolicyAmendment":…}).
+		// json.RawMessage per element so an object entry doesn't fail the decode;
+		// only the string entries are inspected for `decline`.
+		AvailableDecisions []json.RawMessage `json:"availableDecisions"`
 	}
 	if json.Unmarshal(params, &p) != nil {
 		return codexApprovalRequest{}, false
@@ -441,7 +452,19 @@ func parseCodexApprovalRequest(method string, params json.RawMessage) (codexAppr
 			summary = "apply file changes"
 		}
 	}
-	return codexApprovalRequest{summary: summary, cwd: strings.TrimSpace(p.Cwd)}, true
+	declineAvailable := false
+	for _, d := range p.AvailableDecisions {
+		var s string
+		if json.Unmarshal(d, &s) == nil && s == codexDecisionDecline {
+			declineAvailable = true
+			break
+		}
+	}
+	return codexApprovalRequest{
+		summary:          summary,
+		cwd:              strings.TrimSpace(p.Cwd),
+		declineAvailable: declineAvailable,
+	}, true
 }
 
 // codexApprovalApproveLabel / codexApprovalDenyLabel are the tappable option
@@ -479,19 +502,33 @@ func codexApprovalCardContent(req codexApprovalRequest) (string, bool) {
 	return b.String(), true
 }
 
+// codexApprovalDecision* are the JSON-RPC decision strings the broker sends in
+// response to an approval request (CommandExecutionApprovalDecision /
+// FileChangeApprovalDecision).
+const (
+	codexDecisionAccept  = "accept"
+	codexDecisionDecline = "decline"
+	codexDecisionCancel  = "cancel"
+)
+
 // codexApprovalDecisionFor maps the user's tapped label (or typed reply) to a
 // CommandExecutionApprovalDecision / FileChangeApprovalDecision string.
 //
-// Approve → "accept" (run it). Anything else → "cancel" (deny): cancel is ALWAYS
-// in availableDecisions and ends the turn cleanly, whereas "decline" is offered
-// only for some requests (verified: this capture's availableDecisions omitted
-// decline). Defaulting unknown/typed replies to cancel mirrors claude's
-// AskUserQuestion-deny posture — a deny must never leave the turn spinning.
-func codexApprovalDecisionFor(answer string) string {
+// Approve → "accept" (run it). Anything else is a deny: prefer "decline" when
+// this request offered it (declineAvailable) — it blocks only this command and
+// lets the turn CONTINUE so the agent acknowledges the denial and can adapt
+// (device feedback: a deny→cancel left the agent silent because cancel
+// interrupts the whole turn). Fall back to "cancel" when decline isn't offered
+// (cancel is ALWAYS in availableDecisions); a deny must never leave the turn
+// spinning, mirroring claude's AskUserQuestion-deny posture.
+func codexApprovalDecisionFor(answer string, declineAvailable bool) string {
 	if strings.EqualFold(strings.TrimSpace(answer), codexApprovalApproveLabel) {
-		return "accept"
+		return codexDecisionAccept
 	}
-	return "cancel"
+	if declineAvailable {
+		return codexDecisionDecline
+	}
+	return codexDecisionCancel
 }
 
 // isCodexCompactCommand reports whether the user's composer text is exactly the

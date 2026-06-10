@@ -311,6 +311,36 @@ struct MergeConversationTests {
     }
 }
 
+@Suite("SessionStore.stripPendingSentinel — HTTP replay matches the live path")
+struct StripPendingSentinelTests {
+    private let sentinel = "[[conduit:needs-input]]"
+
+    @Test func dropsTheSentinelLine() {
+        let raw = "\(sentinel)\nAllow codex to run this command?\n\nls -la\nin /root\n\n1. Approve\n2. Deny"
+        let stripped = SessionStore.stripPendingSentinel(raw)
+        #expect(!stripped.contains(sentinel))
+        #expect(stripped.hasPrefix("Allow codex to run this command?"))
+        // The non-sentinel body is preserved verbatim.
+        #expect(stripped.contains("1. Approve"))
+        #expect(stripped.contains("2. Deny"))
+    }
+
+    @Test func noSentinelIsUnchanged() {
+        let raw = "just a normal assistant message\nwith two lines"
+        #expect(SessionStore.stripPendingSentinel(raw) == raw)
+    }
+
+    @Test func strippedFingerprintMatchesLiveCard() {
+        // The dup bug: HTTP replay kept the sentinel, so its role+content
+        // fingerprint differed from the live (core-stripped) card and survived
+        // mergeConversation's dedup. After stripping, the two match and the
+        // live pending_input card wins.
+        let liveBody = "Allow codex to run this command?\n\nls\nin /root\n\n1. Approve\n2. Deny"
+        let pastRaw = "\(sentinel)\n\(liveBody)"
+        #expect(SessionStore.stripPendingSentinel(pastRaw) == liveBody)
+    }
+}
+
 /// `session-reconcile-broker-truth` — pins the wire contract for the
 /// broker's authoritative live-session list (`GET /api/sessions`,
 /// `broker/internal/session.LiveSessionInfo`). A careless rename of a

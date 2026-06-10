@@ -131,6 +131,11 @@ type codexAppServerProcess struct {
 	// approval, kept so a reattaching client can re-see it (PendingApprovalCard,
 	// the codex twin of PendingAskChatContent). "" when none is pending.
 	pendingApprovalCard string
+	// pendingApprovalDecline is true when the outstanding approval offered
+	// `decline` in availableDecisions, so a deny answers `decline` (turn
+	// continues) instead of `cancel` (turn interrupted). Captured from the
+	// request; read by AnswerApproval.
+	pendingApprovalDecline bool
 	// approvalTimer auto-denies an unanswered approval after askAnswerTimeout
 	// (mirrors claude's askcontrol.go give-up timer), so a never-tapped card
 	// can't wedge the turn forever. nil when no approval is pending.
@@ -403,6 +408,7 @@ func (c *codexAppServerProcess) finishTurn() (active, published, intentional, in
 	// the turn is already over); the abandoned approval simply clears.
 	c.pendingApprovalID = nil
 	c.pendingApprovalCard = ""
+	c.pendingApprovalDecline = false
 	if c.approvalTimer != nil {
 		c.approvalTimer.Stop()
 		c.approvalTimer = nil
@@ -733,13 +739,13 @@ func (c *codexAppServerProcess) handleServerRequest(rawID json.RawMessage, metho
 	req, ok := parseCodexApprovalRequest(method, params)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "codex app-server: unparseable approval request %q — denying\n", method)
-		c.respondApproval(rawID, "cancel")
+		c.respondApproval(rawID, codexDecisionCancel)
 		return
 	}
 	content, ok := codexApprovalCardContent(req)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "codex app-server: approval request %q with empty summary — denying\n", method)
-		c.respondApproval(rawID, "cancel")
+		c.respondApproval(rawID, codexDecisionCancel)
 		return
 	}
 
@@ -754,6 +760,7 @@ func (c *codexAppServerProcess) handleServerRequest(rawID json.RawMessage, metho
 	copy(idForTimer, rawID)
 	c.pendingApprovalID = idForTimer
 	c.pendingApprovalCard = content
+	c.pendingApprovalDecline = req.declineAvailable
 	c.approvalTimer = time.AfterFunc(askAnswerTimeout, func() { c.expireApproval(idForTimer) })
 	c.mu.Unlock()
 
@@ -775,29 +782,32 @@ func (c *codexAppServerProcess) handleServerRequest(rawID json.RawMessage, metho
 // when nothing is pending — SendChat then routes the message as a normal turn.
 // The approve label → accept; anything else → cancel (deny).
 func (c *codexAppServerProcess) AnswerApproval(msg string) bool {
-	id := c.takePendingApproval()
+	id, declineAvailable := c.takePendingApproval()
 	if id == nil {
 		return false
 	}
-	decision := codexApprovalDecisionFor(msg)
+	decision := codexApprovalDecisionFor(msg, declineAvailable)
 	fmt.Fprintf(os.Stderr, "codex app-server: approval answered (id %s) → %s\n", string(id), decision)
 	c.respondApproval(id, decision)
 	return true
 }
 
 // takePendingApproval atomically consumes the stashed approval id (and stops its
-// timer), or nil when none is pending.
-func (c *codexAppServerProcess) takePendingApproval() json.RawMessage {
+// timer), returning the id and whether the request offered `decline`. id is nil
+// when none is pending.
+func (c *codexAppServerProcess) takePendingApproval() (json.RawMessage, bool) {
 	c.mu.Lock()
 	id := c.pendingApprovalID
+	declineAvailable := c.pendingApprovalDecline
 	c.pendingApprovalID = nil
 	c.pendingApprovalCard = ""
+	c.pendingApprovalDecline = false
 	if c.approvalTimer != nil {
 		c.approvalTimer.Stop()
 		c.approvalTimer = nil
 	}
 	c.mu.Unlock()
-	return id
+	return id, declineAvailable
 }
 
 // PendingApprovalCard returns the rendered card for an outstanding approval (and
@@ -817,9 +827,11 @@ func (c *codexAppServerProcess) PendingApprovalCard() (string, bool) {
 // nothing is pending. Safe to call after stdin is gone — respondApproval's write
 // just errors harmlessly.
 func (c *codexAppServerProcess) clearPendingApproval() {
-	if id := c.takePendingApproval(); id != nil {
+	// Always cancel on EOF/close: the app-server is gone, so the turn can't
+	// continue regardless of whether decline was offered.
+	if id, _ := c.takePendingApproval(); id != nil {
 		fmt.Fprintf(os.Stderr, "codex app-server: pending approval (id %s) abandoned — denying (cancel)\n", string(id))
-		c.respondApproval(id, "cancel")
+		c.respondApproval(id, codexDecisionCancel)
 	}
 }
 
@@ -834,10 +846,11 @@ func (c *codexAppServerProcess) expireApproval(rawID json.RawMessage) {
 	}
 	c.pendingApprovalID = nil
 	c.pendingApprovalCard = ""
+	c.pendingApprovalDecline = false
 	c.approvalTimer = nil
 	c.mu.Unlock()
 	fmt.Fprintf(os.Stderr, "codex app-server: approval (id %s) timed out — denying (cancel)\n", string(rawID))
-	c.respondApproval(rawID, "cancel")
+	c.respondApproval(rawID, codexDecisionCancel)
 }
 
 // respondApproval sends the JSON-RPC decision response for an approval request
@@ -954,11 +967,12 @@ func (c *codexAppServerProcess) Close() error {
 		id := c.pendingApprovalID
 		c.pendingApprovalID = nil
 		c.pendingApprovalCard = ""
+		c.pendingApprovalDecline = false
 		if c.approvalTimer != nil {
 			c.approvalTimer.Stop()
 			c.approvalTimer = nil
 		}
-		if line, err := encodeCodexResponse(id, map[string]any{"decision": "cancel"}); err == nil && c.stdin != nil {
+		if line, err := encodeCodexResponse(id, map[string]any{"decision": codexDecisionCancel}); err == nil && c.stdin != nil {
 			_, _ = c.stdin.Write(line)
 		}
 	}

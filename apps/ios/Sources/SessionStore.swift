@@ -947,12 +947,21 @@ final class SessionStore {
             let files = (raw.files ?? []).map {
                 ViewEventFile(path: $0.path, rev: $0.rev ?? "")
             }
+            // Strip the pending-input sentinel the broker persists with an
+            // AskUserQuestion / codex approval card. The live path runs the
+            // core classifier (which strips it); this raw HTTP replay does
+            // not, so without this the sentinel-bearing line both shows as
+            // raw chat text AND fails to dedupe against the live, stripped
+            // card (different role+content fingerprint) — a duplicate card
+            // body under the real card on reattach. Byte-identical to the
+            // broker constant.
+            let content = Self.stripPendingSentinel(raw.content)
             return ConversationItem(
                 id: "saved-\(sessionID)-\(index)",
                 role: raw.role,
                 kind: kind,
                 status: "done",
-                content: raw.content,
+                content: content,
                 ts: raw.ts ?? "",
                 files: files,
                 toolName: nil,
@@ -2299,6 +2308,19 @@ final class SessionStore {
             !liveFingerprints.contains("\($0.role)|\($0.content)")
         }
         return (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
+    }
+
+    /// Remove the broker's pending-input sentinel line from raw transcript
+    /// content (the HTTP `fetchConversation` replay bypasses the core
+    /// classifier, which strips it on the live path). Byte-identical to the
+    /// broker / core constant; mirrors core `strip_pending_sentinel`.
+    nonisolated static func stripPendingSentinel(_ text: String) -> String {
+        let sentinel = ConduitUI.ChatViewModel.pendingInputSentinel
+        guard text.contains(sentinel) else { return text }
+        return text
+            .components(separatedBy: "\n")
+            .filter { $0.trimmingCharacters(in: .whitespaces) != sentinel }
+            .joined(separator: "\n")
     }
 
     /// Restore a reattached live session's prior conversation from the

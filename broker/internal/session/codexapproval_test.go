@@ -77,23 +77,62 @@ func TestCodexApprovalCardFileChange(t *testing.T) {
 	}
 }
 
-// TestCodexApprovalDecisionFor: Approve → accept; everything else → cancel
-// (cancel is always available and ends the turn cleanly; decline is not always
-// offered).
+// TestCodexApprovalDecisionFor: Approve → accept; a deny prefers `decline` when
+// the request offered it (turn continues, agent acknowledges) and falls back to
+// `cancel` when it didn't (cancel is always available and ends the turn cleanly).
 func TestCodexApprovalDecisionFor(t *testing.T) {
-	cases := map[string]string{
-		"Approve":     "accept",
-		"approve":     "accept",
-		"  Approve  ": "accept",
-		"Deny":        "cancel",
-		"no":          "cancel",
-		"":            "cancel",
-		"garbage":     "cancel",
+	cases := []struct {
+		answer           string
+		declineAvailable bool
+		want             string
+	}{
+		// Approve always accepts, regardless of declineAvailable.
+		{"Approve", false, "accept"},
+		{"approve", true, "accept"},
+		{"  Approve  ", true, "accept"},
+		// Deny WITHOUT decline offered → cancel (interrupts the turn).
+		{"Deny", false, "cancel"},
+		{"no", false, "cancel"},
+		{"", false, "cancel"},
+		{"garbage", false, "cancel"},
+		// Deny WITH decline offered → decline (turn continues).
+		{"Deny", true, "decline"},
+		{"no", true, "decline"},
+		{"", true, "decline"},
+		{"garbage", true, "decline"},
 	}
-	for answer, want := range cases {
-		if got := codexApprovalDecisionFor(answer); got != want {
-			t.Fatalf("decision(%q) = %q, want %q", answer, got, want)
+	for _, tc := range cases {
+		if got := codexApprovalDecisionFor(tc.answer, tc.declineAvailable); got != tc.want {
+			t.Fatalf("decision(%q, decline=%v) = %q, want %q", tc.answer, tc.declineAvailable, got, tc.want)
 		}
+	}
+}
+
+// TestParseCodexApprovalDeclineAvailable: declineAvailable reflects whether
+// `decline` appears (as a string) in availableDecisions; object entries
+// (e.g. acceptWithExecpolicyAmendment) don't break the decode.
+func TestParseCodexApprovalDeclineAvailable(t *testing.T) {
+	cases := []struct {
+		name   string
+		params string
+		want   bool
+	}{
+		{"decline present", `{"command":"ls","availableDecisions":["accept","decline","cancel"]}`, true},
+		{"decline absent", `{"command":"ls","availableDecisions":["accept","cancel"]}`, false},
+		{"with object entry", `{"command":"ls","availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{}},"cancel"]}`, false},
+		{"with object + decline", `{"command":"ls","availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{}},"decline","cancel"]}`, true},
+		{"missing field", `{"command":"ls"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, ok := parseCodexApprovalRequest("item/commandExecution/requestApproval", json.RawMessage(tc.params))
+			if !ok {
+				t.Fatal("parse failed")
+			}
+			if req.declineAvailable != tc.want {
+				t.Fatalf("declineAvailable = %v, want %v", req.declineAvailable, tc.want)
+			}
+		})
 	}
 }
 
@@ -299,6 +338,73 @@ func TestCodexApprovalDenyIntegration(t *testing.T) {
 	}
 	if got := waitForApprovalResponse(t, recv); got != "cancel" {
 		t.Fatalf("decision = %q, want cancel", got)
+	}
+}
+
+// codexApprovalDeclineStub is codexApprovalStub but the approval request offers
+// `decline` in availableDecisions, so a deny tap resolves to decline (turn
+// continues) rather than cancel.
+func codexApprovalDeclineStub(t *testing.T, dir, recvPath string) string {
+	t.Helper()
+	fake := filepath.Join(dir, "codex")
+	script := `#!/usr/bin/env bash
+RECV="` + recvPath + `"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$RECV"
+  case "$line" in
+    *'"initialize"'*)
+      printf '%s\n' '{"id":1,"result":{"userAgent":"fake"}}'
+      ;;
+    *'"thread/start"'*)
+      printf '%s\n' '{"id":2,"result":{"thread":{"id":"thr-1"}}}'
+      ;;
+    *'"turn/start"'*)
+      printf '%s\n' '{"method":"turn/started","params":{"threadId":"thr-1","turn":{"id":"turn-1"}}}'
+      printf '%s\n' '{"method":"item/commandExecution/requestApproval","id":0,"params":{"threadId":"thr-1","turnId":"turn-1","itemId":"call_1","command":"/bin/bash -lc '"'"'echo hi > hello.txt'"'"'","cwd":"'"$PWD"'","availableDecisions":["accept","decline","cancel"]}}'
+      ;;
+    *'"id":0'*'"decision"'*)
+      printf '%s\n' '{"method":"serverRequest/resolved","params":{"threadId":"thr-1","requestId":0}}'
+      printf '%s\n' '{"method":"item/completed","params":{"threadId":"thr-1","item":{"type":"agentMessage","id":"m1","text":"done"}}}'
+      printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thr-1","turn":{"status":"completed"}}}'
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	return fake
+}
+
+// TestCodexApprovalDenyDeclineIntegration: when the request offers `decline`,
+// tapping Deny sends `decline` (the turn continues) instead of `cancel`.
+func TestCodexApprovalDenyDeclineIntegration(t *testing.T) {
+	dir := t.TempDir()
+	recv := filepath.Join(dir, "recv.jsonl")
+	fake := codexApprovalDeclineStub(t, dir, recv)
+
+	events := make(chan []byte, 32)
+	proc, err := newCodexAppServerProcess(
+		fake, dir, nil, SpawnOverride{},
+		func(p []byte) { events <- p },
+		nil, "", func(string) {},
+	)
+	if err != nil {
+		t.Fatalf("construct: %v", err)
+	}
+	defer proc.Close()
+
+	if err := proc.Send("do the thing"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForChatEvent(t, events, func(role, content string) bool {
+		return role == "assistant" && strings.HasPrefix(content, pendingInputSentinel)
+	})
+	if !proc.AnswerApproval(codexApprovalDenyLabel) {
+		t.Fatal("AnswerApproval should report handled")
+	}
+	if got := waitForApprovalResponse(t, recv); got != "decline" {
+		t.Fatalf("decision = %q, want decline", got)
 	}
 }
 
