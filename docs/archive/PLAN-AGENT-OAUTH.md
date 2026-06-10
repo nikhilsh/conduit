@@ -956,3 +956,75 @@ Confirmed locally on the harness host 2026-05-22:
   code back via `agent_login_code`. The v2 wire protocol leaves room
   for this branch: `agent_login_url.loopback_port` may be `0` to
   signal the code-paste flow.
+
+## Stage 2 validation 2026-06-10 (WS-0.3)
+
+Validated end-to-end against the real `claude` CLI **2.1.170** on the harness
+host, in an isolated `$HOME` (`HOME=$(mktemp -d)`,
+`CLAUDE_CONFIG_DIR=$HOME/.claude`) so the operator's real credentials were never
+touched. Findings confirm §K's prediction: **the claude flow is code-paste, NOT
+loopback.**
+
+### What `claude auth login --claudeai` prints (verbatim)
+
+```
+Opening browser to sign in…
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload&code_challenge=<REDACTED>&code_challenge_method=S256&state=<REDACTED>
+Paste code here if prompted >
+```
+
+Key differences from codex:
+
+- **Authorize host is `claude.com/cai/oauth/authorize`** (302s onward), not
+  `auth.openai.com`. Matches memory `claude-oauth-ground-truth`.
+- **`redirect_uri = https://platform.claude.com/oauth/code/callback`** — a
+  *remote HTTPS* page, NOT a `http://localhost:<port>` loopback. The user (or
+  the app's in-app browser) lands on that page after consent; the page **displays
+  the authorization code** for the user to copy.
+- The URL prefix is `Opening browser to sign in…\nIf the browser didn't open,
+  visit: <url>` — the URL is **inline on the same line** as the "visit:" prefix,
+  not on its own line like codex. The matcher must scan for the embedded
+  `https://…claude.com/cai/oauth…` substring, not require a whole-line URL.
+- **No local OAuth callback port is bound.** `ss -tlnp` while the CLI waited
+  showed a `127.0.0.1:<random>` claude listener, but that is the unrelated
+  IDE/MCP server — it is NOT in `redirect_uri` and is not the OAuth callback.
+  `extractLoopbackPort` correctly returns 0 for this URL (no loopback in
+  `redirect_uri`).
+- **The CLI then blocks reading a pasted code from stdin** (`Paste code here if
+  prompted > `). It reads from a **plain stdin pipe** (confirmed: feeding the
+  code via a pipe, not a TTY, drives the exchange).
+
+### Paste format: `<code>#<state>`
+
+Recovered from the 2.1.170 Bun bundle (`/root/.local/share/claude/versions/2.1.170`):
+
+```js
+[code, state] = pasted.split("#");
+if (!code || !state) { error: "Invalid code. Please make sure the full code was copied" }
+```
+
+So the CLI expects the pasted line to be **`AUTHORIZATION_CODE#STATE`**. The
+`platform.claude.com/oauth/code/callback` page shows exactly this `code#state`
+string for the user to copy. After the paste the CLI performs the token exchange
+(JSON body to `platform.claude.com/v1/oauth/token`, per
+`claude-oauth-ground-truth`) and writes `~/.claude/.credentials.json`.
+
+End-to-end paste was exercised with a deliberately bogus `code#state`: the CLI
+read it from stdin and attempted the real exchange, failing with
+`Login failed: Request failed with status code 400` — proving the stdin paste
+path drives the exchange. (No real token was ever produced; the isolated HOME
+was discarded.)
+
+### Broker implications (implemented in this WS)
+
+- `claudeProvider.ExtractURL` matches the inline `…claude.com/cai/oauth…` URL
+  (substring scan, not whole-line) and strips the "visit:" prefix.
+- `LoopbackPort` stays 0 for claude → the phone presents its in-app browser,
+  reads the displayed `code#state`, and ships it back via the existing
+  `agent_login_callback` `query_string` (no new wire message needed — the broker
+  accepts either `?code=…&state=…` or a bare `code#state`).
+- `Session.Forward` branches on the provider's delivery mode: codex → HTTP GET
+  to the loopback (unchanged); claude → write `<code>#<state>\n` to the CLI's
+  stdin, then wait for the CLI to exit (success = credentials written).
+- The broker derives `code#state` from whatever the app sends: a query string
+  with `code`/`state` params, OR a pre-joined `code#state` paste blob.
