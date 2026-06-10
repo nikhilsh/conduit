@@ -130,6 +130,73 @@ func TestRelaySenderDisabledWhenEmptyURL(t *testing.T) {
 	}
 }
 
+// TestRelayInnerCategoryOmitempty guards the relay 400 regression: the relay
+// rejects a body where "category" is present but not "alert"/"liveactivity".
+// An empty Category must be omitted from the JSON entirely.
+func TestRelayInnerCategoryOmitempty(t *testing.T) {
+	tests := []struct {
+		name    string
+		inner   relayInner
+		wantKey string // key that MUST be absent when empty
+		wantVal string // if non-empty, key must be present with this value
+	}{
+		{
+			name:    "empty category omitted",
+			inner:   relayInner{Title: "t", Body: "b"},
+			wantKey: "category",
+		},
+		{
+			name:    "empty session_id omitted",
+			inner:   relayInner{Title: "t", Body: "b"},
+			wantKey: "session_id",
+		},
+		{
+			name:    "alert category sent",
+			inner:   relayInner{Title: "t", Body: "b", Category: "alert"},
+			wantKey: "category",
+			wantVal: "alert",
+		},
+		{
+			name:    "liveactivity category sent",
+			inner:   relayInner{Title: "t", Body: "b", Category: "liveactivity"},
+			wantKey: "category",
+			wantVal: "liveactivity",
+		},
+		{
+			name:    "non-empty session_id sent",
+			inner:   relayInner{Title: "t", Body: "b", SessionID: "sess-42"},
+			wantKey: "session_id",
+			wantVal: "sess-42",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.inner)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(b, &m); err != nil {
+				t.Fatalf("unmarshal map: %v", err)
+			}
+			if tc.wantVal == "" {
+				// Key must be absent.
+				if _, ok := m[tc.wantKey]; ok {
+					t.Errorf("JSON contains %q=%v, want key absent (relay would 400)", tc.wantKey, m[tc.wantKey])
+				}
+			} else {
+				// Key must be present with the expected value.
+				got, ok := m[tc.wantKey]
+				if !ok {
+					t.Errorf("JSON missing %q, want %q", tc.wantKey, tc.wantVal)
+				} else if got != tc.wantVal {
+					t.Errorf("JSON %q=%v, want %q", tc.wantKey, got, tc.wantVal)
+				}
+			}
+		})
+	}
+}
+
 func TestInstallCredMintAndReuse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "push-install.json")
 
