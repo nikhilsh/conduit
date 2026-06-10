@@ -57,9 +57,14 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	// goroutine's lock-free read of s.previewPort.
 	previewPort := m.allocatePreviewPortLocked()
 	sessionDir := filepath.Join(m.conduitRoot, "sessions", id)
-	hasClaudeConversation := chatConversationOnDisk(sessionDir, ".claude")
+	// Use the adapter's manifest config_dir for conversation discovery so
+	// a third-party adapter with a non-standard config directory is found.
+	// Falls back gracefully: if ConfigDir is empty (shouldn't happen after
+	// applyLegacyDefaults) chatConversationOnDisk returns false, which just
+	// means resume IDs are cleared — safe, if conservative.
+	hasAgentConversation := chatConversationOnDisk(sessionDir, adapter.ConfigDir)
 	resumeID := meta.ClaudeChatSessionID
-	if !hasClaudeConversation {
+	if !hasAgentConversation {
 		resumeID = ""
 	}
 	codexThreadID := meta.CodexThreadID
@@ -88,10 +93,14 @@ func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 		// Pre-latch sessions (conversation on disk, no persisted id —
 		// created before the resume fix) fall back to --continue, which
 		// resolves this session's own newest conversation.
-		continueLatestChat:  resumeID == "" && hasClaudeConversation,
+		continueLatestChat:  resumeID == "" && hasAgentConversation,
 		resumeCodexThreadID: codexThreadID,
 		modelCatalog:        m.ModelCatalog,
 		codexBinary:         m.codexBinary,
+		// Derive credential providers from the registry so new adapters
+		// with a login_provider are automatically mirrored into the
+		// session's ephemeral HOME (WS-1.2).
+		credentialProviders: credentialProvidersFromRegistry(m.registry),
 	})
 	if err != nil {
 		return nil, err

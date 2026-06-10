@@ -18,6 +18,16 @@ type Hooks struct {
 	OnSwap  string `toml:"on_swap"`
 }
 
+// PermissionModeRule describes how to rewrite an argv for a named
+// permission mode (e.g. "plan"). drop_args lists flag strings to
+// remove; add_args lists flags to append. Both operate on the full
+// argv (binary + args), so flags like "--dangerously-skip-permissions"
+// can be stripped even when they came from the adapter's base args.
+type PermissionModeRule struct {
+	DropArgs []string `toml:"drop_args"`
+	AddArgs  []string `toml:"add_args"`
+}
+
 type Adapter struct {
 	Name string `toml:"name"`
 	// Image is legacy/ignored: the broker runs agents as bare child
@@ -47,6 +57,53 @@ type Adapter struct {
 	// affordance rather than an agent.
 	Hidden bool  `toml:"hidden"`
 	Hooks  Hooks `toml:"hooks"`
+
+	// --- Phase 1: manifest-driven fields (WS-1.1) ---
+	// All fields are optional; absent fields are resolved by adapter Name
+	// to today's hardcoded defaults in applyLegacyDefaults so third-party
+	// adapter TOMLs that omit them preserve existing behavior.
+
+	// Protocol is the chat-backend routing key for Phase 2.
+	// Mirrors ChatMode for now; "stream-json" / "codex-app-server" / etc.
+	Protocol string `toml:"protocol"`
+
+	// ConfigDir is the agent's per-user config directory (e.g. ".claude",
+	// ".codex"). Used by recovery.go to discover conversation files and
+	// by lifecycle.go to derive credential paths.
+	ConfigDir string `toml:"config_dir"`
+
+	// CredFiles lists the credential files the agent stores under its
+	// config dir in the host HOME. Used by mirrorHostCredentials to copy
+	// the right files into each session's ephemeral HOME.
+	CredFiles []string `toml:"cred_files"`
+
+	// ResumeArgs is the argv suffix to resume a previous session by ID.
+	// The placeholder {session_id} is replaced with the actual ID.
+	// Empty slice means the agent doesn't support CLI-level resume
+	// (e.g. codex uses a protocol-level thread/resume instead).
+	ResumeArgs []string `toml:"resume_args"`
+
+	// ContinueArgs is the argv suffix to continue the most recent session
+	// (no explicit ID). Used when conversation files exist but no session
+	// ID was persisted.
+	ContinueArgs []string `toml:"continue_args"`
+
+	// ModelArgs is the argv template to pass a model override.
+	// The placeholder {model} is replaced with the model name.
+	ModelArgs []string `toml:"model_args"`
+
+	// EffortArgs is the argv template to pass a reasoning-effort override.
+	// The placeholder {effort} is replaced with the effort label.
+	EffortArgs []string `toml:"effort_args"`
+
+	// LoginProvider is the OAuth provider key ("anthropic", "openai", …)
+	// used by the credential store for this agent. "" means no OAuth flow.
+	LoginProvider string `toml:"login_provider"`
+
+	// PermissionModes maps mode name (e.g. "plan") → rewrite rule.
+	// When a session is created with a named permission mode the rule's
+	// drop_args are removed from the argv and add_args are appended.
+	PermissionModes map[string]PermissionModeRule `toml:"permission_modes"`
 }
 
 func (a Adapter) Validate() error {
@@ -59,6 +116,86 @@ func (a Adapter) Validate() error {
 		return fmt.Errorf("adapter %q: workdir is required", a.Name)
 	}
 	return nil
+}
+
+// applyLegacyDefaults fills in any Phase-1 manifest fields that are absent
+// from the TOML by resolving them from the adapter's Name. This preserves
+// byte-identical behavior for third-party adapter TOMLs that predate the
+// new fields, and also for the built-in claude/codex TOMLs until they are
+// updated.
+//
+// The defaults mirror today's hardcoded switch sites exactly — the golden
+// tests in manifest_golden_test.go pin this invariant.
+func applyLegacyDefaults(a *Adapter) {
+	switch a.Name {
+	case "claude":
+		if a.Protocol == "" {
+			a.Protocol = "stream-json"
+		}
+		if a.ConfigDir == "" {
+			a.ConfigDir = ".claude"
+		}
+		if len(a.CredFiles) == 0 {
+			a.CredFiles = []string{".claude/.credentials.json", ".claude.json"}
+		}
+		if a.ResumeArgs == nil {
+			a.ResumeArgs = []string{"--resume", "{session_id}"}
+		}
+		if a.ContinueArgs == nil {
+			a.ContinueArgs = []string{"--continue"}
+		}
+		if len(a.ModelArgs) == 0 {
+			a.ModelArgs = []string{"--model", "{model}"}
+		}
+		if len(a.EffortArgs) == 0 {
+			a.EffortArgs = []string{"--effort", "{effort}"}
+		}
+		if a.LoginProvider == "" {
+			a.LoginProvider = "anthropic"
+		}
+		if a.PermissionModes == nil {
+			a.PermissionModes = map[string]PermissionModeRule{
+				"plan": {
+					DropArgs: []string{"--dangerously-skip-permissions"},
+					AddArgs:  []string{"--permission-mode", "plan"},
+				},
+			}
+		}
+	case "codex":
+		if a.Protocol == "" {
+			a.Protocol = "codex-app-server"
+		}
+		if a.ConfigDir == "" {
+			a.ConfigDir = ".codex"
+		}
+		if len(a.CredFiles) == 0 {
+			a.CredFiles = []string{".codex/auth.json", ".codex/config.toml"}
+		}
+		if a.ResumeArgs == nil {
+			// codex resumes via thread/resume (protocol level), not CLI args
+			a.ResumeArgs = []string{}
+		}
+		if a.ContinueArgs == nil {
+			a.ContinueArgs = []string{}
+		}
+		if len(a.ModelArgs) == 0 {
+			a.ModelArgs = []string{"--model", "{model}"}
+		}
+		if len(a.EffortArgs) == 0 {
+			a.EffortArgs = []string{"-c", "model_reasoning_effort={effort}"}
+		}
+		if a.LoginProvider == "" {
+			a.LoginProvider = "openai"
+		}
+		if a.PermissionModes == nil {
+			a.PermissionModes = map[string]PermissionModeRule{
+				"plan": {
+					DropArgs: []string{"--dangerously-bypass-approvals-and-sandbox"},
+					AddArgs:  []string{"--sandbox", "read-only"},
+				},
+			}
+		}
+	}
 }
 
 type Registry struct {
@@ -94,6 +231,7 @@ func LoadFS(fsys fs.FS, root, displayDir string) (*Registry, error) {
 		if err := adapter.Validate(); err != nil {
 			return nil, fmt.Errorf("%s/%s: %w", displayDir, entry.Name(), err)
 		}
+		applyLegacyDefaults(&adapter)
 		if _, exists := reg.adapters[adapter.Name]; exists {
 			return nil, fmt.Errorf("%s/%s: duplicate adapter name %q", displayDir, entry.Name(), adapter.Name)
 		}

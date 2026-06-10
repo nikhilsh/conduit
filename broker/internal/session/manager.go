@@ -304,7 +304,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		// Apply the optional reasoning-effort / model override after the
 		// adapter's own args. Empty override → adapter.Args unchanged, so
 		// the normal start path is byte-for-byte identical to before.
-		ptyArgs := append(append([]string{}, adapter.Args...), opts.override.extraArgsFor(adapter.Name)...)
+		ptyArgs := append(append([]string{}, adapter.Args...), opts.override.extraArgsForAdapter(adapter)...)
 		cmd = exec.Command(adapter.Command[0], append(append([]string{}, adapter.Command[1:]...), ptyArgs...)...)
 	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "PS1=$ ")
@@ -393,7 +393,10 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	// If the credentials don't exist on the broker host either, we log
 	// and let the agent prompt for login on its own — that's a clean
 	// "please /login" UX, far better than the silent refresh-token race.
-	provider := providerForAssistant(adapter.Name)
+	// Use the adapter manifest's login_provider (WS-1.2). Falls back to
+	// providerForAssistant(adapter.Name) via applyLegacyDefaults so
+	// third-party adapters without the field behave as before.
+	provider := adapter.LoginProvider
 	// Keep the ephemeral HOME in the broker's per-session storage, NOT under
 	// s.workspaceDir — workspaceDir is now the user's selected project folder
 	// (cwd), and dropping a .conduit/agent-home dir full of copied OAuth
@@ -448,7 +451,11 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		// and quiet on the common "host isn't logged into that agent" case.
 		// Each session keeps its own private copy, so this does NOT
 		// reintroduce the cross-session refresh-token race.
-		for _, p := range allCredentialProviders() {
+		allProviders := opts.credentialProviders
+		if len(allProviders) == 0 {
+			allProviders = allCredentialProviders()
+		}
+		for _, p := range allProviders {
 			if p == provider {
 				continue // already materialized above (possibly via app blob)
 			}
@@ -509,7 +516,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	// backend doesn't recognise) spawns fine but fails every turn — this log
 	// line is the only on-box record of which slug a session got. Logged for
 	// every create so a working vs broken model is comparable.
-	if extra := opts.override.extraArgsFor(adapter.Name); len(extra) > 0 {
+	if extra := opts.override.extraArgsForAdapter(adapter); len(extra) > 0 {
 		log.Printf("session %s: model override applied (%s): %v", id, adapter.Name, extra)
 	}
 	s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID)
@@ -600,11 +607,11 @@ func (s *Session) startChatBackend(
 		s.chatSessionID = resumeChatSessionID
 		s.mu.Unlock()
 		argsFor := func(resume string, continueLatest bool) []string {
-			baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsFor(adapter.Name)...)
+			baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsForAdapter(adapter)...)
 			// Apply the chosen permission mode (e.g. plan): for claude this
 			// may drop --dangerously-skip-permissions, so it must wrap the
 			// adapter args before the stream-json flags are appended.
-			baseArgs = applyClaudePermissionMode(baseArgs, s.override.PermissionMode)
+			baseArgs = applyPermissionModeFromManifest(baseArgs, adapter, s.override.PermissionMode)
 			return claudeStreamCommand(adapter.Command, baseArgs, resume, continueLatest)
 		}
 		chat, cerr := startChatProcess(
@@ -681,12 +688,12 @@ func (s *Session) startChatBackend(
 				backend = proc
 			} else {
 				fmt.Fprintf(os.Stderr, "session %s: codex app-server spawn failed: %v (falling back to codex-exec)\n", s.ID, cerr)
-				backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
+				backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsForAdapter(adapter), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
 			}
 		} else {
 			// codex-exec: per-turn exec/resume, constructed lazily (spawns on
 			// first Send).
-			backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsFor(adapter.Name), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
+			backend = newCodexChatProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override.extraArgsForAdapter(adapter), s.PublishText, s.accumulateUsage, resumeCodexThreadID, s.latchCodexThreadID, s.override.PermissionMode)
 		}
 		// AI niceties for codex (task WS-0.1): codex sessions now get the same
 		// AI titles + quick replies claude has always had. The generators are
@@ -1210,7 +1217,7 @@ func (s *Session) ReasoningEffort() string {
 	defer s.mu.Unlock()
 	// Surface the validated per-session override when the session was
 	// forked onto a different effort; otherwise the adapter default.
-	return s.override.effectiveEffort(s.Assistant, s.adapter.ReasoningEffort)
+	return s.override.effectiveEffortForAdapter(s.adapter)
 }
 
 // DisplayName returns the human-readable session label set by the most
@@ -1808,16 +1815,17 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	// binds a framework default the broker can't predict).
 	previewPort := m.allocatePreviewPortLocked()
 	s, err := newSession(id, adapter, sessionOptions{
-		repoRoot:      m.repoRoot,
-		conduitRoot:   m.conduitRoot,
-		requestedCWD:  requestedCWD,
-		termgrid:      m.termgrid,
-		replayBaseDir: m.replayBaseDir,
-		credStore:     m.credStore,
-		override:      opts.Override,
-		previewPort:   previewPort,
-		modelCatalog:  m.ModelCatalog,
-		codexBinary:   m.codexBinary,
+		repoRoot:            m.repoRoot,
+		conduitRoot:         m.conduitRoot,
+		requestedCWD:        requestedCWD,
+		termgrid:            m.termgrid,
+		replayBaseDir:       m.replayBaseDir,
+		credStore:           m.credStore,
+		override:            opts.Override,
+		previewPort:         previewPort,
+		modelCatalog:        m.ModelCatalog,
+		codexBinary:         m.codexBinary,
+		credentialProviders: credentialProvidersFromRegistry(m.registry),
 	})
 	if err != nil {
 		return nil, false, err
@@ -1933,6 +1941,13 @@ type sessionOptions struct {
 	// legacy host-mirror $HOME behaviour. Manager fills this in
 	// from its own field; tests typically leave it empty.
 	credStore *credentials.Store
+	// credentialProviders is the set of login_provider keys to mirror
+	// into the session's ephemeral HOME (for the "interactive Terminal
+	// is logged into all agents" guarantee). Derived from the registry
+	// via credentialProvidersFromRegistry (WS-1.2). nil → falls back
+	// to allCredentialProviders(). Manager fills this in; tests leave
+	// it nil to keep the hardcoded fallback.
+	credentialProviders []string
 	// override carries the optional reasoning-effort / model override
 	// applied to the spawned agent's argv. Zero value = adapter
 	// defaults unchanged (the normal start path).

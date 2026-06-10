@@ -10,6 +10,20 @@ chat_event_port_env = "AGENT_CHAT_PORT"
 # one-shot "codex-exec" mode remains as a fallback backend.
 chat_mode           = "codex-app-server"
 
+# --- Phase 1: manifest-driven fields (WS-1.1) ---
+protocol            = "codex-app-server"
+config_dir          = ".codex"
+cred_files          = [".codex/auth.json", ".codex/config.toml"]
+resume_args         = []                    # app-server resumes via thread/resume
+continue_args       = []
+model_args          = ["--model", "{model}"]
+effort_args         = ["-c", "model_reasoning_effort={effort}"]
+login_provider      = "openai"
+
+[permission_modes.plan]
+drop_args = ["--dangerously-bypass-approvals-and-sandbox"]
+add_args  = ["--sandbox", "read-only"]
+
 [hooks]
 on_start = "conduit-broker memory render --session $SESSION_UUID > /workspace/.conduit/HANDOFF.html"
 on_exit  = "conduit-broker memory checkpoint --session $SESSION_UUID --reason 'exit'"

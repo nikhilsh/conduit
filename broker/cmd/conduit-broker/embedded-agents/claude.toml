@@ -8,6 +8,20 @@ chat_event_port_env = "AGENT_CHAT_PORT"
 # in stream-json for clean Chat events; the Terminal tab hosts a shell.
 chat_mode           = "stream-json"
 
+# --- Phase 1: manifest-driven fields (WS-1.1) ---
+protocol            = "stream-json"
+config_dir          = ".claude"
+cred_files          = [".claude/.credentials.json", ".claude.json"]
+resume_args         = ["--resume", "{session_id}"]
+continue_args       = ["--continue"]
+model_args          = ["--model", "{model}"]
+effort_args         = ["--effort", "{effort}"]
+login_provider      = "anthropic"
+
+[permission_modes.plan]
+drop_args = ["--dangerously-skip-permissions"]
+add_args  = ["--permission-mode", "plan"]
+
 [hooks]
 on_start = "conduit-broker memory render --session $SESSION_UUID > /workspace/.conduit/HANDOFF.html"
 on_exit  = "conduit-broker memory checkpoint --session $SESSION_UUID --reason 'exit'"
