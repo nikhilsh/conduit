@@ -63,8 +63,13 @@ object SlashCommandRegistry {
      * Classify [input] for a session running [agent] ("claude" / "codex" / …).
      * Returns null when [input] isn't a recognised slash command (so the
      * caller sends it as a normal chat message).
+     *
+     * [supportsCompact] is the broker-provided capability flag for the
+     * agent's compact support. When non-null it overrides the static
+     * `agent == "claude"` check for [SlashCommand.claudeOnly] commands.
+     * null = fall back to the static check (old broker / unknown agent).
      */
-    fun classify(input: String, agent: String): SlashCommandMatch? {
+    fun classify(input: String, agent: String, supportsCompact: Boolean? = null): SlashCommandMatch? {
         val trimmed = input.trimStart()
         if (!trimmed.startsWith("/")) return null
         val body = trimmed.substring(1)
@@ -72,7 +77,11 @@ object SlashCommandRegistry {
         if (name.isEmpty()) return null
         val cmd = lookup(name) ?: return null
         val args = body.drop(name.length).trim()
-        val supported = !(cmd.claudeOnly && !agent.equals("claude", ignoreCase = true))
+        val supported = if (cmd.claudeOnly) {
+            supportsCompact ?: agent.equals("claude", ignoreCase = true)
+        } else {
+            true
+        }
         return SlashCommandMatch(cmd, args, supported)
     }
 

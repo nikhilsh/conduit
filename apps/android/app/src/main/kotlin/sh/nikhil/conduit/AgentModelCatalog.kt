@@ -38,3 +38,111 @@ internal fun parseModelCatalog(raw: String): Map<String, List<SessionStore.Agent
     }
     return out
 }
+
+/**
+ * Per-assistant capability flags declared by the broker in the `agents`
+ * map of `/api/capabilities` (PR #440). All fields have safe defaults so
+ * an old broker (no `agents` key) keeps today's behavior: the static
+ * Claude-only gating stays in place.
+ *
+ * Mirror of iOS `ConduitUI.AgentDescriptor`.
+ */
+data class AgentDescriptor(
+    /** Human-readable name from the broker ("Claude", "Codex", …). */
+    val displayName: String,
+    /** OAuth provider key ("anthropic", "openai", …). Maps to [OAuthProvider]. */
+    val loginProvider: String,
+    /** Agent supports `/compact` and context-summarisation (stream-json only). */
+    val supportsCompact: Boolean,
+    /** Agent supports AskUserQuestion interactive prompts. */
+    val supportsAskUserQuestion: Boolean,
+    /** Agent supports per-session reasoning-effort override (`--effort`). */
+    val supportsEffort: Boolean,
+    /** Agent supports plan-mode (read-only planning posture). */
+    val supportsPlanMode: Boolean,
+    /** Agent has an account-level usage/limits endpoint. */
+    val supportsUsage: Boolean,
+)
+
+/**
+ * Static fallback descriptors for the two known agents. Used when the
+ * broker is too old to serve the `agents` map — keeps today's hard-coded
+ * behavior pixel-identical.
+ */
+internal val staticAgentDescriptors: Map<String, AgentDescriptor> = mapOf(
+    "claude" to AgentDescriptor(
+        displayName = "Claude",
+        loginProvider = "anthropic",
+        supportsCompact = true,
+        supportsAskUserQuestion = true,
+        supportsEffort = true,
+        supportsPlanMode = true,
+        supportsUsage = true,
+    ),
+    "codex" to AgentDescriptor(
+        displayName = "Codex",
+        loginProvider = "openai",
+        supportsCompact = false,
+        supportsAskUserQuestion = false,
+        supportsEffort = true,
+        supportsPlanMode = true,
+        supportsUsage = true,
+    ),
+)
+
+/**
+ * Parse the broker's `/api/capabilities` "agents" map (PR #440). Empty map
+ * when the key is absent (old broker) — callers fall back to
+ * [staticAgentDescriptors]. Pure + top-level for unit tests.
+ */
+internal fun parseAgentDescriptors(raw: String): Map<String, AgentDescriptor> {
+    val agents = JSONObject(raw).optJSONObject("agents") ?: return emptyMap()
+    val out = mutableMapOf<String, AgentDescriptor>()
+    for (name in agents.keys()) {
+        val o = agents.optJSONObject(name) ?: continue
+        val supports = o.optJSONObject("supports") ?: JSONObject()
+        out[name] = AgentDescriptor(
+            displayName = o.optString("display_name", name.replaceFirstChar { it.uppercaseChar() }),
+            loginProvider = o.optString("login_provider", ""),
+            supportsCompact = supports.optBoolean("compact", false),
+            supportsAskUserQuestion = supports.optBoolean("ask_user_question", false),
+            supportsEffort = supports.optBoolean("effort", false),
+            supportsPlanMode = supports.optBoolean("plan_mode", false),
+            supportsUsage = supports.optBoolean("usage", false),
+        )
+    }
+    return out
+}
+
+/**
+ * Resolve the descriptor for [assistant], preferring the broker-provided
+ * [descriptors] and falling back to [staticAgentDescriptors] for the two
+ * known agents, then a neutral generic descriptor for unknowns.
+ */
+internal fun descriptorFor(assistant: String, descriptors: Map<String, AgentDescriptor>): AgentDescriptor {
+    val key = assistant.lowercase()
+    return descriptors[key]
+        ?: staticAgentDescriptors[key]
+        ?: AgentDescriptor(
+            displayName = assistant.replaceFirstChar { it.uppercaseChar() },
+            loginProvider = "",
+            supportsCompact = false,
+            supportsAskUserQuestion = false,
+            supportsEffort = false,
+            supportsPlanMode = false,
+            supportsUsage = false,
+        )
+}
+
+/**
+ * Resolve the OAuth provider key ("anthropic", "openai", …) for an
+ * assistant. Uses the broker-provided descriptor when available;
+ * falls back to the static mapping for claude/codex so old-broker
+ * behavior is pixel-identical.
+ *
+ * The returned string is the provider's wire name — callers compare
+ * it against the raw value of their `OAuthProvider` enum (or
+ * `AgentLoginProvider`).
+ */
+internal fun loginProviderFor(assistant: String, descriptors: Map<String, AgentDescriptor>): String =
+    descriptorFor(assistant, descriptors).loginProvider
