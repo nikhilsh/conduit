@@ -253,6 +253,176 @@ func TestOpencodeBackend_AbortErrorIsQuiet(t *testing.T) {
 	}
 }
 
+// TestOpencodeBackend_HeartbeatDoesNotStarveWatchdog is the regression for the
+// REAL device hang that survived #459: a turn goes busy, the hosted provider
+// then stalls (rate-limited / slow / down) emitting NO further per-session
+// frames and NO session.idle/session.error — but opencode keeps the SSE alive
+// with a server-wide `server.heartbeat` (no sessionID) every ~10s. Those
+// heartbeats MUST NOT reset the per-turn silence watchdog, or the 10-minute
+// backstop never fires and the composer's typing indicator spins forever.
+// Drives handleEvent directly (no real server) for a deterministic check.
+func TestOpencodeBackend_HeartbeatDoesNotStarveWatchdog(t *testing.T) {
+	events := make(chan []byte, 8)
+	c := &opencodeServerProcess{
+		publish:        func(p []byte) { events <- p },
+		sessionID:      "ses_hb",
+		silenceTimeout: 60 * time.Millisecond,
+	}
+	// Start a turn (busy for our session).
+	c.handleEvent(opencodeEvent{
+		Type:       "session.status",
+		Properties: opencodeEventProperties{SessionID: "ses_hb", Status: &opencodeStatus{Type: "busy"}},
+	})
+	if !c.TurnActive() {
+		t.Fatal("turn should be active after busy")
+	}
+	// Pump server-wide heartbeats (empty sessionID) faster than the silence
+	// window. Pre-fix these reset lastActivity and the watchdog never fired.
+	hb := opencodeEvent{Type: "server.heartbeat"}
+	stop := make(chan struct{})
+	go func() {
+		tk := time.NewTicker(15 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				c.handleEvent(hb)
+			}
+		}
+	}()
+	defer close(stop)
+
+	// The watchdog must still fire and surface the no-response system message.
+	waitForSystemEvent(t, events, "no response from the agent")
+	if c.TurnActive() {
+		t.Fatal("turn should be cleared after the watchdog fires")
+	}
+}
+
+// TestOpencodeBackend_StaleSessionRecreatedOnSend covers the resume-after-DB-
+// loss path: the persisted ses_ id no longer exists (opencode's global store was
+// wiped/rotated), so prompt_async 404s with no SSE frames. The backend must
+// create a fresh session, re-persist the new id, and retry the prompt once —
+// rather than bouncing every turn with a "prompt rejected (404)" forever.
+func TestOpencodeBackend_StaleSessionRecreatedOnSend(t *testing.T) {
+	const staleID, freshID = "ses_stale", "ses_fresh"
+	var (
+		mu       sync.Mutex
+		sseW     http.ResponseWriter
+		sseF     http.Flusher
+		sseReady = make(chan struct{})
+		promptsF int // prompts that hit the fresh id
+	)
+	push := func(body string) {
+		mu.Lock()
+		w, f := sseW, sseF
+		mu.Unlock()
+		if w == nil {
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", body)
+		if f != nil {
+			f.Flush()
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"healthy":true,"version":"1.17.0"}`)
+	})
+	mux.HandleFunc("/session", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"id":%q,"projectID":"global"}`, freshID)
+	})
+	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
+		f, _ := w.(http.Flusher)
+		w.Header().Set("content-type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"server.connected\",\"properties\":{}}\n\n")
+		if f != nil {
+			f.Flush()
+		}
+		mu.Lock()
+		sseW, sseF = w, f
+		mu.Unlock()
+		close(sseReady)
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("/session/"+staleID+"/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+		// Stale session no longer exists in the (rotated) store.
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"name":"NotFoundError","data":{"message":"Session not found: %s"}}`, staleID)
+	})
+	mux.HandleFunc("/session/"+freshID+"/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		promptsF++
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		go func() {
+			push(fmt.Sprintf(`{"type":"session.status","properties":{"sessionID":%q,"status":{"type":"busy"}}}`, freshID))
+			push(fmt.Sprintf(`{"type":"message.part.updated","properties":{"sessionID":%q,"part":{"id":"prt_t","type":"text","text":"recovered"}}}`, freshID))
+			push(fmt.Sprintf(`{"type":"session.idle","properties":{"sessionID":%q}}`, freshID))
+		}()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	events := make(chan []byte, 16)
+	relatched := make(chan string, 2)
+	c := &opencodeServerProcess{
+		publish:        func(p []byte) { events <- p },
+		onSession:      func(id string) { relatched <- id },
+		sessionID:      staleID, // resume the stale id
+		baseURL:        srv.URL,
+		hc:             &http.Client{Timeout: 5 * time.Second},
+		silenceTimeout: opencodeTurnSilenceTimeout,
+	}
+	if err := c.connect(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close()
+	<-sseReady
+
+	if err := c.Send("hi"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// The recovered session id must be persisted for the next resume.
+	select {
+	case id := <-relatched:
+		if id != freshID {
+			t.Fatalf("re-latched %q, want %q", id, freshID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale session was not recreated/re-latched")
+	}
+
+	// The retried prompt must produce a real assistant bubble — no "rejected".
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case p := <-events:
+			role, content := chatEventRoleContent(p)
+			if role == "system" {
+				t.Fatalf("unexpected system bubble (should self-heal): %q", content)
+			}
+			if role == "assistant" {
+				if content != "recovered" {
+					t.Fatalf("assistant bubble = %q, want recovered", content)
+				}
+				mu.Lock()
+				n := promptsF
+				mu.Unlock()
+				if n != 1 {
+					t.Fatalf("fresh prompt issued %d times, want 1", n)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("no assistant bubble after stale-session recovery")
+		}
+	}
+}
+
 func TestOpencodeBackend_Interrupt(t *testing.T) {
 	stub := newStubOpencodeServer("ses_int")
 	defer stub.close()
