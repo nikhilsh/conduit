@@ -250,6 +250,34 @@ Verbatim key frames:
   line for the user-facing notice. (Observed: a *model-not-found* error WAS
   followed by `idle`, but error classes that fail mid-stream are not — endTurn
   is idempotent, so handling both is safe.)
+- **Silent stall — the REAL v0.0.134 no-reply hang (fixed).** The `session.error`
+  terminus above (#459) only covers turns that *fail*. A turn can also go `busy`
+  and then **stall with NO terminus at all** — no `message.part.*`, no
+  `session.idle`, no `session.error` — when the hosted **OpenCode Zen** provider
+  (the no-auth default `opencode/big-pickle`) is rate-limited / slow / down and
+  opencode's upstream request just hangs. Reproduced live on the box: a turn that
+  errors or succeeds always ends, but a provider stall leaves the per-session
+  stream silent indefinitely. The backstop is a 10-minute silence watchdog
+  (`opencodeTurnSilenceTimeout`) that ends the turn and posts "no response from
+  the agent." **The bug:** opencode emits a server-wide **`server.heartbeat`**
+  frame — `{"type":"server.heartbeat","properties":{}}`, NO `sessionID` — every
+  **~10 s**, and the backend was resetting the watchdog's `lastActivity` on
+  *every* decoded frame *before* the own-session filter. So the heartbeats
+  perpetually rearmed the watchdog and it could NEVER fire → typing indicator
+  spun forever, no reply, no error (matching the device report; not the #459
+  case). **Fix:** reset `lastActivity` only for frames that belong to OUR
+  `sessionID`, *after* the filter — heartbeats and other-session frames no longer
+  starve the watchdog (`handleEvent`, `backend_opencode.go`).
+- **Stale resume → `prompt_async` 404 (fixed).** opencode's conversation store is
+  a single global SQLite DB (`~/.local/share/opencode/opencode.db`). If it is
+  wiped/rotated under the broker (fresh agent-home after a redeploy, a GC of
+  `data_dir`, a DB reset) while `meta.json` still carries the old `ses_…`, then
+  resuming that id makes `POST /session/{id}/prompt_async` return **HTTP 404**
+  (`NotFoundError`) with **zero SSE frames** — no `busy`, no terminus. Verified
+  live. The backend now treats a 404 on send as "session lost": it `POST`s a
+  fresh `/session`, re-persists the new `ses_…` (so the next resume targets a
+  live id), and retries the prompt once. The old transcript stays in the app's
+  own log.
 - **Token usage** rides the `step-finish` part and the final assistant
   `message.updated` (`tokens{total,input,output,reasoning,cache{read,write}}`,
   plus `cost`). On the free zen models `cost` is `0`. This is the Usage source
