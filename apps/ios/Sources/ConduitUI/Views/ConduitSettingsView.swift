@@ -690,6 +690,17 @@ extension ConduitUI {
                 subtitle: subtitle,
                 iconTint: iconTint
             ) {
+                // Broker supports push but permission has not been asked yet.
+                // Users who already had sessions at launch never saw the 0->1
+                // prompt, so give them an explicit affordance here.
+                if state.brokerSupported && state.auth == .notDetermined {
+                    Button("Enable") {
+                        Telemetry.breadcrumb("push", "settings notDetermined enable tapped")
+                        PushNotificationManager.shared.requestAuthorizationIfNeeded()
+                    }
+                    .font(neon.sans(13).weight(.semibold))
+                    .foregroundStyle(neon.accent)
+                }
                 // If permission is denied, offer a shortcut to Settings.
                 if state.auth == .denied {
                     Button("Open Settings") {
