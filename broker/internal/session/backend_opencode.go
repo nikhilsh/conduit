@@ -430,7 +430,39 @@ func (c *opencodeServerProcess) handleEvent(ev opencodeEvent) {
 	case "session.idle":
 		// Terminal per-session turn-end signal.
 		c.endTurn()
+	case "session.error":
+		// A turn failure (bad model, provider auth, context overflow, API
+		// error, abort). opencode does NOT always follow this with
+		// session.idle, so it MUST end the turn here — otherwise the composer's
+		// typing indicator spins forever with no reply (the device-reported
+		// hang). Surface the cause in the Chat tab unless it's a plain abort
+		// (the Stop button already handled that quietly). endTurn is idempotent,
+		// so a later session.idle for the same turn is a harmless no-op.
+		c.failTurn(ev.Properties.Error)
 	}
+}
+
+// failTurn surfaces a session.error in the Chat tab (unless it is an abort) and
+// ends the active turn so the typing indicator clears. Safe to call when no
+// turn is active (a stray error frame just emits the notice).
+func (c *opencodeServerProcess) failTurn(e *opencodeError) {
+	c.mu.Lock()
+	intentional := c.closed
+	interrupting := c.interrupting
+	c.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "opencode serve: session.error (session %s, name=%q)\n", c.sessionID, errName(e))
+	if !intentional && !interrupting && !e.isAbort() {
+		publishChatSystem(c.publish, "⚠️ opencode: "+e.message())
+	}
+	c.endTurn()
+}
+
+// errName returns the error class for logging (empty string when nil).
+func errName(e *opencodeError) string {
+	if e == nil {
+		return ""
+	}
+	return e.Name
 }
 
 // startTurnIfIdle begins a turn accumulator on the first busy status. Re-entry
