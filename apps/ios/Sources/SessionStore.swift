@@ -705,6 +705,9 @@ final class SessionStore {
             do {
                 try await newClient.connect(delegate: newDelegate)
                 self.harness = .linked
+                Telemetry.breadcrumb("onboarding", "endpoint_connected",
+                    data: ["host": self.endpoint.displayHost,
+                           "first_server": "\(self.savedServers.count == 1)"])
                 self.refreshSessions()
                 // Reconcile against the broker's authoritative live set:
                 // reattach only genuinely-running agents (so they resume
@@ -820,6 +823,9 @@ final class SessionStore {
         }
         if let models = caps.models, !models.isEmpty {
             modelCatalog = models
+            Telemetry.breadcrumb("onboarding", OnboardingStep.capabilitiesFetched,
+                data: ["host": endpoint.displayHost,
+                       "agents": models.keys.sorted().joined(separator: ",")])
             Telemetry.breadcrumb(
                 "model_catalog", "refreshed",
                 data: [
@@ -1175,6 +1181,8 @@ final class SessionStore {
                 self.disconnect()
                 self.connect()
                 self.sshBootstrapState = .idle
+                Telemetry.breadcrumb("onboarding", OnboardingStep.pairingSucceeded,
+                    data: ["transport": "ssh", "host": host])
                 Telemetry.capture(
                     error: NSError(domain: "ios.ssh_bootstrap", code: 0, userInfo: [NSLocalizedDescriptionKey: "ok"]),
                     message: "iOS SSH bootstrap success",
@@ -1363,6 +1371,11 @@ final class SessionStore {
                 let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
                 let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode)
                 Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
+                // Funnel: first-ever session creation (no prior sessions on any launch).
+                if self.sessions.isEmpty {
+                    Telemetry.breadcrumb("onboarding", OnboardingStep.firstSessionCreated,
+                        data: ["assistant": assistant, "host": self.endpoint.displayHost])
+                }
                 // Record the explicit --model override so the title menu's
                 // identity header can show the real model (the broker never
                 // reports one back). Inherit (nil) stays absent on purpose.
@@ -1779,6 +1792,13 @@ final class SessionStore {
         conversationLog[sessionID, default: []].append(item)
         let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
         chatLog[sessionID, default: []].append(localEvent)
+        // Funnel: first ever turn sent — first session, no prior conversation items.
+        let priorItems = (conversationLog[sessionID] ?? []).filter { !$0.id.hasPrefix("local-") }
+        if sessions.count <= 1, priorItems.isEmpty {
+            Telemetry.breadcrumb("onboarding", OnboardingStep.firstTurnSent,
+                data: ["session": sessionID,
+                       "chars": "\(message.count)"])
+        }
         // The user has answered — clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233).
         quickReplies[sessionID] = nil
@@ -2196,6 +2216,16 @@ final class SessionStore {
     }
 
     func ingestChat(_ sessionID: String, _ event: ChatEvent) {
+        // Funnel: first assistant reply on the very first session.
+        // Guard: no prior assistant items in the chat log for this session.
+        if event.role == "assistant" {
+            let priorAssistant = (chatLog[sessionID] ?? []).filter { $0.role == "assistant" }
+            if sessions.count <= 1, priorAssistant.isEmpty {
+                Telemetry.breadcrumb("onboarding", OnboardingStep.firstReplyReceived,
+                    data: ["session": sessionID,
+                           "chars": "\(event.content.count)"])
+            }
+        }
         chatLog[sessionID, default: []].append(event)
         // A fresh user/assistant turn invalidates the previous turn's AI
         // chips — clear them so stale suggestions don't linger. The

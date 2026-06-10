@@ -196,6 +196,13 @@ extension ConduitUI {
                 // box actually serves. Failure = keep static fallbacks.
                 await store.refreshModelCatalog()
             }
+            .onAppear {
+                // Funnel: agent picker opened (new-session flow or post-pair deep link).
+                let isFirstSession = store.sessions.isEmpty
+                Telemetry.breadcrumb("onboarding", OnboardingStep.agentPickerOpened,
+                    data: ["first_session": "\(isFirstSession)",
+                           "host": store.endpoint.displayHost])
+            }
             .appearanceColorScheme()
         }
 

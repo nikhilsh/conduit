@@ -51,6 +51,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import sh.nikhil.conduit.Endpoint
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 
 /**
  * LAN discovery sheet — mirrors `apps/ios/Sources/Views/DiscoveryView.swift`
@@ -169,10 +170,12 @@ fun DiscoveryScreen(
         }
     }
 
-    // Tap behaviour shared between the pill row and the per-row CTA —
+    // Tap behaviour shared between the pill row and the per-row CTA --
     // upsert + connect + dismiss is the same flow either way.
     fun pairWith(entry: DiscoveredEntry) {
         val endpoint = Endpoint(url = entry.url, token = entry.token)
+        Telemetry.breadcrumb("onboarding", OnboardingStep.PAIRING_SUCCEEDED,
+            mapOf("transport" to "discover", "host" to endpoint.displayHost))
         store.setEndpoint(endpoint.url, endpoint.token)
         store.upsertSavedServer(
             name = entry.name,

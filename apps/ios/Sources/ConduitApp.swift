@@ -356,13 +356,15 @@ struct ConduitApp: App {
     private func applyPairingURL(_ url: URL) {
         guard let parsed = PairingURL.parse(url.absoluteString) else { return }
         let next = StoredEndpoint(url: parsed.endpoint, token: parsed.token)
+        Telemetry.breadcrumb("onboarding", OnboardingStep.pairingSucceeded,
+            data: ["transport": "deep_link", "host": next.displayHost])
         store.endpoint = next
         store.upsertSavedServer(name: next.displayHost, endpoint: next, makeDefault: true)
         store.disconnect()
         store.connect()
         // After dialling in, drop the user straight onto the agent
-        // picker so a deep-link tap is a single user motion: tap →
-        // (paired) → pick Claude/Codex → in.
+        // picker so a deep-link tap is a single user motion: tap ->
+        // (paired) -> pick Claude/Codex -> in.
         store.pendingAgentPick = PendingAgentPick(hostNote: next.displayHost)
     }
 }

@@ -39,6 +39,7 @@ import androidx.compose.ui.window.DialogProperties
 import sh.nikhil.conduit.Endpoint
 import sh.nikhil.conduit.PairingURL
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 
 /**
  * Compose mirror of `apps/ios/Sources/Views/AddServerSheet.swift`.
@@ -64,6 +65,8 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
         if (code.isNullOrBlank()) return false
         val parsed = PairingURL.parse(code) ?: return false
         val ep = Endpoint(parsed.endpoint, parsed.token)
+        Telemetry.breadcrumb("onboarding", OnboardingStep.PAIRING_SUCCEEDED,
+            mapOf("transport" to "qr", "host" to ep.displayHost))
         store.setEndpoint(ep.url, ep.token)
         store.upsertSavedServer(ep.displayHost, ep, makeDefault = true)
         store.disconnect()
@@ -94,26 +97,38 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
                 tint = neon.accent,
                 title = "Scan pairing QR",
                 subtitle = "Camera or pick from Photos.",
-            ) { showScanner = true }
+            ) {
+                Telemetry.breadcrumb("onboarding", OnboardingStep.PAIR_QR_STARTED)
+                showScanner = true
+            }
             EntryCard(
                 icon = { Icon(Icons.Filled.Wifi, null, tint = neon.accentText) },
                 // Semantic "discovery / network" green.
                 tint = neon.green,
                 title = "Discover on LAN",
                 subtitle = "Find a broker advertising via mDNS on the same Wi-Fi.",
-            ) { showDiscover = true }
+            ) {
+                Telemetry.breadcrumb("onboarding", OnboardingStep.PAIR_DISCOVER_STARTED)
+                showDiscover = true
+            }
             EntryCard(
                 icon = { Icon(Icons.Filled.Terminal, null, tint = neon.accentText) },
                 tint = neon.claude,
                 title = "SSH bootstrap",
                 subtitle = "Cold-start a broker on a remote box you can SSH to.",
-            ) { showSsh = true }
+            ) {
+                Telemetry.breadcrumb("onboarding", OnboardingStep.PAIR_SSH_STARTED)
+                showSsh = true
+            }
             EntryCard(
                 icon = { Icon(Icons.Filled.Link, null, tint = neon.accentText) },
                 tint = neon.yellow,
                 title = "Paste URL + token",
                 subtitle = "If you already have ws://… + a bearer token.",
-            ) { showManual = true }
+            ) {
+                Telemetry.breadcrumb("onboarding", OnboardingStep.PAIR_MANUAL_STARTED)
+                showManual = true
+            }
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -243,6 +258,8 @@ fun ManualPairSheet(store: SessionStore, onDismiss: () -> Unit) {
                 onClick = {
                     val ep = Endpoint(url.trim(), token.trim())
                     if (ep.isComplete) {
+                        Telemetry.breadcrumb("onboarding", OnboardingStep.PAIRING_SUCCEEDED,
+                            mapOf("transport" to "manual", "host" to ep.displayHost))
                         store.setEndpoint(ep.url, ep.token)
                         store.upsertSavedServer(ep.displayHost, ep, makeDefault = true)
                         store.disconnect()

@@ -1,5 +1,25 @@
 import SwiftUI
 
+// MARK: - Onboarding funnel breadcrumb step names
+// Shared constants keep iOS/Android step labels byte-identical in Sentry.
+enum OnboardingStep {
+    static let screenShown        = "screen_shown"
+    static let welcomeShown       = "welcome_shown"
+    static let installShown       = "install_shown"
+    static let pairShown          = "pair_shown"
+    static let pairQRStarted      = "pair_qr_started"
+    static let pairSSHStarted     = "pair_ssh_started"
+    static let pairManualStarted  = "pair_manual_started"
+    static let pairDiscoverStarted = "pair_discover_started"
+    static let pairingSucceeded   = "pairing_succeeded"
+    static let capabilitiesFetched = "capabilities_fetched"
+    static let agentPickerOpened  = "agent_picker_opened"
+    static let firstSessionCreated = "first_session_created"
+    static let firstTurnSent      = "first_turn_sent"
+    static let firstReplyReceived = "first_reply_received"
+    static let doneShown          = "done_shown"
+}
+
 // MARK: - ConduitOnboardingView (handoff §5 / onb-flow.jsx)
 //
 // First-run onboarding: Welcome → Install the broker → Pair → Done. Gated
@@ -49,9 +69,18 @@ extension ConduitUI {
             .tint(neon.accent)
             .onAppear(perform: resolveInitialStep)
             // Pairing succeeded somewhere (QR / manual / discovery / deep
-            // link): a saved server now exists → advance to Done.
-            .onChange(of: store.savedServers.count) { _, count in
+            // link): a saved server now exists -> advance to Done.
+            .onChange(of: store.savedServers.count) { old, count in
                 if count > 0, step <= Step.pair.rawValue {
+                    // pairing_succeeded: fired on the first server add
+                    // (old == 0) so it fires once per onboarding flow
+                    // regardless of transport.
+                    if old == 0 {
+                        let host = store.savedServers.last?.endpoint.displayHost
+                            ?? store.endpoint.displayHost
+                        Telemetry.breadcrumb("onboarding", OnboardingStep.pairingSucceeded,
+                            data: ["host": host])
+                    }
                     go(to: .done)
                 }
             }
@@ -68,12 +97,22 @@ extension ConduitUI {
             )
             step = flags.onboardingInitialStep(for: route)
             if step == Step.welcome.rawValue { flags.onboardingSeenWelcome = true }
+            Telemetry.breadcrumb("onboarding", OnboardingStep.screenShown,
+                data: ["step": "\(step)", "route": "\(route)"])
         }
 
         private func go(to target: Step) {
             withAnimation(.easeInOut(duration: 0.2)) { step = target.rawValue }
             flags.onboardingFurthestStep = max(flags.onboardingFurthestStep, target.rawValue)
             if target == .welcome { flags.onboardingSeenWelcome = true }
+            let stepName: String
+            switch target {
+            case .welcome: stepName = OnboardingStep.welcomeShown
+            case .install: stepName = OnboardingStep.installShown
+            case .pair:    stepName = OnboardingStep.pairShown
+            case .done:    stepName = OnboardingStep.doneShown
+            }
+            Telemetry.breadcrumb("onboarding", stepName)
         }
 
         // MARK: Chrome
@@ -306,11 +345,20 @@ extension ConduitUI {
                         }
                     }
                     pairOption(icon: "qrcode.viewfinder", title: "Scan pairing QR",
-                               subtitle: "Camera-scan the QR from the broker terminal.") { showScanner = true }
+                               subtitle: "Camera-scan the QR from the broker terminal.") {
+                        Telemetry.breadcrumb("onboarding", OnboardingStep.pairQRStarted)
+                        showScanner = true
+                    }
                     pairOption(icon: "wifi.circle", title: "Discover on LAN",
-                               subtitle: "Find a broker advertising on the same Wi-Fi.") { showDiscover = true }
+                               subtitle: "Find a broker advertising on the same Wi-Fi.") {
+                        Telemetry.breadcrumb("onboarding", OnboardingStep.pairDiscoverStarted)
+                        showDiscover = true
+                    }
                     pairOption(icon: "link", title: "Enter URL + token",
-                               subtitle: "Paste ws://… and the bearer token by hand.") { showManual = true }
+                               subtitle: "Paste ws://\u{2026} and the bearer token by hand.") {
+                        Telemetry.breadcrumb("onboarding", OnboardingStep.pairManualStarted)
+                        showManual = true
+                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
@@ -340,7 +388,8 @@ extension ConduitUI {
             store.upsertSavedServer(name: next.displayHost, endpoint: next, makeDefault: true)
             store.disconnect()
             store.connect()
-            // savedServers count change advances us to Done via .onChange.
+            // savedServers count change advances us to Done via .onChange,
+            // which also fires the pairing_succeeded breadcrumb.
         }
 
         // MARK: Step 4 — Done
