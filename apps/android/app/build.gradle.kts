@@ -154,6 +154,13 @@ dependencies {
     // ZXing-embedded QR scanner. Ships its own activity + permission flow.
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
+    // UnifiedPush android-connector — vendor-free push (WS-P.3).
+    // The device must have a distributor app installed (e.g. ntfy) for
+    // registration to succeed; the library is a ~20 kB connector only,
+    // no bundled distributor. Published on Maven Central.
+    // https://github.com/UnifiedPush/android-connector
+    implementation("org.unifiedpush.android:connector:3.3.3")
+
     // Termux terminal stack — Apache-2.0, pinned to v0.118.3 (May 22
     // 2025 release; see docs/PLAN-TERMINAL-REWRITE.md Android section).
     // Published as a multi-module JitPack build under the parent

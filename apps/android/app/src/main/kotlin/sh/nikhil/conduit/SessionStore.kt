@@ -1872,6 +1872,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
     data class BoxFeatures(
         val hostMetrics: Boolean,
         val shellSessions: Boolean,
+        /** Broker supports push registration (`features.push`). WS-P.1. */
+        val push: Boolean = false,
     )
 
     /**
@@ -1942,6 +1944,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             BoxFeatures(
                 hostMetrics = features?.optBoolean("host_metrics", false) ?: false,
                 shellSessions = features?.optBoolean("shell_sessions", false) ?: false,
+                push = features?.optBoolean("push", false) ?: false,
             )
         }.getOrNull()
     }
