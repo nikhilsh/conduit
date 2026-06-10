@@ -184,6 +184,17 @@ dependencies {
     // service and token APIs are all Java surface, no KTX required.
     implementation("com.google.firebase:firebase-messaging:23.4.1")
 
+    // Explicit androidx.fragment pin — lint's InvalidFragmentVersionForActivityResult
+    // check fires when registerForActivityResult() is used and fragment is not on
+    // the classpath (lint can't verify ≥1.3.0 → errors out instead of warning).
+    // This app is Compose-only (no FragmentActivity/Fragments), so the check is a
+    // false positive, but the safest fix is to pin the version lint needs rather
+    // than blanket-disabling the rule. 1.8.9 uses kotlin-stdlib 1.8.22 (mv=[1,8,x])
+    // — no Kotlin 2.1+ metadata risk against our Kotlin 2.0.0 toolchain.
+    // The transitive activity:1.8.1 dep from fragment is resolved upward to our
+    // direct activity-compose:1.9.2 by Gradle's conflict resolution.
+    implementation("androidx.fragment:fragment-ktx:1.8.9")
+
     // Termux terminal stack — Apache-2.0, pinned to v0.118.3 (May 22
     // 2025 release; see docs/PLAN-TERMINAL-REWRITE.md Android section).
     // Published as a multi-module JitPack build under the parent
