@@ -1603,6 +1603,12 @@ func (m *Manager) AssistantNames() []string {
 	return m.registry.Names()
 }
 
+// Registry returns the underlying adapter registry. Exposed for the ws
+// package's readiness block (CLI presence + login-provider resolution).
+func (m *Manager) Registry() *agents.Registry {
+	return m.registry
+}
+
 // HasAssistant reports whether an adapter exists under this name —
 // including hidden ones (e.g. "shell") that Names() deliberately omits.
 func (m *Manager) HasAssistant(name string) bool {
