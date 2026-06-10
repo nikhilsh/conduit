@@ -270,7 +270,6 @@ func TestGoldenCodexTurnArgv(t *testing.T) {
 		threadID string
 		extra    []string
 		mode     string
-		msg      string
 		wantStr  string // joined argv for easy matching
 	}
 	rows := []row{
