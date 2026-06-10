@@ -13,6 +13,10 @@ package push
 
 import (
 	"context"
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,15 +28,19 @@ type Platform string
 const (
 	// PlatformAPNs is Apple Push Notification service (iOS).
 	PlatformAPNs Platform = "apns"
-	// PlatformFCM is Firebase Cloud Messaging (Android).
+	// PlatformFCM is Firebase Cloud Messaging (Android fallback via relay).
 	PlatformFCM Platform = "fcm"
+	// PlatformUnifiedPush is a self-hosted UnifiedPush distributor (Android
+	// purist path — no vendor hop). The DeviceToken.Token is the distributor
+	// endpoint URL the app registered.
+	PlatformUnifiedPush Platform = "unifiedpush"
 )
 
 // ValidPlatform reports whether p is a transport the broker knows how to
 // route to. Unknown platforms are rejected at registration time so a
 // typo'd client doesn't silently never receive pushes.
 func ValidPlatform(p Platform) bool {
-	return p == PlatformAPNs || p == PlatformFCM
+	return p == PlatformAPNs || p == PlatformFCM || p == PlatformUnifiedPush
 }
 
 // DeviceToken is one registered device endpoint for an identity.
@@ -66,12 +74,117 @@ type Notifier interface {
 type Registry struct {
 	mu sync.RWMutex
 	// identity -> set of "<platform>\x00<token>" -> DeviceToken
-	byIdentity map[string]map[string]DeviceToken
+	byIdentity  map[string]map[string]DeviceToken
+	persistPath string // empty = no persistence
 }
 
-// NewRegistry returns an empty registry.
+// NewRegistry returns an empty in-memory registry (no persistence).
 func NewRegistry() *Registry {
 	return &Registry{byIdentity: make(map[string]map[string]DeviceToken)}
+}
+
+// NewRegistryWithPersistence returns a Registry backed by a JSON file at
+// path. Existing tokens are loaded from the file on construction; on
+// every Register/Unregister call the file is rewritten atomically at
+// mode 0600. An error loading the file is logged but not fatal — the
+// registry starts empty rather than refusing to start.
+func NewRegistryWithPersistence(path string) *Registry {
+	r := &Registry{
+		byIdentity:  make(map[string]map[string]DeviceToken),
+		persistPath: path,
+	}
+	if err := r.load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("push registry: load %s: %v (starting empty)", path, err)
+	}
+	return r
+}
+
+// persistSnapshot is the on-disk representation. Using a simple slice of
+// {identity, tokens} pairs is enough — the registry is small (one entry
+// per paired device).
+type persistSnapshot struct {
+	Tokens []persistEntry `json:"tokens"`
+}
+
+type persistEntry struct {
+	Identity string        `json:"identity"`
+	Tokens   []DeviceToken `json:"tokens"`
+}
+
+// load reads the JSON snapshot from r.persistPath into r.byIdentity.
+// Caller must NOT hold r.mu.
+func (r *Registry) load() error {
+	if r.persistPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(r.persistPath)
+	if err != nil {
+		return err
+	}
+	var snap persistSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return err
+	}
+	for _, e := range snap.Tokens {
+		set := make(map[string]DeviceToken, len(e.Tokens))
+		for _, t := range e.Tokens {
+			set[key(t)] = t
+		}
+		r.byIdentity[e.Identity] = set
+	}
+	return nil
+}
+
+// save writes r.byIdentity to r.persistPath atomically.
+// Caller must hold r.mu (at least RLock). Errors are logged, not fatal.
+func (r *Registry) save() {
+	if r.persistPath == "" {
+		return
+	}
+	snap := persistSnapshot{}
+	for identity, set := range r.byIdentity {
+		tokens := make([]DeviceToken, 0, len(set))
+		for _, t := range set {
+			tokens = append(tokens, t)
+		}
+		snap.Tokens = append(snap.Tokens, persistEntry{
+			Identity: identity,
+			Tokens:   tokens,
+		})
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		log.Printf("push registry: marshal for persist: %v", err)
+		return
+	}
+	dir := filepath.Dir(r.persistPath)
+	tmp, err := os.CreateTemp(dir, ".push-tokens-*.tmp")
+	if err != nil {
+		log.Printf("push registry: create temp: %v", err)
+		return
+	}
+	tmpPath := tmp.Name()
+	if _, werr := tmp.Write(data); werr != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		log.Printf("push registry: write temp: %v", werr)
+		return
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		log.Printf("push registry: chmod temp: %v", err)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		log.Printf("push registry: close temp: %v", err)
+		return
+	}
+	if err := os.Rename(tmpPath, r.persistPath); err != nil {
+		_ = os.Remove(tmpPath)
+		log.Printf("push registry: rename to %s: %v", r.persistPath, err)
+	}
 }
 
 func key(t DeviceToken) string {
@@ -96,6 +209,7 @@ func (r *Registry) Register(identity string, token DeviceToken) bool {
 		r.byIdentity[identity] = set
 	}
 	set[key(token)] = token
+	r.save()
 	return true
 }
 
@@ -112,6 +226,7 @@ func (r *Registry) Unregister(identity string, token DeviceToken) {
 	if len(set) == 0 {
 		delete(r.byIdentity, identity)
 	}
+	r.save()
 }
 
 // TokensFor returns the device tokens registered for identity, sorted
