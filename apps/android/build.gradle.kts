@@ -9,4 +9,11 @@ plugins {
     // workflow research). Adds `recordRoborazzi*` / `verifyRoborazzi*`
     // gradle tasks once applied in app/build.gradle.kts.
     id("io.github.takahirom.roborazzi") version "1.32.0" apply false
+    // Google Services plugin — processes google-services.json into
+    // BuildConfig / res values consumed by Firebase SDKs. Pinned to
+    // 4.4.2 (latest at time of writing): uses kotlin-stdlib-jdk8:1.7.x
+    // (verified via POM) — no Kotlin 2.1+ metadata risk. Paired with
+    // AGP 8.5.2; 4.4.x targets AGP 8.x (the plugin's own AGP
+    // dependency is a compile-only marker, not a runtime constraint).
+    id("com.google.gms.google-services") version "4.4.2" apply false
 }

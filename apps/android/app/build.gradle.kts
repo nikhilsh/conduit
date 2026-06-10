@@ -9,6 +9,9 @@ plugins {
     // Roborazzi: Compose snapshot testing on the JVM. See docs/
     // TESTING-STRATEGY.md for the rationale (Paparazzi alternative).
     id("io.github.takahirom.roborazzi")
+    // Processes google-services.json into BuildConfig / res values that
+    // Firebase SDKs read at startup. Version declared in root build.gradle.kts.
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -171,6 +174,15 @@ dependencies {
     implementation("org.unifiedpush.android:connector:3.0.10") {
         exclude(group = "com.google.crypto.tink", module = "tink")
     }
+
+    // FCM push fallback (WS-P.3 fallback path). Direct version pin (NOT BOM)
+    // because the firebase-bom pulls in firebase-common-ktx and related KTX
+    // artifacts compiled with Kotlin 2.1 metadata in recent BOM revisions,
+    // which poisons the build against our pinned Kotlin 2.0.0 toolchain.
+    // 23.4.1 verified: kotlin-stdlib dep is 1.7.10 (POM inspection); no tink
+    // or duplicate-class risk against existing deps. Java-first library — the
+    // service and token APIs are all Java surface, no KTX required.
+    implementation("com.google.firebase:firebase-messaging:23.4.1")
 
     // Termux terminal stack — Apache-2.0, pinned to v0.118.3 (May 22
     // 2025 release; see docs/PLAN-TERMINAL-REWRITE.md Android section).

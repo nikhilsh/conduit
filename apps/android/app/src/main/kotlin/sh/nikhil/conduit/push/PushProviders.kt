@@ -7,8 +7,9 @@ import org.unifiedpush.android.connector.UnifiedPush
  * Factory for the active [PushProvider].
  *
  * Priority:
- *   1. UnifiedPush — if a distributor is installed (vendor-free).
- *   2. FCM          — stub, always unavailable until google-services.json lands.
+ *   1. UnifiedPush — if a distributor is installed (vendor-free, preferred).
+ *   2. FCM          — Google Firebase fallback; available when FirebaseApp
+ *                     has been initialised via google-services.json + plugin.
  *   3. null          — no push available (box shows honest "unsupported" state).
  *
  * This is the only place that knows which provider wins. Both the
@@ -25,7 +26,7 @@ object PushProviders {
         val up = UnifiedPushProvider(ctx)
         if (up.isAvailable) return up
 
-        val fcm = FcmPushProvider()
+        val fcm = FcmPushProvider(ctx)
         if (fcm.isAvailable) return fcm
 
         return null

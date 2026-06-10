@@ -1,5 +1,8 @@
 package sh.nikhil.conduit.push
 
+import android.content.Context
+import io.mockk.every
+import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -67,24 +70,29 @@ class PushSettingsStateTest {
 
     // ── Platform string values ────────────────────────────────────────────
 
-    @Test fun platformStrings_areCanonical() {
+    @Test fun fcmProvider_platformString_isCanonical() {
         // The broker API contract requires lowercase platform strings.
-        assertEquals("unifiedpush", FcmPushProvider().platform.also {
-            // FcmPushProvider is the FCM stub; test it compiles with correct platform.
-        }.let { "unifiedpush" }) // UP platform string
-        assertEquals("fcm", FcmPushProvider().platform)
+        val ctx = mockk<Context>(relaxed = true)
+        assertEquals("fcm", FcmPushProvider(ctx).platform)
     }
 
-    @Test fun fcmProvider_isAlwaysUnavailable() {
-        // The FCM stub must never report isAvailable = true without
-        // google-services.json. This guard prevents accidental enablement.
-        val fcm = FcmPushProvider()
-        assertFalse("FCM stub must be unavailable without google-services.json", fcm.isAvailable)
+    @Test fun fcmProvider_isUnavailable_whenFirebaseNotInitialised() {
+        // In the JVM unit-test environment FirebaseApp is never initialised
+        // (no real Android runtime), so isAvailable must be false. This
+        // confirms the fallback guard works: FcmPushProvider.isAvailable only
+        // returns true when FirebaseApp.getInstance() succeeds without throwing.
+        val ctx = mockk<Context>(relaxed = true)
+        val fcm = FcmPushProvider(ctx)
+        // FirebaseApp is not present in the test JVM → isAvailable = false.
+        assertFalse("FCM must be unavailable when FirebaseApp is not initialised", fcm.isAvailable)
     }
 
-    @Test fun fcmProvider_requestTokenReturnsNull() {
+    @Test fun fcmProvider_requestToken_returnsNull_whenUnavailable() {
+        // When isAvailable = false (FirebaseApp not initialised), requestToken
+        // must deliver null rather than throwing.
+        val ctx = mockk<Context>(relaxed = true)
         var result: String? = "not-null"
-        FcmPushProvider().requestToken { result = it }
+        FcmPushProvider(ctx).requestToken { result = it }
         assertEquals(null, result)
     }
 }
