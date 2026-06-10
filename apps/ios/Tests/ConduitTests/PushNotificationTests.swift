@@ -111,7 +111,7 @@ struct PushSettingsStateTests {
 
     @Test func statusLabelWhenDenied() {
         let state = PushSettingsState(auth: .denied, brokerSupported: true, registered: false)
-        #expect(state.statusLabel == "disabled in iOS Settings")
+        #expect(state.statusLabel == "disabled in Settings")
     }
 
     @Test func statusLabelWhenPending() {

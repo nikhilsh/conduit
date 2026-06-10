@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import org.json.JSONException
 import org.json.JSONObject
+import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.MessagingReceiver
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
@@ -60,6 +61,19 @@ class ConduitUnifiedPushReceiver : MessagingReceiver() {
         val store = PushStore.applicationStore(context.applicationContext)
         val brokerEndpoint = store.readBrokerEndpoint(context.applicationContext)
         store.updateEndpoint(endpoint.url, brokerEndpoint)
+    }
+
+    /**
+     * Called when the distributor cannot complete registration (e.g. no network
+     * or the distributor requires a VAPID key). Logged as a breadcrumb; no
+     * user-visible action is taken — the next [UnifiedPushProvider.requestToken]
+     * call will retry.
+     */
+    override fun onRegistrationFailed(context: Context, reason: FailedReason, instance: String) {
+        Telemetry.breadcrumb(
+            "push", "UP onRegistrationFailed",
+            mapOf("reason" to reason.name, "instance" to instance),
+        )
     }
 
     /**
