@@ -79,6 +79,7 @@ documented in the frozen contracts above and the archived plans.
   so drop-off is visible in Sentry.
 - **Google Play distribution** — AAB build, data-safety form, and folding the
   Play-signing SHA into the Firebase API-key restriction.
+- **Buy me a coffee / donation link** — Settings row that opens an external tip-jar URL in the system browser (not an IAP; placeholder URL in-source, replace before shipping).
 
 ---
 
