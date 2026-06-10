@@ -129,6 +129,14 @@ type capabilitiesResponse struct {
 	// fallback; an unknown agent degrades to a generic look. Omitted when no
 	// assistant has a structured backend (only the legacy scrape path).
 	Agents map[string]session.AgentDescriptor `json:"agents,omitempty"`
+	// Readiness is the WS-H.1 connection-health block. It lets the app show
+	// a post-pair checklist and a stale-broker prompt instead of letting
+	// sessions fail cryptically:
+	//   - broker_version: the ldflags-stamped tag/SHA (or "dev")
+	//   - node_present:   termgrid sidecar availability (scrollback quality)
+	//   - tmux_present:   session-recovery availability
+	//   - agents:         per-agent CLI presence + sign-in state
+	Readiness ReadinessBlock `json:"readiness"`
 }
 
 func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +164,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PushRelayConfigured = s.PushRelayConfigured
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
+	resp.Readiness = buildReadiness(s.Sessions, s.Sessions.Registry())
 	writeJSON(w, http.StatusOK, resp)
 }
 

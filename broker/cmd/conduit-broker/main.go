@@ -38,7 +38,19 @@ import (
 	"github.com/nikhilsh/conduit/broker/internal/ws"
 )
 
+// version is stamped at link time by the release workflow:
+//
+//	go build -ldflags "-X main.version=v0.1.2" ./cmd/conduit-broker
+//
+// Defaults to "dev" for local builds where no stamp is provided.
+var version string
+
 func main() {
+	// Inject version into the ws package so /api/capabilities readiness
+	// block reports the correct broker_version. Done before any command
+	// dispatch so the value is present from the first request.
+	ws.SetBrokerVersion(version)
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
