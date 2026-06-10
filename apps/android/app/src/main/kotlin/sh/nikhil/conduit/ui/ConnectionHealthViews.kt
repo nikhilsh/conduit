@@ -3,7 +3,6 @@ package sh.nikhil.conduit.ui
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CapsuleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -91,7 +90,7 @@ fun BrokerUpdateBanner(
                 if (isSshPaired) {
                     // One-tap re-bootstrap.
                     Surface(
-                        shape = CapsuleShape,
+                        shape = RoundedCornerShape(99.dp),
                         color = neon.accent,
                         modifier = Modifier.clickable { onRebootstrap() },
                     ) {
@@ -109,7 +108,7 @@ fun BrokerUpdateBanner(
                     AnimatedContent(targetState = copyConfirmed, label = "copy") { confirmed ->
                         val scope = rememberCoroutineScope()
                         Surface(
-                            shape = CapsuleShape,
+                            shape = RoundedCornerShape(99.dp),
                             color = neon.accent,
                             modifier = Modifier.clickable {
                                 clipboard.setText(AnnotatedString(INSTALL_ONELINER))
@@ -224,7 +223,7 @@ private fun ReadinessRow(
                 ReadinessStatus.NotSignedIn -> {
                     if (!item.loginProvider.isNullOrEmpty()) {
                         Surface(
-                            shape = CapsuleShape,
+                            shape = RoundedCornerShape(99.dp),
                             color = neon.accent,
                             modifier = Modifier.clickable { onSignIn(item.loginProvider) },
                         ) {
