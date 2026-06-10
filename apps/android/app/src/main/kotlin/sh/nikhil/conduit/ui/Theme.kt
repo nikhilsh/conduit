@@ -52,10 +52,13 @@ internal object ConduitPalette {
     // Inflection Pi blue — Tailwind blue-500.
     val piAccent        = AdaptiveColor(0xFF3B82F6, 0xFF60A5FA)
     val piAccentStrong  = AdaptiveColor(0xFF1D4ED8, 0xFF3B82F6)
-    // opencode orange — Tailwind orange-500. sst.dev's opencode docs
-    // site reads orange.
-    val opencodeAccent  = AdaptiveColor(0xFFF97316, 0xFFFB923C)
-    val opencodeAccentStrong = AdaptiveColor(0xFFC2410C, 0xFFF97316)
+    // opencode lime — Tailwind lime-400 (#A3E635) dark / lime-700 (#6B9A0F) light.
+    // opencode.ai's brand is intentionally monochromatic gray; lime is chosen
+    // for the neon palette because it is distinct from claude (orange) and
+    // codex (cyan), evokes open-source terminal culture, and sits in the same
+    // vibrancy band as the other agent tints. Matches the NeonTheme opencode token.
+    val opencodeAccent  = AdaptiveColor(0xFF6B9A0F, 0xFFA3E635)
+    val opencodeAccentStrong = AdaptiveColor(0xFF4A6A08, 0xFF84CC16)
     val textPrimary     = AdaptiveColor(0xFF1A1A1A, 0xFFFFFFFF)
     val textSecondary   = AdaptiveColor(0xFF6B6B6B, 0xFF888888)
     val textMuted       = AdaptiveColor(0xFF9E9E9E, 0xFF555555)

@@ -40,10 +40,14 @@ enum ConduitPalette {
     /// reads as a cool blue in their marketing.
     static let piAccent        = Pair(light: "#3B82F6", dark: "#60A5FA")
     static let piAccentStrong  = Pair(light: "#1D4ED8", dark: "#3B82F6")
-    /// opencode orange. Tailwind orange-500 — sst.dev's opencode
-    /// reads orange on its docs site.
-    static let opencodeAccent  = Pair(light: "#F97316", dark: "#FB923C")
-    static let opencodeAccentStrong = Pair(light: "#C2410C", dark: "#F97316")
+    /// opencode lime. Tailwind lime-400 (#A3E635) dark / lime-700 (#6B9A0F)
+    /// light. opencode.ai's brand is intentionally monochromatic gray; lime
+    /// is chosen for the neon palette because it is distinct from claude
+    /// (orange) and codex (cyan), evokes open-source terminal culture, and
+    /// sits in the same vibrancy band as the other agent tints. Matches
+    /// NeonTheme.opencode.
+    static let opencodeAccent  = Pair(light: "#6B9A0F", dark: "#A3E635")
+    static let opencodeAccentStrong = Pair(light: "#4A6A08", dark: "#84CC16")
     static let textPrimary     = Pair(light: "#1A1A1A", dark: "#FFFFFF")
     static let textSecondary   = Pair(light: "#6B6B6B", dark: "#888888")
     static let textMuted       = Pair(light: "#9E9E9E", dark: "#555555")

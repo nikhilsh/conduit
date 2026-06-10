@@ -67,9 +67,10 @@ struct AgentAvatar: View {
     static func logoAsset(forAgent assistant: String) -> String? {
         let name: String
         switch assistant.lowercased() {
-        case "claude": name = "ClaudeMark"
-        case "codex":  name = "CodexMark"
-        default:       return nil
+        case "claude":    name = "ClaudeMark"
+        case "codex":     name = "CodexMark"
+        case "opencode":  name = "OpencodeMark"
+        default:          return nil
         }
         return UIImage(named: name) != nil ? name : nil
     }

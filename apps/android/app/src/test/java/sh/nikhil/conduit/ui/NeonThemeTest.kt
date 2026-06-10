@@ -80,6 +80,7 @@ class NeonThemeTest {
         val t = NeonTheme.resolve(NeonPalette.ICE, dark = true, glow = true)
         assertEquals(Color(0xFFFF9D4D), t.claude)
         assertEquals(Color(0xFF22D3EE), t.codex)      // fixed brand cyan
+        assertEquals(Color(0xFFA3E635), t.opencode)   // lime — distinct from claude/codex
         assertEquals(Color(0xFFB487FF), t.purple)
         assertEquals(Color(0xFF4F8CFF), t.blue)        // == accent2
         assertEquals(Color(0xFF3EF0A0), t.green)
@@ -98,6 +99,7 @@ class NeonThemeTest {
         val synth = NeonTheme.resolve(NeonPalette.SYNTH, dark = true, glow = true)
         assertEquals(Color(0xFF22D3EE), synth.codex)
         assertEquals(Color(0xFFFF9D4D), synth.claude)
+        assertEquals(Color(0xFFA3E635), synth.opencode)
         // sanity: synth's own accent is NOT cyan, so codex differs from accent
         assertNotEquals(synth.accent, synth.codex)
     }

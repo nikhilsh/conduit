@@ -113,9 +113,10 @@ fun AgentAvatar(
 @Composable
 private fun agentLogoRes(assistant: String): Int? {
     val name = when (assistant.lowercase()) {
-        "claude" -> "claude_mark"
-        "codex" -> "codex_mark"
-        else -> return null
+        "claude"   -> "claude_mark"
+        "codex"    -> "codex_mark"
+        "opencode" -> "opencode_mark"
+        else       -> return null
     }
     val ctx = LocalContext.current
     return ctx.resources.getIdentifier(name, "drawable", ctx.packageName).takeIf { it != 0 }
