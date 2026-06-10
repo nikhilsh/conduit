@@ -6,7 +6,11 @@
 //! no app-server proxy / WebSocket-tunnel branching, no binary
 //! discovery.
 
+use std::sync::Arc;
+
 use thiserror::Error;
+
+use super::SshTunnel;
 
 /// Credentials the mobile app collects from the user to open an SSH
 /// session against their server.
@@ -54,6 +58,15 @@ pub struct SshBootstrapResult {
     /// True if we attached to a container the previous bootstrap
     /// started; false if we ran a fresh `docker run`.
     pub reused: bool,
+}
+
+/// Result of [`crate::ssh::ssh_bootstrap_tunneled`]: the pairing target plus
+/// the owned [`SshTunnel`] handle the caller keeps to control the forward's
+/// lifecycle (observe liveness, stop on logout). UniFFI surfaces this as a
+/// dictionary whose `tunnel` field is the opaque tunnel object.
+pub struct SshTunnelBootstrap {
+    pub result: SshBootstrapResult,
+    pub tunnel: Arc<SshTunnel>,
 }
 
 /// Structured errors the mobile layer can present meaningfully. Codes

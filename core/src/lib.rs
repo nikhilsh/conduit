@@ -84,7 +84,9 @@ pub trait ConduitDelegate: Send + Sync {
     fn on_view_event(&self, session_id: String, kind: String, payload: HashMap<String, String>);
 }
 
-pub use ssh::{SshAuth, SshBootstrapResult, SshCredentials, SshError};
+pub use ssh::{
+    SshAuth, SshBootstrapResult, SshCredentials, SshError, SshTunnel, SshTunnelBootstrap,
+};
 
 /// Platform callback for SSH host-key TOFU. The platform layer
 /// implements this and pops up an "accept/reject this server
@@ -111,6 +113,35 @@ pub async fn ssh_bootstrap(
         Box::pin(async move { delegate.accept_host_key(fp) })
     });
     run_on_core(ssh::ssh_bootstrap(
+        credentials,
+        pre_allocated_token,
+        anthropic_api_key,
+        openai_api_key,
+        image_ref,
+        cb,
+    ))
+    .await
+}
+
+/// UniFFI entry point for the **tunneled** SSH bootstrap. Same flow as
+/// [`ssh_bootstrap`] but returns the owned [`SshTunnel`] so the app controls
+/// the forward's lifecycle (hold the handle, observe `is_alive()`, `stop()` on
+/// logout). This is the path the apps should adopt — see
+/// `docs/PLAN-SSH-TUNNEL.md`.
+pub async fn ssh_bootstrap_tunneled(
+    credentials: SshCredentials,
+    pre_allocated_token: String,
+    anthropic_api_key: String,
+    openai_api_key: String,
+    image_ref: Option<String>,
+    host_key_delegate: Box<dyn SshHostKeyDelegate>,
+) -> Result<SshTunnelBootstrap, SshError> {
+    let delegate: Arc<dyn SshHostKeyDelegate> = Arc::from(host_key_delegate);
+    let cb: ssh::HostKeyCallback = Arc::new(move |fp: String| {
+        let delegate = Arc::clone(&delegate);
+        Box::pin(async move { delegate.accept_host_key(fp) })
+    });
+    run_on_core(ssh::ssh_bootstrap_tunneled(
         credentials,
         pre_allocated_token,
         anthropic_api_key,

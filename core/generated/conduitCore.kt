@@ -893,6 +893,18 @@ internal open class UniffiVTableCallbackInterfaceSshHostKeyDelegate(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -926,7 +938,7 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_connect(`ptr`: Pointer,`delegate`: Long,
     ): Long
-    fun uniffi_conduit_core_fn_method_conduitclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`cwd`: RustBuffer.ByValue,
+    fun uniffi_conduit_core_fn_method_conduitclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`cwd`: RustBuffer.ByValue,`permissionMode`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_disconnect(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -955,6 +967,8 @@ internal interface UniffiLib : Library {
     fun uniffi_conduit_core_fn_method_conduitclient_set_agent_credentials(`ptr`: Pointer,`provider`: RustBuffer.ByValue,`credentialJson`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_start_agent_login(`ptr`: Pointer,`provider`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_conduit_core_fn_method_conduitclient_stop_turn(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_switch_agent(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`assistant`: RustBuffer.ByValue,
     ): Long
@@ -992,11 +1006,23 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_conduit_core_fn_method_sessionstorecore_sessions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_conduit_core_fn_clone_sshtunnel(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_conduit_core_fn_free_sshtunnel(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_conduit_core_fn_method_sshtunnel_is_alive(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_conduit_core_fn_method_sshtunnel_local_port(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Short
+    fun uniffi_conduit_core_fn_method_sshtunnel_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_conduit_core_fn_init_callback_vtable_conduitdelegate(`vtable`: UniffiVTableCallbackInterfaceConduitDelegate,
     ): Unit
     fun uniffi_conduit_core_fn_init_callback_vtable_sshhostkeydelegate(`vtable`: UniffiVTableCallbackInterfaceSshHostKeyDelegate,
     ): Unit
     fun uniffi_conduit_core_fn_func_ssh_bootstrap(`credentials`: RustBuffer.ByValue,`preAllocatedToken`: RustBuffer.ByValue,`anthropicApiKey`: RustBuffer.ByValue,`openaiApiKey`: RustBuffer.ByValue,`imageRef`: RustBuffer.ByValue,`hostKeyDelegate`: Long,
+    ): Long
+    fun uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(`credentials`: RustBuffer.ByValue,`preAllocatedToken`: RustBuffer.ByValue,`anthropicApiKey`: RustBuffer.ByValue,`openaiApiKey`: RustBuffer.ByValue,`imageRef`: RustBuffer.ByValue,`hostKeyDelegate`: Long,
     ): Long
     fun ffi_conduit_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1112,6 +1138,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_conduit_core_checksum_func_ssh_bootstrap(
     ): Short
+    fun uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled(
+    ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_agent_login_callback(
     ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_cancel_agent_login(
@@ -1148,6 +1176,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_start_agent_login(
     ): Short
+    fun uniffi_conduit_core_checksum_method_conduitclient_stop_turn(
+    ): Short
     fun uniffi_conduit_core_checksum_method_conduitclient_switch_agent(
     ): Short
     fun uniffi_conduit_core_checksum_method_sessionstorecore_apply_chat(
@@ -1177,6 +1207,12 @@ internal interface UniffiLib : Library {
     fun uniffi_conduit_core_checksum_method_sessionstorecore_register_session(
     ): Short
     fun uniffi_conduit_core_checksum_method_sessionstorecore_sessions(
+    ): Short
+    fun uniffi_conduit_core_checksum_method_sshtunnel_is_alive(
+    ): Short
+    fun uniffi_conduit_core_checksum_method_sshtunnel_local_port(
+    ): Short
+    fun uniffi_conduit_core_checksum_method_sshtunnel_stop(
     ): Short
     fun uniffi_conduit_core_checksum_constructor_conduitclient_new(
     ): Short
@@ -1222,6 +1258,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_conduit_core_checksum_func_ssh_bootstrap() != 50145.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled() != 60504.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_agent_login_callback() != 4395.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1231,7 +1270,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_connect() != 37807.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_conduit_core_checksum_method_conduitclient_create_session() != 40358.toShort()) {
+    if (lib.uniffi_conduit_core_checksum_method_conduitclient_create_session() != 43260.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_disconnect() != 13038.toShort()) {
@@ -1274,6 +1313,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_start_agent_login() != 62905.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_conduit_core_checksum_method_conduitclient_stop_turn() != 45552.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_switch_agent() != 60424.toShort()) {
@@ -1319,6 +1361,15 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_sessionstorecore_sessions() != 26204.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_conduit_core_checksum_method_sshtunnel_is_alive() != 16897.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_conduit_core_checksum_method_sshtunnel_local_port() != 37878.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_conduit_core_checksum_method_sshtunnel_stop() != 25241.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_constructor_conduitclient_new() != 15956.toShort()) {
@@ -1828,7 +1879,7 @@ public interface ConduitClientInterface {
     
     suspend fun `connect`(`delegate`: ConduitDelegate)
     
-    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?): kotlin.String
+    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?): kotlin.String
     
     fun `disconnect`()
     
@@ -1857,6 +1908,8 @@ public interface ConduitClientInterface {
     suspend fun `setAgentCredentials`(`provider`: kotlin.String, `credentialJson`: kotlin.String)
     
     suspend fun `startAgentLogin`(`provider`: kotlin.String)
+    
+    suspend fun `stopTurn`(`sessionId`: kotlin.String)
     
     suspend fun `switchAgent`(`sessionId`: kotlin.String, `assistant`: kotlin.String)
     
@@ -2020,12 +2073,12 @@ open class ConduitClient: Disposable, AutoCloseable, ConduitClientInterface {
     
     @Throws(ConduitException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?) : kotlin.String {
+    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?) : kotlin.String {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
             UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_create_session(
                 thisPtr,
-                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),FfiConverterOptionalString.lower(`cwd`),
+                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),FfiConverterOptionalString.lower(`cwd`),FfiConverterOptionalString.lower(`permissionMode`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -2283,6 +2336,28 @@ open class ConduitClient: Disposable, AutoCloseable, ConduitClientInterface {
             UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_start_agent_login(
                 thisPtr,
                 FfiConverterString.lower(`provider`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_free_void(future) },
+        // lift function
+        { Unit },
+        
+        // Error FFI converter
+        ConduitException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(ConduitException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stopTurn`(`sessionId`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithPointer { thisPtr ->
+            UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_stop_turn(
+                thisPtr,
+                FfiConverterString.lower(`sessionId`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_void(future, callback, continuation) },
@@ -2776,6 +2851,268 @@ public object FfiConverterTypeSessionStoreCore: FfiConverter<SessionStoreCore, P
 }
 
 
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+public interface SshTunnelInterface {
+    
+    fun `isAlive`(): kotlin.Boolean
+    
+    fun `localPort`(): kotlin.UShort
+    
+    fun `stop`()
+    
+    companion object
+}
+
+open class SshTunnel: Disposable, AutoCloseable, SshTunnelInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_conduit_core_fn_free_sshtunnel(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_conduit_core_fn_clone_sshtunnel(pointer!!, status)
+        }
+    }
+
+    override fun `isAlive`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_sshtunnel_is_alive(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    override fun `localPort`(): kotlin.UShort {
+            return FfiConverterUShort.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_sshtunnel_local_port(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    override fun `stop`()
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_sshtunnel_stop(
+        it, _status)
+}
+    }
+    
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSshTunnel: FfiConverter<SshTunnel, Pointer> {
+
+    override fun lower(value: SshTunnel): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): SshTunnel {
+        return SshTunnel(value)
+    }
+
+    override fun read(buf: ByteBuffer): SshTunnel {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: SshTunnel) = 8UL
+
+    override fun write(value: SshTunnel, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
 
 data class BrowserViewState (
     var `preview`: PreviewInfo?
@@ -3224,6 +3561,7 @@ data class SessionStatus (
     var `preview`: PreviewInfo?, 
     var `sessionName`: kotlin.String?, 
     var `viewers`: kotlin.UInt?, 
+    var `turnActive`: kotlin.Boolean? = null, 
     var `reasoningEffort`: kotlin.String?, 
     var `cwd`: kotlin.String?, 
     var `startedAt`: kotlin.String?, 
@@ -3265,6 +3603,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalTypePreviewInfo.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
@@ -3299,6 +3638,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalTypePreviewInfo.allocationSize(value.`preview`) +
             FfiConverterOptionalString.allocationSize(value.`sessionName`) +
             FfiConverterOptionalUInt.allocationSize(value.`viewers`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`turnActive`) +
             FfiConverterOptionalString.allocationSize(value.`reasoningEffort`) +
             FfiConverterOptionalString.allocationSize(value.`cwd`) +
             FfiConverterOptionalString.allocationSize(value.`startedAt`) +
@@ -3332,6 +3672,7 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalTypePreviewInfo.write(value.`preview`, buf)
             FfiConverterOptionalString.write(value.`sessionName`, buf)
             FfiConverterOptionalUInt.write(value.`viewers`, buf)
+            FfiConverterOptionalBoolean.write(value.`turnActive`, buf)
             FfiConverterOptionalString.write(value.`reasoningEffort`, buf)
             FfiConverterOptionalString.write(value.`cwd`, buf)
             FfiConverterOptionalString.write(value.`startedAt`, buf)
@@ -3436,6 +3777,47 @@ public object FfiConverterTypeSshCredentials: FfiConverterRustBuffer<SshCredenti
             FfiConverterUShort.write(value.`port`, buf)
             FfiConverterString.write(value.`username`, buf)
             FfiConverterTypeSshAuth.write(value.`auth`, buf)
+    }
+}
+
+
+
+data class SshTunnelBootstrap (
+    var `result`: SshBootstrapResult, 
+    var `tunnel`: SshTunnel
+) : Disposable {
+    
+    @Suppress("UNNECESSARY_SAFE_CALL") // codegen is much simpler if we unconditionally emit safe calls here
+    override fun destroy() {
+        
+        Disposable.destroy(this.`result`)
+    
+        Disposable.destroy(this.`tunnel`)
+    
+    }
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSshTunnelBootstrap: FfiConverterRustBuffer<SshTunnelBootstrap> {
+    override fun read(buf: ByteBuffer): SshTunnelBootstrap {
+        return SshTunnelBootstrap(
+            FfiConverterTypeSshBootstrapResult.read(buf),
+            FfiConverterTypeSshTunnel.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SshTunnelBootstrap) = (
+            FfiConverterTypeSshBootstrapResult.allocationSize(value.`result`) +
+            FfiConverterTypeSshTunnel.allocationSize(value.`tunnel`)
+    )
+
+    override fun write(value: SshTunnelBootstrap, buf: ByteBuffer) {
+            FfiConverterTypeSshBootstrapResult.write(value.`result`, buf)
+            FfiConverterTypeSshTunnel.write(value.`tunnel`, buf)
     }
 }
 
@@ -4370,6 +4752,38 @@ public object FfiConverterOptionalDouble: FfiConverterRustBuffer<kotlin.Double?>
 /**
  * @suppress
  */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
     override fun read(buf: ByteBuffer): kotlin.String? {
         if (buf.get().toInt() == 0) {
@@ -4748,6 +5162,21 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
         { future -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_free_rust_buffer(future) },
         // lift function
         { FfiConverterTypeSshBootstrapResult.lift(it) },
+        // Error FFI converter
+        SshException.ErrorHandler,
+    )
+    }
+
+    @Throws(SshException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `sshBootstrapTunneled`(`credentials`: SshCredentials, `preAllocatedToken`: kotlin.String, `anthropicApiKey`: kotlin.String, `openaiApiKey`: kotlin.String, `imageRef`: kotlin.String?, `hostKeyDelegate`: SshHostKeyDelegate) : SshTunnelBootstrap {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(FfiConverterTypeSshCredentials.lower(`credentials`),FfiConverterString.lower(`preAllocatedToken`),FfiConverterString.lower(`anthropicApiKey`),FfiConverterString.lower(`openaiApiKey`),FfiConverterOptionalString.lower(`imageRef`),FfiConverterTypeSshHostKeyDelegate.lower(`hostKeyDelegate`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeSshTunnelBootstrap.lift(it) },
         // Error FFI converter
         SshException.ErrorHandler,
     )

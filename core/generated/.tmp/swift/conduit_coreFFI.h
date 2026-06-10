@@ -377,7 +377,7 @@ uint64_t uniffi_conduit_core_fn_method_conduitclient_connect(void*_Nonnull ptr, 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_CREATE_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_CREATE_SESSION
-uint64_t uniffi_conduit_core_fn_method_conduitclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch, RustBuffer reasoning_effort, RustBuffer model, RustBuffer cwd
+uint64_t uniffi_conduit_core_fn_method_conduitclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch, RustBuffer reasoning_effort, RustBuffer model, RustBuffer cwd, RustBuffer permission_mode
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_DISCONNECT
@@ -448,6 +448,11 @@ uint64_t uniffi_conduit_core_fn_method_conduitclient_set_agent_credentials(void*
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_START_AGENT_LOGIN
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_START_AGENT_LOGIN
 uint64_t uniffi_conduit_core_fn_method_conduitclient_start_agent_login(void*_Nonnull ptr, RustBuffer provider
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_STOP_TURN
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_STOP_TURN
+uint64_t uniffi_conduit_core_fn_method_conduitclient_stop_turn(void*_Nonnull ptr, RustBuffer session_id
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_SWITCH_AGENT
@@ -541,6 +546,31 @@ void uniffi_conduit_core_fn_method_sessionstorecore_register_session(void*_Nonnu
 RustBuffer uniffi_conduit_core_fn_method_sessionstorecore_sessions(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_CLONE_SSHTUNNEL
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_CLONE_SSHTUNNEL
+void*_Nonnull uniffi_conduit_core_fn_clone_sshtunnel(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FREE_SSHTUNNEL
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FREE_SSHTUNNEL
+void uniffi_conduit_core_fn_free_sshtunnel(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_SSHTUNNEL_IS_ALIVE
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_SSHTUNNEL_IS_ALIVE
+int8_t uniffi_conduit_core_fn_method_sshtunnel_is_alive(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_SSHTUNNEL_LOCAL_PORT
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_SSHTUNNEL_LOCAL_PORT
+uint16_t uniffi_conduit_core_fn_method_sshtunnel_local_port(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_SSHTUNNEL_STOP
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_SSHTUNNEL_STOP
+void uniffi_conduit_core_fn_method_sshtunnel_stop(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_INIT_CALLBACK_VTABLE_CONDUITDELEGATE
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_INIT_CALLBACK_VTABLE_CONDUITDELEGATE
 void uniffi_conduit_core_fn_init_callback_vtable_conduitdelegate(UniffiVTableCallbackInterfaceConduitDelegate* _Nonnull vtable
@@ -554,6 +584,11 @@ void uniffi_conduit_core_fn_init_callback_vtable_sshhostkeydelegate(UniffiVTable
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP
 uint64_t uniffi_conduit_core_fn_func_ssh_bootstrap(RustBuffer credentials, RustBuffer pre_allocated_token, RustBuffer anthropic_api_key, RustBuffer openai_api_key, RustBuffer image_ref, uint64_t host_key_delegate
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP_TUNNELED
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP_TUNNELED
+uint64_t uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(RustBuffer credentials, RustBuffer pre_allocated_token, RustBuffer anthropic_api_key, RustBuffer openai_api_key, RustBuffer image_ref, uint64_t host_key_delegate
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_CONDUIT_CORE_RUSTBUFFER_ALLOC
@@ -842,6 +877,12 @@ uint16_t uniffi_conduit_core_checksum_func_ssh_bootstrap(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_FUNC_SSH_BOOTSTRAP_TUNNELED
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_FUNC_SSH_BOOTSTRAP_TUNNELED
+uint16_t uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITCLIENT_AGENT_LOGIN_CALLBACK
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITCLIENT_AGENT_LOGIN_CALLBACK
 uint16_t uniffi_conduit_core_checksum_method_conduitclient_agent_login_callback(void
@@ -950,6 +991,12 @@ uint16_t uniffi_conduit_core_checksum_method_conduitclient_start_agent_login(voi
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITCLIENT_STOP_TURN
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITCLIENT_STOP_TURN
+uint16_t uniffi_conduit_core_checksum_method_conduitclient_stop_turn(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITCLIENT_SWITCH_AGENT
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITCLIENT_SWITCH_AGENT
 uint16_t uniffi_conduit_core_checksum_method_conduitclient_switch_agent(void
@@ -1037,6 +1084,24 @@ uint16_t uniffi_conduit_core_checksum_method_sessionstorecore_register_session(v
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SESSIONSTORECORE_SESSIONS
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SESSIONSTORECORE_SESSIONS
 uint16_t uniffi_conduit_core_checksum_method_sessionstorecore_sessions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHTUNNEL_IS_ALIVE
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHTUNNEL_IS_ALIVE
+uint16_t uniffi_conduit_core_checksum_method_sshtunnel_is_alive(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHTUNNEL_LOCAL_PORT
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHTUNNEL_LOCAL_PORT
+uint16_t uniffi_conduit_core_checksum_method_sshtunnel_local_port(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHTUNNEL_STOP
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHTUNNEL_STOP
+uint16_t uniffi_conduit_core_checksum_method_sshtunnel_stop(void
     
 );
 #endif

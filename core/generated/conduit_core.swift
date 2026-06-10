@@ -570,7 +570,7 @@ public protocol ConduitClientProtocol : AnyObject {
     
     func connect(delegate: ConduitDelegate) async throws 
     
-    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?) async throws  -> String
+    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?) async throws  -> String
     
     func disconnect() 
     
@@ -599,6 +599,8 @@ public protocol ConduitClientProtocol : AnyObject {
     func setAgentCredentials(provider: String, credentialJson: String) async throws 
     
     func startAgentLogin(provider: String) async throws 
+    
+    func stopTurn(sessionId: String) async throws 
     
     func switchAgent(sessionId: String, assistant: String) async throws 
     
@@ -714,13 +716,13 @@ open func connect(delegate: ConduitDelegate)async throws  {
         )
 }
     
-open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?)async throws  -> String {
+open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_conduit_core_fn_method_conduitclient_create_session(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model),FfiConverterOptionString.lower(cwd)
+                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model),FfiConverterOptionString.lower(cwd),FfiConverterOptionString.lower(permissionMode)
                 )
             },
             pollFunc: ffi_conduit_core_rust_future_poll_rust_buffer,
@@ -909,6 +911,23 @@ open func startAgentLogin(provider: String)async throws  {
                 uniffi_conduit_core_fn_method_conduitclient_start_agent_login(
                     self.uniffiClonePointer(),
                     FfiConverterString.lower(provider)
+                )
+            },
+            pollFunc: ffi_conduit_core_rust_future_poll_void,
+            completeFunc: ffi_conduit_core_rust_future_complete_void,
+            freeFunc: ffi_conduit_core_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeConduitError.lift
+        )
+}
+    
+open func stopTurn(sessionId: String)async throws  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_conduit_core_fn_method_conduitclient_stop_turn(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(sessionId)
                 )
             },
             pollFunc: ffi_conduit_core_rust_future_poll_void,
@@ -1248,6 +1267,143 @@ public func FfiConverterTypeSessionStoreCore_lift(_ pointer: UnsafeMutableRawPoi
 #endif
 public func FfiConverterTypeSessionStoreCore_lower(_ value: SessionStoreCore) -> UnsafeMutableRawPointer {
     return FfiConverterTypeSessionStoreCore.lower(value)
+}
+
+
+
+
+public protocol SshTunnelProtocol : AnyObject {
+    
+    func isAlive()  -> Bool
+    
+    func localPort()  -> UInt16
+    
+    func stop() 
+    
+}
+
+open class SshTunnel:
+    SshTunnelProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_conduit_core_fn_clone_sshtunnel(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_conduit_core_fn_free_sshtunnel(pointer, $0) }
+    }
+
+    
+
+    
+open func isAlive() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_conduit_core_fn_method_sshtunnel_is_alive(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func localPort() -> UInt16 {
+    return try!  FfiConverterUInt16.lift(try! rustCall() {
+    uniffi_conduit_core_fn_method_sshtunnel_local_port(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func stop() {try! rustCall() {
+    uniffi_conduit_core_fn_method_sshtunnel_stop(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSshTunnel: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = SshTunnel
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> SshTunnel {
+        return SshTunnel(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: SshTunnel) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SshTunnel {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: SshTunnel, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSshTunnel_lift(_ pointer: UnsafeMutableRawPointer) throws -> SshTunnel {
+    return try FfiConverterTypeSshTunnel.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSshTunnel_lower(_ value: SshTunnel) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeSshTunnel.lower(value)
 }
 
 
@@ -2150,6 +2306,7 @@ public struct SessionStatus {
     public var preview: PreviewInfo?
     public var sessionName: String?
     public var viewers: UInt32?
+    public var turnActive: Bool?
     public var reasoningEffort: String?
     public var cwd: String?
     public var startedAt: String?
@@ -2173,7 +2330,7 @@ public struct SessionStatus {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil) {
+    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, turnActive: Bool? = nil, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil) {
         self.session = session
         self.assistant = assistant
         self.phase = phase
@@ -2184,6 +2341,7 @@ public struct SessionStatus {
         self.preview = preview
         self.sessionName = sessionName
         self.viewers = viewers
+        self.turnActive = turnActive
         self.reasoningEffort = reasoningEffort
         self.cwd = cwd
         self.startedAt = startedAt
@@ -2239,6 +2397,9 @@ extension SessionStatus: Equatable, Hashable {
             return false
         }
         if lhs.viewers != rhs.viewers {
+            return false
+        }
+        if lhs.turnActive != rhs.turnActive {
             return false
         }
         if lhs.reasoningEffort != rhs.reasoningEffort {
@@ -2315,6 +2476,7 @@ extension SessionStatus: Equatable, Hashable {
         hasher.combine(preview)
         hasher.combine(sessionName)
         hasher.combine(viewers)
+        hasher.combine(turnActive)
         hasher.combine(reasoningEffort)
         hasher.combine(cwd)
         hasher.combine(startedAt)
@@ -2356,6 +2518,7 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
                 preview: FfiConverterOptionTypePreviewInfo.read(from: &buf), 
                 sessionName: FfiConverterOptionString.read(from: &buf), 
                 viewers: FfiConverterOptionUInt32.read(from: &buf), 
+                turnActive: FfiConverterOptionBool.read(from: &buf), 
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
                 cwd: FfiConverterOptionString.read(from: &buf), 
                 startedAt: FfiConverterOptionString.read(from: &buf), 
@@ -2390,6 +2553,7 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
         FfiConverterOptionTypePreviewInfo.write(value.preview, into: &buf)
         FfiConverterOptionString.write(value.sessionName, into: &buf)
         FfiConverterOptionUInt32.write(value.viewers, into: &buf)
+        FfiConverterOptionBool.write(value.turnActive, into: &buf)
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
         FfiConverterOptionString.write(value.cwd, into: &buf)
         FfiConverterOptionString.write(value.startedAt, into: &buf)
@@ -2598,6 +2762,54 @@ public func FfiConverterTypeSshCredentials_lift(_ buf: RustBuffer) throws -> Ssh
 #endif
 public func FfiConverterTypeSshCredentials_lower(_ value: SshCredentials) -> RustBuffer {
     return FfiConverterTypeSshCredentials.lower(value)
+}
+
+
+public struct SshTunnelBootstrap {
+    public var result: SshBootstrapResult
+    public var tunnel: SshTunnel
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(result: SshBootstrapResult, tunnel: SshTunnel) {
+        self.result = result
+        self.tunnel = tunnel
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSshTunnelBootstrap: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SshTunnelBootstrap {
+        return
+            try SshTunnelBootstrap(
+                result: FfiConverterTypeSshBootstrapResult.read(from: &buf), 
+                tunnel: FfiConverterTypeSshTunnel.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SshTunnelBootstrap, into buf: inout [UInt8]) {
+        FfiConverterTypeSshBootstrapResult.write(value.result, into: &buf)
+        FfiConverterTypeSshTunnel.write(value.tunnel, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSshTunnelBootstrap_lift(_ buf: RustBuffer) throws -> SshTunnelBootstrap {
+    return try FfiConverterTypeSshTunnelBootstrap.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSshTunnelBootstrap_lower(_ value: SshTunnelBootstrap) -> RustBuffer {
+    return FfiConverterTypeSshTunnelBootstrap.lower(value)
 }
 
 
@@ -3747,6 +3959,30 @@ fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -4099,6 +4335,20 @@ public func sshBootstrap(credentials: SshCredentials, preAllocatedToken: String,
             errorHandler: FfiConverterTypeSshError.lift
         )
 }
+public func sshBootstrapTunneled(credentials: SshCredentials, preAllocatedToken: String, anthropicApiKey: String, openaiApiKey: String, imageRef: String?, hostKeyDelegate: SshHostKeyDelegate)async throws  -> SshTunnelBootstrap {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(FfiConverterTypeSshCredentials.lower(credentials),FfiConverterString.lower(preAllocatedToken),FfiConverterString.lower(anthropicApiKey),FfiConverterString.lower(openaiApiKey),FfiConverterOptionString.lower(imageRef),FfiConverterCallbackInterfaceSshHostKeyDelegate.lower(hostKeyDelegate)
+                )
+            },
+            pollFunc: ffi_conduit_core_rust_future_poll_rust_buffer,
+            completeFunc: ffi_conduit_core_rust_future_complete_rust_buffer,
+            freeFunc: ffi_conduit_core_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeSshTunnelBootstrap.lift,
+            errorHandler: FfiConverterTypeSshError.lift
+        )
+}
 
 private enum InitializationResult {
     case ok
@@ -4118,6 +4368,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_conduit_core_checksum_func_ssh_bootstrap() != 50145) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled() != 60504) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_conduit_core_checksum_method_conduitclient_agent_login_callback() != 4395) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4127,7 +4380,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_conduit_core_checksum_method_conduitclient_connect() != 37807) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_conduit_core_checksum_method_conduitclient_create_session() != 40358) {
+    if (uniffi_conduit_core_checksum_method_conduitclient_create_session() != 43260) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_disconnect() != 13038) {
@@ -4170,6 +4423,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_start_agent_login() != 62905) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_conduit_core_checksum_method_conduitclient_stop_turn() != 45552) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_switch_agent() != 60424) {
@@ -4215,6 +4471,15 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_sessionstorecore_sessions() != 26204) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_conduit_core_checksum_method_sshtunnel_is_alive() != 16897) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_conduit_core_checksum_method_sshtunnel_local_port() != 37878) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_conduit_core_checksum_method_sshtunnel_stop() != 25241) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_constructor_conduitclient_new() != 15956) {
