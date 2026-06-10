@@ -1,5 +1,8 @@
 package sh.nikhil.conduit.ui
 
+// TODO(nikhil): Replace with your real Buy Me a Coffee / donation URL before shipping.
+private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/nikhilsh"
+
 import sh.nikhil.conduit.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,6 +28,7 @@ import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -66,7 +70,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
+import android.content.Intent
+import android.net.Uri
 import sh.nikhil.conduit.AppearanceStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.LocalAppearanceStore
@@ -426,6 +433,20 @@ fun SettingsScreen(
                     Spacer(Modifier.height(6.dp))
                     Text("A = Breathe · B = Signature · Auto follows your assigned bucket.", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
                 }
+            }
+
+            // Support — external donation link (not an IAP; opens system browser).
+            SettingsSection("Support") {
+                SettingsRow(
+                    icon = Icons.Filled.Favorite,
+                    title = "Buy me a coffee",
+                    subtitle = "Support Conduit development",
+                    onClick = {
+                        Telemetry.breadcrumb("settings", "buy-me-a-coffee tapped")
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SUPPORT_DONATION_URL))
+                        context.startActivity(intent)
+                    },
+                )
             }
 
             // About — static identity card + a tap-through to the

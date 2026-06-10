@@ -1,6 +1,6 @@
 # conduit-push — stateless push relay (Cloudflare Worker)
 
-The vendor relay from [`docs/PLAN-PUSH.md`](../docs/PLAN-PUSH.md) (WS-P.2). It
+The vendor relay from [`docs/archive/PLAN-PUSH.md`](../docs/archive/PLAN-PUSH.md) (WS-P.2). It
 holds the Apple APNs `.p8` key and a minimal-role Firebase service account, and
 pass-throughs the broker's `{token, payload}` to Apple / Google. It is
 **stateless**: no device tokens are stored — the only KV state is a per-install
