@@ -12,8 +12,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowOutward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Button
@@ -122,14 +124,14 @@ fun AgentPickerSheet(
                 store = store,
                 assistant = agent,
                 agentTint = neonAgentColor(agent, neon),
-                onCreate = { cwd, model, effort, permissionMode ->
+                onCreate = { cwd, model, effort, permissionMode, seedPrompt ->
                     val target = savedServers.firstOrNull { it.id == resolvedServerId }
                     if (target != null && target.endpoint != endpoint) {
                         // Session targeted at a different box: switch
                         // endpoint → connect → create.
-                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode)
+                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, initialPrompt = seedPrompt)
                     } else {
-                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode)
+                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, initialPrompt = seedPrompt)
                     }
                     onDismiss()
                 },
@@ -414,7 +416,9 @@ private fun DirectoryStep(
     store: SessionStore,
     assistant: String,
     agentTint: Color,
-    onCreate: (String?, String?, String?, String?) -> Unit,
+    // cwd, model, effort, permissionMode, seedPrompt. seedPrompt is the Part B
+    // "Set up agent harness" bootstrap prompt (null on the normal start paths).
+    onCreate: (String?, String?, String?, String?, String?) -> Unit,
 ) {
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
     val useDial by appearance.newSessionEffortDial.collectAsState()
@@ -425,6 +429,10 @@ private fun DirectoryStep(
     var listing by remember { mutableStateOf<RemoteDirectoryListing?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    // Part B: whether the browsed dir already has CLAUDE.md / AGENTS.md
+    // (null = unknown / not yet checked → don't nag). Dismissible per session.
+    var harnessStatus by remember { mutableStateOf<RemoteHarnessStatus?>(null) }
+    var harnessChipDismissed by remember { mutableStateOf(false) }
     // Selected model alias. forkModelInherit ("") = no override / agent
     // default, which is the default and keeps the start path unchanged.
     var model by remember(assistant) { mutableStateOf(forkModelInherit) }
@@ -468,7 +476,12 @@ private fun DirectoryStep(
         isLoading = true
         loadError = null
         runCatching { store.listDirectories(currentPath) }
-            .onSuccess { listing = it }
+            .onSuccess {
+                listing = it
+                // Part B: refresh the harness check for the resolved path the
+                // broker listed. Best-effort — null leaves the chip hidden.
+                harnessStatus = store.harnessStatus(it.path)
+            }
             .onFailure { e ->
                 // Surface the real broker error (truncated) instead of a bare
                 // generic line so folder-list failures are diagnosable
@@ -572,7 +585,7 @@ private fun DirectoryStep(
                 SectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recent.forEach { path ->
-                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode) })
+                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode, null) })
                     }
                 }
             }
@@ -626,6 +639,23 @@ private fun DirectoryStep(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // Part B: dismissible "Set up agent harness" chip, shown only when
+            // the broker confirmed BOTH CLAUDE.md and AGENTS.md are absent.
+            // Tapping seeds the curated bootstrap prompt and starts cd'd in.
+            val showHarnessChip = harnessStatus?.let { !it.hasHarness } == true &&
+                !harnessChipDismissed && listing != null
+            if (showHarnessChip) {
+                HarnessChip(
+                    tint = agentTint,
+                    onTap = {
+                        onCreate(
+                            listing?.path, selectedModel, selectedEffort, selectedMode,
+                            SessionStore.HARNESS_BOOTSTRAP_PROMPT,
+                        )
+                    },
+                    onDismiss = { harnessChipDismissed = true },
+                )
+            }
             if (useLaunch) {
                 // Live launch preview (§3): will run <agent> · <effort> · <folder>.
                 val folder = listing?.path?.trimEnd('/')?.substringAfterLast('/')?.ifEmpty { null }
@@ -644,7 +674,7 @@ private fun DirectoryStep(
                 )
             }
             Button(
-                onClick = { onCreate(listing?.path, selectedModel, selectedEffort, selectedMode) },
+                onClick = { onCreate(listing?.path, selectedModel, selectedEffort, selectedMode, null) },
                 enabled = listing != null,
                 shape = RoundedCornerShape(14.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
@@ -657,7 +687,7 @@ private fun DirectoryStep(
                 Spacer(Modifier.width(8.dp))
                 Text("Use this folder", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
             }
-            TextButton(onClick = { onCreate(null, selectedModel, selectedEffort, selectedMode) }) {
+            TextButton(onClick = { onCreate(null, selectedModel, selectedEffort, selectedMode, null) }) {
                 Text(
                     "Start without a folder",
                     fontFamily = neon.sans,
@@ -665,6 +695,60 @@ private fun DirectoryStep(
                 )
             }
         }
+    }
+}
+
+/**
+ * Part B: a tasteful, dismissible "Set up agent harness" suggestion shown only
+ * when the chosen folder has neither CLAUDE.md nor AGENTS.md. Tapping seeds the
+ * curated bootstrap prompt (audit repo → write CLAUDE.md + AGENTS.md with
+ * verified gates, ask before committing) and starts cd'd into the folder. The
+ * x dismisses it for the session. Mirror of iOS `harnessChip`.
+ */
+@Composable
+private fun HarnessChip(
+    tint: Color,
+    onTap: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(tint.copy(alpha = 0.10f))
+            .border(1.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onTap)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Icon(Icons.Filled.AutoAwesome, null, tint = tint, modifier = Modifier.size(16.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Set up agent harness",
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                color = neon.text,
+            )
+            Text(
+                "No CLAUDE.md or AGENTS.md here. Have the agent audit the repo and write them.",
+                fontFamily = neon.mono,
+                fontSize = 10.5.sp,
+                color = neon.textDim,
+            )
+        }
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = "Dismiss harness suggestion",
+            tint = neon.textFaint,
+            modifier = Modifier
+                .size(26.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .clickable(onClick = onDismiss)
+                .padding(6.dp),
+        )
     }
 }
 

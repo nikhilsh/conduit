@@ -175,6 +175,16 @@ struct RemoteDirectoryListing: Codable, Equatable {
     var entries: [RemoteDirectoryEntry]
 }
 
+/// Wire shape of `GET /api/fs/harness-status?path=` — whether a directory
+/// already carries an agent harness (CLAUDE.md / AGENTS.md). Powers the
+/// "Set up agent harness" chip (Part B); `fs/list` is dirs-only so it can't
+/// surface these files.
+struct RemoteHarnessStatus: Codable, Equatable {
+    var has_claude_md: Bool
+    var has_agents_md: Bool
+    var has_harness: Bool
+}
+
 /// Wire shape of `GET /api/session/conversation/<id>` (broker PR #196).
 /// The persisted transcript is a flat list of role/content/ts/files
 /// rows — the same `conversation.jsonl` the broker replays into a live
@@ -858,6 +868,35 @@ final class SessionStore {
         }
         return try JSONDecoder().decode(RemoteDirectoryListing.self, from: data)
     }
+
+    /// Whether a directory already has an agent harness (CLAUDE.md / AGENTS.md).
+    /// Returns nil on any failure so callers default to NOT nagging (the chip
+    /// only shows on a definite has_harness=false). Best-effort; never throws.
+    func harnessStatus(path: String?) async -> RemoteHarnessStatus? {
+        guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let base = endpoint.httpBaseURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/fs/harness-status"
+        components?.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = components?.url else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let status = try? JSONDecoder().decode(RemoteHarnessStatus.self, from: data)
+        else { return nil }
+        return status
+    }
+
+    /// The curated bootstrap prompt seeded when the user taps "Set up agent
+    /// harness" (Part B). Audits the repo and writes a CLAUDE.md + AGENTS.md
+    /// with VERIFIED gate commands, asking before committing.
+    static let harnessBootstrapPrompt =
+        "Audit this repository and set up its agent harness. Identify the real "
+        + "build, test, and lint commands by inspecting the project (do not guess) "
+        + "and verify each one actually runs. Then write a concise CLAUDE.md and "
+        + "AGENTS.md documenting those verified gate commands and the project "
+        + "layout, and propose sensible CI gates. Ask me before committing anything."
 
     /// Host health snapshot from `GET /api/host/metrics` (broker v0.0.111+).
     /// Percentages are 0–100; see broker/internal/hostmetrics.

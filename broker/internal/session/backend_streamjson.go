@@ -65,6 +65,14 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	s.chatSessionID = req.resumeChatSessionID
 	s.mu.Unlock()
 
+	// Part A breadcrumb: the conduit-awareness addendum rides claude's
+	// --append-system-prompt (merged with the askUserQuestionNudge in
+	// claudeAppendSystemPrompt). Log once per spawn so a "the agent didn't
+	// know about $PORT" report is diagnosable from box logs.
+	if conduitAwarenessEnabled() {
+		logConduitAwarenessInjected(s.ID, adapter.Name, "claude:append-system-prompt")
+	}
+
 	argsFor := func(resume string, continueLatest bool) []string {
 		baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsForAdapter(adapter)...)
 		// Apply the chosen permission mode (e.g. plan): for claude this may

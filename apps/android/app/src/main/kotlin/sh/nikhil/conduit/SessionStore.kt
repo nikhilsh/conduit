@@ -225,6 +225,18 @@ data class RemoteDirectoryListing(
 )
 
 /**
+ * Wire shape of `GET /api/fs/harness-status?path=` — whether a directory
+ * already carries an agent harness (CLAUDE.md / AGENTS.md). Powers the
+ * "Set up agent harness" chip (Part B); `fs/list` is dirs-only so it can't
+ * surface these files. Mirror of iOS `RemoteHarnessStatus`.
+ */
+data class RemoteHarnessStatus(
+    val hasClaudeMd: Boolean,
+    val hasAgentsMd: Boolean,
+    val hasHarness: Boolean,
+)
+
+/**
  * Raised by [SessionStore.fetchConversation] when the broker has no
  * persisted transcript for the session — either the session predates
  * the #196 redeploy (no `conversation.jsonl` was written) or the id is
@@ -902,6 +914,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         reasoningEffort: String? = null,
         model: String? = null,
         permissionMode: String? = null,
+        initialPrompt: String? = null,
     ) {
         Telemetry.breadcrumb(
             "session",
@@ -914,7 +927,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 harness.first { it.canIssueCommands }
             }
             if (ready != null) {
-                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model, permissionMode = permissionMode)
+                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model, permissionMode = permissionMode, initialPrompt = initialPrompt)
             } else {
                 Telemetry.capture(
                     IllegalStateException("connect+start timed out"),
@@ -2032,6 +2045,40 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
+     * Whether a directory already has an agent harness (CLAUDE.md / AGENTS.md).
+     * Returns null on any failure so callers default to NOT nagging (the chip
+     * only shows on a definite hasHarness=false). Best-effort; never throws.
+     * Mirror of iOS `harnessStatus(path:)`.
+     */
+    suspend fun harnessStatus(path: String?): RemoteHarnessStatus? = withContext(Dispatchers.IO) {
+        if (path.isNullOrBlank()) return@withContext null
+        val base = _endpoint.value.httpBaseUrl ?: return@withContext null
+        try {
+            val url = URL("$base/api/fs/harness-status?path=${java.net.URLEncoder.encode(path, "UTF-8")}")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", "Bearer ${_endpoint.value.token}")
+                connectTimeout = 7_000
+                readTimeout = 7_000
+            }
+            if (conn.responseCode !in 200..299) {
+                conn.disconnect()
+                return@withContext null
+            }
+            conn.inputStream.bufferedReader().use { reader ->
+                val obj = JSONObject(reader.readText())
+                RemoteHarnessStatus(
+                    hasClaudeMd = obj.optBoolean("has_claude_md", false),
+                    hasAgentsMd = obj.optBoolean("has_agents_md", false),
+                    hasHarness = obj.optBoolean("has_harness", false),
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Host health snapshot from `GET /api/host/metrics` (broker v0.0.111+,
      * `broker/internal/hostmetrics`). Percentages are 0–100. Mirror of iOS
      * `SessionStore.HostMetrics`.
@@ -2783,6 +2830,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
         /** Upper bound on retained delete tombstones. */
         private const val TOMBSTONE_CAP = 500
+
+        /**
+         * The curated bootstrap prompt seeded when the user taps "Set up agent
+         * harness" (Part B). Audits the repo and writes a CLAUDE.md + AGENTS.md
+         * with VERIFIED gate commands, asking before committing. Mirror of iOS
+         * `SessionStore.harnessBootstrapPrompt`.
+         */
+        const val HARNESS_BOOTSTRAP_PROMPT =
+            "Audit this repository and set up its agent harness. Identify the real " +
+                "build, test, and lint commands by inspecting the project (do not guess) " +
+                "and verify each one actually runs. Then write a concise CLAUDE.md and " +
+                "AGENTS.md documenting those verified gate commands and the project " +
+                "layout, and propose sensible CI gates. Ask me before committing anything."
 
         /**
          * Classify a broker `SessionStatus.phase` as live/running vs
