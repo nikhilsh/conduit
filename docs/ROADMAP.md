@@ -37,10 +37,6 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 
 ### Next
 
-- **ACP (Agent Client Protocol) backend** — the AgentBackend registry is
-  protocol-keyed; gemini-cli is the pilot ACP agent (see
-  [IN-PROGRESS.md](IN-PROGRESS.md)); `pi` as native `pi --mode rpc` is a
-  later candidate.
 - **Push-driven Live Activity updates** — the relay already supports the APNs
   `.push-type.liveactivity` topic; drive lock-screen turn-progress LAs via push.
 - **Per-identity readiness/push (multi-tenant)** — readiness `signed_in` is
@@ -51,9 +47,6 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 
 - **Google Play distribution** — AAB build, data-safety form, Play-signing SHA
   into the Firebase API-key restriction.
-- **VPS backup/disaster-recovery helper** — a `conduit backup` doc or script for
-  the tier-1 secrets tarball (`.p8` APNs key, systemd unit with pinned token,
-  agent creds); GH/Cloudflare secret stores are write-only and are not a backup.
 
 ---
 
