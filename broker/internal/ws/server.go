@@ -75,6 +75,13 @@ type Server struct {
 	// (pushIdentity); per-identity keying in the registry is forward
 	// compat for a future multi-tenant broker.
 	Push *push.Registry
+	// LATokens is the per-(identity,session) Live Activity push-token registry.
+	// LA tokens are session-scoped and distinct from the global alert token.
+	// Nil-safe: LA registration is a no-op when nil.
+	LATokens *push.LARegistry
+	// LASender is the push.Sender used to deliver LA content-state pushes.
+	// Typically the same relay sender wired for alert APNs. Nil-safe.
+	LASender push.Sender
 	// Dispatcher fans out Payload to every registered device via the
 	// per-platform senders. Nil-safe: POST /api/push/test returns 503
 	// when nil. Set via WithDispatcher.
@@ -124,6 +131,32 @@ func (s *Server) WithOAuth(mgr *oauth.Manager) *Server {
 func (s *Server) WithPush(reg *push.Registry) *Server {
 	s.Push = reg
 	return s
+}
+
+// WithLARegistry wires the Live Activity token registry into the server.
+// Fluent, nil-safe: without it, apns-liveactivity registration is a no-op.
+func (s *Server) WithLARegistry(r *push.LARegistry) *Server {
+	s.LATokens = r
+	s.rewireLASender()
+	return s
+}
+
+// WithLASender wires the Sender used to deliver LA content-state pushes.
+// Typically called with the same relay sender used for alert APNs.
+// Fluent, nil-safe. Must be called after WithLARegistry if both are set.
+func (s *Server) WithLASender(sender push.Sender) *Server {
+	s.LASender = sender
+	s.rewireLASender()
+	return s
+}
+
+// rewireLASender wires the LA registry + sender into the session Manager
+// whenever either is updated. No-op if Sessions is nil.
+func (s *Server) rewireLASender() {
+	if s.Sessions == nil || s.LATokens == nil || s.LASender == nil {
+		return
+	}
+	s.Sessions.SetLASender(s.LATokens, s.LASender, pushIdentity)
 }
 
 // WithDispatcher wires the push Dispatcher into the server. The

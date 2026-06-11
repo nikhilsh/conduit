@@ -173,6 +173,11 @@ func runUp(args []string) int {
 			pushSenders[push.PlatformAPNs] = relaySender
 			pushSenders[push.PlatformFCM] = relaySender
 			log.Printf("push relay: configured relay=%s", relayURL)
+			// Wire Live Activity: use the same relay sender for LA content-state
+			// pushes. LA tokens are session-scoped (LARegistry) and distinct from
+			// the global alert registry.
+			laReg := push.NewLARegistry()
+			srv.WithLARegistry(laReg).WithLASender(relaySender)
 		}
 	}
 	pushSenders[push.PlatformUnifiedPush] = push.NewUnifiedPushSender()

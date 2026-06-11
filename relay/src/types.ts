@@ -7,6 +7,13 @@ export interface PushPayload {
   session_id?: string;
   box?: string;
   category?: "alert" | "liveactivity";
+  // Live Activity fields (category="liveactivity" only).
+  // event is the APNs activity event: "update" or "end".
+  event?: "update" | "end";
+  // content_state is the broker-supplied TurnActivityContentState object
+  // forwarded verbatim into aps."content-state". Keys must match the iOS
+  // Codable (epoch-millis Int timestamps, see shared contract).
+  content_state?: Record<string, unknown>;
 }
 
 export interface SendRequest {

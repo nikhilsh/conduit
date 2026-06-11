@@ -229,3 +229,96 @@ func TestInstallCredMintAndReuse(t *testing.T) {
 		t.Errorf("perm=%o, want 600", fi.Mode().Perm())
 	}
 }
+
+// TestRelaySenderLAPayload verifies that a liveactivity Payload is forwarded to
+// the relay with the correct content_state, event, and category fields.
+func TestRelaySenderLAPayload(t *testing.T) {
+	var got relaySendBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	sender, err := NewRelaySender(srv.URL, filepath.Join(dir, "push-install.json"))
+	if err != nil {
+		t.Fatalf("NewRelaySender: %v", err)
+	}
+
+	cs := map[string]any{
+		"status":      "running",
+		"startedAtMs": int64(1749600000000),
+		"syncedAtMs":  int64(1749600005000),
+		"tokensIn":    int64(1234),
+		"tokensOut":   int64(56),
+		"currentTool": "Read",
+	}
+	payload := Payload{
+		Title:        "claude",
+		Body:         "Turn in progress",
+		SessionID:    "sess-la",
+		Category:     "liveactivity",
+		Event:        "update",
+		ContentState: cs,
+	}
+	token := DeviceToken{Platform: PlatformAPNs, Token: "la-device-token"}
+	if err := sender.Send(context.Background(), token, payload); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if got.Payload.Category != "liveactivity" {
+		t.Errorf("category=%q, want liveactivity", got.Payload.Category)
+	}
+	if got.Payload.Event != "update" {
+		t.Errorf("event=%q, want update", got.Payload.Event)
+	}
+	if got.Payload.SessionID != "sess-la" {
+		t.Errorf("session_id=%q, want sess-la", got.Payload.SessionID)
+	}
+	if got.Payload.ContentState == nil {
+		t.Fatal("content_state is nil in relay body")
+	}
+	// Verify epoch-millis timestamps survived the round-trip.
+	if v, ok := got.Payload.ContentState["startedAtMs"]; !ok {
+		t.Error("content_state missing startedAtMs")
+	} else {
+		// JSON numbers decode as float64 by default.
+		if f, ok := v.(float64); !ok || f != 1749600000000 {
+			t.Errorf("startedAtMs = %v, want 1749600000000", v)
+		}
+	}
+	if v, ok := got.Payload.ContentState["currentTool"]; !ok || v != "Read" {
+		t.Errorf("currentTool = %v, want Read", v)
+	}
+}
+
+// TestRelaySenderLAEndEvent verifies that event="end" is forwarded correctly.
+func TestRelaySenderLAEndEvent(t *testing.T) {
+	var got relaySendBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	sender, _ := NewRelaySender(srv.URL, filepath.Join(dir, "push-install.json"))
+
+	payload := Payload{
+		Category:     "liveactivity",
+		Event:        "end",
+		SessionID:    "sess-end",
+		ContentState: map[string]any{"status": "exited"},
+	}
+	_ = sender.Send(context.Background(), DeviceToken{Platform: PlatformAPNs, Token: "tok"}, payload)
+
+	if got.Payload.Event != "end" {
+		t.Errorf("event=%q, want end", got.Payload.Event)
+	}
+	if s, ok := got.Payload.ContentState["status"]; !ok || s != "exited" {
+		t.Errorf("content_state.status = %v, want exited", s)
+	}
+}

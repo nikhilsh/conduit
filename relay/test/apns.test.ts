@@ -103,6 +103,100 @@ describe("sendApns", () => {
     expect(headers!.get("apns-push-type")).toBe("liveactivity");
   });
 
+  it("uses apns-priority 5 for liveactivity and 10 for alert", async () => {
+    let laPriority = "";
+    let alertPriority = "";
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      const h = new Headers(init?.headers);
+      laPriority = h.get("apns-priority") ?? "";
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(env(), "tok", { ...payload, category: "liveactivity" }, "production");
+    expect(laPriority).toBe("5");
+
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      const h = new Headers(init?.headers);
+      alertPriority = h.get("apns-priority") ?? "";
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(env(), "tok", payload, "production");
+    expect(alertPriority).toBe("10");
+  });
+
+  it("forwards content_state verbatim and uses broker event for liveactivity", async () => {
+    let body: unknown = null;
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      body = JSON.parse(init?.body as string);
+      return new Response(null, { status: 200 });
+    });
+    const contentState = {
+      status: "running",
+      startedAtMs: 1749600000000,
+      syncedAtMs: 1749600005000,
+      tokensIn: 1234,
+      tokensOut: 56,
+      currentTool: "Bash",
+    };
+    await sendApns(
+      env(),
+      "tok",
+      {
+        ...payload,
+        category: "liveactivity",
+        event: "update",
+        content_state: contentState,
+      },
+      "production",
+    );
+    const b = body as Record<string, any>;
+    expect(b.aps.event).toBe("update");
+    expect(b.aps["content-state"]).toEqual(contentState);
+    // No alert key on LA updates (per spec).
+    expect(b.aps.alert).toBeUndefined();
+  });
+
+  it("uses event=end and content_state for liveactivity end event", async () => {
+    let body: unknown = null;
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      body = JSON.parse(init?.body as string);
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(
+      env(),
+      "tok",
+      {
+        ...payload,
+        category: "liveactivity",
+        event: "end",
+        content_state: { status: "exited", startedAtMs: 1749600000000, syncedAtMs: 1749600010000 },
+      },
+      "production",
+    );
+    const b = body as Record<string, any>;
+    expect(b.aps.event).toBe("end");
+    expect(b.aps["content-state"].status).toBe("exited");
+  });
+
+  it("falls back to update event when event is absent in LA payload", async () => {
+    let body: unknown = null;
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      body = JSON.parse(init?.body as string);
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(
+      env(),
+      "tok",
+      { ...payload, category: "liveactivity", content_state: { status: "running" } },
+      "production",
+    );
+    const b = body as Record<string, any>;
+    expect(b.aps.event).toBe("update");
+  });
+
   it("maps 410 Unregistered to gone", async () => {
     mockFetch([
       [

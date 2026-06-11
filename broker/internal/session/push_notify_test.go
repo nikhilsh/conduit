@@ -9,6 +9,53 @@ import (
 	"github.com/nikhilsh/conduit/broker/internal/push"
 )
 
+// recordingSender captures Sender.Send calls for LA push tests.
+type recordingSender struct {
+	mu      sync.Mutex
+	calls   []laSendCall
+	errFunc func(i int) error // returns error for call index i; nil means no error
+}
+
+type laSendCall struct {
+	token   push.DeviceToken
+	payload push.Payload
+}
+
+func (r *recordingSender) Send(_ context.Context, tok push.DeviceToken, p push.Payload) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	idx := len(r.calls)
+	r.calls = append(r.calls, laSendCall{token: tok, payload: p})
+	if r.errFunc != nil {
+		return r.errFunc(idx)
+	}
+	return nil
+}
+
+func (r *recordingSender) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func (r *recordingSender) lastPayload() push.Payload {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.calls) == 0 {
+		return push.Payload{}
+	}
+	return r.calls[len(r.calls)-1].payload
+}
+
+func (r *recordingSender) lastToken() push.DeviceToken {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.calls) == 0 {
+		return push.DeviceToken{}
+	}
+	return r.calls[len(r.calls)-1].token
+}
+
 // recordingNotifier captures every Notify call.
 type recordingNotifier struct {
 	mu   sync.Mutex
@@ -210,5 +257,134 @@ func TestPushNotifyDisplayName(t *testing.T) {
 	}
 	if n.last().Title != "My Project" {
 		t.Errorf("title = %q, want \"My Project\"", n.last().Title)
+	}
+}
+
+// ---- Live Activity emission tests ----
+
+// newBareSessionWithLA builds a bare session wired with an LA registry and sender.
+func newBareSessionWithLA(id string) (*Session, *push.LARegistry, *recordingSender) {
+	s := bareSession(id)
+	s.Assistant = "claude"
+	reg := push.NewLARegistry()
+	sender := &recordingSender{}
+	s.SetLAState(reg, sender, "broker")
+	return s, reg, sender
+}
+
+// TestLAEmit_TurnEnd verifies that notifyLATurnEnd sends an "end" event when
+// an LA token is registered, then drops the token (so no further updates fire).
+func TestLAEmit_TurnEnd(t *testing.T) {
+	s, reg, sender := newBareSessionWithLA("sess-la-1")
+	reg.SetLA("broker", "sess-la-1", "la-tok-abc")
+
+	s.notifyLATurnEnd()
+
+	if sender.count() != 1 {
+		t.Fatalf("expected 1 LA send, got %d", sender.count())
+	}
+	p := sender.lastPayload()
+	if p.Category != "liveactivity" {
+		t.Errorf("category = %q, want liveactivity", p.Category)
+	}
+	if p.Event != "end" {
+		t.Errorf("event = %q, want end", p.Event)
+	}
+	if p.SessionID != "sess-la-1" {
+		t.Errorf("session_id = %q, want sess-la-1", p.SessionID)
+	}
+	cs := p.ContentState
+	if cs == nil {
+		t.Fatal("content_state is nil")
+	}
+	if cs["status"] != "exited" {
+		t.Errorf("content_state.status = %v, want exited", cs["status"])
+	}
+	// Timestamps must be integers (epoch-millis).
+	if _, ok := cs["syncedAtMs"].(int64); !ok {
+		t.Errorf("syncedAtMs type = %T, want int64", cs["syncedAtMs"])
+	}
+	if _, ok := cs["startedAtMs"].(int64); !ok {
+		t.Errorf("startedAtMs type = %T, want int64", cs["startedAtMs"])
+	}
+	// Token was sent to the correct device token.
+	if sender.lastToken().Token != "la-tok-abc" {
+		t.Errorf("sent to token %q, want la-tok-abc", sender.lastToken().Token)
+	}
+	// After end, the token must be dropped from the registry.
+	if tok := reg.GetLA("broker", "sess-la-1"); tok != "" {
+		t.Errorf("LA token not dropped after end: %q", tok)
+	}
+}
+
+// TestLAEmit_NoToken verifies that no send occurs when no LA token is registered.
+func TestLAEmit_NoToken(t *testing.T) {
+	s, _, sender := newBareSessionWithLA("sess-la-2")
+	// No token registered.
+	s.notifyLATurnEnd()
+	if sender.count() != 0 {
+		t.Fatalf("expected 0 sends (no token), got %d", sender.count())
+	}
+}
+
+// TestLAEmit_TurnEnd_AlertNotAffected verifies that alert notifications still
+// fire for subscribers=0 even when LA is wired.
+func TestLAEmit_TurnEnd_AlertNotAffected(t *testing.T) {
+	alertN := &recordingNotifier{}
+	s, reg, _ := newBareSessionWithLA("sess-la-3")
+	s.SetPushNotifier(alertN, "broker")
+	reg.SetLA("broker", "sess-la-3", "la-tok")
+
+	// Pin clock so debounce doesn't coalesce.
+	fixed := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	orig := pushNow
+	pushNow = func() time.Time { return fixed }
+	defer func() { pushNow = orig }()
+
+	s.maybeNotifyTurnEnd()
+
+	// Alert notification must fire (no subscribers).
+	if alertN.count() != 1 {
+		t.Fatalf("alert notification count = %d, want 1", alertN.count())
+	}
+}
+
+// TestLAEmit_ContentStateKeys verifies content_state has all required fields
+// after SetLACurrentTool + notifyLATurnEnd.
+func TestLAEmit_ContentStateKeys(t *testing.T) {
+	s, reg, sender := newBareSessionWithLA("sess-la-4")
+	reg.SetLA("broker", "sess-la-4", "la-tok-xyz")
+
+	// Simulate a tool use.
+	// Pin time so turnStartedAt is deterministic.
+	t0 := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	pushNow = func() time.Time { return t0 }
+	defer func() { pushNow = time.Now }()
+
+	// Tool change: debounce window prevents an immediate emit — reset lastLA.
+	s.laState.mu.Lock()
+	s.laState.lastLA = time.Time{} // clear so maybeEmitLAUpdate fires
+	s.laState.mu.Unlock()
+	s.SetLACurrentTool("Bash")
+
+	if sender.count() < 1 {
+		t.Fatal("expected at least one LA send after SetLACurrentTool")
+	}
+	p := sender.lastPayload()
+	cs := p.ContentState
+	if cs == nil {
+		t.Fatal("content_state is nil")
+	}
+	if cs["currentTool"] != "Bash" {
+		t.Errorf("currentTool = %v, want Bash", cs["currentTool"])
+	}
+	if cs["status"] != "running" {
+		t.Errorf("status = %v, want running", cs["status"])
+	}
+	if v, ok := cs["startedAtMs"].(int64); !ok || v == 0 {
+		t.Errorf("startedAtMs = %v (type %T), want non-zero int64", cs["startedAtMs"], cs["startedAtMs"])
+	}
+	if v, ok := cs["syncedAtMs"].(int64); !ok || v == 0 {
+		t.Errorf("syncedAtMs = %v (type %T), want non-zero int64", cs["syncedAtMs"], cs["syncedAtMs"])
 	}
 }

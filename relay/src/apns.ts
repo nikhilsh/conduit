@@ -56,17 +56,17 @@ async function providerToken(env: ApnsEnv, now: number): Promise<string> {
 function buildBody(payload: PushPayload): string {
   const isLiveActivity = payload.category === "liveactivity";
   if (isLiveActivity) {
-    // Live Activity updates use a content-state envelope. The broker fills
-    // the real shape later; we forward title/body as a minimal update.
+    // Live Activity updates: forward the broker-supplied content_state verbatim
+    // into aps."content-state" so the iOS TurnActivityContentState Codable
+    // receives exactly the keys the broker computed. Use the broker's event
+    // field ("update"|"end"); fall back to "update" if absent (forward compat).
+    const event = payload.event ?? "update";
+    const contentState = payload.content_state ?? { title: payload.title, body: payload.body };
     return JSON.stringify({
       aps: {
         timestamp: Math.floor(Date.now() / 1000),
-        event: "update",
-        "content-state": {
-          title: payload.title,
-          body: payload.body,
-        },
-        alert: { title: payload.title, body: payload.body },
+        event,
+        "content-state": contentState,
       },
       session_id: payload.session_id,
       box: payload.box,
@@ -96,13 +96,17 @@ export async function sendApns(
   const host =
     pushEnv === "sandbox" ? "api.sandbox.push.apple.com" : "api.push.apple.com";
 
+  // Live Activity updates use priority 5 (energy-efficient, Apple throttles
+  // priority-10 LA pushes heavily). Alert pushes keep priority 10.
+  const apnsPriority = isLiveActivity ? "5" : "10";
+
   const resp = await fetch(`https://${host}/3/device/${token}`, {
     method: "POST",
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": topic,
       "apns-push-type": isLiveActivity ? "liveactivity" : "alert",
-      "apns-priority": "10",
+      "apns-priority": apnsPriority,
       "content-type": "application/json",
     },
     body: buildBody(payload),

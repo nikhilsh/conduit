@@ -60,6 +60,67 @@ type Payload struct {
 	Title     string
 	Body      string
 	SessionID string
+	// Category, when set, routes through the relay's category-specific path.
+	// "liveactivity" causes the relay to emit an APNs Live Activity push instead
+	// of a standard alert. Empty = alert (default).
+	Category string
+	// ContentState is the Live Activity content-state object (category="liveactivity"
+	// only). The relay forwards it verbatim into aps."content-state". Keys match the
+	// iOS TurnActivityContentState Codable — see the shared contract in
+	// docs/push-la-spec.md. Nil for alert pushes.
+	ContentState map[string]any
+	// Event is the APNs Live Activity event type: "update" or "end". Only used
+	// when Category="liveactivity".
+	Event string
+}
+
+// LARegistry is a thread-safe per-(identity,session) Live Activity push-token
+// store. Separate from the main alert Registry: LA tokens are session-scoped
+// (one per session, replaced on update, dropped on turn-end) rather than
+// device-global. Zero value is not usable; call NewLARegistry.
+type LARegistry struct {
+	mu sync.Mutex
+	// (identity, session_id) -> token
+	tokens map[laKey]string
+}
+
+type laKey struct {
+	Identity  string
+	SessionID string
+}
+
+// NewLARegistry returns an empty in-memory LA token store.
+func NewLARegistry() *LARegistry {
+	return &LARegistry{tokens: make(map[laKey]string)}
+}
+
+// SetLA stores or replaces the LA token for (identity, sessionID). An empty
+// token is accepted and clears any existing entry (same as DropLA).
+func (r *LARegistry) SetLA(identity, sessionID, token string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := laKey{Identity: identity, SessionID: sessionID}
+	if token == "" {
+		delete(r.tokens, k)
+		return
+	}
+	r.tokens[k] = token
+}
+
+// GetLA returns the registered LA token for (identity, sessionID), or ""
+// if none is registered.
+func (r *LARegistry) GetLA(identity, sessionID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.tokens[laKey{Identity: identity, SessionID: sessionID}]
+}
+
+// DropLA removes the LA token for (identity, sessionID). Safe to call when
+// no token is registered (no-op).
+func (r *LARegistry) DropLA(identity, sessionID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tokens, laKey{Identity: identity, SessionID: sessionID})
 }
 
 // Notifier delivers a Payload to every device registered for an identity.
