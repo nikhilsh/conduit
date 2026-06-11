@@ -528,7 +528,10 @@ func TestGoldenProviderForAssistant(t *testing.T) {
 
 func TestGoldenAllCredentialProviders(t *testing.T) {
 	got := allCredentialProviders()
-	want := []string{"anthropic", "openai"}
+	// opencode is included so a session's ephemeral HOME gets the host's
+	// opencode credentials (auth.json + opencode.jsonc) mirrored in, letting
+	// the spawned `opencode serve` use a real provider instead of Zen.
+	want := []string{"anthropic", "openai", "opencode"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("allCredentialProviders() = %v, want %v", got, want)
 	}
@@ -557,7 +560,8 @@ func buildTestRegistry(t *testing.T, tomls map[string]string) *agents.Registry {
 }
 
 func TestGoldenCredentialProvidersFromRegistry(t *testing.T) {
-	// Full claude+codex registry → same result as allCredentialProviders.
+	// Full claude+codex registry → derives "anthropic" and "openai" from the
+	// adapters' login_provider fields (set via applyLegacyDefaults).
 	reg := buildTestRegistry(t, map[string]string{
 		"claude.toml": "name=\"claude\"\ncommand=[\"claude\"]\nworkdir=\"/w\"\n",
 		"codex.toml":  "name=\"codex\"\ncommand=[\"codex\"]\nworkdir=\"/w\"\n",
@@ -573,9 +577,11 @@ func TestGoldenCredentialProvidersFromRegistry(t *testing.T) {
 		"shell.toml": "name=\"shell\"\ncommand=[\"bash\"]\nworkdir=\"/w\"\n",
 	})
 	got2 := credentialProvidersFromRegistry(reg2)
-	// No providers → falls back to allCredentialProviders().
-	if !reflect.DeepEqual(got2, want) {
-		t.Fatalf("empty-provider fallback: got %v, want %v", got2, want)
+	// No providers → falls back to allCredentialProviders() which now includes
+	// "opencode" so the Zen fallback sessions also get opencode creds mirrored.
+	wantFallback := []string{"anthropic", "openai", "opencode"}
+	if !reflect.DeepEqual(got2, wantFallback) {
+		t.Fatalf("empty-provider fallback: got %v, want %v", got2, wantFallback)
 	}
 
 	// Registry with a custom login_provider → included.

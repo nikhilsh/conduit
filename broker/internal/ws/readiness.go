@@ -214,6 +214,9 @@ func hostCredFile(provider string) string {
 		return home + "/.claude/.credentials.json"
 	case "openai":
 		return home + "/.codex/auth.json"
+	case "opencode":
+		// opencode stores its auth under the XDG data dir.
+		return home + "/.local/share/opencode/auth.json"
 	default:
 		return ""
 	}
@@ -226,6 +229,8 @@ func hostCredFile(provider string) string {
 //   - anthropic → claudeAiOauth.expiresAt (epoch ms)
 //   - openai    → exp claim of tokens.access_token JWT (epoch s → ms),
 //     falling back to last_refresh RFC3339 string.
+//   - opencode  → file present + valid JSON → signed-in, no expiry extracted
+//     (opencode auth.json is per-provider and format varies).
 func credentialExpiryMillisForReadiness(provider string, data []byte) (int64, bool) {
 	switch provider {
 	case "anthropic":
