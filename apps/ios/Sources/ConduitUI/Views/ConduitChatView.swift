@@ -1021,8 +1021,76 @@ extension ConduitUI {
 
         // MARK: Composer
 
+        // MARK: - Queued Next panel
+
+        /// Entries currently held in the "Queued Next" panel for this session.
+        private var queuedTurnEntries: [PendingChat] {
+            store.pendingChats.queuedTurnEntries(for: session.id)
+        }
+
+        /// True when the agent for this session supports steer injection.
+        private var sessionSupportsSteer: Bool {
+            store.supportsSteer(sessionID: session.id)
+        }
+
+        @ViewBuilder
+        private var queuedNextPanel: some View {
+            let entries = queuedTurnEntries
+            if !entries.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    // Panel header with optional count pill when >1 entry.
+                    HStack(spacing: 6) {
+                        Text("Queued Next")
+                            .font(neon.mono(11).weight(.bold))
+                            .foregroundStyle(neon.textDim)
+                            .textCase(.uppercase)
+                        if entries.count > 1 {
+                            Text("\(entries.count)")
+                                .font(neon.mono(10).weight(.bold))
+                                .foregroundStyle(neon.accentText)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(neon.accent))
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+
+                    ForEach(entries, id: \.localID) { entry in
+                        QueuedNextCard(
+                            entry: entry,
+                            supportsSteer: sessionSupportsSteer,
+                            onSteer: {
+                                store.steerQueuedEntry(
+                                    sessionID: session.id,
+                                    localID: entry.localID,
+                                    message: entry.message
+                                )
+                            },
+                            onCancel: {
+                                store.cancelQueuedEntry(
+                                    sessionID: session.id,
+                                    localID: entry.localID
+                                )
+                            }
+                        )
+                        .padding(.horizontal, 12)
+                    }
+                    .padding(.bottom, 4)
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .animation(.easeOut(duration: 0.18), value: entries.count)
+            }
+        }
+
         private var composer: some View {
             VStack(alignment: .leading, spacing: 0) {
+                // "Queued Next" panel: sits above the composer text field,
+                // below any plan/turn-progress UI, visible only while a turn
+                // is active and the user has queued messages.
+                queuedNextPanel
+
                 // Picked-file chips + any transient pick/upload error
                 // ride ABOVE the text field so they don't crowd the
                 // send button, and stay inside the keyboard-tracking
@@ -1056,7 +1124,7 @@ extension ConduitUI {
                     endPoint: .bottom
                 )
             )
-            // Accent-tinted glow rising up from the composer — a quiet
+            // Accent-tinted glow rising up from the composer -- a quiet
             // ambient "you're talking to X" cue without painting the
             // surface. Low alpha + soft radius so it reads as ambient.
             .shadow(
@@ -1106,7 +1174,7 @@ extension ConduitUI {
                 .onSubmit { send() }
 
                 // Send is enabled by a non-empty draft OR at least one
-                // pending attachment (attachment-only sends are valid —
+                // pending attachment (attachment-only sends are valid --
                 // the reference line is the message). Disabled mid-upload
                 // so a double-tap can't fire two sends.
                 let hasDraft = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1118,6 +1186,15 @@ extension ConduitUI {
                                 ProgressView()
                                     .controlSize(.small)
                                     .frame(width: 28, height: 28)
+                            } else if isAgentWorking && sessionSupportsSteer {
+                                // Codex turn active: steer glyph signals the message
+                                // will be injected into the running turn.
+                                Image(systemName: "arrow.turn.down.right")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundStyle(neon.accentText)
+                                    .frame(width: 36, height: 36)
+                                    .background(Circle().fill(neon.accent))
+                                    .neonGlowBox(neon.glow ? neon.glowBox : nil)
                             } else {
                                 Image(systemName: "arrow.up")
                                     .font(.system(size: 16, weight: .bold))
@@ -1130,7 +1207,7 @@ extension ConduitUI {
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)
-                    .accessibilityLabel("Send")
+                    .accessibilityLabel(isAgentWorking && sessionSupportsSteer ? "Steer" : "Send")
                 } else if isAgentWorking {
                     // Empty composer while the agent is producing output: the
                     // send affordance becomes a Stop button that interrupts the
@@ -1263,9 +1340,110 @@ private struct ConduitChatEmptyState: View {
     }
 }
 
+// MARK: - QueuedNextCard
+//
+// One card in the "Queued Next" panel. Shows a truncated preview, a status
+// badge (Queued / Steering / Retrying), an optional Steer button (codex only),
+// and a cancel (X) button.
+
+private struct QueuedNextCard: View {
+    let entry: PendingChat
+    /// True when the agent supports steer (codex app-server).
+    let supportsSteer: Bool
+    let onSteer: () -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.neonTheme) private var neon
+
+    /// Badge label per spec (exact strings).
+    private var badgeLabel: String {
+        switch entry.kind {
+        case .normal:      return "Queued"
+        case .queuedTurn:  return "Queued"
+        case .steering:    return "Steering"
+        case .retrying:    return "Retrying"
+        }
+    }
+
+    /// Badge tint: Queued = accent, Steering = accentBright (brightest),
+    /// Retrying = yellow (warning). Uses existing theme tokens.
+    private var badgeColor: Color {
+        switch entry.kind {
+        case .normal, .queuedTurn: return neon.accent
+        case .steering:             return neon.accentBright
+        case .retrying:             return neon.yellow
+        }
+    }
+
+    /// Steer button is enabled only when not already in-flight.
+    private var canSteer: Bool {
+        supportsSteer && (entry.kind == .queuedTurn || entry.kind == .retrying)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Message preview -- 1-2 lines, truncated.
+            Text(entry.message)
+                .font(neon.sans(13))
+                .foregroundStyle(neon.text)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Status badge.
+            Text(badgeLabel)
+                .font(neon.mono(10).weight(.bold))
+                .foregroundStyle(entry.kind == .steering ? neon.surfaceSolid : badgeColor)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule().fill(entry.kind == .steering ? badgeColor : badgeColor.opacity(0.15))
+                )
+
+            // Steer button (codex only, not while in-flight).
+            if supportsSteer {
+                Button(action: onSteer) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Steer")
+                            .font(neon.sans(12).weight(.semibold))
+                    }
+                    .foregroundStyle(canSteer ? neon.accent : neon.textDim)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSteer)
+                .accessibilityLabel("Steer this message into the running turn")
+            }
+
+            // Cancel (X) button.
+            Button(action: onCancel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(neon.textDim)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(neon.surface))
+                    .overlay(Circle().stroke(neon.border, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel queued message")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(neon.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(neon.border, lineWidth: 1)
+        )
+    }
+}
+
 // MARK: - ConduitEventRow
 //
-// Per-message dispatch — routes `ConversationItem` to the right inline
+// Per-message dispatch -- routes `ConversationItem` to the right inline
 // card (pending input, handoff, subagent, tool, or chat message).
 
 /// Holds the last scroll-proximity band across renders WITHOUT being a

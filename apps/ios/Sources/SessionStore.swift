@@ -274,6 +274,11 @@ struct AgentDescriptorSupports: Decodable, Equatable {
     var planMode: Bool
     /// Whether the account-usage / limits card has a data source.
     var usage: Bool
+    /// Whether `turn/steer` injection is available (codex app-server only).
+    /// When true the "Queued Next" panel shows the "Steer" button and the
+    /// send button becomes the steer glyph while a turn is active.
+    /// Default false so older brokers and claude sessions are unaffected.
+    var steer: Bool
 
     enum CodingKeys: String, CodingKey {
         case compact
@@ -281,6 +286,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         case effort
         case planMode = "plan_mode"
         case usage
+        case steer
     }
 
     init(
@@ -288,13 +294,15 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         askUserQuestion: Bool = false,
         effort: Bool = true,
         planMode: Bool = false,
-        usage: Bool = false
+        usage: Bool = false,
+        steer: Bool = false
     ) {
         self.compact = compact
         self.askUserQuestion = askUserQuestion
         self.effort = effort
         self.planMode = planMode
         self.usage = usage
+        self.steer = steer
     }
 
     init(from decoder: Decoder) throws {
@@ -304,6 +312,7 @@ struct AgentDescriptorSupports: Decodable, Equatable {
         effort          = try c.decodeIfPresent(Bool.self, forKey: .effort)          ?? true
         planMode        = try c.decodeIfPresent(Bool.self, forKey: .planMode)        ?? false
         usage           = try c.decodeIfPresent(Bool.self, forKey: .usage)           ?? false
+        steer           = try c.decodeIfPresent(Bool.self, forKey: .steer)           ?? false
     }
 }
 
@@ -2114,14 +2123,39 @@ final class SessionStore {
         )
     }
 
+    /// True when a turn is currently active for the given session. Driven by
+    /// the broker's authoritative `turn_active` field from the status frame.
+    func isTurnActive(sessionID: String) -> Bool {
+        statusBySession[sessionID]?.turnActive == true
+    }
+
+    /// True when the agent for this session supports `turn/steer` injection
+    /// (codex app-server only). Gated on `supports.steer` from the agent
+    /// descriptor -- never hardcoded by agent name.
+    func supportsSteer(sessionID: String) -> Bool {
+        let assistant = sessions.first(where: { $0.id == sessionID })?.assistant ?? ""
+        return agentDescriptors[assistant.lowercased()]?.supports.steer ?? false
+    }
+
     func sendChat(sessionID: String, message: String) {
         // Slash-command routing: intercept recognised `/`-commands before
         // they reach the agent. Pass-through commands (Claude only) fall
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if handleSlashCommand(sessionID: sessionID, message: message) { return }
+
+        // QUEUED-NEXT GATE: if a turn is active, queue the message in the
+        // "Queued Next" panel instead of delivering immediately. For codex
+        // (supports.steer), queue AND immediately attempt a steer so the
+        // message is injected into the running turn. For all other agents
+        // (claude, etc.), hold it and auto-send when the turn ends.
+        if isTurnActive(sessionID: sessionID) {
+            sendChatQueued(sessionID: sessionID, message: message)
+            return
+        }
+
         // Bug #2: previously this method returned early when `client`
-        // was nil — that swallowed the optimistic local echo *and* the
+        // was nil -- that swallowed the optimistic local echo *and* the
         // outbound WS write, so typing into the composer simply
         // disappeared if the user happened to send during a reconnect
         // window. Always materialize the local echo first so the user
@@ -2185,14 +2219,14 @@ final class SessionStore {
         conversationLog[sessionID, default: []].append(item)
         let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
         chatLog[sessionID, default: []].append(localEvent)
-        // Funnel: first ever turn sent — first session, no prior conversation items.
+        // Funnel: first ever turn sent -- first session, no prior conversation items.
         let priorItems = (conversationLog[sessionID] ?? []).filter { !$0.id.hasPrefix("local-") }
         if sessions.count <= 1, priorItems.isEmpty {
             Telemetry.breadcrumb("onboarding", OnboardingStep.firstTurnSent,
                 data: ["session": sessionID,
                        "chars": "\(message.count)"])
         }
-        // The user has answered — clear the AI quick-reply chips so they
+        // The user has answered -- clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233).
         quickReplies[sessionID] = nil
         if useRustStore {
@@ -2201,16 +2235,101 @@ final class SessionStore {
         }
         // Register the message as pending and persist BEFORE attempting any
         // WS write. This is the fix for the device-reported "send then
-        // background → message lost" bug: the queue (and the persisted copy)
+        // background -> message lost" bug: the queue (and the persisted copy)
         // outlives a fire-and-forget WS write that the OS may suspend before
         // it flushes, and outlives `client == nil` during a reconnect window.
-        // The flush — on connect / foreground / reconnect — re-delivers it.
+        // The flush -- on connect / foreground / reconnect -- re-delivers it.
         pendingChats.enqueue(sessionID: sessionID, localID: localID, message: message, ts: now)
         Telemetry.breadcrumb("chat", "queued", data: ["session": sessionID, "chars": "\(message.count)"])
         // Attempt immediate delivery. If `client` is nil (reconnect window)
-        // we DON'T drop it — it stays queued for the next flush. Previously
+        // we DON'T drop it -- it stays queued for the next flush. Previously
         // a nil client here silently abandoned the WS write.
         attemptDeliver(sessionID: sessionID, localID: localID, message: message)
+    }
+
+    /// Queue a message in the "Queued Next" panel while a turn is active.
+    /// For codex (supports.steer) this immediately attempts a steer; for
+    /// all other agents (claude, etc.) it holds the entry and auto-sends
+    /// when the turn ends via `flushQueuedOnTurnComplete`.
+    ///
+    /// NOTE: The optimistic transcript echo is NOT created here -- the
+    /// panel card is the visual placeholder. The echo is created when the
+    /// entry is actually delivered (turn ends or steer succeeds).
+    private func sendChatQueued(sessionID: String, message: String) {
+        let now = conduitConversationTsString(epoch: Date().timeIntervalSince1970)
+        let localID = "local-\(UUID().uuidString)"
+        pendingChats.enqueueForActiveTurn(sessionID: sessionID, localID: localID, message: message, ts: now)
+        Telemetry.breadcrumb("chat", "queued for active turn",
+            data: ["session": sessionID, "chars": "\(message.count)",
+                   "supports_steer": supportsSteer(sessionID: sessionID) ? "1" : "0"])
+
+        if supportsSteer(sessionID: sessionID) {
+            // Codex: attempt immediate steer injection.
+            steerQueuedEntry(sessionID: sessionID, localID: localID, message: message)
+        }
+        // Claude / others: no-op here; flushQueuedOnTurnComplete fires on turn-end.
+    }
+
+    /// Attempt to steer a queued codex entry into the running turn by
+    /// delivering it via the normal chat-send path. The broker sees an active
+    /// turn and routes via `turn/steer`. On WS-write success the card clears;
+    /// on failure the kind flips to `.retrying` so the Steer button re-appears.
+    func steerQueuedEntry(sessionID: String, localID: String, message: String) {
+        guard let client else {
+            pendingChats.markRetrying(sessionID: sessionID, localID: localID)
+            return
+        }
+        pendingChats.markSteering(sessionID: sessionID, localID: localID)
+        Telemetry.breadcrumb("chat", "steer attempt",
+            data: ["session": sessionID, "local_id": localID])
+        Task {
+            do {
+                try await client.sendChat(sessionId: sessionID, msg: message)
+                // Steer ack: the broker injected the message. Clear the panel card.
+                self.pendingChats.markDelivered(sessionID: sessionID, localID: localID)
+                Telemetry.breadcrumb("chat", "steer ack",
+                    data: ["session": sessionID, "local_id": localID])
+            } catch {
+                // Steer failed: flip to retrying so the panel shows the Steer button.
+                self.pendingChats.markRetrying(sessionID: sessionID, localID: localID)
+                Telemetry.breadcrumb("chat", "steer failed -> retrying",
+                    data: ["session": sessionID, "local_id": localID])
+                Telemetry.capture(
+                    error: error,
+                    message: "iOS steer attempt failed",
+                    tags: ["surface": "ios", "phase": "steer"],
+                    extras: ["session": sessionID]
+                )
+            }
+        }
+    }
+
+    /// Cancel a queued-turn entry the user no longer wants to send.
+    /// Removes it from the panel and persists the updated queue.
+    func cancelQueuedEntry(sessionID: String, localID: String) {
+        pendingChats.markDelivered(sessionID: sessionID, localID: localID)
+        Telemetry.breadcrumb("chat", "queued entry cancelled",
+            data: ["session": sessionID, "local_id": localID])
+    }
+
+    /// Called when a turn transitions from active to idle for a session.
+    /// Delivers the OLDEST queued-turn entry via the normal send path
+    /// (which creates the optimistic echo and fires the WS write). Remaining
+    /// entries stay queued for the NEXT turn-complete. If the entry is
+    /// `.steering` it was already in flight; we skip it (delivery is
+    /// in-progress or just succeeded). Un-steered or `.retrying` codex
+    /// entries also flush here so nothing is lost.
+    func flushQueuedOnTurnComplete(sessionID: String) {
+        guard let entry = pendingChats.flushOnTurnComplete(sessionID: sessionID) else { return }
+        Telemetry.breadcrumb("chat", "flush-on-turn-complete",
+            data: ["session": sessionID, "local_id": entry.localID,
+                   "kind": entry.kind.rawValue])
+        // Remove the queued entry BEFORE re-sending so the queue doesn't
+        // accumulate a duplicate when sendChat enqueues it again as .normal.
+        pendingChats.markDelivered(sessionID: sessionID, localID: entry.localID)
+        // Route through the full sendChat path so the optimistic echo is
+        // created and the message is persisted via the normal enqueue(.normal).
+        sendChat(sessionID: sessionID, message: entry.message)
     }
 
     /// Attempt to deliver one queued message over the live WS, reporting the
@@ -2834,8 +2953,20 @@ final class SessionStore {
     // frame carries `reasoningEffort` / `cwd` / `startedAt` etc. and
     // a test confirms `statusBySession` reflects those fields end-to-end.
     func ingestStatus(_ status: SessionStatus) {
+        // Detect turn-active -> idle transition BEFORE overwriting statusBySession.
+        // When the prior status had turn_active=true and the new one is false/nil,
+        // a turn just ended -- flush ONE queued entry for the session.
+        let priorTurnActive = statusBySession[status.session]?.turnActive ?? false
+        let newTurnActive = status.turnActive ?? false
+        let turnJustCompleted = priorTurnActive && !newTurnActive
+
         statusBySession[status.session] = status
         if let p = status.preview { preview[status.session] = p }
+
+        // Flush one queued-turn entry now that the agent is idle.
+        if turnJustCompleted {
+            flushQueuedOnTurnComplete(sessionID: status.session)
+        }
         // Promote lifecycle from a non-terminal state using the phase the
         // broker actually reported — NOT a blanket `.live`. A status frame
         // for a recovered/exited session carries `phase: "exited…"`; that

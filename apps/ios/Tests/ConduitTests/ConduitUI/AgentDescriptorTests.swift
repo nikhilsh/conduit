@@ -306,9 +306,90 @@ struct AgentDescriptorGenericMetaTests {
         //   compact = false (don't show /compact for unknowns)
         //   effort  = true  (show effort UI unless explicitly disabled)
         //   usage   = false (don't show a limits card for unknowns)
+        //   steer   = false (don't show Steer button for unknowns)
         let d = AgentDescriptor()
         #expect(!d.supports.compact)
         #expect(d.supports.effort)
         #expect(!d.supports.usage)
+        #expect(!d.supports.steer)
+    }
+}
+
+// MARK: - supports.steer decode + gate (steer-ui-spec)
+
+@Suite("AgentDescriptorSupports — steer capability gate")
+struct AgentDescriptorSteerTests {
+
+    /// Codex app-server descriptor with steer=true (broker sets this).
+    @Test func codexSteerDecodeTrue() throws {
+        let json = """
+        {
+          "display_name": "Codex",
+          "login_provider": "openai",
+          "supports": {
+            "compact": false,
+            "ask_user_question": false,
+            "effort": true,
+            "plan_mode": false,
+            "usage": true,
+            "steer": true
+          }
+        }
+        """.data(using: .utf8)!
+        let d = try JSONDecoder().decode(AgentDescriptor.self, from: json)
+        #expect(d.supports.steer == true, "codex with steer:true must decode as supports.steer=true")
+    }
+
+    /// Claude descriptor without steer -- defaults to false.
+    @Test func claudeSteerDefaultsFalse() throws {
+        let json = """
+        {
+          "display_name": "Claude",
+          "login_provider": "anthropic",
+          "supports": {
+            "compact": true,
+            "ask_user_question": true,
+            "effort": true,
+            "plan_mode": true,
+            "usage": true
+          }
+        }
+        """.data(using: .utf8)!
+        let d = try JSONDecoder().decode(AgentDescriptor.self, from: json)
+        #expect(d.supports.steer == false, "claude without steer field must default to false")
+    }
+
+    /// Absent supports block defaults steer to false (old broker).
+    @Test func absentSupportsBlockDefaultsSteerFalse() throws {
+        let json = """
+        {
+          "display_name": "OldAgent",
+          "supports": {}
+        }
+        """.data(using: .utf8)!
+        let d = try JSONDecoder().decode(AgentDescriptor.self, from: json)
+        #expect(d.supports.steer == false, "missing steer key must default to false")
+    }
+
+    /// Explicit steer=false is decoded correctly.
+    @Test func explicitSteerFalseDecoded() throws {
+        let json = """
+        {
+          "display_name": "Codex",
+          "login_provider": "openai",
+          "supports": {
+            "effort": true,
+            "steer": false
+          }
+        }
+        """.data(using: .utf8)!
+        let d = try JSONDecoder().decode(AgentDescriptor.self, from: json)
+        #expect(d.supports.steer == false)
+    }
+
+    /// Direct init with steer=true is preserved.
+    @Test func initSteerTruePreserved() {
+        let s = AgentDescriptorSupports(steer: true)
+        #expect(s.steer == true)
     }
 }

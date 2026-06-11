@@ -1,8 +1,8 @@
 import XCTest
 @testable import Conduit
 
-/// Pins the optimistic-send pending-queue state machine: queue on send →
-/// flush when ready → ack clears → failure path after retries → retry
+/// Pins the optimistic-send pending-queue state machine: queue on send ->
+/// flush when ready -> ack clears -> failure path after retries -> retry
 /// re-arms. Pure logic, no live WS. Mirror of Android
 /// `PendingChatQueueTest`.
 final class PendingChatQueueTests: XCTestCase {
@@ -45,7 +45,7 @@ final class PendingChatQueueTests: XCTestCase {
         XCTAssertFalse(crossed)
         XCTAssertTrue(q.isPending("local-1", in: "s1"))
         XCTAssertFalse(q.isFailed("local-1", in: "s1"))
-        // Still in the flush set — a later reconnect retries it.
+        // Still in the flush set -- a later reconnect retries it.
         XCTAssertEqual(q.flushable(for: "s1").count, 1)
     }
 
@@ -103,5 +103,107 @@ final class PendingChatQueueTests: XCTestCase {
         q.markDelivered(sessionID: "s1", localID: "local-1")
         XCTAssertFalse(q.isPending("local-1", in: "s1"))
         XCTAssertTrue(q.isPending("local-2", in: "s2"))
+    }
+
+    // MARK: - Queued-Next / Steer extensions (#480 / steer-ui-spec)
+
+    /// A `normal` entry (no active turn) still flushes on connect --
+    /// regression guard for #479 behavior.
+    func testNormalEntryFlushableOnConnect() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-1", message: "hi", ts: "t0")
+        // flushable returns .normal entries that are not failed.
+        let due = q.flushable(for: "s1")
+        XCTAssertEqual(due.count, 1)
+        XCTAssertEqual(due.first?.kind, .normal)
+    }
+
+    /// Enqueueing during an active turn produces a `.queuedTurn` entry
+    /// that does NOT appear in flushable() (so it is not auto-delivered).
+    func testQueuedTurnEntryNotFlushable() {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-q1", message: "queued", ts: "t0")
+        XCTAssertTrue(q.flushable(for: "s1").isEmpty,
+            "queuedTurn entry must not appear in normal flushable set")
+        let panel = q.queuedTurnEntries(for: "s1")
+        XCTAssertEqual(panel.count, 1)
+        XCTAssertEqual(panel.first?.kind, .queuedTurn)
+    }
+
+    /// flushOnTurnComplete returns the OLDEST queuedTurn entry, in order.
+    func testFlushOnTurnCompleteReturnsOldestEntry() {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-q1", message: "first", ts: "t0")
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-q2", message: "second", ts: "t1")
+        let next = q.flushOnTurnComplete(sessionID: "s1")
+        XCTAssertEqual(next?.localID, "local-q1", "oldest entry must be flushed first")
+        XCTAssertEqual(next?.message, "first")
+    }
+
+    /// After the first entry is delivered, the second is still available.
+    func testFlushOnTurnCompleteSerializesOneAtATime() {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-q1", message: "first", ts: "t0")
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-q2", message: "second", ts: "t1")
+        // Simulate delivery of the first.
+        q.markDelivered(sessionID: "s1", localID: "local-q1")
+        let next = q.flushOnTurnComplete(sessionID: "s1")
+        XCTAssertEqual(next?.localID, "local-q2", "second entry should be ready after first is acked")
+    }
+
+    /// markSteering transitions kind to .steering.
+    func testMarkSteeringTransition() {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-s1", message: "steer me", ts: "t0")
+        q.markSteering(sessionID: "s1", localID: "local-s1")
+        let entry = q.entries(for: "s1").first
+        XCTAssertEqual(entry?.kind, .steering)
+        // A .steering entry is shown in the panel but not returned by flushOnTurnComplete.
+        XCTAssertNil(q.flushOnTurnComplete(sessionID: "s1"),
+            ".steering entry must not be returned by flushOnTurnComplete (already in-flight)")
+    }
+
+    /// markRetrying transitions kind to .retrying, re-offered by panel and flushOnTurnComplete.
+    func testMarkRetryingTransition() {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-r1", message: "retry me", ts: "t0")
+        q.markSteering(sessionID: "s1", localID: "local-r1")
+        q.markRetrying(sessionID: "s1", localID: "local-r1")
+        let entry = q.entries(for: "s1").first
+        XCTAssertEqual(entry?.kind, .retrying)
+        // A .retrying entry IS returned by flushOnTurnComplete.
+        let next = q.flushOnTurnComplete(sessionID: "s1")
+        XCTAssertEqual(next?.localID, "local-r1")
+    }
+
+    /// Cancel removes the entry entirely.
+    func testCancelRemovesEntry() {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-c1", message: "cancel me", ts: "t0")
+        q.markDelivered(sessionID: "s1", localID: "local-c1") // cancel = markDelivered
+        XCTAssertFalse(q.isPending("local-c1", in: "s1"))
+        XCTAssertTrue(q.queuedTurnEntries(for: "s1").isEmpty)
+    }
+
+    /// Persistence round-trip preserves the kind field.
+    func testKindRoundTripsThroughCodable() throws {
+        var q = PendingChatQueue()
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-k1", message: "kind test", ts: "t0")
+        q.markSteering(sessionID: "s1", localID: "local-k1")
+        let data = try JSONEncoder().encode(q.bySession)
+        let decoded = try JSONDecoder().decode([String: [PendingChat]].self, from: data)
+        let restored = PendingChatQueue(bySession: decoded)
+        XCTAssertEqual(restored.entries(for: "s1").first?.kind, .steering)
+    }
+
+    /// Normal entries and queuedTurn entries coexist independently in the same session.
+    func testNormalAndQueuedTurnCoexist() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-n1", message: "normal", ts: "t0")
+        q.enqueueForActiveTurn(sessionID: "s1", localID: "local-q1", message: "queued", ts: "t1")
+        // flushable only returns normal.
+        XCTAssertEqual(q.flushable(for: "s1").map { $0.localID }, ["local-n1"])
+        // queuedTurnEntries only returns queued.
+        XCTAssertEqual(q.queuedTurnEntries(for: "s1").map { $0.localID }, ["local-q1"])
     }
 }
