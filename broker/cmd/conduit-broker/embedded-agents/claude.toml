@@ -16,6 +16,9 @@ resume_args         = ["--resume", "{session_id}"]
 continue_args       = ["--continue"]
 model_args          = ["--model", "{model}"]
 effort_args         = ["--effort", "{effort}"]
+# Claude "fast mode" is a boolean setting (verified): --settings '{"fastMode":true}'.
+# {fast} expands to "true"/"false". claude-only — no other adapter sets this.
+fast_mode_args      = ['--settings', '{"fastMode":{fast}}']
 login_provider      = "anthropic"
 
 [permission_modes.plan]

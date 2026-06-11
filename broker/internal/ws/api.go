@@ -203,6 +203,10 @@ type startSessionRequest struct {
 	// PermissionMode selects the agent's permission posture ("" / "auto" =
 	// full-auto default, "plan" = read-only planning). See override.go.
 	PermissionMode string `json:"permission_mode"`
+	// FastMode is the claude-only "fast mode" toggle. nil (field absent) =
+	// unchanged; true/false ride to the adapter's --settings arg. Non-claude
+	// adapters ignore it. See override.go.
+	FastMode *bool `json:"fast_mode,omitempty"`
 }
 
 type startSessionResponse struct {
@@ -247,6 +251,7 @@ func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
 		ReasoningEffort: strings.TrimSpace(req.ReasoningEffort),
 		Model:           strings.TrimSpace(req.Model),
 		PermissionMode:  strings.TrimSpace(req.PermissionMode),
+		FastMode:        req.FastMode,
 	}
 	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{CWD: cwd, Override: override})
 	if err != nil {

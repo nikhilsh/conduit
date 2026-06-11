@@ -42,6 +42,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -152,6 +154,9 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     // Permission mode for the fork. "" = Auto (full-auto default); "plan" =
     // read-only planning. The sentinel "" maps to null into forkSession.
     var forkMode by remember(showFork) { mutableStateOf("") }
+    // Claude-only "fast mode" toggle. Defaults OFF; only shown / only sent
+    // when the selected model supports it (null otherwise → no override).
+    var forkFastMode by remember(showFork) { mutableStateOf(false) }
 
     // Refresh the 5h/weekly limits on appear so they don't read stale (they
     // otherwise only refresh on connect + the card's manual button — feedback:
@@ -604,7 +609,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (forkModelSupportsFastMode(forkModel, catalog)) {
-                        FastModeBadge()
+                        FastModeToggle(checked = forkFastMode, onCheckedChange = { forkFastMode = it })
                     }
                 }
             },
@@ -614,7 +619,9 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                     val mode = forkMode.trim().ifEmpty { null }
                     // No effort control on the chosen model (haiku) → no override.
                     val effort = forkEffort.trim().ifEmpty { null }?.takeIf { effortOptions.isNotEmpty() }
-                    store.forkSession(session.id, reasoningEffort = effort, model = model, permissionMode = mode)
+                    // Only send the toggle when the model supports it.
+                    val fast = if (forkModelSupportsFastMode(forkModel, catalog)) forkFastMode else null
+                    store.forkSession(session.id, reasoningEffort = effort, model = model, permissionMode = mode, fastMode = fast)
                     showFork = false
                     onDismiss()
                 }) { Text("Fork") }
@@ -1326,35 +1333,39 @@ object SessionDetails {
 }
 
 /**
- * Yellow capsule badge with a bolt icon, shown when a model advertises fast
- * mode. Mirrors the iOS yellow capsule with `bolt` icon in
- * `ConduitAgentPickerSheet` and `SessionInfoView`. Uses neon theme tokens so
- * it adapts to light/dark and never hard-codes hex.
+ * Actionable claude "fast mode" toggle. Shown in the fork dialog and the
+ * new-session model section when the selected model advertises
+ * `supportsFastMode`. Defaults OFF; the choice rides core → broker
+ * `--settings '{"fastMode":...}'`. Mirrors the iOS yellow `Toggle`.
  */
 @Composable
-internal fun FastModeBadge() {
+internal fun FastModeToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     val neon = LocalNeonTheme.current
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = neon.yellow.copy(alpha = 0.18f),
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Icon(
-                Icons.Filled.Bolt,
-                contentDescription = null,
-                tint = neon.yellow,
-                modifier = Modifier.size(12.dp),
-            )
-            Text(
-                "Fast mode available",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = neon.yellow,
-            )
-        }
+        Icon(
+            Icons.Filled.Bolt,
+            contentDescription = null,
+            tint = neon.yellow,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            "Fast mode",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = neon.yellow,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = neon.yellow,
+                checkedTrackColor = neon.yellow.copy(alpha = 0.4f),
+            ),
+        )
     }
 }

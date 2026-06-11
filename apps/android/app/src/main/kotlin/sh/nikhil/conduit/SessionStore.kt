@@ -796,14 +796,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * (the broker falls back to the adapter default). Effort can't change
      * mid-session — that's why forking is the path, not a live switch.
      */
-    fun forkSession(sessionId: String, reasoningEffort: String? = null, model: String? = null, permissionMode: String? = null) {
+    fun forkSession(sessionId: String, reasoningEffort: String? = null, model: String? = null, permissionMode: String? = null, fastMode: Boolean? = null) {
         val c = client ?: return
         val original = _sessions.value.firstOrNull { it.id == sessionId } ?: return
         val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
         viewModelScope.launch {
             try {
                 val newId = withContext(Dispatchers.IO) {
-                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode)
+                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode, fastMode)
                 }
                 val seed = "Forked from ${original.name} (id $sessionId). Pick up where the previous session left off."
                 runCatching { withContext(Dispatchers.IO) { c.sendChat(newId, seed) } }
@@ -1009,6 +1009,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         reasoningEffort: String? = null,
         model: String? = null,
         permissionMode: String? = null,
+        fastMode: Boolean? = null,
         initialPrompt: String? = null,
     ) {
         Telemetry.breadcrumb(
@@ -1022,7 +1023,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 harness.first { it.canIssueCommands }
             }
             if (ready != null) {
-                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model, permissionMode = permissionMode, initialPrompt = initialPrompt)
+                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = initialPrompt)
             } else {
                 Telemetry.capture(
                     IllegalStateException("connect+start timed out"),
@@ -1607,6 +1608,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         reasoningEffort: String? = null,
         model: String? = null,
         permissionMode: String? = null,
+        fastMode: Boolean? = null,
         initialPrompt: String? = null,
     ) {
         val c = client ?: return
@@ -1633,7 +1635,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedModel = model?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
-                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode) }
+                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode, fastMode) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
                 // Funnel: first-ever session creation (no prior sessions on any launch).
                 if (_sessions.value.isEmpty()) {

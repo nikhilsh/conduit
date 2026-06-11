@@ -106,6 +106,12 @@ type Adapter struct {
 	// The placeholder {effort} is replaced with the effort label.
 	EffortArgs []string `toml:"effort_args"`
 
+	// FastModeArgs is the argv template to pass a "fast mode" toggle
+	// (claude-only). The placeholder {fast} is replaced with the literal
+	// "true" or "false". Empty = the adapter has no fast-mode concept and
+	// the toggle is a no-op (codex/opencode/gemini).
+	FastModeArgs []string `toml:"fast_mode_args"`
+
 	// LoginProvider is the OAuth provider key ("anthropic", "openai", …)
 	// used by the credential store for this agent. "" means no OAuth flow.
 	LoginProvider string `toml:"login_provider"`
@@ -168,6 +174,12 @@ func applyLegacyDefaults(a *Adapter) {
 		}
 		if len(a.EffortArgs) == 0 {
 			a.EffortArgs = []string{"--effort", "{effort}"}
+		}
+		if len(a.FastModeArgs) == 0 {
+			// claude fast mode is a boolean setting passed via
+			// --settings '{"fastMode":true}' (verified; NOT an effort
+			// level, NOT a model). {fast} expands to "true"/"false".
+			a.FastModeArgs = []string{"--settings", `{"fastMode":{fast}}`}
 		}
 		if a.LoginProvider == "" {
 			a.LoginProvider = "anthropic"

@@ -265,6 +265,22 @@ func (s *Server) serveHealthz(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// parseFastMode maps the optional `fast_mode` query param to the override's
+// tri-state *bool: absent / unparseable → nil (unchanged, byte-identical
+// argv to before); "true"/"1" → &true; "false"/"0" → &false. Claude-only;
+// other adapters ignore it (no FastModeArgs).
+func parseFastMode(raw string) *bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
@@ -288,6 +304,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		ReasoningEffort: strings.TrimSpace(r.URL.Query().Get("reasoning_effort")),
 		Model:           strings.TrimSpace(r.URL.Query().Get("model")),
 		PermissionMode:  strings.TrimSpace(r.URL.Query().Get("permission_mode")),
+		FastMode:        parseFastMode(r.URL.Query().Get("fast_mode")),
 	}
 	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{
 		CWD:      cwd,
