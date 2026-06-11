@@ -441,6 +441,25 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val conversationLog: StateFlow<Map<String, List<ConversationItem>>> = _conversationLog.asStateFlow()
 
     /**
+     * Per-session optimistic-send queue: messages the user has sent that
+     * haven't been acked by a successful WS write yet. Persisted to
+     * EncryptedSharedPreferences so a backgrounding-mid-send (or a
+     * kill/relaunch) never silently drops a typed message — the
+     * device-reported "send then background -> never delivered" bug. Flushed
+     * on connect / foreground / reconnect. The transcript echo reads this to
+     * draw the clock / "failed" indicator. Mirror of iOS `pendingChats`.
+     */
+    private val _pendingChats = MutableStateFlow(PendingChatQueue())
+    val pendingChats: StateFlow<PendingChatQueue> = _pendingChats.asStateFlow()
+
+    /** Mutate the pending queue and persist it in one step. */
+    private fun updatePendingChats(transform: (PendingChatQueue) -> PendingChatQueue) {
+        val next = transform(_pendingChats.value)
+        _pendingChats.value = next
+        prefs?.edit()?.putString(KEY_PENDING_CHATS, PendingChatQueue.encode(next))?.apply()
+    }
+
+    /**
      * AI-generated quick replies per session (task #233). The broker
      * emits a `view:"quick_replies"` view_event when an assistant turn
      * completes; the chat composer renders these as tap-able chips,
@@ -781,6 +800,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
             // the typing indicator spins forever. Mirror of iOS.
             client?.notifyNetworkChange()
             refreshSessions()
+            // Foregrounding may have re-armed a socket that died while
+            // suspended — flush any message the user sent right before they
+            // backgrounded the app (the lost-send bug).
+            flushPendingChats()
         }
 
         override fun onStop(owner: LifecycleOwner) {
@@ -813,6 +836,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             _brokerTitles.value = decodeDisplayNames(p.getString(KEY_BROKER_TITLES, null))
             _deletedIds.value = decodeDeletedIds(p.getString(KEY_DELETED_IDS, null))
             _savedSessions.value = SavedSessionsReducer.decode(p.getString(KEY_SAVED_SESSIONS, null))
+            _pendingChats.value = PendingChatQueue.decode(p.getString(KEY_PENDING_CHATS, null))
             refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
@@ -1008,6 +1032,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     mapOf("host" to _endpoint.value.displayHost,
                           "first_server" to (_savedServers.value.size == 1).toString()))
                 refreshSessions()
+                // Connection is live again — re-deliver any messages queued
+                // while disconnected (reconnect window / backgrounded
+                // mid-send / killed before the WS flushed).
+                flushPendingChats()
             } catch (t: Throwable) {
                 val detail = describe(t)
                 _harness.value = HarnessState.Failed(detail)
@@ -1836,11 +1864,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if (handleSlashCommand(sessionId, msg)) return
-        val c = client ?: return
         // Optimistic local echo — harness doesn't loop user messages back
         // as onChatEvent, so the chat tab would stay empty until the
         // assistant replies. The `local-` id lets refreshConversation
         // preserve this entry until the server's typed log catches up.
+        //
+        // CRITICAL: this echo + enqueue happens BEFORE any `client` guard.
+        // The old `val c = client ?: return` here dropped the message
+        // entirely (no echo, no record) if the user sent during a reconnect
+        // window — the device-reported lost-send bug. Now the message is
+        // always queued and persisted; the flush re-delivers it when the
+        // connection comes back.
         //
         // Timestamp must be ANCHORED to the server clock domain, not the
         // device wall-clock. Every persisted item already in the log is
@@ -1874,11 +1908,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val ts = java.time.Instant.ofEpochMilli(echoMs)
             .atOffset(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        val localId = "local-${java.util.UUID.randomUUID()}"
         val item = ConversationItem(
-            id = "local-${java.util.UUID.randomUUID()}",
+            id = localId,
             role = "user",
             kind = "message",
-            status = "done",
+            // PENDING until a successful WS write acks it (flushPendingChats
+            // flips it to "done"). The user bubble draws a clock while
+            // pending and a retry affordance if it ultimately fails.
+            status = "pending",
             content = msg,
             ts = ts,
             files = emptyList(),
@@ -1901,7 +1939,86 @@ class SessionStore : ViewModel(), ConduitDelegate {
             m[sessionId] = (m[sessionId] ?: emptyList()) +
                 ChatEvent(role = "user", content = msg, ts = ts, files = emptyList())
         }
-        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } } }
+        // Register as pending + persist BEFORE attempting any WS write, so a
+        // backgrounding-mid-send or a null client during reconnect never
+        // drops it. The flush re-delivers it on connect / foreground.
+        updatePendingChats { it.enqueue(sessionId, localId, msg, ts) }
+        Telemetry.breadcrumb("chat", "queued", mapOf("session" to sessionId, "chars" to msg.length.toString()))
+        attemptDeliver(sessionId, localId, msg)
+    }
+
+    /**
+     * Attempt to deliver one queued message over the live WS, reporting the
+     * outcome back to [pendingChats] (ack on success, attempt-bump on
+     * failure) and flipping the transcript echo's status. Safe when [client]
+     * is null — it just leaves the entry queued for a later flush. Shared by
+     * the send path and [flushPendingChats]. Mirror of iOS `attemptDeliver`.
+     */
+    private fun attemptDeliver(sessionId: String, localId: String, msg: String) {
+        val c = client ?: return
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
+            if (result.isSuccess) {
+                // Ack: drop from the queue and flip the echo to "done".
+                updatePendingChats { it.markDelivered(sessionId, localId) }
+                setEchoStatus(sessionId, localId, "done")
+            } else {
+                updatePendingChats { it.markAttemptFailed(sessionId, localId) }
+                if (_pendingChats.value.isFailed(localId, sessionId)) {
+                    setEchoStatus(sessionId, localId, "failed")
+                    Telemetry.capture(
+                        error = result.exceptionOrNull() ?: RuntimeException("chat send failed"),
+                        message = "chat send to agent failed (gave up after retries)",
+                        tags = mapOf("surface" to "android", "phase" to "chat_send"),
+                        extras = mapOf("session" to sessionId),
+                    )
+                } else {
+                    // Transient: stays queued + pending for the next flush.
+                    Telemetry.breadcrumb("chat", "send attempt failed — keeping queued",
+                        mapOf("session" to sessionId))
+                }
+            }
+        }
+    }
+
+    /**
+     * Re-deliver every still-pending message for a session — called when the
+     * connection/agent becomes ready again (connect success, app foreground,
+     * reconnect). Failed entries are skipped until the user retries them.
+     * Pass null to flush every session. Mirror of iOS `flushPendingChats`.
+     */
+    fun flushPendingChats(sessionId: String? = null) {
+        val ids = sessionId?.let { listOf(it) } ?: _pendingChats.value.bySession.keys.toList()
+        for (sid in ids) {
+            val due = _pendingChats.value.flushable(sid)
+            if (due.isEmpty()) continue
+            Telemetry.breadcrumb("chat", "flush pending",
+                mapOf("session" to sid, "count" to due.size.toString()))
+            due.forEach { entry -> attemptDeliver(sid, entry.localId, entry.message) }
+        }
+    }
+
+    /**
+     * User tapped retry on a failed message bubble — re-arm the entry and
+     * attempt delivery again immediately. Mirror of iOS `retryPendingChat`.
+     */
+    fun retryPendingChat(sessionId: String, localId: String) {
+        val entry = _pendingChats.value.entries(sessionId).firstOrNull { it.localId == localId } ?: return
+        updatePendingChats { it.retry(sessionId, localId) }
+        setEchoStatus(sessionId, localId, "pending")
+        attemptDeliver(sessionId, localId, entry.message)
+    }
+
+    /**
+     * Flip the `status` of a `local-…` transcript echo in place (pending ->
+     * done / failed). Drives the user-bubble indicator without touching the
+     * message content or its log position. Mirror of iOS `setEchoStatus`.
+     */
+    private fun setEchoStatus(sessionId: String, localId: String, status: String) {
+        _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+            val list = m[sessionId] ?: return@also
+            m[sessionId] = list.map { if (it.id == localId) it.copy(status = status) else it }
+        }
     }
 
     /**
@@ -2405,6 +2522,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // Session is gone server-side — drop its cached scrollback so a
         // recycled id can't resurrect a stale terminal on next launch.
         discardPersistedTerminal(sessionId)
+        // Drop any unsent queued messages for the deleted session.
+        updatePendingChats { it.clear(sessionId) }
     }
 
     fun resize(sessionId: String, rows: UShort, cols: UShort) {
@@ -2854,6 +2973,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         private const val KEY_BROKER_TITLES = "conduit.session_broker_titles"
         private const val KEY_DELETED_IDS = "conduit.deleted_session_ids"
         private const val KEY_SAVED_SESSIONS = "conduit.saved_sessions"
+        private const val KEY_PENDING_CHATS = "conduit.pending_chats"
 
         /** SSH-tunnel transport toggle (connection-critical). Default ON;
          *  flip off to fall back to the legacy public path for one release. */

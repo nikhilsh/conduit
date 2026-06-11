@@ -91,6 +91,14 @@ struct SessionStoreTests {
         // The raw chat log also gets it so the streaming coordinator
         // path and the Rust shadow store remain in lockstep.
         #expect(store.chatLog[sessionID]?.first?.content == "Hi")
+
+        // Optimistic-send: with no client the message is QUEUED (not dropped)
+        // and the echo is marked pending so the bubble shows "sending…". A
+        // later connect/foreground flush re-delivers it.
+        #expect(log.first?.status == "pending")
+        let localID = log.first?.id ?? ""
+        #expect(store.pendingChats.isPending(localID, in: sessionID))
+        #expect(store.pendingChats.entries(for: sessionID).first?.message == "Hi")
     }
 
     // MARK: - refreshConversation ordering (bug #3)
