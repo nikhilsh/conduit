@@ -9,19 +9,30 @@ release, the section for that version is the device-test punch list.
 
 ---
 
-## Unreleased (on main past v0.0.137)
+## v0.0.138
 
-- **`--with-ntfy` bootstrap + `features.ntfy_url` advertise** — `remote-bootstrap.sh
-  --with-ntfy` installs ntfy alongside the broker and the broker advertises the
-  endpoint in capabilities. PR #484. [bootstrap + broker; needs device test of
-  UnifiedPush auto-configure flow on Android]
+- **Subagent "Agents" panel in the Information tab** — debug-gated (default
+  OFF); shows claude subagents (#490 iOS / #491 Android / #492 broker+core) and
+  codex subagents via collab threads (#495). [app, on-device]
+- **ACP backend + gemini-cli selectable as an agent** — broker-side ACP
+  protocol handler; gemini-cli now appears in the agent picker. PR #488. Verify
+  a gemini session starts and streams. [broker, on-device]
 - **opencode real-provider via env_passthrough + host-cred mirror** — opencode
-  reads host API keys / configured providers; OAuth-only users still fall back to
-  Zen. PR #485. [broker behavior; verify opencode session starts against real
-  provider when key present]
-- **ACP protocol research doc** — wire facts + conduit backend design notes for
-  ACP. PR #486. [docs only — no device verification needed; move straight to
-  DONE.md]
+  reads host API keys / configured providers; OAuth-only users still fall back
+  to Zen. PR #485. Verify opencode session starts against real provider when key
+  present. [broker]
+- **`--with-ntfy` bootstrap + `features.ntfy_url` advertise** —
+  `remote-bootstrap.sh --with-ntfy` installs ntfy alongside the broker and the
+  broker advertises the endpoint in capabilities. PR #484. Android UnifiedPush
+  auto-configure is a future follow-up. [bootstrap/broker]
+- **Android parity fixes** — fast-mode badge in new-session picker,
+  broker-update banner on tablet, chat/Queued-Next width caps on tablet, steer
+  button label+icon, retrying-badge color, styled fast-mode capsule, readiness
+  checkmark, retry button semantics. PR #494. [app, tablet+phone]
+- **SSH add-box fix + instrumentation** — private-key field smart-dash/quote
+  corruption fixed (em-dash bug), inline "why disabled" reasons, PEM-format +
+  encrypted-key warnings, `ssh_addbox` breadcrumb trail; iOS+Android. PR #496.
+  [app, on-device]
 
 ---
 
