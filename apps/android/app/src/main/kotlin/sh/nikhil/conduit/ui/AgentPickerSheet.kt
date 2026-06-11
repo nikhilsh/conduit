@@ -593,7 +593,7 @@ private fun DirectoryStep(
             if (recent.isNotEmpty()) {
                 SectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    recent.forEach { path ->
+                    recent.take(3).forEach { path ->
                         RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode, null) })
                     }
                 }

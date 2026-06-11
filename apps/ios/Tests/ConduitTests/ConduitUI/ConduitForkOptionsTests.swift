@@ -85,10 +85,12 @@ struct ConduitForkOptionsCatalogTests {
     ]
 
     @Test func catalogModelsPrependInheritWhenAbsent() {
-        // codex's catalog has no "" entry → the inherit sentinel is added.
+        // codex's catalog has an explicit non-empty isDefault ("gpt-5.5") — that
+        // entry IS the recommended row, so the "" sentinel is NOT prepended (no duplicate).
         let codex = ConduitUI.ForkOptions.models(forAssistant: "codex", catalog: codexCatalog)
-        #expect(codex == ["", "gpt-5.5", "gpt-5.4-mini"])
-        // claude's catalog already leads with the normalized "" entry.
+        #expect(codex == ["gpt-5.5", "gpt-5.4-mini"])
+        #expect(!codex.contains(""))
+        // claude's catalog already leads with the normalized "" entry (id="" isDefault).
         let claude = ConduitUI.ForkOptions.models(forAssistant: "claude", catalog: claudeCatalog)
         #expect(claude == ["", "claude-fable-5[1m]", "sonnet", "haiku"])
     }
@@ -129,7 +131,8 @@ struct ConduitForkOptionsCatalogTests {
     }
 
     @Test func modelLabelAndDetailComeFromCatalog() {
-        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5")
+        // codex's gpt-5.5 is the isDefault entry — show "(recommended)" suffix.
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5 (recommended)")
         // Fix A: the default/inherit entry shows the resolved model name so
         // Opus is discoverable after the user has switched to another model.
         // claude: catalog has an entry with id "" and displayName
@@ -166,18 +169,21 @@ struct ConduitForkOptionsCatalogTests {
         #expect(ConduitUI.ForkOptions.modelLabel("unknown-model", catalog: claudeCatalog) == "unknown-model")
     }
 
-    // Fix 3 (device feedback v0.0.134): codex has no literal "" catalog entry,
-    // so the inherit sentinel must resolve via the isDefault entry ("gpt-5.5")
-    // and show "GPT-5.5 (recommended)" — not the stale "Default (inherit)".
-    @Test func codexInheritResolvesToDefaultModelName() {
-        // The inherit sentinel "" resolves through the isDefault entry (gpt-5.5)
-        // → "GPT-5.5 (recommended)".
+    // codex has an explicit non-empty isDefault entry ("gpt-5.5") — the picker
+    // options list contains no "" sentinel, so there is no duplicate recommended row.
+    // The isDefault entry itself shows "(recommended)" via modelLabel.
+    @Test func codexCatalogOptionsHaveNoInheritSentinelAndDefaultRowIsLabeled() {
+        // Options list has no "" entry — no duplicate.
+        let options = ConduitUI.ForkOptions.models(forAssistant: "codex", catalog: codexCatalog)
+        #expect(options == ["gpt-5.5", "gpt-5.4-mini"])
+        #expect(!options.contains(""))
+        // The isDefault entry shows "(recommended)" directly on its own id.
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5 (recommended)")
+        // Non-default entry shows verbatim display name.
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.4-mini", catalog: codexCatalog) == "GPT-5.4-Mini")
+        // Querying "" (inherit sentinel, e.g. static-fallback path) still resolves
+        // through isDefault to "GPT-5.5 (recommended)".
         #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "GPT-5.5 (recommended)")
-        // Explicit gpt-5.5 row still shows its own name verbatim (no "(recommended)" suffix).
-        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5")
-        // Consequence: the picker will show both "GPT-5.5 (recommended)" (inherit)
-        // and "GPT-5.5" (pinned). That's acceptable — inherit-follows-default vs
-        // pinned — Nikhil to decide if a dedup pass is needed.
     }
 
     @Test func defaultModelTitleResolvesCardLabel() {
