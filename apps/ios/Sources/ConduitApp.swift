@@ -191,11 +191,19 @@ struct ConduitApp: App {
                             )
                         }
                     }
-                    .sheet(item: hostKeyBinding) { prompt in
-                        HostKeyPromptSheet(prompt: prompt) { accepted in
-                            store.resolveHostKeyPrompt(accept: accepted)
+                    .alert(
+                        "Unknown SSH Host Key",
+                        isPresented: hostKeyIsPresented,
+                        presenting: store.pendingHostKey
+                    ) { prompt in
+                        Button("Trust & Connect") {
+                            store.resolveHostKeyPrompt(accept: true)
                         }
-                        .presentationDetents([.medium])
+                        Button("Cancel", role: .cancel) {
+                            store.resolveHostKeyPrompt(accept: false)
+                        }
+                    } message: { prompt in
+                        Text("\(prompt.host):\(prompt.port)\nFingerprint:\n\(prompt.fingerprint)\n\nTrust this host and continue connecting?")
                     }
                     .sheet(item: agentPickBinding) { pick in
                         ConduitUI.AgentPickerSheet(headerNote: pick.hostNote)
@@ -246,13 +254,14 @@ struct ConduitApp: App {
         )
     }
 
-    private var hostKeyBinding: Binding<HostKeyPrompt?> {
+    /// Bool binding used by the host-key TOFU alert. The `set:` path fires
+    /// when the user dismisses the alert without choosing a button (e.g. by
+    /// swiping away) — treat that as a rejection so the bridge unblocks.
+    private var hostKeyIsPresented: Binding<Bool> {
         Binding(
-            get: { store.pendingHostKey },
-            set: { next in
-                // SwiftUI may set this to nil if the user swipes the sheet
-                // away — treat that as a rejection so the bridge unblocks.
-                if next == nil, store.pendingHostKey != nil {
+            get: { store.pendingHostKey != nil },
+            set: { showing in
+                if !showing, store.pendingHostKey != nil {
                     store.resolveHostKeyPrompt(accept: false)
                 }
             }

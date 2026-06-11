@@ -1671,20 +1671,28 @@ final class SessionStore {
 
     /// Called from `SshHostKeyBridge` on the main actor when the SSH
     /// handshake hits an unknown fingerprint. The completion runs when
-    /// the user taps Accept/Reject in `HostKeyPromptSheet`.
+    /// the user accepts/rejects the host-key alert.
     fileprivate func presentHostKeyPrompt(
         host: String,
         port: UInt16,
         fingerprint: String,
         completion: @escaping (Bool) -> Void
     ) {
+        Telemetry.breadcrumb(
+            "ssh_hostkey", "host key prompt presented",
+            data: ["host": host, "fp_prefix": String(fingerprint.prefix(16))]
+        )
         hostKeyResolver = completion
         pendingHostKey = HostKeyPrompt(host: host, port: port, fingerprint: fingerprint)
     }
 
-    /// Invoked by the TOFU sheet's buttons.
+    /// Invoked by the TOFU alert buttons.
     func resolveHostKeyPrompt(accept: Bool) {
         guard let prompt = pendingHostKey else { return }
+        Telemetry.breadcrumb(
+            "ssh_hostkey", "host key resolved",
+            data: ["accept": accept ? "true" : "false"]
+        )
         if accept {
             SshHostKeyTrustStore.trust(host: prompt.host, port: prompt.port, fingerprint: prompt.fingerprint)
         }
@@ -4191,6 +4199,10 @@ final class SshHostKeyBridge: SshHostKeyDelegate {
 
     func acceptHostKey(fingerprint: String) -> Bool {
         if let trusted = SshHostKeyTrustStore.known(host: host, port: port), trusted == fingerprint {
+            Telemetry.breadcrumb(
+                "ssh_hostkey", "host key auto-trusted (known)",
+                data: ["host": host, "fp_prefix": String(fingerprint.prefix(16))]
+            )
             return true
         }
         let sem = DispatchSemaphore(value: 0)
@@ -4207,7 +4219,14 @@ final class SshHostKeyBridge: SshHostKeyDelegate {
                 sem.signal()
             }
         }
-        sem.wait()
+        let result = sem.wait(timeout: .now() + 120)
+        if result == .timedOut {
+            Telemetry.breadcrumb(
+                "ssh_hostkey", "host key decision timed out -> reject",
+                data: ["host": host, "fp_prefix": String(fingerprint.prefix(16))]
+            )
+            return false
+        }
         return decision
     }
 }

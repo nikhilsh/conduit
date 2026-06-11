@@ -310,6 +310,9 @@ struct SSHLoginSheet: View {
     /// disabled. Empty means all preconditions are satisfied.
     private var disabledReasons: [String] {
         var reasons: [String] = []
+        if case .running = store.sshBootstrapState {
+            reasons.append("Connecting...")
+        }
         if host.trimmingCharacters(in: .whitespaces).isEmpty {
             reasons.append("Enter host")
         }
