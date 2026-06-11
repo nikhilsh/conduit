@@ -267,6 +267,7 @@ namespace conduit_core {
         string anthropic_api_key,
         string openai_api_key,
         string? image_ref,
+        string? app_version,
         SshHostKeyDelegate host_key_delegate
     );
 
@@ -280,6 +281,7 @@ namespace conduit_core {
         string anthropic_api_key,
         string openai_api_key,
         string? image_ref,
+        string? app_version,
         SshHostKeyDelegate host_key_delegate
     );
 };

@@ -194,12 +194,42 @@ fi
 # the app streams stderr as status.
 if [ ! -x "$BIN" ]; then
   mkdir -p "$BIN_DIR" "$STATE_DIR"
+
+  # Build the release base URL.  All conduit GitHub releases are tagged as
+  # prereleases, so /releases/latest/download/ resolves only the latest
+  # *stable* (non-prerelease) release and 404s for every prerelease build.
+  # When the app passes CONDUIT_VERSION (without leading 'v', e.g. "0.0.141")
+  # we use a versioned URL that resolves correctly regardless of prerelease
+  # status.  Fall back to /latest/ only when the version is unknown (gives a
+  # path forward if a stable release is ever published).
+  if [ -n "${CONDUIT_VERSION:-}" ]; then
+    _rel_base="https://github.com/nikhilsh/conduit/releases/download/v${CONDUIT_VERSION}"
+    _version_arg="--version v${CONDUIT_VERSION}"
+  else
+    _rel_base="https://github.com/nikhilsh/conduit/releases/latest/download"
+    _version_arg=""
+  fi
+
+  # Download and pipe install.sh.  IMPORTANT: in POSIX sh a pipe's exit
+  # status is the last command's (sh), NOT curl's.  If curl fails
+  # (network error, 404, etc.) sh receives empty stdin and exits 0 —
+  # the if-check passes but the binary was never written.  We therefore
+  # check that the binary is actually present and executable right after,
+  # regardless of the pipe exit status.
+  _install_failed=0
+  # shellcheck disable=SC2086
   if ! curl -fsSL \
        --connect-timeout "$CURL_CONNECT_TIMEOUT" \
        --max-time "$CURL_MAX_TIME" \
-       https://github.com/nikhilsh/conduit/releases/latest/download/install.sh \
-       | sh -s -- --bin-dir "$BIN_DIR" 1>&2; then
-    echo "ERR 16 could not install conduit-broker binary"
+       "${_rel_base}/install.sh" \
+       | sh -s -- --bin-dir "$BIN_DIR" ${_version_arg} 1>&2; then
+    _install_failed=1
+  fi
+  # Definitive check: assert the binary landed at the expected path.
+  # This catches both an explicit installer failure AND the silent-curl
+  # case where sh exited 0 on empty input but wrote nothing.
+  if [ "$_install_failed" = "1" ] || [ ! -x "$BIN" ]; then
+    echo "ERR 16 could not install conduit-broker binary (expected: $BIN)"
     exit 16
   fi
 fi
@@ -434,11 +464,13 @@ Environment=\"CONDUIT_NTFY_URL=$_ntfy_url\""
 [Unit]
 Description=conduit broker
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 ExecStart=$BIN up --addr 127.0.0.1:$HOST_PORT
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=10
 $_env_lines
 
 [Install]

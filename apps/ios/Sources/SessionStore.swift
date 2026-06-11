@@ -1598,6 +1598,7 @@ final class SessionStore {
                         anthropicApiKey: anthropicApiKey,
                         openaiApiKey: openaiApiKey,
                         imageRef: imageRef,
+                        appVersion: BuildInfo.marketingVersion,
                         hostKeyDelegate: bridge
                     )
                     result = bootstrap.result
@@ -1613,6 +1614,7 @@ final class SessionStore {
                         anthropicApiKey: anthropicApiKey,
                         openaiApiKey: openaiApiKey,
                         imageRef: imageRef,
+                        appVersion: BuildInfo.marketingVersion,
                         hostKeyDelegate: bridge
                     )
                 }

@@ -1272,6 +1272,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                             anthropicApiKey,
                             openaiApiKey,
                             imageRef,
+                            BuildConfig.VERSION_NAME,
                             bridge,
                         )
                     }
@@ -1290,6 +1291,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                             anthropicApiKey,
                             openaiApiKey,
                             imageRef,
+                            BuildConfig.VERSION_NAME,
                             bridge,
                         )
                     }
