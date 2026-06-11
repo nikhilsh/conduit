@@ -3911,6 +3911,12 @@ final class SessionStore {
         guard let client else { return }
         let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
         let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
+        let modeCrumb = pickedMode ?? "auto"
+        Telemetry.breadcrumb("session", "fork override", data: [
+            "assistant": original.assistant,
+            "permission_mode": modeCrumb,
+            "session_id": sessionID,
+        ])
         Task {
             do {
                 let newID = try await client.createSession(

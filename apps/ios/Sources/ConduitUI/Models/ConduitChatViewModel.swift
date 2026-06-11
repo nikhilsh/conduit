@@ -242,14 +242,19 @@ extension ConduitUI {
                 conversation.map { "\($0.role.lowercased())|\($0.content)" }
             )
             let synthetic: [ConversationItem] = chatLog.enumerated().compactMap { idx, ev in
-                let key = "\(ev.role.lowercased())|\(ev.content)"
+                // Strip the pending-input sentinel before fingerprinting so
+                // this raw chatLog item dedupes against the already-stripped
+                // typed card (same role+content key), and before setting the
+                // content so the sentinel never leaks as a bare raw bubble.
+                let strippedContent = SessionStore.stripPendingSentinel(ev.content)
+                let key = "\(ev.role.lowercased())|\(strippedContent)"
                 if typedFingerprints.contains(key) { return nil }
                 return ConversationItem(
                     id: "chatlog-\(ev.ts)-\(idx)",
                     role: ev.role,
                     kind: ev.role.lowercased() == "tool" ? "tool" : "message",
                     status: "done",
-                    content: ev.content,
+                    content: strippedContent,
                     ts: ev.ts,
                     files: ev.files,
                     toolName: nil,
