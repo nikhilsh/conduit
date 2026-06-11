@@ -5,7 +5,7 @@ the detailed forward-looking specs live in the active `PLAN-*.md` docs (linked
 below), and the frozen wire/lifecycle contracts live in their own references.
 Completed plans are archived under `docs/archive/` once their work ships.
 
-Last updated: 2026-06-11 (v0.0.139).
+Last updated: 2026-06-11 (v0.0.140).
 
 **Lifecycle:** [ROADMAP.md](ROADMAP.md) (backlog) →
 [IN-PROGRESS.md](IN-PROGRESS.md) (building) →
@@ -24,13 +24,6 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 ---
 
 ## Backlog
-
-### Now
-
-- **Surface claude catalog richness — fast-mode toggle** — usage hints and
-  `supportsFastMode` availability label shipped (#475); fast-mode toggle is
-  **in progress** (branch `fast-mode-toggle`): iOS shows a read-only label;
-  Android has nothing yet.
 
 ### Later
 

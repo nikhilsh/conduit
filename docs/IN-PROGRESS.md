@@ -7,8 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-- **Fast-mode toggle** — branch `fast-mode-toggle`; make the `supportsFastMode`
-  label actionable (iOS is read-only today; Android has nothing).
+- **Fast-mode toggle** — branch `fast-mode-toggle-ship`, PR #509. Actionable claude fast-mode toggle: read-only "Fast mode available" label replaced by a Toggle (iOS) / Switch (Android) in the new-session picker + fork sheets; launches claude with `--settings '{"fastMode":true}'` via core→broker. Tablet+phone. On merge → VERIFY-CHECKLIST.md.
 
 ## Deferred (not active)
 

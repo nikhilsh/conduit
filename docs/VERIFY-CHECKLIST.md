@@ -9,6 +9,22 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.140
+
+- **SSH add-box connect no longer hangs (broker-first bootstrap)** — broker
+  starts first on the remote box (bound `127.0.0.1:1977`, reachable only via the
+  SSH tunnel) and emits OK before any agent install. Agent install is now
+  best-effort and time-bounded (`AGENT_INSTALL_TIMEOUT_S=180`; all curl calls
+  bounded). Script embedded in core via `include_str!` — no broker redeploy
+  needed. PR #507. [app+bootstrap, on-device] Verify: add a box via SSH private
+  key to a VPS with NO claude/codex installed → "Starting server" completes and
+  the session connects; readiness then flags agent-not-installed.
+- **SSH add-box sheet keyboard** — keyboard dismisses on scroll and a Done
+  toolbar button ensures the Connect button is always reachable. PR #506.
+  [iOS, on-device]
+
+---
+
 ## v0.0.139
 
 - **Push-driven Live Activities** — iOS Live Activities now updated via APNs
