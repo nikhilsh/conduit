@@ -160,6 +160,7 @@ fi
 # ── Reuse path ────────────────────────────────────────────────────────────
 # A healthy broker on the port → return immediately.  Works whether the
 # broker was launched by systemd (no pidfile) or by the old nohup path.
+echo "STEP reuse_check" >&2
 if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
@@ -193,6 +194,7 @@ fi
 # Progress goes to stderr so the stdout OK/ERR contract stays clean;
 # the app streams stderr as status.
 if [ ! -x "$BIN" ]; then
+  echo "STEP download_broker" >&2
   mkdir -p "$BIN_DIR" "$STATE_DIR"
 
   # Build the release base URL.  All conduit GitHub releases are tagged as
@@ -412,6 +414,7 @@ if [ -n "$ANTHROPIC" ]; then export ANTHROPIC_API_KEY="$ANTHROPIC"; fi
 if [ -n "$OPENAI" ]; then export OPENAI_API_KEY="$OPENAI"; fi
 
 # ── Launch: prefer user-level systemd, fall back to pidfile/nohup ─────────
+echo "STEP start_broker" >&2
 #
 # Systemd path requires all of:
 #   1. systemctl is on PATH and the user bus responds.
@@ -505,6 +508,7 @@ fi
 
 # ── Wait for /health ───────────────────────────────────────────────────────
 # Bare cold-start is fast; systemd may take a moment to exec the unit.
+echo "STEP wait_ready" >&2
 i=1
 while [ "$i" -le 15 ]; do
   if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
@@ -528,6 +532,7 @@ while [ "$i" -le 15 ]; do
         return 0
       fi
 
+      echo "STEP install_agent" >&2
       echo "conduit: no agent CLI found; attempting user-space install (set CONDUIT_AUTOINSTALL_AGENT=0 to skip)" >&2
 
       # Ensure ~/.local/bin is on PATH so a freshly installed binary is visible.

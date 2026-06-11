@@ -263,6 +263,21 @@ callback interface SshHostKeyDelegate {
     boolean accept_host_key(string fingerprint);
 };
 
+// Per-phase progress callback for the SSH bootstrap flow. Emitted as each
+// stage is entered so the app can surface granular status instead of a frozen
+// "Starting server…". Phases mirror the stages in the bootstrap script and
+// the Rust SSH client:
+//
+//   connecting     — TCP dial started; `detail` is "<host>:<port>"
+//   handshake      — russh TLS/SSH handshake complete; detail null
+//   authenticating — public-key / password auth about to run; detail null
+//   tunnel         — port-forward listener bound; `detail` is the local port
+//   bootstrap      — one line from the remote script's stderr; detail is the
+//                    raw line (may be a machine STEP marker or human text)
+callback interface SshProgressDelegate {
+    void on_progress(string phase, string? detail);
+};
+
 namespace conduit_core {
     [Async, Throws=SshError]
     SshBootstrapResult ssh_bootstrap(
@@ -272,7 +287,8 @@ namespace conduit_core {
         string openai_api_key,
         string? image_ref,
         string? app_version,
-        SshHostKeyDelegate host_key_delegate
+        SshHostKeyDelegate host_key_delegate,
+        SshProgressDelegate? progress_delegate
     );
 
     // Tunneled variant — returns the owned SshTunnel handle so the app can
@@ -286,7 +302,8 @@ namespace conduit_core {
         string openai_api_key,
         string? image_ref,
         string? app_version,
-        SshHostKeyDelegate host_key_delegate
+        SshHostKeyDelegate host_key_delegate,
+        SshProgressDelegate? progress_delegate
     );
 };
 

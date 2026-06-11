@@ -29,6 +29,8 @@ pub use types::{SshAuth, SshBootstrapResult, SshCredentials, SshError, SshTunnel
 pub use connect::HostKeyCallback;
 use connect::SshClient;
 
+use crate::SshProgressDelegate;
+
 /// Embedded copy of `scripts/remote-bootstrap.sh`. We bake it into the
 /// binary so the mobile clients ship a known, version-locked script —
 /// no risk of an old phone running a stale bootstrap against a freshly
@@ -47,6 +49,7 @@ const REMOTE_BOOTSTRAP_SH: &str = include_str!("../../../scripts/remote-bootstra
 /// accept loop + russh session stay alive (the spawned tasks hold their own
 /// `Arc`s), so the forward keeps working — but the caller gets no way to stop
 /// it or observe liveness. Prefer [`ssh_bootstrap_tunneled`] for new code.
+#[allow(clippy::too_many_arguments)]
 pub async fn ssh_bootstrap(
     creds: SshCredentials,
     pre_allocated_token: String,
@@ -55,6 +58,7 @@ pub async fn ssh_bootstrap(
     image_ref: Option<String>,
     app_version: Option<String>,
     host_key_cb: HostKeyCallback,
+    progress: std::sync::Arc<dyn SshProgressDelegate>,
 ) -> Result<SshBootstrapResult, SshError> {
     let bootstrap = ssh_bootstrap_tunneled(
         creds,
@@ -64,6 +68,7 @@ pub async fn ssh_bootstrap(
         image_ref,
         app_version,
         host_key_cb,
+        progress,
     )
     .await?;
     // Detach the tunnel: forget the handle so the accept loop / watcher keep
@@ -81,6 +86,7 @@ pub async fn ssh_bootstrap(
 ///
 /// This is the path the apps should migrate to (see
 /// `docs/PLAN-SSH-TUNNEL.md`).
+#[allow(clippy::too_many_arguments)]
 pub async fn ssh_bootstrap_tunneled(
     creds: SshCredentials,
     pre_allocated_token: String,
@@ -89,6 +95,7 @@ pub async fn ssh_bootstrap_tunneled(
     image_ref: Option<String>,
     app_version: Option<String>,
     host_key_cb: HostKeyCallback,
+    progress: std::sync::Arc<dyn SshProgressDelegate>,
 ) -> Result<SshTunnelBootstrap, SshError> {
     if pre_allocated_token.len() < 16 {
         return Err(SshError::BootstrapParse(
@@ -96,7 +103,8 @@ pub async fn ssh_bootstrap_tunneled(
         ));
     }
 
-    let client = SshClient::connect(creds.clone(), host_key_cb).await?;
+    let client =
+        SshClient::connect(creds.clone(), host_key_cb, std::sync::Arc::clone(&progress)).await?;
     let parsed = run_remote_bootstrap(
         &client,
         &pre_allocated_token,
@@ -104,6 +112,7 @@ pub async fn ssh_bootstrap_tunneled(
         &openai_api_key,
         image_ref.as_deref(),
         app_version.as_deref(),
+        std::sync::Arc::clone(&progress),
     )
     .await?;
 
@@ -111,6 +120,7 @@ pub async fn ssh_bootstrap_tunneled(
     // tunnel (accept loop forwards each accept onto a direct-tcpip channel to
     // the remote harness port; a watcher trips teardown if the session dies).
     let (listener, local_port) = port_forward::bind_random_local().await?;
+    progress.on_progress("tunnel".to_string(), Some(local_port.to_string()));
     let handle = std::sync::Arc::clone(&client.handle);
     let remote_port = parsed.port;
     let tunnel = SshTunnel::spawn(handle, listener, local_port, remote_port);
@@ -130,6 +140,8 @@ pub async fn ssh_bootstrap_tunneled(
 /// Open an SSH exec channel running `sh -s -- <args>`, pipe the
 /// embedded bootstrap script in on stdin, collect stdout + the exit
 /// status, then hand the captured stdout to [`bootstrap::parse_output`].
+/// Each complete stderr line is also forwarded to `progress` as a
+/// `("bootstrap", <line>)` event so the app can show live status.
 async fn run_remote_bootstrap(
     client: &SshClient,
     token: &str,
@@ -137,6 +149,7 @@ async fn run_remote_bootstrap(
     openai: &str,
     image_ref: Option<&str>,
     app_version: Option<&str>,
+    progress: std::sync::Arc<dyn SshProgressDelegate>,
 ) -> Result<bootstrap::ParsedBootstrap, SshError> {
     let args = [
         shell_quote(token),
@@ -180,17 +193,37 @@ async fn run_remote_bootstrap(
 
     let mut stdout = String::new();
     let mut stderr = String::new();
+    // Incomplete line buffer — russh may deliver stderr in arbitrary chunks.
+    let mut stderr_buf = String::new();
     let mut exit_code: Option<i32> = None;
     while let Some(msg) = channel.wait().await {
         match msg {
             russh::ChannelMsg::Data { ref data } => stdout.push_str(&String::from_utf8_lossy(data)),
             russh::ChannelMsg::ExtendedData { ref data, .. } => {
-                stderr.push_str(&String::from_utf8_lossy(data))
+                let chunk = String::from_utf8_lossy(data);
+                stderr_buf.push_str(&chunk);
+                // Emit each complete newline-terminated line as a progress
+                // event so the app sees updates as they stream in.
+                while let Some(pos) = stderr_buf.find('\n') {
+                    let line = stderr_buf[..pos].trim_end_matches('\r').to_string();
+                    stderr_buf = stderr_buf[pos + 1..].to_string();
+                    if !line.is_empty() {
+                        progress.on_progress("bootstrap".to_string(), Some(line.clone()));
+                        stderr.push_str(&line);
+                        stderr.push('\n');
+                    }
+                }
             }
             russh::ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status as i32),
             russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {}
             _ => {}
         }
+    }
+    // Flush any remaining partial line (no trailing newline).
+    if !stderr_buf.trim().is_empty() {
+        let line = stderr_buf.trim_end_matches('\r').to_string();
+        progress.on_progress("bootstrap".to_string(), Some(line.clone()));
+        stderr.push_str(&line);
     }
 
     // Parse first — the OK/ERR contract is on stdout. If the script

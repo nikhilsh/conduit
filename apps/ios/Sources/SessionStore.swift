@@ -700,6 +700,12 @@ final class SessionStore {
     /// Cleared automatically the next time the user tries again.
     var sessionCreationError: String?
 
+    /// Sheet-independent error surfaced after the SSH bootstrap fails.
+    /// Persists even when the SSH login sheet is dismissed so the user
+    /// can see what went wrong from the main screen. Cleared when a new
+    /// bootstrap attempt starts.
+    var sshBootstrapError: String?
+
     /// Per-session lifecycle. Sessions whose entry is `.creating` appear
     /// in the list as placeholders even before the server reports them.
     var sessionLifecycle: [String: SessionLifecycle] = [:]
@@ -1566,6 +1572,17 @@ final class SessionStore {
         let host = credentials.host
         let port = credentials.port
         let user = credentials.username
+
+        // Single-flight guard — belt-and-suspenders beyond the UI disabledReasons
+        // check: if a bootstrap is already in progress, ignore the duplicate tap.
+        if case .running = sshBootstrapState {
+            Telemetry.breadcrumb("ssh_addbox", "connect ignored (already running)")
+            return
+        }
+
+        // Clear any prior sheet-independent error so stale messages don't linger.
+        sshBootstrapError = nil
+
         // Breadcrumb before anything else so we can confirm this function was
         // reached even if the Task or bootstrap throws before the first await.
         Telemetry.breadcrumb("ssh_addbox", "connectViaSSH reached", data: [
@@ -1577,10 +1594,9 @@ final class SessionStore {
 
         Task {
             let preToken = UUID().uuidString
-            let bridge = SshHostKeyBridge(store: self, host: host, port: port)
+            let hostKeyBridge = SshHostKeyBridge(store: self, host: host, port: port)
+            let progressBridge = SshProgressBridge(store: self, host: host)
             do {
-                self.sshBootstrapState = .running(message: "Starting server on \(host)…")
-
                 // SSH-tunnel transport (core #451): hold the returned
                 // `SshTunnel` for the session's lifetime so the token rides
                 // the SSH-encrypted channel and the box needs no public port.
@@ -1590,34 +1606,55 @@ final class SessionStore {
                 let useTunnel = FeatureFlags.sshTunnelTransportEnabled()
                 let result: SshBootstrapResult
                 var tunnel: SshTunnel?
-                if useTunnel {
-                    Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", data: ["host": host])
-                    let bootstrap = try await sshBootstrapTunneled(
-                        credentials: credentials,
-                        preAllocatedToken: preToken,
-                        anthropicApiKey: anthropicApiKey,
-                        openaiApiKey: openaiApiKey,
-                        imageRef: imageRef,
-                        appVersion: BuildInfo.marketingVersion,
-                        hostKeyDelegate: bridge
-                    )
-                    result = bootstrap.result
-                    tunnel = bootstrap.tunnel
-                    Telemetry.breadcrumb("ssh_tunnel", "tunnel open", data: [
-                        "host": host,
-                        "local_port": "\(bootstrap.tunnel.localPort())",
-                    ])
-                } else {
-                    result = try await sshBootstrap(
-                        credentials: credentials,
-                        preAllocatedToken: preToken,
-                        anthropicApiKey: anthropicApiKey,
-                        openaiApiKey: openaiApiKey,
-                        imageRef: imageRef,
-                        appVersion: BuildInfo.marketingVersion,
-                        hostKeyDelegate: bridge
-                    )
+
+                // Helper that runs the actual bootstrap call (factored out so
+                // the ECONNRESET-retry logic can call it twice without duplication).
+                func runBootstrap() async throws -> (SshBootstrapResult, SshTunnel?) {
+                    if useTunnel {
+                        Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", data: ["host": host])
+                        let bootstrap = try await sshBootstrapTunneled(
+                            credentials: credentials,
+                            preAllocatedToken: preToken,
+                            anthropicApiKey: anthropicApiKey,
+                            openaiApiKey: openaiApiKey,
+                            imageRef: imageRef,
+                            appVersion: BuildInfo.marketingVersion,
+                            hostKeyDelegate: hostKeyBridge,
+                            progressDelegate: progressBridge
+                        )
+                        Telemetry.breadcrumb("ssh_tunnel", "tunnel open", data: [
+                            "host": host,
+                            "local_port": "\(bootstrap.tunnel.localPort())",
+                        ])
+                        return (bootstrap.result, bootstrap.tunnel)
+                    } else {
+                        let r = try await sshBootstrap(
+                            credentials: credentials,
+                            preAllocatedToken: preToken,
+                            anthropicApiKey: anthropicApiKey,
+                            openaiApiKey: openaiApiKey,
+                            imageRef: imageRef,
+                            appVersion: BuildInfo.marketingVersion,
+                            hostKeyDelegate: hostKeyBridge,
+                            progressDelegate: progressBridge
+                        )
+                        return (r, nil)
+                    }
                 }
+
+                do {
+                    (result, tunnel) = try await runBootstrap()
+                } catch let firstErr as SshError where Self.isEconnreset(firstErr) {
+                    // ECONNRESET on handshake: sshd RST'd the connection — likely
+                    // a concurrent handshake from a previous tap. Wait briefly
+                    // and retry once before surfacing the failure.
+                    Telemetry.breadcrumb("ssh_addbox", "ECONNRESET on first attempt — retrying once",
+                        data: ["host": host])
+                    self.sshBootstrapState = .running(message: "Retrying connection…")
+                    try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5s
+                    (result, tunnel) = try await runBootstrap()
+                }
+
                 let endpoint = StoredEndpoint(
                     url: "ws://127.0.0.1:\(result.localPort)",
                     token: result.token
@@ -1654,6 +1691,9 @@ final class SessionStore {
             } catch let err as SshError {
                 let detail = Self.describeSsh(err)
                 self.sshBootstrapState = .failed(reason: detail)
+                // Also persist the error outside the sheet so the user sees it
+                // even if they dismissed the SSH login sheet before it finished.
+                self.sshBootstrapError = detail
                 Telemetry.capture(
                     error: err,
                     message: "iOS SSH bootstrap failed",
@@ -1663,6 +1703,7 @@ final class SessionStore {
             } catch {
                 let detail = String(describing: error)
                 self.sshBootstrapState = .failed(reason: detail)
+                self.sshBootstrapError = detail
                 Telemetry.capture(
                     error: error,
                     message: "iOS SSH bootstrap failed",
@@ -1670,6 +1711,19 @@ final class SessionStore {
                     extras: ["host": host, "user": user, "detail": detail]
                 )
             }
+        }
+    }
+
+    /// Returns true if the SSH error looks like a TCP connection-reset by
+    /// peer — the trigger condition for the one-shot ECONNRESET retry.
+    private static func isEconnreset(_ err: SshError) -> Bool {
+        switch err {
+        case .Handshake(let m):
+            let lower = m.lowercased()
+            return lower.contains("reset by peer") || lower.contains("os error 54")
+                || lower.contains("connection reset")
+        default:
+            return false
         }
     }
 
@@ -4234,6 +4288,62 @@ final class SshHostKeyBridge: SshHostKeyDelegate {
             return false
         }
         return decision
+    }
+}
+
+// MARK: - SshProgressBridge
+
+/// Bridges the Rust SSH bootstrap progress callbacks into SwiftUI state.
+/// Called synchronously on the russh worker thread; each call dispatches
+/// to the `@MainActor` store to update `sshBootstrapState` with a
+/// friendly human-readable message. The mapping covers both the Rust
+/// connect-sequence phases and the STEP markers in remote-bootstrap.sh.
+final class SshProgressBridge: SshProgressDelegate {
+    private weak var store: SessionStore?
+    private let host: String
+
+    init(store: SessionStore, host: String) {
+        self.store = store
+        self.host = host
+    }
+
+    func onProgress(phase: String, detail: String?) {
+        let message = SshProgressBridge.friendlyMessage(phase: phase, detail: detail, host: host)
+        guard let message else { return }
+        Task { @MainActor [weak store] in
+            store?.sshBootstrapState = .running(message: message)
+        }
+    }
+
+    /// Map (phase, detail) pairs from the Rust core + bootstrap script to
+    /// user-facing strings. Returns nil for lines we choose to suppress
+    /// (raw human stderr that isn't a STEP marker).
+    private static func friendlyMessage(phase: String, detail: String?, host: String) -> String? {
+        switch phase {
+        case "connecting":
+            return "Connecting to \(detail ?? host)…"
+        case "handshake":
+            return "Securing connection…"
+        case "authenticating":
+            return "Authenticating…"
+        case "tunnel":
+            return "Opening secure tunnel…"
+        case "bootstrap":
+            guard let line = detail else { return nil }
+            // Machine-parseable STEP markers from remote-bootstrap.sh.
+            switch line {
+            case "STEP reuse_check":    return "Checking for existing server…"
+            case "STEP download_broker": return "Downloading server…"
+            case "STEP start_broker":   return "Starting server…"
+            case "STEP install_agent":  return "Installing agent…"
+            case "STEP wait_ready":     return "Waiting for server…"
+            default:
+                // Suppress other human-readable stderr lines to avoid spam.
+                return nil
+            }
+        default:
+            return nil
+        }
     }
 }
 
