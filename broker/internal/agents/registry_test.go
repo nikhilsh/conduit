@@ -235,6 +235,42 @@ cred_files = ["path/to/creds.json"]
 	}
 }
 
+// TestOpencodeManifestEnvPassthrough loads the real embedded opencode.toml and
+// pins the env_passthrough keys that allow a real AI provider to be used when
+// the broker host has a key set. The three keys are the primary way opencode
+// picks up a provider over the no-auth Zen fallback; if any is missing,
+// operator keys go unused and every session falls back to the flaky free tier.
+func TestOpencodeManifestEnvPassthrough(t *testing.T) {
+	// Load the real manifest from the embedded-agents directory.
+	const tomlPath = "../../cmd/conduit-broker/embedded-agents/opencode.toml"
+	dir := t.TempDir()
+	raw, err := os.ReadFile(tomlPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", tomlPath, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "opencode.toml"), raw, 0o644); err != nil {
+		t.Fatalf("write temp toml: %v", err)
+	}
+	reg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	a, err := reg.Get("opencode")
+	if err != nil {
+		t.Fatalf("Get(opencode): %v", err)
+	}
+	wantKeys := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_API_KEY"}
+	envSet := make(map[string]bool, len(a.EnvPassthrough))
+	for _, k := range a.EnvPassthrough {
+		envSet[k] = true
+	}
+	for _, k := range wantKeys {
+		if !envSet[k] {
+			t.Errorf("opencode env_passthrough missing %q (got %v); operator AI-provider keys won't reach the server", k, a.EnvPassthrough)
+		}
+	}
+}
+
 // TestThirdPartyAdapterNoDefaults verifies that a non-claude/codex adapter
 // gets empty defaults (no panic, no crash) — third-party adapters that
 // predate the manifest fields are unaffected.
