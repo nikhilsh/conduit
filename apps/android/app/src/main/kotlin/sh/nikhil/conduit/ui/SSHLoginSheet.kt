@@ -350,6 +350,21 @@ fun SSHLoginSheet(
                             "disabled_reason" to reasons.joinToString("; "),
                         ),
                     )
+                    // Fire a real Sentry event so the breadcrumb trail is
+                    // uploaded even when the tap is blocked. Without a captured
+                    // event the ring-buffered breadcrumbs are never flushed.
+                    if (reasons.isNotEmpty()) {
+                        Telemetry.diagnostic(
+                            "ssh connect blocked",
+                            tags = mapOf("surface" to "android", "phase" to "ssh_connect_blocked"),
+                            extras = mapOf(
+                                "disabled_reasons" to reasons.joinToString("; "),
+                                "mode" to mode.name,
+                                "host_nonempty" to host.isNotBlank().toString(),
+                            ),
+                        )
+                        return@Button
+                    }
                     val portValue = port.toIntOrNull()
                         ?.takeIf { it in 1..65535 }
                         ?.toUShort()
@@ -357,10 +372,14 @@ fun SSHLoginSheet(
                     val trimmedKey = privateKey.trim()
 
                     // Log key metadata only -- never the key body or passphrase.
+                    val looksLikePem: Boolean
+                    val looksEncrypted: Boolean
+                    val hasPassphrase: Boolean
                     if (mode == AuthMode.PrivateKey) {
                         val header = trimmedKey.lines().firstOrNull().orEmpty()
-                        val looksLikePem = trimmedKey.contains("-----BEGIN") && trimmedKey.contains("PRIVATE KEY-----")
-                        val looksEncrypted = trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED")
+                        looksLikePem = trimmedKey.contains("-----BEGIN") && trimmedKey.contains("PRIVATE KEY-----")
+                        looksEncrypted = trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED")
+                        hasPassphrase = passphrase.isNotBlank()
                         Telemetry.breadcrumb(
                             "ssh_addbox",
                             "key metadata",
@@ -369,15 +388,35 @@ fun SSHLoginSheet(
                                 "length" to trimmedKey.length.toString(),
                                 "looks_pem" to looksLikePem.toString(),
                                 "looks_encrypted" to looksEncrypted.toString(),
-                                "has_passphrase" to passphrase.isNotBlank().toString(),
+                                "has_passphrase" to hasPassphrase.toString(),
                             ),
                         )
+                    } else {
+                        looksLikePem = false
+                        looksEncrypted = false
+                        hasPassphrase = false
                     }
 
                     Telemetry.breadcrumb(
                         "ssh_addbox",
                         "connect() entry",
                         mapOf("host" to host.trim(), "port" to port, "mode" to mode.name),
+                    )
+
+                    // Captured event so the breadcrumb trail is guaranteed to be
+                    // uploaded even if connectViaSSH returns early before its own
+                    // captures fire.
+                    Telemetry.diagnostic(
+                        "ssh connect attempt",
+                        tags = mapOf("surface" to "android", "phase" to "ssh_connect_attempt"),
+                        extras = mapOf(
+                            "mode" to mode.name,
+                            "host_nonempty" to host.isNotBlank().toString(),
+                            "key_length" to if (mode == AuthMode.PrivateKey) trimmedKey.length.toString() else "0",
+                            "looks_pem" to looksLikePem.toString(),
+                            "looks_encrypted" to looksEncrypted.toString(),
+                            "has_passphrase" to hasPassphrase.toString(),
+                        ),
                     )
 
                     val auth: SshAuth = when (mode) {

@@ -248,7 +248,23 @@ struct SSHLoginSheet: View {
                     "enabled": reasons.isEmpty ? "true" : "false",
                     "disabled_reason": reasons.joined(separator: "; "),
                 ])
-                guard reasons.isEmpty else { return }
+                guard reasons.isEmpty else {
+                    // Fire a real Sentry event so the breadcrumb trail is
+                    // uploaded even when the tap is blocked. Without a captured
+                    // event the ring-buffered breadcrumbs are never flushed.
+                    Telemetry.capture(
+                        error: NSError(domain: "ios.ssh_addbox", code: 1,
+                                       userInfo: [NSLocalizedDescriptionKey: "connect blocked"]),
+                        message: "ssh connect blocked",
+                        tags: ["surface": "ios", "phase": "ssh_connect_blocked"],
+                        extras: [
+                            "disabled_reasons": reasons.joined(separator: "; "),
+                            "mode": mode.rawValue,
+                            "host_nonempty": host.trimmingCharacters(in: .whitespaces).isEmpty ? "false" : "true",
+                        ]
+                    )
+                    return
+                }
                 connect()
             } label: {
                 Label("Connect", systemImage: "bolt.horizontal.circle")
@@ -315,18 +331,43 @@ struct SSHLoginSheet: View {
         let trimmedKey = privateKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Log key metadata only -- never the key body or passphrase.
+        let looksLikePem: Bool
+        let looksEncrypted: Bool
+        let hasPassphrase: Bool
         if mode == .privateKey {
             let header = trimmedKey.components(separatedBy: "\n").first ?? ""
-            let looksLikePem = trimmedKey.contains("-----BEGIN") && trimmedKey.contains("PRIVATE KEY-----")
-            let looksEncrypted = trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED")
+            looksLikePem = trimmedKey.contains("-----BEGIN") && trimmedKey.contains("PRIVATE KEY-----")
+            looksEncrypted = trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED")
+            hasPassphrase = !passphrase.isEmpty
             Telemetry.breadcrumb("ssh_addbox", "key metadata", data: [
                 "header": header,
                 "length": "\(trimmedKey.count)",
                 "looks_pem": looksLikePem ? "true" : "false",
                 "looks_encrypted": looksEncrypted ? "true" : "false",
-                "has_passphrase": passphrase.isEmpty ? "false" : "true",
+                "has_passphrase": hasPassphrase ? "true" : "false",
             ])
+        } else {
+            looksLikePem = false
+            looksEncrypted = false
+            hasPassphrase = false
         }
+
+        // Captured event so the breadcrumb trail is guaranteed to be uploaded
+        // even if connectViaSSH returns early (before its own captures fire).
+        Telemetry.capture(
+            error: NSError(domain: "ios.ssh_addbox", code: 0,
+                           userInfo: [NSLocalizedDescriptionKey: "connect attempt"]),
+            message: "ssh connect attempt",
+            tags: ["surface": "ios", "phase": "ssh_connect_attempt"],
+            extras: [
+                "mode": mode.rawValue,
+                "host_nonempty": host.trimmingCharacters(in: .whitespaces).isEmpty ? "false" : "true",
+                "key_length": mode == .privateKey ? "\(trimmedKey.count)" : "0",
+                "looks_pem": looksLikePem ? "true" : "false",
+                "looks_encrypted": looksEncrypted ? "true" : "false",
+                "has_passphrase": hasPassphrase ? "true" : "false",
+            ]
+        )
 
         let auth: SshAuth
         switch mode {
