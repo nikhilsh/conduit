@@ -82,6 +82,12 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 		return claudeStreamCommand(adapter.Command, baseArgs, resume, continueLatest)
 	}
 
+	// Subagent registry handle: carries s.mu + s.subagents so the stream
+	// pump can update the roster and emit view_event{view:"agents"}. Built
+	// once here and reused for the self-heal respawn so the registry state
+	// (which lives on the Session) persists across process restarts.
+	subagentH := s.subagentHandle()
+
 	chat, cerr := startChatProcess(
 		context.Background(),
 		argsFor(req.resumeChatSessionID, req.continueLatestChat),
@@ -93,6 +99,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 		s.accumulateUsage,
 		s.handleAskControl,
 		s.latchChatSessionID,
+		subagentH,
 	)
 	if cerr != nil {
 		fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
@@ -120,6 +127,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 			s.accumulateUsage,
 			s.handleAskControl,
 			s.latchChatSessionID,
+			subagentH,
 		)
 		return fresh, ferr
 	}

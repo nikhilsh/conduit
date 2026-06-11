@@ -903,6 +903,22 @@ async fn handle_text(
                             );
                         }
                     }
+                    // Subagent roster snapshot (task: subagent-visibility-panel).
+                    // The broker emits view:"agents" with an object payload
+                    // {agents:[...]} whenever a system/task_* frame updates the
+                    // per-session subagent registry. The typed on_view_event
+                    // delegate carries only string values, so we re-encode the
+                    // agents array as a JSON string under key "agents" — identical
+                    // minimal-passthrough pattern as quick_replies. The apps decode
+                    // the string back into their roster model.
+                    "agents" => {
+                        let payload = flatten_agents(&ev);
+                        delegate.on_view_event(
+                            session_id.to_string(),
+                            "agents".to_string(),
+                            payload,
+                        );
+                    }
                     // view:"status" carries typed sub-events keyed by name,
                     // e.g. {"agent_login_url": {"url": ..., "loopback_port": 8080, ...}}.
                     // Flatten each sub-event's inner object to string values and
@@ -1069,6 +1085,24 @@ fn flatten_session_title(ev: &serde_json::Value) -> HashMap<String, String> {
     payload
 }
 
+/// Flatten a broker `view:"agents"` event into the string-map the typed
+/// `on_view_event` delegate carries (task: subagent-visibility-panel). The
+/// broker payload is `{agents:[...]}` — a full roster snapshot. The typed
+/// delegate can't hold an array, so `agents` is re-encoded as a JSON-array
+/// string the apps decode back into their roster model. Missing/non-array
+/// `agents` produces an empty array string so the apps always get a valid
+/// (possibly empty) roster to render.
+fn flatten_agents(ev: &serde_json::Value) -> HashMap<String, String> {
+    let mut payload = HashMap::new();
+    let agents_str = ev
+        .as_object()
+        .and_then(|obj| obj.get("agents"))
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "[]".to_string());
+    payload.insert("agents".to_string(), agents_str);
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1121,6 +1155,50 @@ mod tests {
         assert!(!flatten_session_title(&serde_json::json!({"title": "   "})).contains_key("title"));
         // Non-object → empty, no panic.
         assert!(flatten_session_title(&serde_json::json!("nope")).is_empty());
+    }
+
+    #[test]
+    fn flatten_agents_encodes_roster() {
+        let ev = serde_json::json!({
+            "agents": [
+                {
+                    "task_id": "a85166712f62b002d",
+                    "name": "ci-reviewer",
+                    "description": "Read a.txt contents",
+                    "status": "working",
+                    "last_tool": "Read",
+                    "tokens": 10226,
+                    "tool_uses": 1,
+                    "duration_ms": 2843,
+                    "started_at": "2026-06-11T00:00:00Z",
+                    "ended_at": ""
+                }
+            ]
+        });
+        let p = flatten_agents(&ev);
+        // The "agents" key must be a JSON-array string that round-trips.
+        let agents_json = p.get("agents").expect("agents key present");
+        let decoded: serde_json::Value = serde_json::from_str(agents_json).expect("valid JSON");
+        let arr = decoded.as_array().expect("array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["task_id"], "a85166712f62b002d");
+        assert_eq!(arr[0]["name"], "ci-reviewer");
+        assert_eq!(arr[0]["status"], "working");
+    }
+
+    #[test]
+    fn flatten_agents_empty_and_missing() {
+        // Empty agents array → "[]" string.
+        let p = flatten_agents(&serde_json::json!({"agents": []}));
+        assert_eq!(p.get("agents").map(String::as_str), Some("[]"));
+
+        // Missing agents key → "[]" string.
+        let p2 = flatten_agents(&serde_json::json!({}));
+        assert_eq!(p2.get("agents").map(String::as_str), Some("[]"));
+
+        // Non-object event → "[]" string (tolerate garbage without panic).
+        let p3 = flatten_agents(&serde_json::json!("nope"));
+        assert_eq!(p3.get("agents").map(String::as_str), Some("[]"));
     }
 
     #[test]

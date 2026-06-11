@@ -199,6 +199,12 @@ type Session struct {
 	// for the user's answer (askcontrol.go). Guarded by mu.
 	pendingAsk *pendingAsk
 
+	// subagents is the per-session registry of spawned subagents, updated
+	// from system/task_* stream-json frames via the subagentRegistryHandle
+	// in the claude chat process pump. Guarded by mu. Non-nil from session
+	// create time so the handle can safely acquire mu without nil checks.
+	subagents *subagentRegistry
+
 	// pushState holds the per-session push-notification state (notifier,
 	// identity, and debounce latches). See push_notify.go. Has its own
 	// mutex so the push path never nests under s.mu.
@@ -348,6 +354,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		lastOutput: time.Now().UTC(),
 		startedAt:  time.Now().UTC(),
 		spawnedAt:  time.Now().UTC(),
+		subagents:  newSubagentRegistry(),
 	}
 	s.applyPaths()
 	if err := s.prepareFilesystem(); err != nil {

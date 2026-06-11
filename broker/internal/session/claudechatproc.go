@@ -57,6 +57,7 @@ func startChatProcess(
 	onUsage func(usageDelta),
 	onAsk func(controlRequest, *chatProcess),
 	onInit func(string),
+	onSubagent *subagentRegistryHandle,
 ) (*chatProcess, error) {
 	if len(command) == 0 {
 		return nil, errors.New("chat process: empty command")
@@ -106,7 +107,7 @@ func startChatProcess(
 				if idle != nil {
 					idle()
 				}
-			})
+			}, onSubagent)
 		// EOF / agent exit: whatever turn was in flight is over.
 		cp.markTurnActive(false)
 		werr := cmd.Wait()
