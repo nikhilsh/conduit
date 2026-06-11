@@ -217,9 +217,16 @@ private fun ReadinessRow(
                 color = if (item.status == ReadinessStatus.Ok) neon.text else neon.textDim,
                 modifier = Modifier.weight(1f),
             )
-            // Action label.
+            // Action label. iOS shows a green checkmark for Ok rows.
             when (item.status) {
-                ReadinessStatus.Ok -> { /* no action */ }
+                ReadinessStatus.Ok -> {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = neon.green,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
                 ReadinessStatus.NotSignedIn -> {
                     if (!item.loginProvider.isNullOrEmpty()) {
                         Surface(

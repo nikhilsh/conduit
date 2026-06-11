@@ -853,6 +853,10 @@ private fun ModelPicker(
                 color = neon.textFaint,
             )
         }
+        // Fast-mode badge — yellow capsule with bolt icon, mirrors iOS picker.
+        if (forkModelSupportsFastMode(model, catalog)) {
+            FastModeBadge()
+        }
     }
 }
 
