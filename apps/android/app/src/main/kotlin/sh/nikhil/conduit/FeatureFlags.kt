@@ -46,6 +46,16 @@ object FeatureFlags {
         const val DONE = 3
     }
 
+    // ── Debug flags ─────────────────────────────────────────────────────
+
+    /**
+     * Show the "Agents" subagent-roster panel in the session Information
+     * screen. Default OFF — the panel is incomplete until the broker
+     * ships the `view:"agents"` view_event. Expose via the debug settings
+     * toggle (Labs section). Mirror of iOS `FeatureFlags.showSubagentPanel`.
+     */
+    const val showSubagentPanel: Boolean = false
+
     // ── Chat A/B ────────────────────────────────────────────────────────
 
     /** FNV-1a 32-bit over UTF-8 — small, dependency-free, stable across

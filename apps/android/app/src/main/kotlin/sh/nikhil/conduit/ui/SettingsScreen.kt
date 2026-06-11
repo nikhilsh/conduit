@@ -140,6 +140,7 @@ fun SettingsScreen(
     val terminalFontSize by appearance.terminalFontSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val neonGlow by appearance.neonGlow.collectAsState()
+    val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
 
     var showAddServer by remember { mutableStateOf(false) }
     var showServerSwitcher by remember { mutableStateOf(false) }
@@ -407,6 +408,7 @@ fun SettingsScreen(
 
             // Labs — chat-shell-v2 A/B override (§2). Auto follows the
             // assigned bucket; A/B are a local override for dogfooding.
+            // Also hosts the debug-gated Agents panel toggle.
             SettingsSection("Labs") {
                 val neon = LocalNeonTheme.current
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -434,6 +436,14 @@ fun SettingsScreen(
                     Spacer(Modifier.height(6.dp))
                     Text("A = Breathe · B = Signature · Auto follows your assigned bucket.", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
                 }
+                SettingsDivider()
+                ToggleRow(
+                    icon = Icons.Filled.Person,
+                    title = "Subagent panel",
+                    subtitle = "Show Agents section in session Info (debug)",
+                    isOn = showSubagentPanel,
+                    onChange = { appearance.setShowSubagentPanel(it) },
+                )
             }
 
             // Support — external donation link (not an IAP; opens system browser).

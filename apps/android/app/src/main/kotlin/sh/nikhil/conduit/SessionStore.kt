@@ -194,6 +194,55 @@ data class AIQuickReplies(
 }
 
 /**
+ * One subagent entry as delivered by the broker's `view:"agents"`
+ * view_event. Exact JSON keys from the spec: task_id, name, description,
+ * status, last_tool, tokens, tool_uses, duration_ms, started_at, ended_at.
+ * Mirror of iOS `SubagentEntry`.
+ */
+data class SubagentEntry(
+    val taskId: String,
+    val name: String,
+    val description: String,
+    val status: String,      // "working" | "done" | "failed"
+    val lastTool: String,
+    val tokens: Long,
+    val toolUses: Int,
+    val durationMs: Long,
+    val startedAt: String,
+    val endedAt: String,
+) {
+    companion object {
+        /**
+         * Decode the `agents[]` JSON array from the view_event payload
+         * (`payload["agents"]` is a JSON-array string). Returns an empty
+         * list on any parse error so callers stay resilient to partial
+         * broker payloads.
+         */
+        fun listFrom(payload: Map<String, String>): List<SubagentEntry> {
+            val raw = payload["agents"] ?: return emptyList()
+            return runCatching {
+                val arr = JSONArray(raw)
+                (0 until arr.length()).mapNotNull { i ->
+                    val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                    SubagentEntry(
+                        taskId = obj.optString("task_id", ""),
+                        name = obj.optString("name", ""),
+                        description = obj.optString("description", ""),
+                        status = obj.optString("status", "working"),
+                        lastTool = obj.optString("last_tool", ""),
+                        tokens = obj.optLong("tokens", 0L),
+                        toolUses = obj.optInt("tool_uses", 0),
+                        durationMs = obj.optLong("duration_ms", 0L),
+                        startedAt = obj.optString("started_at", ""),
+                        endedAt = obj.optString("ended_at", ""),
+                    )
+                }
+            }.getOrElse { emptyList() }
+        }
+    }
+}
+
+/**
  * Pairs the in-flight [OAuthRequest] (PKCE verifier + state, kept in
  * memory only) with the redirect [android.net.Uri] delivered to
  * MainActivity by the `conduit://oauth/...` intent filter. The
@@ -468,6 +517,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
      */
     private val _quickReplies = MutableStateFlow<Map<String, AIQuickReplies>>(emptyMap())
     val quickReplies: StateFlow<Map<String, AIQuickReplies>> = _quickReplies.asStateFlow()
+
+    /**
+     * Per-session subagent roster. Keyed by session id; value is the
+     * full snapshot of [SubagentEntry] items delivered by the broker's
+     * `view:"agents"` view_event. Entries are retained for the whole
+     * session (working + done + failed) ordered by arrival so the panel
+     * shows a complete history. In-memory only — rehydrated on reconnect
+     * via the broker's PublishText record+replay. Mirror of iOS
+     * `SessionStore.subagentRoster`.
+     */
+    private val _subagentRoster = MutableStateFlow<Map<String, List<SubagentEntry>>>(emptyMap())
+    val subagentRoster: StateFlow<Map<String, List<SubagentEntry>>> = _subagentRoster.asStateFlow()
 
     private val _previews = MutableStateFlow<Map<String, PreviewInfo>>(emptyMap())
     val previews: StateFlow<Map<String, PreviewInfo>> = _previews.asStateFlow()
@@ -2926,6 +2987,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         when (kind) {
             "quick_replies" -> ingestQuickReplies(sessionId, payload)
             "session_title" -> ingestSessionTitle(sessionId, payload)
+            "agents" -> ingestSubagents(sessionId, payload)
             else -> routeAgentLoginViewEvent(kind, payload)
         }
     }
@@ -2954,6 +3016,29 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val parsed = AIQuickReplies.from(payload)
         _quickReplies.value = _quickReplies.value.toMutableMap().also { m ->
             if (parsed != null) m[sessionId] = parsed else m.remove(sessionId)
+        }
+    }
+
+    /**
+     * Ingest a full subagent roster snapshot from the broker's
+     * `view:"agents"` view_event. The broker sends the FULL snapshot on
+     * every task_* frame so reconnecting clients catch up via record+replay.
+     * Emits a Telemetry breadcrumb the first time a non-empty roster arrives
+     * for a session. Mirror of iOS `SessionStore.ingestSubagents`.
+     */
+    fun ingestSubagents(sessionId: String, payload: Map<String, String>) {
+        val entries = SubagentEntry.listFrom(payload)
+        val prior = _subagentRoster.value[sessionId]
+        val isFirstPopulate = prior.isNullOrEmpty() && entries.isNotEmpty()
+        _subagentRoster.value = _subagentRoster.value.toMutableMap().also { m ->
+            if (entries.isNotEmpty()) m[sessionId] = entries else m.remove(sessionId)
+        }
+        if (isFirstPopulate) {
+            Telemetry.breadcrumb(
+                "agents_panel",
+                "subagent roster first populate",
+                mapOf("session" to sessionId, "count" to entries.size.toString()),
+            )
         }
     }
 
