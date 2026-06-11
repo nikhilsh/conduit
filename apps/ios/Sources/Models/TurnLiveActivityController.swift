@@ -52,7 +52,7 @@ public final class TurnLiveActivityController {
     /// The broker endpoint to use for Live Activity push-token registration.
     /// Set by the bridge (which owns the store) whenever it evaluates,
     /// so the controller always has the current base URL + bearer token.
-    public var registrationEndpoint: StoredEndpoint?
+    var registrationEndpoint: StoredEndpoint?
 
     private init() {}
 
