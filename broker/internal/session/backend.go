@@ -68,6 +68,11 @@ type BackendCapabilities struct {
 	// (Usage returns ok=true). Drives the Session Info usage card's presence
 	// in the per-assistant descriptor.
 	Usage bool
+	// Steer: the protocol supports injecting a message into a RUNNING turn
+	// (turn/steer JSON-RPC). Drives the apps' "Queued Next" / "Steer" UI —
+	// when true the composer queues + steers; when false it queues + holds
+	// until the turn ends. Only codex app-server sets this true.
+	Steer bool
 }
 
 // AgentDescriptor is the per-assistant capability descriptor served in
@@ -84,14 +89,15 @@ type AgentDescriptor struct {
 }
 
 // AgentSupports is the descriptor's feature-flag block, the wire shape the apps
-// read instead of name-switching. compact/ask_user_question/effort/usage come
-// from BackendCapabilities; plan_mode from the manifest's permission_modes.
+// read instead of name-switching. compact/ask_user_question/effort/usage/steer
+// come from BackendCapabilities; plan_mode from the manifest's permission_modes.
 type AgentSupports struct {
 	Compact         bool `json:"compact"`
 	AskUserQuestion bool `json:"ask_user_question"`
 	Effort          bool `json:"effort"`
 	PlanMode        bool `json:"plan_mode"`
 	Usage           bool `json:"usage"`
+	Steer           bool `json:"steer"`
 }
 
 // spawnRequest carries the per-spawn inputs a backend needs that aren't on the

@@ -147,11 +147,17 @@ chat_mode = "codex-exec"
 		!claude.Supports.PlanMode || !claude.Supports.Usage {
 		t.Errorf("claude supports = %+v, want all true", claude.Supports)
 	}
+	// claude (stream-json) does not support turn/steer: apps must not show the
+	// Steer button for claude sessions.
+	if claude.Supports.Steer {
+		t.Errorf("claude supports.steer must be false, got true")
+	}
 	if len(claude.Models) != 1 || claude.Models[0].ID != "haiku" {
 		t.Errorf("claude models = %+v, want [haiku]", claude.Models)
 	}
 
-	// codex-exec: no /compact, no ask_user_question (the exec fallback path).
+	// codex-exec: no /compact, no ask_user_question (the exec fallback path),
+	// and no steer (the exec backend has no persistent turn to inject into).
 	codex, ok := body.Agents["codex"]
 	if !ok {
 		t.Fatalf("agents missing codex: %+v", body.Agents)
@@ -168,10 +174,80 @@ chat_mode = "codex-exec"
 	if !codex.Supports.Effort || !codex.Supports.Usage {
 		t.Errorf("codex supports = %+v, want effort+usage true", codex.Supports)
 	}
+	if codex.Supports.Steer {
+		t.Errorf("codex-exec supports.steer must be false, got true")
+	}
 
 	// The legacy top-level models map is still served alongside the descriptors.
 	if _, present := body.Models["claude"]; !present {
 		t.Errorf("top-level models[claude] must stay present for one release")
+	}
+}
+
+// TestCapabilitiesSteerFlagPerBackend pins supports.steer for each backend:
+// codex app-server (the only backend with turn/steer) → true; all others → false.
+// This guards the CAPABILITY GATE so apps never hardcode by agent name.
+func TestCapabilitiesSteerFlagPerBackend(t *testing.T) {
+	a := auth.NewStore()
+	tok := a.Mint()
+
+	dir := t.TempDir()
+	// codex app-server backend
+	writeAdapter(t, dir, "codex-appserver.toml", `
+name = "codex-appserver"
+command = ["cat"]
+workdir = "."
+chat_mode = "codex-app-server"
+`)
+	// codex exec backend (fallback — no steer)
+	writeAdapter(t, dir, "codex-exec.toml", `
+name = "codex-exec"
+command = ["cat"]
+workdir = "."
+chat_mode = "codex-exec"
+`)
+	// claude stream-json backend (no steer)
+	writeAdapter(t, dir, "claude.toml", `
+name = "claude"
+command = ["cat"]
+workdir = "."
+chat_mode = "stream-json"
+`)
+	reg, err := agents.LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	m := session.NewManager(reg)
+	srv := httptest.NewServer(New(a, m).Handler())
+	t.Cleanup(func() { srv.Close(); m.Close() })
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET capabilities: %v", err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Agents map[string]session.AgentDescriptor `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if d, ok := body.Agents["codex-appserver"]; !ok {
+		t.Fatal("agents missing codex-appserver")
+	} else if !d.Supports.Steer {
+		t.Errorf("codex app-server supports.steer must be true, got false; supports=%+v", d.Supports)
+	}
+	if d, ok := body.Agents["codex-exec"]; !ok {
+		t.Fatal("agents missing codex-exec")
+	} else if d.Supports.Steer {
+		t.Errorf("codex-exec supports.steer must be false, got true; supports=%+v", d.Supports)
+	}
+	if d, ok := body.Agents["claude"]; !ok {
+		t.Fatal("agents missing claude")
+	} else if d.Supports.Steer {
+		t.Errorf("claude supports.steer must be false, got true; supports=%+v", d.Supports)
 	}
 }
 
