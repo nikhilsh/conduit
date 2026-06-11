@@ -395,14 +395,21 @@ func (s *Server) serveSessionDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // pushRegisterRequest is the body for POST /api/push/register.
+// session_id is required when platform="apns-liveactivity"; omitted for alert platforms.
 type pushRegisterRequest struct {
-	Platform string `json:"platform"`
-	Token    string `json:"token"`
+	Platform  string `json:"platform"`
+	Token     string `json:"token"`
+	SessionID string `json:"session_id"`
 }
 
 // servePushRegister handles POST /api/push/register.
 // The caller must supply a valid bearer token (requireAuth).
 // Identity = pushIdentity (single-operator broker).
+//
+// Two registration paths:
+//   - platform="apns-liveactivity": registers an LA push token keyed by
+//     (identity, session_id); stored in the LARegistry, not the alert Registry.
+//   - platform="apns"|"fcm"|"unifiedpush": existing alert registration (unchanged).
 func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
@@ -416,9 +423,35 @@ func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	platform := push.Platform(strings.TrimSpace(req.Platform))
+	platform := strings.TrimSpace(req.Platform)
 	token := strings.TrimSpace(req.Token)
-	if !push.ValidPlatform(platform) {
+	sessionID := strings.TrimSpace(req.SessionID)
+
+	// LA token path: session-scoped, stored separately from alert tokens.
+	if platform == "apns-liveactivity" {
+		if token == "" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_token", "token is required")
+			return
+		}
+		if sessionID == "" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_session_id", "session_id is required for apns-liveactivity")
+			return
+		}
+		if s.LATokens == nil {
+			// No LA registry wired — accept and silently discard so old brokers
+			// without the registry don't 503 the iOS client.
+			writeJSON(w, http.StatusOK, map[string]any{"registered": true, "platform": platform})
+			return
+		}
+		s.LATokens.SetLA(pushIdentity, sessionID, token)
+		log.Printf("push: registered apns-liveactivity token for session %s", sessionID)
+		writeJSON(w, http.StatusOK, map[string]any{"registered": true, "platform": platform, "session_id": sessionID})
+		return
+	}
+
+	// Standard alert registration path — unchanged.
+	pp := push.Platform(platform)
+	if !push.ValidPlatform(pp) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_platform", "platform must be apns, fcm, or unifiedpush")
 		return
 	}
@@ -430,10 +463,10 @@ func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusServiceUnavailable, "push_unavailable", "push registry not configured")
 		return
 	}
-	dt := push.DeviceToken{Platform: platform, Token: token}
+	dt := push.DeviceToken{Platform: pp, Token: token}
 	s.Push.Register(pushIdentity, dt)
 	log.Printf("push: registered %s token for %s", platform, pushIdentity)
-	writeJSON(w, http.StatusOK, map[string]any{"registered": true, "platform": string(platform)})
+	writeJSON(w, http.StatusOK, map[string]any{"registered": true, "platform": string(pp)})
 }
 
 // servePushUnregister handles POST /api/push/unregister.

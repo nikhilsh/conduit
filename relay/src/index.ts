@@ -30,6 +30,11 @@ function validPayload(p: unknown): p is PushPayload {
   if (o.category !== undefined && o.category !== "alert" && o.category !== "liveactivity") {
     return false;
   }
+  // Live Activity optional fields.
+  if (o.event !== undefined && o.event !== "update" && o.event !== "end") return false;
+  if (o.content_state !== undefined && (typeof o.content_state !== "object" || o.content_state === null)) {
+    return false;
+  }
   return true;
 }
 

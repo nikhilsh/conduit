@@ -5,6 +5,77 @@ import (
 	"testing"
 )
 
+// ---- LARegistry tests ----
+
+func TestLARegistry_SetGetDrop(t *testing.T) {
+	r := NewLARegistry()
+
+	// Not yet registered.
+	if got := r.GetLA("broker", "sess-1"); got != "" {
+		t.Fatalf("GetLA before set = %q, want empty", got)
+	}
+
+	// Set and retrieve.
+	r.SetLA("broker", "sess-1", "tok-abc")
+	if got := r.GetLA("broker", "sess-1"); got != "tok-abc" {
+		t.Fatalf("GetLA after set = %q, want tok-abc", got)
+	}
+
+	// Different session — isolated.
+	if got := r.GetLA("broker", "sess-2"); got != "" {
+		t.Fatalf("sess-2 should be empty, got %q", got)
+	}
+
+	// Replace on re-register.
+	r.SetLA("broker", "sess-1", "tok-xyz")
+	if got := r.GetLA("broker", "sess-1"); got != "tok-xyz" {
+		t.Fatalf("after replace = %q, want tok-xyz", got)
+	}
+
+	// Drop.
+	r.DropLA("broker", "sess-1")
+	if got := r.GetLA("broker", "sess-1"); got != "" {
+		t.Fatalf("after drop = %q, want empty", got)
+	}
+
+	// Safe double-drop.
+	r.DropLA("broker", "sess-1")
+}
+
+func TestLARegistry_AlertTokenUnaffected(t *testing.T) {
+	// LA registry is separate from the alert Registry; operations on one must not
+	// affect the other.
+	alert := NewRegistry()
+	la := NewLARegistry()
+
+	alert.Register("broker", tok(PlatformAPNs, "alert-tok"))
+	la.SetLA("broker", "sess-1", "la-tok")
+
+	// Alert registry still has the alert token.
+	if toks := alert.TokensFor("broker"); len(toks) != 1 || toks[0].Token != "alert-tok" {
+		t.Fatalf("alert token changed: %+v", toks)
+	}
+	// LA registry has only the LA token.
+	if got := la.GetLA("broker", "sess-1"); got != "la-tok" {
+		t.Fatalf("la token changed: %q", got)
+	}
+
+	// Dropping the LA token leaves the alert token intact.
+	la.DropLA("broker", "sess-1")
+	if toks := alert.TokensFor("broker"); len(toks) != 1 {
+		t.Fatalf("alert token disappeared after LA drop: %+v", toks)
+	}
+}
+
+func TestLARegistry_SetEmptyTokenDrops(t *testing.T) {
+	r := NewLARegistry()
+	r.SetLA("broker", "sess-1", "tok-abc")
+	r.SetLA("broker", "sess-1", "") // empty token = drop
+	if got := r.GetLA("broker", "sess-1"); got != "" {
+		t.Fatalf("after set-empty = %q, want empty", got)
+	}
+}
+
 func tok(p Platform, t string) DeviceToken { return DeviceToken{Platform: p, Token: t} }
 
 func TestRegisterAndTokensFor(t *testing.T) {

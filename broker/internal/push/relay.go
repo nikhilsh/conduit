@@ -57,6 +57,12 @@ type relayInner struct {
 	Body      string `json:"body"`
 	SessionID string `json:"session_id,omitempty"`
 	Category  string `json:"category,omitempty"`
+	// Event is the APNs Live Activity event type ("update" or "end").
+	// Only sent when Category="liveactivity".
+	Event string `json:"event,omitempty"`
+	// ContentState carries the Live Activity aps."content-state" payload.
+	// Only sent when Category="liveactivity". The relay forwards this verbatim.
+	ContentState map[string]any `json:"content_state,omitempty"`
 }
 
 // NewRelaySender builds a relaySender. relayURL is the base URL of the
@@ -90,9 +96,12 @@ func (s *relaySender) Send(ctx context.Context, token DeviceToken, payload Paylo
 		Token:         token.Token,
 		Env:           "production",
 		Payload: relayInner{
-			Title:     payload.Title,
-			Body:      payload.Body,
-			SessionID: payload.SessionID,
+			Title:        payload.Title,
+			Body:         payload.Body,
+			SessionID:    payload.SessionID,
+			Category:     payload.Category,
+			Event:        payload.Event,
+			ContentState: payload.ContentState,
 		},
 	}
 

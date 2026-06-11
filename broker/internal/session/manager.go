@@ -209,6 +209,10 @@ type Session struct {
 	// identity, and debounce latches). See push_notify.go. Has its own
 	// mutex so the push path never nests under s.mu.
 	pushState pushNotifyState
+	// laState holds the per-session Live Activity push state (LA token
+	// registry, sender, content-state fields, and debounce latch).
+	// See push_notify.go. Has its own mutex.
+	laState laPushState
 	// chatSessionID is the claude CLI's OWN conversation id, latched
 	// from the stream-json init line and persisted (meta.json) so a
 	// respawned agent --resumes the conversation instead of starting
@@ -1418,6 +1422,10 @@ type Manager struct {
 	// tests, brokers without a relay or UnifiedPush client).
 	pushNotifier push.Notifier
 	pushIdentity string
+	// laTokens and laSender are wired from cmd/conduit-broker via SetLASender
+	// for Live Activity push support. nil = LA disabled.
+	laTokens *push.LARegistry
+	laSender push.Sender
 }
 
 // SetCredentialStore wires the per-identity OAuth credential store into
@@ -1451,6 +1459,17 @@ func (m *Manager) SetPushNotifier(n push.Notifier, identity string) {
 	m.mu.Lock()
 	m.pushNotifier = n
 	m.pushIdentity = identity
+	m.mu.Unlock()
+}
+
+// SetLASender wires the Live Activity token registry and sender into the
+// Manager so every NEW session can emit LA push updates. nil reg or sender
+// disables LA updates (useful in tests / brokers without LA configured).
+func (m *Manager) SetLASender(reg *push.LARegistry, sender push.Sender, identity string) {
+	m.mu.Lock()
+	m.laTokens = reg
+	m.laSender = sender
+	m.pushIdentity = identity // shared with alert push identity
 	m.mu.Unlock()
 }
 
@@ -1822,6 +1841,11 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	// notifications when no client is attached. nil notifier is a no-op.
 	if m.pushNotifier != nil {
 		s.SetPushNotifier(m.pushNotifier, m.pushIdentity)
+	}
+	// Wire the Live Activity sender so the session can emit content-state
+	// updates to the iOS lock-screen turn card. nil reg/sender = no-op.
+	if m.laTokens != nil && m.laSender != nil {
+		s.SetLAState(m.laTokens, m.laSender, m.pushIdentity)
 	}
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)

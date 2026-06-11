@@ -52,6 +52,47 @@ func newTestServerWithPush(t *testing.T) (*httptest.Server, string, *push.Regist
 	return srv, tok, pushReg, relayRec
 }
 
+// newTestServerWithPushAndLA creates a test server with a full push stack +
+// an LA registry wired, so LA registration endpoints can be tested.
+func newTestServerWithPushAndLA(t *testing.T) (*httptest.Server, string, *push.Registry, *push.LARegistry, *recordingRelaySrv) {
+	t.Helper()
+
+	a := auth.NewStore()
+	tok := a.Mint()
+	reg := newTestRegistry(t)
+	m := session.NewManager(reg)
+
+	relayRec := newRecordingRelaySrv()
+	relayHttp := httptest.NewServer(relayRec)
+	t.Cleanup(relayHttp.Close)
+
+	pushReg := push.NewRegistryWithPersistence(filepath.Join(t.TempDir(), "push-tokens.json"))
+	installCredFile := filepath.Join(t.TempDir(), "push-install.json")
+
+	relaySender, err := push.NewRelaySender(relayHttp.URL, installCredFile)
+	if err != nil {
+		t.Fatalf("NewRelaySender: %v", err)
+	}
+	senders := map[push.Platform]push.Sender{
+		push.PlatformAPNs:        relaySender,
+		push.PlatformFCM:         relaySender,
+		push.PlatformUnifiedPush: push.NewUnifiedPushSender(),
+	}
+	disp := push.NewDispatcher(pushReg, senders)
+	laReg := push.NewLARegistry()
+
+	wsSrv := New(a, m).
+		WithPush(pushReg).
+		WithDispatcher(disp).
+		WithPushRelayConfigured(true).
+		WithLARegistry(laReg).
+		WithLASender(relaySender)
+
+	srv := httptest.NewServer(wsSrv.Handler())
+	t.Cleanup(func() { srv.Close(); m.Close() })
+	return srv, tok, pushReg, laReg, relayRec
+}
+
 // recordingRelaySrv is a fake relay that records send calls and can be
 // told to return a specific status code.
 type recordingRelaySrv struct {
@@ -382,5 +423,118 @@ func TestPushTestRequiresAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// ---- Live Activity registration tests ----
+
+// TestLARegisterHappyPath verifies that platform="apns-liveactivity" + session_id
+// stores the token in the LARegistry and does NOT touch the alert registry.
+func TestLARegisterHappyPath(t *testing.T) {
+	srv, tok, alertReg, laReg, _ := newTestServerWithPushAndLA(t)
+
+	body := `{"platform":"apns-liveactivity","token":"la-tok-123","session_id":"sess-abc"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST register LA: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200", resp.StatusCode)
+	}
+
+	var out struct {
+		Registered bool   `json:"registered"`
+		Platform   string `json:"platform"`
+		SessionID  string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Registered || out.Platform != "apns-liveactivity" || out.SessionID != "sess-abc" {
+		t.Fatalf("unexpected response: %+v", out)
+	}
+
+	// LA token must be in the LA registry under the session.
+	if got := laReg.GetLA(pushIdentity, "sess-abc"); got != "la-tok-123" {
+		t.Errorf("LA token = %q, want la-tok-123", got)
+	}
+
+	// Alert registry must be unaffected.
+	if n := len(alertReg.TokensFor(pushIdentity)); n != 0 {
+		t.Errorf("alert registry should be empty, got %d tokens", n)
+	}
+}
+
+// TestLARegisterReplacesOnReregister verifies that re-registering the same session
+// replaces the previous LA token (replace-on-update semantics).
+func TestLARegisterReplacesOnReregister(t *testing.T) {
+	srv, tok, _, laReg, _ := newTestServerWithPushAndLA(t)
+
+	doReg := func(token string) {
+		body := `{"platform":"apns-liveactivity","token":"` + token + `","session_id":"sess-repl"}`
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register?token="+url.QueryEscape(tok), strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST register: %v", err)
+		}
+		resp.Body.Close()
+	}
+
+	doReg("tok-v1")
+	if got := laReg.GetLA(pushIdentity, "sess-repl"); got != "tok-v1" {
+		t.Fatalf("after first register: %q, want tok-v1", got)
+	}
+	doReg("tok-v2")
+	if got := laReg.GetLA(pushIdentity, "sess-repl"); got != "tok-v2" {
+		t.Fatalf("after second register: %q, want tok-v2", got)
+	}
+}
+
+// TestLARegisterMissingSessionID returns 400 when session_id is absent.
+func TestLARegisterMissingSessionID(t *testing.T) {
+	srv, tok, _, _, _ := newTestServerWithPushAndLA(t)
+
+	body := `{"platform":"apns-liveactivity","token":"la-tok"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST register: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestLARegisterAlertPathUnchanged verifies that existing alert registrations
+// (platform="apns") continue working when the LA registry is also wired.
+func TestLARegisterAlertPathUnchanged(t *testing.T) {
+	srv, tok, alertReg, laReg, _ := newTestServerWithPushAndLA(t)
+
+	body := `{"platform":"apns","token":"alert-tok-xyz"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST register: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200", resp.StatusCode)
+	}
+
+	// Alert token in the alert registry.
+	toks := alertReg.TokensFor(pushIdentity)
+	if len(toks) != 1 || toks[0].Token != "alert-tok-xyz" {
+		t.Fatalf("alert token not in registry: %+v", toks)
+	}
+	// LA registry untouched.
+	if got := laReg.GetLA(pushIdentity, ""); got != "" {
+		t.Errorf("LA registry should be empty, got %q", got)
 	}
 }
