@@ -21,7 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.SubdirectoryArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -3026,7 +3026,7 @@ private fun ConversationComposer(
                             // Mirrors iOS arrow.turn.down.right affordance.
                             if (sendIsSteer) {
                                 Icon(
-                                    Icons.AutoMirrored.Filled.SubdirectoryArrowRight,
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                     contentDescription = "Queue and steer",
                                 )
                             } else {
@@ -3186,7 +3186,7 @@ private fun QueuedNextCard(
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Icon(
-                    Icons.AutoMirrored.Filled.SubdirectoryArrowRight,
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = "Steer",
                     tint = steerColor,
                     modifier = Modifier.size(14.dp),
