@@ -41,6 +41,7 @@ import uniffi.conduit_core.SessionStatus
 import uniffi.conduit_core.SshCredentials
 import uniffi.conduit_core.SshException
 import uniffi.conduit_core.SshHostKeyDelegate
+import uniffi.conduit_core.SshProgressDelegate
 import uniffi.conduit_core.ConduitClient
 import sh.nikhil.conduit.auth.AgentLoginCoordinator
 import uniffi.conduit_core.ConduitDelegate
@@ -548,6 +549,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
     /** SSH-bootstrap progress, observed by the SSH login sheet. */
     private val _sshBootstrap = MutableStateFlow<SshBootstrapState>(SshBootstrapState.Idle)
     val sshBootstrap: StateFlow<SshBootstrapState> = _sshBootstrap.asStateFlow()
+
+    /**
+     * Sheet-independent error string surfaced after the SSH bootstrap fails.
+     * Persists even when the SSH login sheet is dismissed so the main screen can
+     * show a banner. Cleared when a new bootstrap attempt starts.
+     */
+    private val _sshBootstrapError = MutableStateFlow<String?>(null)
+    val sshBootstrapError: StateFlow<String?> = _sshBootstrapError.asStateFlow()
 
     /**
      * Live SSH tunnel for an SSH-bootstrapped session (core #451). Held for
@@ -1241,6 +1250,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val host = credentials.host
         val port = credentials.port
         val user = credentials.username
+
+        // Single-flight guard: if a bootstrap is already in progress, ignore
+        // the duplicate call (belt-and-suspenders beyond the UI disabledReasons check).
+        if (_sshBootstrap.value is SshBootstrapState.Running) {
+            Telemetry.breadcrumb("ssh_addbox", "connect ignored (already running)")
+            return
+        }
+
+        // Clear any prior sheet-independent error so stale messages don't linger.
+        _sshBootstrapError.value = null
+
         // Breadcrumb before anything else so we can confirm this function was
         // reached even if the coroutine or bootstrap throws before the first await.
         Telemetry.breadcrumb(
@@ -1249,12 +1269,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
             mapOf("host" to host, "port" to port.toInt().toString(), "user" to user),
         )
         _sshBootstrap.value = SshBootstrapState.Running("Connecting to $user@$host:$port…")
-        val bridge = SshHostKeyBridge(this, host, port)
+        val hostKeyBridge = SshHostKeyBridge(this, host, port)
+        val progressBridge = SshProgressBridge(this, host)
         viewModelScope.launch {
             val preToken = java.util.UUID.randomUUID().toString()
             try {
-                _sshBootstrap.value = SshBootstrapState.Running("Starting server on $host…")
-
                 // SSH-tunnel transport (core #451): hold the returned
                 // [SshTunnel] for the session's lifetime so the bearer token
                 // rides the SSH-encrypted channel and the box needs no public
@@ -1262,40 +1281,64 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // stays available as a one-release fallback. Token-paired boxes
                 // never reach here — this is the SSH-bootstrap flow only.
                 val useTunnel = sshTunnelTransportEnabled()
-                var tunnel: SshTunnel? = null
-                val result = if (useTunnel) {
-                    Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", mapOf("host" to host))
-                    val bootstrap = withContext(Dispatchers.IO) {
-                        ffiSshBootstrapTunneled(
-                            credentials,
-                            preToken,
-                            anthropicApiKey,
-                            openaiApiKey,
-                            imageRef,
-                            BuildConfig.VERSION_NAME,
-                            bridge,
+
+                // Helper that runs the actual bootstrap call — extracted so the
+                // ECONNRESET retry can call it twice without duplication.
+                suspend fun runBootstrap(): Pair<uniffi.conduit_core.SshBootstrapResult, SshTunnel?> {
+                    return if (useTunnel) {
+                        Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", mapOf("host" to host))
+                        val bootstrap = withContext(Dispatchers.IO) {
+                            ffiSshBootstrapTunneled(
+                                credentials,
+                                preToken,
+                                anthropicApiKey,
+                                openaiApiKey,
+                                imageRef,
+                                BuildConfig.VERSION_NAME,
+                                hostKeyBridge,
+                                progressBridge,
+                            )
+                        }
+                        Telemetry.breadcrumb(
+                            "ssh_tunnel",
+                            "tunnel open",
+                            mapOf("host" to host, "local_port" to bootstrap.tunnel.localPort().toInt().toString()),
                         )
-                    }
-                    tunnel = bootstrap.tunnel
-                    Telemetry.breadcrumb(
-                        "ssh_tunnel",
-                        "tunnel open",
-                        mapOf("host" to host, "local_port" to bootstrap.tunnel.localPort().toInt().toString()),
-                    )
-                    bootstrap.result
-                } else {
-                    withContext(Dispatchers.IO) {
-                        ffiSshBootstrap(
-                            credentials,
-                            preToken,
-                            anthropicApiKey,
-                            openaiApiKey,
-                            imageRef,
-                            BuildConfig.VERSION_NAME,
-                            bridge,
-                        )
+                        Pair(bootstrap.result, bootstrap.tunnel)
+                    } else {
+                        val r = withContext(Dispatchers.IO) {
+                            ffiSshBootstrap(
+                                credentials,
+                                preToken,
+                                anthropicApiKey,
+                                openaiApiKey,
+                                imageRef,
+                                BuildConfig.VERSION_NAME,
+                                hostKeyBridge,
+                                progressBridge,
+                            )
+                        }
+                        Pair(r, null)
                     }
                 }
+
+                // Run bootstrap; on ECONNRESET, wait 1.5s and retry once.
+                val (result, tunnel) = try {
+                    runBootstrap()
+                } catch (e: SshException.Handshake) {
+                    val msg = e.message?.lowercase() ?: ""
+                    if (msg.contains("reset by peer") || msg.contains("os error 54")
+                            || msg.contains("connection reset")) {
+                        Telemetry.breadcrumb("ssh_addbox", "ECONNRESET on first attempt — retrying once",
+                            mapOf("host" to host))
+                        _sshBootstrap.value = SshBootstrapState.Running("Retrying connection…")
+                        delay(1_500)
+                        runBootstrap()
+                    } else {
+                        throw e
+                    }
+                }
+
                 val url = "ws://127.0.0.1:${result.localPort.toInt()}"
                 val token = result.token
                 val endpoint = Endpoint(url, token)
@@ -1314,6 +1357,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
             } catch (e: SshException) {
                 val detail = describeSsh(e)
                 _sshBootstrap.value = SshBootstrapState.Failed(detail)
+                // Also persist the error outside the sheet so it's visible even
+                // after the user dismissed the SSH login sheet.
+                _sshBootstrapError.value = detail
                 Telemetry.capture(
                     error = e,
                     message = "Android SSH bootstrap failed",
@@ -1323,6 +1369,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             } catch (t: Throwable) {
                 val detail = t.message ?: t.toString()
                 _sshBootstrap.value = SshBootstrapState.Failed(detail)
+                _sshBootstrapError.value = detail
                 Telemetry.capture(
                     error = t,
                     message = "Android SSH bootstrap failed",
@@ -1365,6 +1412,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     fun clearSshBootstrap() {
         _sshBootstrap.value = SshBootstrapState.Idle
+    }
+
+    /** Called by [SshProgressBridge] on the main thread to update bootstrap progress. */
+    internal fun updateSshBootstrapProgress(message: String) {
+        _sshBootstrap.value = SshBootstrapState.Running(message)
     }
 
     private fun describeSsh(e: SshException): String = when (e) {
@@ -3481,5 +3533,41 @@ class SshHostKeyBridge(
         }
         latch.await()
         return decision
+    }
+}
+
+/**
+ * Bridges the Rust SSH bootstrap progress callbacks into UI state.
+ * Called synchronously on the russh worker thread; posts to the main
+ * thread via [SessionStore]'s [MutableStateFlow] to update
+ * [SessionStore.sshBootstrap] with a friendly human-readable message.
+ * The mapping covers both the Rust connect-sequence phases and the STEP
+ * markers emitted by remote-bootstrap.sh.
+ */
+class SshProgressBridge(
+    private val store: SessionStore,
+    private val host: String,
+) : SshProgressDelegate {
+    override fun `onProgress`(`phase`: String, `detail`: String?) {
+        val message = friendlyMessage(phase, detail) ?: return
+        store.viewModelScope.launch {
+            store.updateSshBootstrapProgress(message)
+        }
+    }
+
+    private fun friendlyMessage(phase: String, detail: String?): String? = when (phase) {
+        "connecting"    -> "Connecting to ${detail ?: host}…"
+        "handshake"     -> "Securing connection…"
+        "authenticating" -> "Authenticating…"
+        "tunnel"        -> "Opening secure tunnel…"
+        "bootstrap"     -> when (detail) {
+            "STEP reuse_check"    -> "Checking for existing server…"
+            "STEP download_broker" -> "Downloading server…"
+            "STEP start_broker"   -> "Starting server…"
+            "STEP install_agent"  -> "Installing agent…"
+            "STEP wait_ready"     -> "Waiting for server…"
+            else -> null  // suppress other human-readable stderr lines
+        }
+        else -> null
     }
 }

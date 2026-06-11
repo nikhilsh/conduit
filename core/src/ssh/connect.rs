@@ -11,6 +11,7 @@ use russh::keys::{decode_secret_key, key, PublicKeyBase64};
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::{SshAuth, SshCredentials, SshError};
+use crate::SshProgressDelegate;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
@@ -63,9 +64,12 @@ impl SshClient {
     /// Dial → handshake → auth. Returns the live client + the
     /// fingerprint of the server's host key (only populated if the
     /// callback accepted it; otherwise we never reach this point).
+    /// Progress events are emitted at each phase so the app can surface
+    /// live status during the connect sequence.
     pub async fn connect(
         creds: SshCredentials,
         host_key_cb: HostKeyCallback,
+        progress: std::sync::Arc<dyn SshProgressDelegate>,
     ) -> Result<Self, SshError> {
         let captured = Arc::new(SyncMutex::new(None));
         let handler = RusshClientHandler {
@@ -78,6 +82,9 @@ impl SshClient {
             ..Default::default()
         });
 
+        let addr_str = format!("{}:{}", creds.host, creds.port);
+        progress.on_progress("connecting".to_string(), Some(addr_str));
+
         let addr = (creds.host.as_str(), creds.port);
         let mut handle =
             tokio::time::timeout(CONNECT_TIMEOUT, client::connect(config, addr, handler))
@@ -85,6 +92,9 @@ impl SshClient {
                 .map_err(|_| SshError::Dial(format!("timeout after {:?}", CONNECT_TIMEOUT)))?
                 .map_err(|e| SshError::Handshake(e.to_string()))?;
 
+        progress.on_progress("handshake".to_string(), None);
+
+        progress.on_progress("authenticating".to_string(), None);
         let authed = match creds.auth.clone() {
             SshAuth::Password { password } => handle
                 .authenticate_password(creds.username.clone(), password)

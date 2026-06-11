@@ -96,9 +96,26 @@ pub trait SshHostKeyDelegate: Send + Sync {
     fn accept_host_key(&self, fingerprint: String) -> bool;
 }
 
+/// Per-phase progress callback for the SSH bootstrap flow. Emitted as
+/// each stage is entered so the app can surface granular status rather
+/// than a frozen "Starting server…". The `phase` tag matches the UDL
+/// comments; `detail` carries phase-specific context (host:port, local
+/// port, or a raw stderr line from the bootstrap script).
+pub trait SshProgressDelegate: Send + Sync {
+    fn on_progress(&self, phase: String, detail: Option<String>);
+}
+
+/// A no-op [`SshProgressDelegate`] used when the caller doesn't care
+/// about progress (cli-driver example, tests, legacy codepath).
+struct NoopProgress;
+impl SshProgressDelegate for NoopProgress {
+    fn on_progress(&self, _phase: String, _detail: Option<String>) {}
+}
+
 /// UniFFI-visible entry point for the SSH bootstrap. Drives
 /// [`ssh::ssh_bootstrap`] on the core tokio runtime via `run_on_core`
 /// so the caller doesn't need to be inside a tokio context.
+#[allow(clippy::too_many_arguments)]
 pub async fn ssh_bootstrap(
     credentials: SshCredentials,
     pre_allocated_token: String,
@@ -107,12 +124,16 @@ pub async fn ssh_bootstrap(
     image_ref: Option<String>,
     app_version: Option<String>,
     host_key_delegate: Box<dyn SshHostKeyDelegate>,
+    progress_delegate: Option<Box<dyn SshProgressDelegate>>,
 ) -> Result<SshBootstrapResult, SshError> {
-    let delegate: Arc<dyn SshHostKeyDelegate> = Arc::from(host_key_delegate);
+    let hk_delegate: Arc<dyn SshHostKeyDelegate> = Arc::from(host_key_delegate);
     let cb: ssh::HostKeyCallback = Arc::new(move |fp: String| {
-        let delegate = Arc::clone(&delegate);
-        Box::pin(async move { delegate.accept_host_key(fp) })
+        let d = Arc::clone(&hk_delegate);
+        Box::pin(async move { d.accept_host_key(fp) })
     });
+    let progress: Arc<dyn SshProgressDelegate> = progress_delegate
+        .map(|d| Arc::from(d) as Arc<dyn SshProgressDelegate>)
+        .unwrap_or_else(|| Arc::new(NoopProgress));
     run_on_core(ssh::ssh_bootstrap(
         credentials,
         pre_allocated_token,
@@ -121,6 +142,7 @@ pub async fn ssh_bootstrap(
         image_ref,
         app_version,
         cb,
+        progress,
     ))
     .await
 }
@@ -130,6 +152,7 @@ pub async fn ssh_bootstrap(
 /// the forward's lifecycle (hold the handle, observe `is_alive()`, `stop()` on
 /// logout). This is the path the apps should adopt — see
 /// `docs/PLAN-SSH-TUNNEL.md`.
+#[allow(clippy::too_many_arguments)]
 pub async fn ssh_bootstrap_tunneled(
     credentials: SshCredentials,
     pre_allocated_token: String,
@@ -138,12 +161,16 @@ pub async fn ssh_bootstrap_tunneled(
     image_ref: Option<String>,
     app_version: Option<String>,
     host_key_delegate: Box<dyn SshHostKeyDelegate>,
+    progress_delegate: Option<Box<dyn SshProgressDelegate>>,
 ) -> Result<SshTunnelBootstrap, SshError> {
-    let delegate: Arc<dyn SshHostKeyDelegate> = Arc::from(host_key_delegate);
+    let hk_delegate: Arc<dyn SshHostKeyDelegate> = Arc::from(host_key_delegate);
     let cb: ssh::HostKeyCallback = Arc::new(move |fp: String| {
-        let delegate = Arc::clone(&delegate);
-        Box::pin(async move { delegate.accept_host_key(fp) })
+        let d = Arc::clone(&hk_delegate);
+        Box::pin(async move { d.accept_host_key(fp) })
     });
+    let progress: Arc<dyn SshProgressDelegate> = progress_delegate
+        .map(|d| Arc::from(d) as Arc<dyn SshProgressDelegate>)
+        .unwrap_or_else(|| Arc::new(NoopProgress));
     run_on_core(ssh::ssh_bootstrap_tunneled(
         credentials,
         pre_allocated_token,
@@ -152,6 +179,7 @@ pub async fn ssh_bootstrap_tunneled(
         image_ref,
         app_version,
         cb,
+        progress,
     ))
     .await
 }
