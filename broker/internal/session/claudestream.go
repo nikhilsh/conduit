@@ -6,6 +6,81 @@ import (
 	"strings"
 )
 
+// subagentTaskEvent captures the fields present in all three
+// system/task_* frames emitted by claude when a subagent is spawned.
+// Unknown fields are silently discarded — only what the roster needs.
+type subagentTaskEvent struct {
+	// Common to all three subtypes.
+	Subtype string `json:"subtype"` // "task_started" | "task_progress" | "task_notification"
+	TaskID  string `json:"task_id"`
+
+	// task_started / task_progress
+	SubagentType string `json:"subagent_type"` // display name, e.g. "researcher", "general-purpose"
+	Description  string `json:"description"`
+
+	// task_progress
+	LastToolName string        `json:"last_tool_name"`
+	Usage        subagentUsage `json:"usage"`
+
+	// task_notification
+	Status string `json:"status"` // "completed" | "failed"
+}
+
+type subagentUsage struct {
+	TotalTokens uint64 `json:"total_tokens"`
+	ToolUses    uint64 `json:"tool_uses"`
+	DurationMS  uint64 `json:"duration_ms"`
+}
+
+// parseSubagentTaskEvent decodes one stream-json line as a
+// system/task_started|task_progress|task_notification frame. Returns
+// (event, true) only for those three subtypes; all other lines return
+// (_, false) without allocating.
+func parseSubagentTaskEvent(line []byte) (subagentTaskEvent, bool) {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return subagentTaskEvent{}, false
+	}
+	// Fast reject: must contain a task_ subtype marker.
+	if !bytes.Contains(line, []byte(`"task_`)) {
+		return subagentTaskEvent{}, false
+	}
+	// Decode with a flat struct that covers all three frame shapes.
+	var ev struct {
+		Type         string        `json:"type"`
+		Subtype      string        `json:"subtype"`
+		TaskID       string        `json:"task_id"`
+		SubagentType string        `json:"subagent_type"`
+		Description  string        `json:"description"`
+		LastToolName string        `json:"last_tool_name"`
+		Usage        subagentUsage `json:"usage"`
+		Status       string        `json:"status"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return subagentTaskEvent{}, false
+	}
+	if ev.Type != "system" {
+		return subagentTaskEvent{}, false
+	}
+	switch ev.Subtype {
+	case "task_started", "task_progress", "task_notification":
+	default:
+		return subagentTaskEvent{}, false
+	}
+	if ev.TaskID == "" {
+		return subagentTaskEvent{}, false
+	}
+	return subagentTaskEvent{
+		Subtype:      ev.Subtype,
+		TaskID:       ev.TaskID,
+		SubagentType: ev.SubagentType,
+		Description:  ev.Description,
+		LastToolName: ev.LastToolName,
+		Usage:        ev.Usage,
+		Status:       ev.Status,
+	}, true
+}
+
 // claudeStreamEvent decodes one NDJSON line emitted by
 //
 //	claude -p --output-format stream-json --include-partial-messages

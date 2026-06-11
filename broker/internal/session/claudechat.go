@@ -144,7 +144,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest), onInit func(string), onTurnEnd func()) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -212,6 +212,14 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 		// normal event processing below.
 		if c, ok := parseClaudeContextTokens(line); ok {
 			lastContextTokens = c
+		}
+		// system/task_* frames: update the per-session subagent registry
+		// and emit the full roster snapshot as a view_event{view:"agents"}.
+		// Dispatched BEFORE parseClaudeStreamLine so these lines (which are
+		// otherwise ignored by the chat extractor) do not fall through.
+		if taskEv, ok := parseSubagentTaskEvent(line); ok {
+			onSubagent.onTaskEvent(taskEv)
+			continue
 		}
 		// Surface /compact progress + result as a system chat line — the
 		// stream-json engine reports it via system/status events that
