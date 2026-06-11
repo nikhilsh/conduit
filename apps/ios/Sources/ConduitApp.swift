@@ -165,14 +165,30 @@ struct ConduitApp: App {
                             PushNotificationManager.shared.requestAuthorizationIfNeeded()
                         }
                     }
-                    // Re-register with the new box when the active endpoint
-                    // changes (multi-box: user switches servers). V1 covers
-                    // the active box only; all-boxes registration is a follow-up.
+                    // Re-register with ALL paired boxes when the active endpoint
+                    // changes (box switch). The token may have rotated or a
+                    // server may have lost its registration.
                     .onChange(of: store.endpoint) { _, newEndpoint in
-                        PushNotificationManager.shared.endpointChanged(to: newEndpoint)
+                        let allEndpoints = store.savedServers.map { $0.endpoint }
+                        PushNotificationManager.shared.endpointChanged(
+                            to: newEndpoint,
+                            allEndpoints: allEndpoints
+                        )
                         Task { @MainActor in
                             await PushNotificationManager.shared.probeCapabilities(
                                 endpoint: newEndpoint)
+                        }
+                    }
+                    // Unregister push from any server that was removed from
+                    // savedServers (best-effort: one Task per removed box).
+                    .onChange(of: store.savedServers) { old, new in
+                        let removed = old.filter { prev in
+                            !new.contains(where: { $0.id == prev.id })
+                        }
+                        for server in removed {
+                            PushNotificationManager.shared.unregisterFromServer(
+                                endpoint: server.endpoint
+                            )
                         }
                     }
                     .sheet(item: hostKeyBinding) { prompt in
