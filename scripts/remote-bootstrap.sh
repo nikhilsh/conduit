@@ -22,8 +22,13 @@
 #   14  port collision with a non-conduit process
 #   15  bad usage (missing / short token)
 #   16  could not download/install the broker binary
-#   17  no agent CLI (claude / codex) on PATH and auto-install failed/skipped
 #   18  curl not available on the host
+#
+# NOTE: exit 17 (no agent CLI) has been removed.  An agent CLI is NOT
+# required for the broker to start or for the app to connect.  "No agent
+# CLI" is reported on stderr and the broker continues normally.  The
+# broker's own readiness block (cli_present:false / signed_in:false) and
+# the post-pair checklist in the app inform the user of any next steps.
 #
 # Usage:
 #   remote-bootstrap.sh [--with-ntfy] <CONDUIT_TOKEN> [ANTHROPIC_API_KEY] [OPENAI_API_KEY] [IGNORED]
@@ -46,16 +51,20 @@
 # The reuse check (healthy broker already running) works for both paths.
 #
 # ── Agent-CLI auto-install ──────────────────────────────────────────────────
-# If neither claude nor codex is on PATH, the script attempts a best-effort
-# user-space install. Gated by CONDUIT_AUTOINSTALL_AGENT (default: 1 = on).
+# Agent CLI (claude / codex) is NOT a prerequisite for the broker or for the
+# app to connect.  After the broker is healthy and the OK line is printed,
+# the script performs a best-effort, time-bounded, non-fatal install attempt
+# when CONDUIT_AUTOINSTALL_AGENT=1 (default) and no agent is on PATH.
+# Progress goes to stderr so the stdout OK/ERR contract stays clean.
+# A failed or timed-out install is NOT fatal; the broker stays up.
 #   Install order:
 #     1. claude — official native installer (https://claude.ai/install.sh),
 #        installs to ~/.local/bin/claude; auto-updates in the background.
 #     2. codex  — official install script (https://chatgpt.com/codex/install.sh),
 #        installs to ~/.local/bin/codex.
 #     3. codex via npm (fallback for hosts that have npm but no direct DL).
-# Progress goes to stderr so the stdout OK/ERR contract stays clean.
-# If all attempts fail → ERR 17 with pointer to docs/SELF-HOST.md.
+# Each step is bounded by AGENT_INSTALL_TIMEOUT_S (default 180s).
+# If all attempts fail → a stderr note pointing to docs/SELF-HOST.md.
 #
 # To opt out:  CONDUIT_AUTOINSTALL_AGENT=0 remote-bootstrap.sh ...
 #
@@ -86,6 +95,16 @@
 # ────────────────────────────────────────────────────────────────────────────
 
 set -eu
+
+# ── Network / install timeout caps ───────────────────────────────────────────
+# All curl calls and installer pipelines are bounded so nothing can cause an
+# indefinite hang that leaves the app stuck on "Starting server…".
+CURL_CONNECT_TIMEOUT=15        # seconds: TCP connect
+CURL_MAX_TIME=180              # seconds: total curl transfer (broker install)
+CURL_HEALTH_MAX_TIME=5         # seconds: health-check curls (fast local calls)
+CURL_API_MAX_TIME=10           # seconds: GitHub API / version lookups
+CURL_NTFY_DL_MAX_TIME=120      # seconds: ntfy binary download
+AGENT_INSTALL_TIMEOUT_S=180    # seconds: per agent installer attempt
 
 # ── Argument parsing ──────────────────────────────────────────────────────
 # Accept optional --with-ntfy flag before the positional args so callers
@@ -141,9 +160,9 @@ fi
 # ── Reuse path ────────────────────────────────────────────────────────────
 # A healthy broker on the port → return immediately.  Works whether the
 # broker was launched by systemd (no pidfile) or by the old nohup path.
-if curl -fsS "$HEALTH" >/dev/null 2>&1; then
+if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ntfy_suffix=""
-  if [ "$_with_ntfy" = "1" ] && curl -fsS "$NTFY_HEALTH" >/dev/null 2>&1; then
+  if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
   fi
   echo "OK port=$HOST_PORT token=$TOKEN reused=true${_ntfy_suffix}"
@@ -152,9 +171,9 @@ fi
 
 # Also accept: legacy pidfile present + process alive + health passes.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null \
-   && curl -fsS "$HEALTH" >/dev/null 2>&1; then
+   && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ntfy_suffix=""
-  if [ "$_with_ntfy" = "1" ] && curl -fsS "$NTFY_HEALTH" >/dev/null 2>&1; then
+  if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
   fi
   echo "OK port=$HOST_PORT token=$TOKEN reused=true${_ntfy_suffix}"
@@ -175,72 +194,13 @@ fi
 # the app streams stderr as status.
 if [ ! -x "$BIN" ]; then
   mkdir -p "$BIN_DIR" "$STATE_DIR"
-  if ! curl -fsSL https://github.com/nikhilsh/conduit/releases/latest/download/install.sh \
+  if ! curl -fsSL \
+       --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+       --max-time "$CURL_MAX_TIME" \
+       https://github.com/nikhilsh/conduit/releases/latest/download/install.sh \
        | sh -s -- --bin-dir "$BIN_DIR" 1>&2; then
     echo "ERR 16 could not install conduit-broker binary"
     exit 16
-  fi
-fi
-
-# ── Agent-CLI presence check + optional auto-install ──────────────────────
-# The bare deploy needs an agent CLI on PATH (the old Docker image bundled
-# them). See docs/SELF-HOST.md for host install instructions.
-if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
-  if [ "$CONDUIT_AUTOINSTALL_AGENT" = "0" ]; then
-    echo "ERR 17 no agent CLI (claude/codex) on PATH; see docs/SELF-HOST.md"
-    exit 17
-  fi
-
-  echo "conduit: no agent CLI found; attempting user-space install (set CONDUIT_AUTOINSTALL_AGENT=0 to skip)" >&2
-
-  # Ensure ~/.local/bin is on PATH for this session so a freshly installed
-  # binary is immediately visible to command -v checks below.
-  LOCAL_BIN="$HOME/.local/bin"
-  mkdir -p "$LOCAL_BIN"
-  case ":$PATH:" in
-    *":$LOCAL_BIN:"*) ;;
-    *) PATH="$LOCAL_BIN:$PATH" ;;
-  esac
-
-  _installed_agent=0
-
-  # Attempt 1: claude — official native installer.
-  # https://claude.ai/install.sh installs to ~/.local/bin/claude and
-  # auto-updates in the background.  Ref: https://code.claude.com/docs/en/setup
-  echo "conduit: trying claude native installer ..." >&2
-  if curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1; then
-    if command -v claude >/dev/null 2>&1; then
-      echo "conduit: claude installed successfully" >&2
-      _installed_agent=1
-    fi
-  fi
-
-  # Attempt 2: codex — official install script.
-  # https://chatgpt.com/codex/install.sh installs to ~/.local/bin/codex.
-  if [ "$_installed_agent" = "0" ]; then
-    echo "conduit: claude install failed; trying codex install script ..." >&2
-    if curl -fsSL https://chatgpt.com/codex/install.sh | sh >/dev/null 2>&1; then
-      if command -v codex >/dev/null 2>&1; then
-        echo "conduit: codex installed successfully" >&2
-        _installed_agent=1
-      fi
-    fi
-  fi
-
-  # Attempt 3: codex via npm (fallback for hosts with npm but no direct DL).
-  if [ "$_installed_agent" = "0" ] && command -v npm >/dev/null 2>&1; then
-    echo "conduit: codex script failed; trying npm install -g @openai/codex ..." >&2
-    if npm install -g @openai/codex >/dev/null 2>&1; then
-      if command -v codex >/dev/null 2>&1; then
-        echo "conduit: codex installed via npm" >&2
-        _installed_agent=1
-      fi
-    fi
-  fi
-
-  if [ "$_installed_agent" = "0" ]; then
-    echo "ERR 17 no agent CLI (claude/codex) on PATH; auto-install failed; see docs/SELF-HOST.md"
-    exit 17
   fi
 fi
 
@@ -281,7 +241,10 @@ if [ "$_with_ntfy" = "1" ]; then
       # matching tarball.  The binary inside is at ntfy_<ver>_<arch>/ntfy.
       _ntfy_ver=""
       if command -v curl >/dev/null 2>&1; then
-        _ntfy_ver="$(curl -fsSL 'https://api.github.com/repos/binwiederhier/ntfy/releases/latest' \
+        _ntfy_ver="$(curl -fsSL \
+          --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+          --max-time "$CURL_API_MAX_TIME" \
+          'https://api.github.com/repos/binwiederhier/ntfy/releases/latest' \
           2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')"
       fi
       if [ -z "$_ntfy_ver" ]; then
@@ -293,7 +256,10 @@ if [ "$_with_ntfy" = "1" ]; then
       _ntfy_tarball="ntfy_${_ntfy_ver_num}_${_ntfy_arch}.tar.gz"
       _ntfy_url_dl="https://github.com/binwiederhier/ntfy/releases/download/${_ntfy_ver}/${_ntfy_tarball}"
       _ntfy_tmp="$(mktemp -d)"
-      if curl -fsSL "$_ntfy_url_dl" -o "$_ntfy_tmp/$_ntfy_tarball" 2>&1 >&2; then
+      if curl -fsSL \
+           --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+           --max-time "$CURL_NTFY_DL_MAX_TIME" \
+           "$_ntfy_url_dl" -o "$_ntfy_tmp/$_ntfy_tarball" 2>&1 >&2; then
         tar -xzf "$_ntfy_tmp/$_ntfy_tarball" -C "$_ntfy_tmp" 2>&1 >&2
         # The binary lives at ntfy_<ver>_<arch>/ntfy inside the tarball.
         _ntfy_extracted="$_ntfy_tmp/ntfy_${_ntfy_ver_num}_${_ntfy_arch}/ntfy"
@@ -389,7 +355,7 @@ NTFY_UNIT
     _ni=1
     _ntfy_ready=0
     while [ "$_ni" -le 10 ]; do
-      if curl -fsS "$NTFY_HEALTH" >/dev/null 2>&1; then
+      if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
         _ntfy_ready=1
         break
       fi
@@ -509,12 +475,79 @@ fi
 # Bare cold-start is fast; systemd may take a moment to exec the unit.
 i=1
 while [ "$i" -le 15 ]; do
-  if curl -fsS "$HEALTH" >/dev/null 2>&1; then
+  if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=""
     if [ -n "$_ntfy_url" ]; then
       _ntfy_suffix=" ntfy=$_ntfy_url"
     fi
+    # OK reflects "broker is up and connectable" — agent CLI is not required.
     echo "OK port=$HOST_PORT token=$TOKEN reused=false${_ntfy_suffix}"
+    # ── Best-effort agent CLI install (non-fatal, after OK is emitted) ─────
+    # The broker is already healthy; the app has its connection.  Now we
+    # attempt to install an agent CLI if none is present.  Any failure is
+    # logged to stderr and silently ignored — it MUST NOT affect the exit
+    # code or the OK line already printed.
+    _try_agent_install() {
+      if command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1; then
+        return 0
+      fi
+      if [ "$CONDUIT_AUTOINSTALL_AGENT" = "0" ]; then
+        echo "conduit: CONDUIT_AUTOINSTALL_AGENT=0; skipping agent CLI install (install manually — see docs/SELF-HOST.md)" >&2
+        return 0
+      fi
+
+      echo "conduit: no agent CLI found; attempting user-space install (set CONDUIT_AUTOINSTALL_AGENT=0 to skip)" >&2
+
+      # Ensure ~/.local/bin is on PATH so a freshly installed binary is visible.
+      LOCAL_BIN="$HOME/.local/bin"
+      mkdir -p "$LOCAL_BIN"
+      case ":$PATH:" in
+        *":$LOCAL_BIN:"*) ;;
+        *) PATH="$LOCAL_BIN:$PATH" ;;
+      esac
+
+      _installed_agent=0
+
+      # Attempt 1: claude — official native installer.
+      echo "conduit: trying claude native installer ..." >&2
+      if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
+           'curl -fsSL --connect-timeout 15 --max-time 60 https://claude.ai/install.sh | bash' \
+           >/dev/null 2>&1; then
+        if command -v claude >/dev/null 2>&1; then
+          echo "conduit: claude installed successfully" >&2
+          _installed_agent=1
+        fi
+      fi
+
+      # Attempt 2: codex — official install script.
+      if [ "$_installed_agent" = "0" ]; then
+        echo "conduit: claude install failed or timed out; trying codex install script ..." >&2
+        if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
+             'curl -fsSL --connect-timeout 15 --max-time 60 https://chatgpt.com/codex/install.sh | sh' \
+             >/dev/null 2>&1; then
+          if command -v codex >/dev/null 2>&1; then
+            echo "conduit: codex installed successfully" >&2
+            _installed_agent=1
+          fi
+        fi
+      fi
+
+      # Attempt 3: codex via npm (fallback for hosts with npm but no direct DL).
+      if [ "$_installed_agent" = "0" ] && command -v npm >/dev/null 2>&1; then
+        echo "conduit: codex script failed or timed out; trying npm install -g @openai/codex ..." >&2
+        if timeout "$AGENT_INSTALL_TIMEOUT_S" npm install -g @openai/codex >/dev/null 2>&1; then
+          if command -v codex >/dev/null 2>&1; then
+            echo "conduit: codex installed via npm" >&2
+            _installed_agent=1
+          fi
+        fi
+      fi
+
+      if [ "$_installed_agent" = "0" ]; then
+        echo "conduit: no agent CLI (claude/codex) on PATH; auto-install failed or timed out; install/sign in from the app — see docs/SELF-HOST.md" >&2
+      fi
+    }
+    _try_agent_install >&2 || true
     exit 0
   fi
   sleep 1
