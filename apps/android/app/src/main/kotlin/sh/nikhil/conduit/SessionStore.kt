@@ -1240,6 +1240,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val host = credentials.host
         val port = credentials.port
         val user = credentials.username
+        // Breadcrumb before anything else so we can confirm this function was
+        // reached even if the coroutine or bootstrap throws before the first await.
+        Telemetry.breadcrumb(
+            "ssh_addbox",
+            "connectViaSSH reached",
+            mapOf("host" to host, "port" to port.toInt().toString(), "user" to user),
+        )
         _sshBootstrap.value = SshBootstrapState.Running("Connecting to $user@$host:$port…")
         val bridge = SshHostKeyBridge(this, host, port)
         viewModelScope.launch {

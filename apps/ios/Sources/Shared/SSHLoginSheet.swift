@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Form-style sheet that drives the SSH-bootstrap flow. The user supplies
 /// host/port + username + password OR PEM key (+ optional passphrase); on
@@ -59,7 +60,7 @@ struct SSHLoginSheet: View {
                 }
             }
             .onChange(of: store.harness) { _, next in
-                // Once the underlying ws connection succeeds, close out — the
+                // Once the underlying ws connection succeeds, close out -- the
                 // bootstrap path already swapped the endpoint and called connect.
                 if case .running = store.sshBootstrapState { return }
                 if next.isReachable, case .idle = store.sshBootstrapState {
@@ -85,7 +86,7 @@ struct SSHLoginSheet: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(cred.username)@\(cred.host)")
                                     .foregroundStyle(ConduitTheme.textBody)
-                                Text("Port \(cred.port) · \(cred.kind == .password ? "Password" : "SSH Key")")
+                                Text("Port \(cred.port) \u{00B7} \(cred.kind == .password ? "Password" : "SSH Key")")
                                     .font(.caption)
                                     .foregroundStyle(ConduitTheme.textSecondary)
                             }
@@ -150,7 +151,10 @@ struct SSHLoginSheet: View {
                 Text("Paste the PEM-encoded private key. The passphrase, if any, is stored only in the Keychain.")
                     .font(.caption)
                     .foregroundStyle(ConduitTheme.textSecondary)
-                TextEditor(text: $privateKey)
+                // UITextView wrapper: disables smart-quotes, smart-dashes, autocorrect,
+                // and autocapitalization -- all of which TextEditor alone cannot suppress
+                // and which silently corrupt a pasted PEM key.
+                PlainKeyTextEditor(text: $privateKey)
                     .font(.system(.footnote, design: .monospaced))
                     .frame(minHeight: 120)
                     .padding(8)
@@ -158,6 +162,26 @@ struct SSHLoginSheet: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(ConduitTheme.surface.opacity(0.45))
                     )
+                // PEM sanity warnings (client-side only; no key body logged)
+                let trimmedKey = privateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedKey.isEmpty {
+                    if !trimmedKey.contains("-----BEGIN") || !trimmedKey.contains("PRIVATE KEY-----") {
+                        Label(
+                            "This does not look like a PEM private key -- it should start with -----BEGIN ...PRIVATE KEY-----",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(ConduitTheme.warning)
+                    } else if (trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED"))
+                                && passphrase.isEmpty {
+                        Label(
+                            "This key appears encrypted -- enter the passphrase below.",
+                            systemImage: "lock.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(ConduitTheme.warning)
+                    }
+                }
                 Divider().background(ConduitTheme.separator)
                 SecureField("Passphrase (optional)", text: $passphrase)
                     .textInputAutocapitalization(.never)
@@ -217,45 +241,100 @@ struct SSHLoginSheet: View {
     }
 
     private var connectButton: some View {
-        Button {
-            connect()
-        } label: {
-            Label("Connect", systemImage: "bolt.horizontal.circle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(ConduitTheme.textPrimary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .glassCapsule(
-                    interactive: true,
-                    tint: ConduitTheme.success.opacity(0.55)
-                )
+        VStack(spacing: 6) {
+            Button {
+                let reasons = disabledReasons
+                Telemetry.breadcrumb("ssh_addbox", "connect tapped", data: [
+                    "enabled": reasons.isEmpty ? "true" : "false",
+                    "disabled_reason": reasons.joined(separator: "; "),
+                ])
+                guard reasons.isEmpty else { return }
+                connect()
+            } label: {
+                Label("Connect", systemImage: "bolt.horizontal.circle")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(canConnect ? ConduitTheme.textPrimary : ConduitTheme.textMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .glassCapsule(
+                        interactive: canConnect,
+                        tint: (canConnect ? ConduitTheme.success : ConduitTheme.separator).opacity(0.55)
+                    )
+            }
+            .buttonStyle(.plain)
+            // Surface why the button is disabled so the user does not face a
+            // silent dead button.
+            if !disabledReasons.isEmpty {
+                Text(disabledReasons.joined(separator: "  \u{00B7}  "))
+                    .font(.caption)
+                    .foregroundStyle(ConduitTheme.warning)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!canConnect)
     }
 
     // MARK: - Logic
 
     private var canConnect: Bool {
-        if host.trimmingCharacters(in: .whitespaces).isEmpty { return false }
-        if username.trimmingCharacters(in: .whitespaces).isEmpty { return false }
-        if UInt16(port) == nil { return false }
-        switch mode {
-        case .password:   return !password.isEmpty
-        case .privateKey: return !privateKey.isEmpty
+        disabledReasons.isEmpty
+    }
+
+    /// Returns a human-readable list of reasons the Connect button should be
+    /// disabled. Empty means all preconditions are satisfied.
+    private var disabledReasons: [String] {
+        var reasons: [String] = []
+        if host.trimmingCharacters(in: .whitespaces).isEmpty {
+            reasons.append("Enter host")
         }
-        // unreachable
+        if username.trimmingCharacters(in: .whitespaces).isEmpty {
+            reasons.append("Enter username")
+        }
+        if UInt16(port) == nil {
+            reasons.append("Port must be 1-65535")
+        }
+        switch mode {
+        case .password:
+            if password.isEmpty { reasons.append("Enter password") }
+        case .privateKey:
+            if privateKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                reasons.append("Paste a private key")
+            }
+        }
+        return reasons
     }
 
     private func connect() {
+        Telemetry.breadcrumb("ssh_addbox", "connect() entry", data: [
+            "host": host.trimmingCharacters(in: .whitespaces),
+            "port": port,
+            "mode": mode.rawValue,
+        ])
+
         guard let portValue = UInt16(port) else { return }
+        let trimmedKey = privateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Log key metadata only -- never the key body or passphrase.
+        if mode == .privateKey {
+            let header = trimmedKey.components(separatedBy: "\n").first ?? ""
+            let looksLikePem = trimmedKey.contains("-----BEGIN") && trimmedKey.contains("PRIVATE KEY-----")
+            let looksEncrypted = trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED")
+            Telemetry.breadcrumb("ssh_addbox", "key metadata", data: [
+                "header": header,
+                "length": "\(trimmedKey.count)",
+                "looks_pem": looksLikePem ? "true" : "false",
+                "looks_encrypted": looksEncrypted ? "true" : "false",
+                "has_passphrase": passphrase.isEmpty ? "false" : "true",
+            ])
+        }
+
         let auth: SshAuth
         switch mode {
         case .password:
             auth = .password(password: password)
         case .privateKey:
             auth = .privateKey(
-                keyPem: privateKey,
+                keyPem: trimmedKey,
                 passphrase: passphrase.isEmpty ? nil : passphrase
             )
         }
@@ -272,7 +351,7 @@ struct SSHLoginSheet: View {
                 port: creds.port,
                 username: creds.username,
                 kind: mode == .password ? .password : .privateKey,
-                secret: mode == .password ? password : privateKey,
+                secret: mode == .password ? password : trimmedKey,
                 passphrase: mode == .privateKey && !passphrase.isEmpty ? passphrase : nil
             )
             SshCredentialStore.save(saved)
@@ -304,6 +383,55 @@ struct SSHLoginSheet: View {
         }
     }
 }
+
+// MARK: - PlainKeyTextEditor
+
+/// A UITextView-backed text editor with all iOS smart-editing features
+/// disabled. `TextEditor` in SwiftUI does not propagate
+/// `.autocorrectionDisabled()` far enough to suppress smart-quotes and
+/// smart-dashes, which silently corrupt pasted PEM private keys (straight
+/// apostrophes/hyphens become curly/em-dashes). This wrapper fixes that.
+private struct PlainKeyTextEditor: UIViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.delegate = context.coordinator
+        tv.autocorrectionType = .no
+        tv.autocapitalizationType = .none
+        tv.smartQuotesType = .no
+        tv.smartDashesType = .no
+        tv.smartInsertDeleteType = .no
+        tv.spellCheckingType = .no
+        tv.keyboardType = .asciiCapable
+        tv.font = UIFont.monospacedSystemFont(ofSize: UIFont.smallSystemFontSize, weight: .regular)
+        tv.backgroundColor = .clear
+        tv.textColor = UIColor.label
+        tv.isScrollEnabled = false
+        tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return tv
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        // Only push if changed to avoid cursor-jump on every keystroke.
+        if uiView.text != text {
+            uiView.text = text
+        }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: PlainKeyTextEditor
+        init(_ parent: PlainKeyTextEditor) { self.parent = parent }
+
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+        }
+    }
+}
+
+// MARK: - SSHCard
 
 private struct SSHCard<Content: View>: View {
     let title: String
