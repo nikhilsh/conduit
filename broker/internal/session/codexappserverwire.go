@@ -164,6 +164,31 @@ func codexThreadResumeParams(threadID, dir string, o SpawnOverride) map[string]a
 	return p
 }
 
+// codexTurnSteerParams builds turn/steer params for mid-turn user injection.
+// The steer frame injects input into the running turn at the next
+// reasoning/step boundary. No model/effort/sandbox overrides are allowed on
+// a steer — input only.
+//
+// Confirmed working against codex-cli 0.132.0 (frames_multistep.jsonl):
+//
+//	C->S {"id":99,"method":"turn/steer","params":{
+//	       "threadId":"019eb47f-…","input":[{"type":"text","text":"…"}],
+//	       "expectedTurnId":"019eb47f-ee92-…"}}
+//	S->C {"id":99,"result":{"turnId":"019eb47f-ee92-…"}}
+//
+// Success: same active turn id echoed back — no new turn/started fires.
+// Failure: error -32600 "no active turn to steer" when the turn already
+// ended before the steer arrived; caller falls back to turn/start.
+func codexTurnSteerParams(threadID, expectedTurnID, text string) map[string]any {
+	return map[string]any{
+		"threadId": threadID,
+		"input": []map[string]any{
+			{"type": "text", "text": text},
+		},
+		"expectedTurnId": expectedTurnID,
+	}
+}
+
 // codexTurnStartParams builds turn/start params for a user message. Model /
 // effort overrides ride along (turn-level overrides are honored per the
 // schema's TurnStartParams.model / .effort).
@@ -962,3 +987,23 @@ func codexRPCErrorMessage(errRaw json.RawMessage) string {
 	}
 	return codexTrimMessage(string(errRaw))
 }
+
+// codexRPCErrorCode lifts the integer error code from a JSON-RPC error object
+// ({code,message,data}). Returns 0 when absent or not parseable.
+//
+// -32600 is the "no active turn to steer" error code returned by codex when
+// turn/steer is called after the turn has already completed.
+func codexRPCErrorCode(errRaw json.RawMessage) int {
+	var e struct {
+		Code int `json:"code"`
+	}
+	if json.Unmarshal(errRaw, &e) == nil {
+		return e.Code
+	}
+	return 0
+}
+
+// codexSteerNoActiveTurnCode is the JSON-RPC error code codex returns when
+// turn/steer is sent after the active turn has already completed.
+// Confirmed live (codex-cli 0.132.0): {"code":-32600,"message":"no active turn to steer"}.
+const codexSteerNoActiveTurnCode = -32600

@@ -46,6 +46,72 @@ S->C {"method":"turn/completed","params":{"turn":{"id":"…","status":"completed
 `--dangerously-bypass-approvals-and-sandbox`) and `read-only`+`on-request` for
 plan mode.
 
+## turn/steer — mid-turn user injection (confirmed working)
+
+`turn/steer` injects a user message into a **running** turn. The injected text
+reaches the model at the next reasoning/step boundary — it does NOT retroactively
+delete already-emitted tokens; output that started streaming before the steer
+continues to completion, then the model incorporates the steered input.
+
+**Note:** prior notes in this repo marked steer as "functionally inert / proposal-only" — that was a test artifact (we steered short turns that had already completed and got -32600 back). Steer is live and working in codex-cli 0.132.0.
+
+### Confirmed-working frame sequence (codex-cli 0.132.0)
+
+```
+# While a turn is in progress (turn/started seen, turn/completed NOT yet seen):
+C->S {"id":99,"method":"turn/steer","params":{
+        "threadId":"019eb47f-edb2-77c0-9760-a4de90fdc5e2",
+        "input":[{"type":"text","text":"STOP. Write about a PURPLE ELEPHANT instead."}],
+        "expectedTurnId":"019eb47f-ee92-7d12-b1b0-7a690fab00ae"}}
+S->C {"id":99,"result":{"turnId":"019eb47f-ee92-7d12-b1b0-7a690fab00ae"}}
+
+# NO new turn/started fires — the turn continues under the same id.
+# The steered text surfaces as a new userMessage item:
+S->C {"method":"item/started","params":{"item":{"type":"userMessage","id":"…","content":[{"type":"text","text":"STOP. Write about a PURPLE ELEPHANT instead."}]},"threadId":"…","turnId":"019eb47f-ee92-7d12-b1b0-7a690fab00ae"}}
+S->C {"method":"item/completed","params":{"item":{"type":"userMessage", …},"threadId":"…","turnId":"019eb47f-ee92-7d12-b1b0-7a690fab00ae"}}
+
+# Agent then picks it up at the next reasoning/step boundary and responds.
+```
+
+### Parameters
+
+```json
+{
+  "threadId": "<active thread id>",
+  "input": [{"type": "text", "text": "<steer text>"}],
+  "expectedTurnId": "<active turn id from turn/started>"
+}
+```
+
+No model/effort/sandbox/outputSchema overrides are allowed on a steer — input only.
+
+### Failure: -32600 "no active turn to steer"
+
+```
+S->C {"id":99,"error":{"code":-32600,"message":"no active turn to steer"}}
+```
+
+This means the turn completed (or was interrupted) before the steer arrived —
+a natural race when the turn finishes just as the steer is sent. The broker's
+fallback: call `turn/start` with the same text so the user's message is never
+lost. The broker implements this automatically in `codexAppServerProcess.Steer`
++ `handleSteerResponse`.
+
+### Where the broker tracks the active turn id
+
+`codexAppServerProcess.turnID` — latched from the `turn/started` notification's
+`params.turn.id`. The same field that `Interrupt()` uses to target
+`turn/interrupt`. `Steer()` reads it under `c.mu`; `finishTurn()` clears it to
+`""` when any turn terminus fires.
+
+### Broker auto-steer behaviour
+
+`Send(text)` with a turn active + `turnID` latched → calls `Steer(text)` instead of
+returning `errCodexTurnInFlight`. The steer response is routed in
+`routeTurnResponse`; on -32600 `handleSteerResponse` falls back to `turn/start`.
+When the turn is active but `turnID` is not yet latched (race: `turn/started` not
+yet seen), `Send` returns `errCodexTurnInFlight` as before.
+
 ## Approval requests (server→client, id-bearing)
 
 `ServerRequest.json` enumerates ten server→client request methods. The two that
