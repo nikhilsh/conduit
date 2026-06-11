@@ -123,18 +123,29 @@ func codexInitializeParams() map[string]any {
 	}
 }
 
+// codexPlanInstruction is the developerInstructions text injected on
+// thread/start and thread/resume when PermissionMode=="plan". Codex has no
+// native plan mode — the read-only sandbox + on-request approvals only GATE
+// writes; this instruction makes codex DRAFT a plan instead of acting.
+// Verified field name against codex app-server 0.132.0 JSON schema
+// (ThreadStartParams.developerInstructions, ThreadResumeParams.developerInstructions).
+const codexPlanInstruction = "You are in PLAN MODE. Investigate and propose a concrete plan before acting. Do not modify files or run state-changing commands without explicit approval; prefer read-only exploration and present your plan for review first."
+
 // codexThreadStartParams builds thread/start params, applying the override's
 // model / effort / permission mode as JSON-RPC params (the app-server twin of
 // the exec path's CLI flags). Unknown / empty values are dropped, never
 // breaking the spawn.
 //
-//	model:           override.Model (free-form string; codex validates)
-//	effort:          ReasoningEffort, validated against codexEfforts → the
-//	                 codex ReasoningEffort enum (low/medium/high)
-//	sandbox:         permission mode "plan" → "read-only" (SandboxMode enum);
-//	                 default → "danger-full-access" (the adapter's bypass posture)
-//	approvalPolicy:  "plan" → "on-request" (read-only review); default →
-//	                 "never" (no approval prompts, matching the bypass flag)
+//	model:                 override.Model (free-form string; codex validates)
+//	effort:                ReasoningEffort, validated against codexEfforts → the
+//	                       codex ReasoningEffort enum (low/medium/high)
+//	sandbox:               permission mode "plan" → "read-only" (SandboxMode enum);
+//	                       default → "danger-full-access" (the adapter's bypass posture)
+//	approvalPolicy:        "plan" → "on-request" (read-only review); default →
+//	                       "never" (no approval prompts, matching the bypass flag)
+//	developerInstructions: "plan" → codexPlanInstruction (planning nudge; codex
+//	                       has no native plan mode so the instruction is required);
+//	                       omitted for all other modes (byte-identical to before)
 func codexThreadStartParams(dir string, o SpawnOverride) map[string]any {
 	p := map[string]any{"cwd": dir}
 	if m := strings.TrimSpace(o.Model); m != "" {
@@ -146,13 +157,17 @@ func codexThreadStartParams(dir string, o SpawnOverride) map[string]any {
 	sandbox, approval := codexSandboxFor(o.PermissionMode)
 	p["sandbox"] = sandbox
 	p["approvalPolicy"] = approval
+	if strings.TrimSpace(o.PermissionMode) == "plan" {
+		p["developerInstructions"] = codexPlanInstruction
+	}
 	return p
 }
 
 // codexThreadResumeParams builds thread/resume params for the recovery path.
 // Resume reuses the thread's recorded posture, but we still re-send cwd +
 // model/effort so a fork-on-resume keeps its override. Sandbox/approval are
-// re-applied for parity with start.
+// re-applied for parity with start. developerInstructions is re-injected when
+// PermissionMode=="plan" so the planning nudge survives a broker restart/recovery.
 func codexThreadResumeParams(threadID, dir string, o SpawnOverride) map[string]any {
 	p := map[string]any{"threadId": threadID, "cwd": dir}
 	if m := strings.TrimSpace(o.Model); m != "" {
@@ -161,6 +176,9 @@ func codexThreadResumeParams(threadID, dir string, o SpawnOverride) map[string]a
 	sandbox, approval := codexSandboxFor(o.PermissionMode)
 	p["sandbox"] = sandbox
 	p["approvalPolicy"] = approval
+	if strings.TrimSpace(o.PermissionMode) == "plan" {
+		p["developerInstructions"] = codexPlanInstruction
+	}
 	return p
 }
 

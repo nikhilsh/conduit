@@ -91,27 +91,31 @@ func TestCodexRequestFrames(t *testing.T) {
 }
 
 // TestCodexThreadStartParams covers the permission-mode / effort / model
-// param mapping against the schema-confirmed enum values.
+// param mapping against the schema-confirmed enum values, including the
+// developerInstructions planning nudge injected only for plan mode.
 func TestCodexThreadStartParams(t *testing.T) {
 	tests := []struct {
 		name         string
 		override     SpawnOverride
 		wantSandbox  string
 		wantApproval string
-		wantModel    any // nil when absent
-		wantEffort   any // nil when absent
+		wantModel    any  // nil when absent
+		wantEffort   any  // nil when absent
+		wantDevInstr bool // true when developerInstructions must be set
 	}{
 		{
 			name:         "default-auto-is-full-access",
 			override:     SpawnOverride{},
 			wantSandbox:  "danger-full-access",
 			wantApproval: "never",
+			wantDevInstr: false,
 		},
 		{
-			name:         "plan-is-read-only",
+			name:         "plan-is-read-only-plus-planning-instruction",
 			override:     SpawnOverride{PermissionMode: "plan"},
 			wantSandbox:  "read-only",
 			wantApproval: "on-request",
+			wantDevInstr: true,
 		},
 		{
 			name:         "model-and-effort-pass-through",
@@ -120,6 +124,7 @@ func TestCodexThreadStartParams(t *testing.T) {
 			wantApproval: "never",
 			wantModel:    "gpt-5-codex",
 			wantEffort:   "high",
+			wantDevInstr: false,
 		},
 		{
 			name:         "unknown-effort-dropped",
@@ -127,6 +132,7 @@ func TestCodexThreadStartParams(t *testing.T) {
 			wantSandbox:  "danger-full-access",
 			wantApproval: "never",
 			wantEffort:   nil,
+			wantDevInstr: false,
 		},
 	}
 	for _, tc := range tests {
@@ -146,6 +152,70 @@ func TestCodexThreadStartParams(t *testing.T) {
 			}
 			if got := p["effort"]; got != tc.wantEffort {
 				t.Fatalf("effort = %v, want %v", got, tc.wantEffort)
+			}
+			gotDevInstr, hasDevInstr := p["developerInstructions"].(string)
+			if tc.wantDevInstr {
+				if !hasDevInstr || gotDevInstr == "" {
+					t.Fatalf("developerInstructions must be non-empty for plan mode, got %v", p["developerInstructions"])
+				}
+			} else {
+				if _, present := p["developerInstructions"]; present {
+					t.Fatalf("developerInstructions must be absent for non-plan mode, got %q", p["developerInstructions"])
+				}
+			}
+		})
+	}
+}
+
+// TestCodexThreadResumeParams covers the resume path's param mapping,
+// including the developerInstructions nudge re-injection for plan mode.
+func TestCodexThreadResumeParams(t *testing.T) {
+	tests := []struct {
+		name         string
+		override     SpawnOverride
+		wantSandbox  string
+		wantApproval string
+		wantDevInstr bool
+	}{
+		{
+			name:         "default-resume-full-access-no-instruction",
+			override:     SpawnOverride{},
+			wantSandbox:  "danger-full-access",
+			wantApproval: "never",
+			wantDevInstr: false,
+		},
+		{
+			name:         "plan-resume-read-only-plus-instruction",
+			override:     SpawnOverride{PermissionMode: "plan"},
+			wantSandbox:  "read-only",
+			wantApproval: "on-request",
+			wantDevInstr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := codexThreadResumeParams("tid-123", "/work", tc.override)
+			if p["threadId"] != "tid-123" {
+				t.Fatalf("bad threadId: %v", p["threadId"])
+			}
+			if p["cwd"] != "/work" {
+				t.Fatalf("bad cwd: %v", p["cwd"])
+			}
+			if p["sandbox"] != tc.wantSandbox {
+				t.Fatalf("sandbox = %v, want %v", p["sandbox"], tc.wantSandbox)
+			}
+			if p["approvalPolicy"] != tc.wantApproval {
+				t.Fatalf("approvalPolicy = %v, want %v", p["approvalPolicy"], tc.wantApproval)
+			}
+			gotDevInstr, hasDevInstr := p["developerInstructions"].(string)
+			if tc.wantDevInstr {
+				if !hasDevInstr || gotDevInstr == "" {
+					t.Fatalf("developerInstructions must be non-empty for plan mode, got %v", p["developerInstructions"])
+				}
+			} else {
+				if _, present := p["developerInstructions"]; present {
+					t.Fatalf("developerInstructions must be absent for non-plan mode, got %q", p["developerInstructions"])
+				}
 			}
 		})
 	}

@@ -329,6 +329,9 @@ func (c *codexAppServerProcess) handshake(resp <-chan json.RawMessage) error {
 
 	if seed != "" {
 		// Recovery: resume the prior thread (no id latch — we already have it).
+		sandbox, approval := codexSandboxFor(c.override.PermissionMode)
+		fmt.Fprintf(os.Stderr, "codex app-server: thread/resume permissionMode=%q sandbox=%s approvalPolicy=%s developerInstructions=%v\n",
+			c.override.PermissionMode, sandbox, approval, c.override.PermissionMode == "plan")
 		if err := c.writeRequest(2, "thread/resume", codexThreadResumeParams(seed, c.dir, c.override)); err != nil {
 			return fmt.Errorf("thread/resume write: %w", err)
 		}
@@ -341,6 +344,9 @@ func (c *codexAppServerProcess) handshake(resp <-chan json.RawMessage) error {
 		// Fresh thread (id:2). The thread id arrives both in this result's
 		// thread.id and in a thread/started notification; we latch it from the
 		// result here so it's available before the first turn.
+		sandbox, approval := codexSandboxFor(c.override.PermissionMode)
+		fmt.Fprintf(os.Stderr, "codex app-server: thread/start permissionMode=%q sandbox=%s approvalPolicy=%s developerInstructions=%v\n",
+			c.override.PermissionMode, sandbox, approval, c.override.PermissionMode == "plan")
 		if err := c.writeRequest(2, "thread/start", codexThreadStartParams(c.dir, c.override)); err != nil {
 			return fmt.Errorf("thread/start write: %w", err)
 		}
