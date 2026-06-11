@@ -85,8 +85,18 @@ type codexAppServerProcess struct {
 	turnReqID int
 	// turnID is the codex turn id (turn.id) of the active turn, latched from the
 	// turn/started notification. Required (with threadID) to target turn/interrupt
-	// — the Stop button. Empty until turn/started arrives and after the turn ends.
+	// (the Stop button) and turn/steer (mid-turn user inject). Empty until
+	// turn/started arrives and after the turn ends.
 	turnID string
+	// steerReqID is the JSON-RPC id of the pending turn/steer request (0 when
+	// none is in flight). The steer response is routed back here: on success the
+	// steer is silently confirmed; on -32600 ("no active turn") the steer text
+	// is re-sent via a normal turn/start (fallback path). Only one steer can be
+	// pending at a time — a second steer replaces the first's id and text.
+	steerReqID int
+	// steerText is the user's message that was sent as a steer, kept for the
+	// turn/start fallback path if the steer gets a -32600 error response.
+	steerText string
 	// interrupting is set when the user Stopped this turn (turn/interrupt sent).
 	// While set, the turn's terminus is QUIET regardless of which path ends it
 	// (turn/completed:interrupted, a racing thread `idle` status, or an error) —
@@ -347,8 +357,19 @@ func (c *codexAppServerProcess) latchThread(tid string) {
 // Send runs one codex turn (or a compaction) for the user's message. It
 // returns immediately; notifications stream via publish from the reader
 // goroutine. A bare "/compact" triggers thread/compact/start instead of a
-// turn. Concurrent Sends while a turn is in flight are rejected (codex
-// serializes one turn per thread).
+// turn.
+//
+// When a turn is currently active AND the turn id has been latched from
+// turn/started, Send attempts a turn/steer instead of returning
+// errCodexTurnInFlight — the steer injects the user's text into the running
+// turn at the next reasoning/step boundary without interrupting it. If the
+// steer is rejected with -32600 ("no active turn"), the response handler
+// falls back to a normal turn/start so the message is never lost.
+//
+// When the turn is active but the turn id hasn't arrived yet (turn/started
+// not seen), or when compaction is in flight, the message is rejected as
+// errCodexTurnInFlight — the client-side composer disables itself while the
+// agent works, so this is a backstop for races.
 func (c *codexAppServerProcess) Send(text string) error {
 	c.mu.Lock()
 	if c.closed {
@@ -360,6 +381,12 @@ func (c *codexAppServerProcess) Send(text string) error {
 		return errChatProcessClosed
 	}
 	if c.turnActive {
+		// A turn is in flight. If the turn id has been latched (turn/started
+		// was seen), steer the running turn rather than rejecting the message.
+		if c.turnID != "" && !isCodexCompactCommand(text) {
+			c.mu.Unlock()
+			return c.Steer(text)
+		}
 		c.mu.Unlock()
 		return errCodexTurnInFlight
 	}
@@ -1045,24 +1072,43 @@ func (c *codexAppServerProcess) respondServerRequest(rawID json.RawMessage, resu
 }
 
 // routeTurnResponse handles a JSON-RPC response correlated to the active
-// turn/compact request. Returns true when it owns the response (so the reader
-// won't also forward it to the handshake waiter). A turn response carrying a
-// JSON-RPC error means the request was rejected outright (e.g.
-// activeTurnNotSteerable, badRequest) — no turn runs and no turn/completed will
+// turn/compact request OR a pending turn/steer request. Returns true when it
+// owns the response (so the reader won't also forward it to the handshake
+// waiter).
+//
+// Turn/compact responses: a JSON-RPC error means the request was rejected
+// outright (e.g. activeTurnNotSteerable, badRequest) — no turn/completed will
 // arrive, so the turn must be failed here or it wedges turnActive forever. A
 // success ack is swallowed; the turn then streams via notifications.
+//
+// Steer responses: a success means the steer was accepted (turn continues
+// unchanged). An error — especially -32600 "no active turn" — triggers the
+// turn/start fallback path so the message is never lost. Either way the
+// steer latch is cleared.
 func (c *codexAppServerProcess) routeTurnResponse(rawID, errRaw json.RawMessage) bool {
 	var id int
 	if json.Unmarshal(rawID, &id) != nil {
 		return false
 	}
 	c.mu.Lock()
-	match := c.turnActive && id == c.turnReqID
-	if match {
+	isTurnReq := c.turnActive && id == c.turnReqID
+	isSteerReq := c.steerReqID != 0 && id == c.steerReqID
+	var steerText string
+	if isSteerReq {
+		steerText = c.steerText
+		c.steerReqID = 0
+		c.steerText = ""
+	}
+	if isTurnReq || isSteerReq {
 		c.lastActivity = claudeChatNow()
 	}
 	c.mu.Unlock()
-	if !match {
+
+	if isSteerReq {
+		c.handleSteerResponse(steerText, errRaw)
+		return true
+	}
+	if !isTurnReq {
 		return false
 	}
 	if len(errRaw) > 0 && string(errRaw) != "null" {
@@ -1121,6 +1167,100 @@ func (c *codexAppServerProcess) Interrupt() error {
 	c.mu.Unlock()
 	fmt.Fprintf(os.Stderr, "codex app-server: turn interrupt (thread %s, turn %s, id %d)\n", tid, turnID, id)
 	return c.writeRequest(id, "turn/interrupt", map[string]any{"threadId": tid, "turnId": turnID})
+}
+
+// Steer injects a user message into the currently-running turn via
+// turn/steer. The steer is delivered to the model at the next reasoning/step
+// boundary — it does NOT retroactively delete already-emitted tokens. codex
+// responds with either a success {"id":N,"result":{"turnId":"…"}} or an
+// error {"id":N,"error":{…}}; the response is routed in routeTurnResponse:
+//
+//   - success → steer confirmed; the turn continues on the same turn id.
+//   - -32600 "no active turn" (turn finished before steer arrived) → fall
+//     back to a normal turn/start so the message is never lost.
+//
+// Steer is a no-op (returns nil) when no turn is in flight or the turn id
+// has not yet been latched — the caller (Send) already checks this before
+// delegating.
+func (c *codexAppServerProcess) Steer(text string) error {
+	c.mu.Lock()
+	if c.closed || !c.turnActive || c.turnID == "" {
+		c.mu.Unlock()
+		return nil
+	}
+	tid := c.threadID
+	turnID := c.turnID
+	id := c.allocIDLocked()
+	c.steerReqID = id
+	c.steerText = text
+	c.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "codex app-server: turn steer (thread %s, turn %s, id %d)\n", tid, turnID, id)
+	if err := c.writeRequest(id, "turn/steer", codexTurnSteerParams(tid, turnID, text)); err != nil {
+		c.mu.Lock()
+		if c.steerReqID == id {
+			c.steerReqID = 0
+			c.steerText = ""
+		}
+		c.mu.Unlock()
+		fmt.Fprintf(os.Stderr, "codex app-server: turn steer write error: %v\n", err)
+	}
+	return nil
+}
+
+// handleSteerResponse acts on the JSON-RPC response to a pending turn/steer
+// request. On success the steer is confirmed (the turn continues, no action
+// needed). On any error — especially -32600 "no active turn" (the turn
+// completed before the steer arrived) — the steer text is re-sent via a
+// normal turn/start so the user's message is never lost.
+//
+// Caller must NOT hold c.mu.
+func (c *codexAppServerProcess) handleSteerResponse(steerText string, errRaw json.RawMessage) {
+	if len(errRaw) == 0 || string(errRaw) == "null" {
+		// Steer accepted — turn continues, nothing more to do.
+		fmt.Fprintf(os.Stderr, "codex app-server: turn steer accepted\n")
+		return
+	}
+	// Steer rejected. Check for -32600 "no active turn to steer" specifically —
+	// that means the turn finished just before our steer arrived, so we fall back
+	// to a normal turn/start with the same text. Any other error is also treated
+	// as a fallback to be safe: if we can't steer, the message must still land.
+	code := codexRPCErrorCode(errRaw)
+	msg := codexRPCErrorMessage(errRaw)
+	fmt.Fprintf(os.Stderr, "codex app-server: turn steer rejected (code %d, %s) — falling back to turn/start\n", code, msg)
+
+	// End the current turn if it's still considered active (a racing
+	// turn/completed may already have cleared it). Then start a fresh turn.
+	// We call endTurn(), not failTurn(): the steer failure is not a user-visible
+	// error — the fallback turn/start will carry the message forward.
+	c.mu.Lock()
+	if c.turnActive {
+		c.mu.Unlock()
+		c.endTurn()
+	} else {
+		c.mu.Unlock()
+	}
+
+	// Start a new turn with the original steer text.
+	c.mu.Lock()
+	if c.closed || !c.inited || c.turnActive {
+		c.mu.Unlock()
+		return
+	}
+	tid := c.threadID
+	id := c.allocIDLocked()
+	c.turnActive = true
+	c.turnReqID = id
+	c.published = false
+	c.interrupting = false
+	c.turnStderrOffset = c.stderrLenLocked()
+	c.beginTurnWatchdogLocked()
+	c.mu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "codex app-server: steer fallback — turn start (thread %s, id %d)\n", tid, id)
+	if err := c.writeRequest(id, "turn/start", codexTurnStartParams(tid, steerText, c.override)); err != nil {
+		c.endTurn()
+		publishChatSystem(c.publish, "⚠️ codex: turn failed to send: "+err.Error())
+	}
 }
 
 // Close stops the app-server: refuse further Sends, close stdin, kill the
