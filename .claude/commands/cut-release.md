@@ -7,6 +7,10 @@ allowed-tools: Bash
 Cut release $1. ORCHESTRATOR task. Releases are tag-triggered
 (.github/workflows/release.yml) and build off whatever commit the tag points at.
 
+Before anything else: `git fetch origin` so your local refs are current.
+The guard script (`scripts/cut-release.sh`) enforces this, but explicit
+fetch first avoids a stale-main footgun (bit us once — v0.0.35).
+
 ORDER MATTERS:
 1. If this release contains broker/ changes that must be live, /broker-redeploy
    FIRST. Tagging does NOT deploy the broker (a broker fix "released" but never
@@ -32,4 +36,7 @@ and /broker-redeploy skill now also inject the ldflag via
 
 After: update pipeline docs (VERIFY-CHECKLIST.md gets a new version section for
 items in this release; memory updated); confirm the About screen shows the
-expected git SHA (catches a stale ship).
+expected git SHA (catches a stale ship). Any worktrees whose PRs shipped in
+this release should be cleaned up now if not already:
+`git worktree remove --force <path>`, `git branch -D <branch>`,
+`git worktree prune`.

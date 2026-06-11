@@ -411,6 +411,98 @@ in-flight turn, add the `Steer` method + backend entry behind the existing
 single-turn guard. The app send-path work belongs on the `optimistic-send-pending`
 branch and is deliberately untouched here.
 
+## Multi-agent / sub-agents (collaboration)
+
+Captured live against `codex-cli 0.132.0` on the dev box.
+
+### Feature status
+
+`multi_agent` is **stable and enabled by default** (confirmed: `codex features
+list` → `multi_agent  stable  true`). The prior assumption that "codex is
+single-agent only" was wrong — it was based on inspecting only `ClientRequest`
+methods, which have no multi-agent entry. The actual surface is on the
+**notification** side.
+
+Experimental / disabled siblings (do not depend on these):
+
+| Feature | State | Enabled |
+|---|---|---|
+| `multi_agent_v2` | under development | false |
+| `child_agents_md` | under development | false |
+| `enable_fanout` | under development | false |
+| `goals` | experimental | false |
+| `collaboration_modes` | removed | — |
+
+`CollaborationMode/*` and `Thread/goal/*` are largely schema-only today.
+
+### How sub-agents surface on the wire
+
+The model spawns sub-agent threads via an internal collab tool. These surface as
+`collabAgentToolCall` **thread items** on the standard `item/started` /
+`item/completed` notifications (there is **no** `item/updated`). Each
+`item/started` / `item/completed` payload's `.item` has `type:
+"collabAgentToolCall"`.
+
+### `CollabAgentToolCallThreadItem` fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | `call_…` prefix |
+| `type` | `"collabAgentToolCall"` | |
+| `tool` | `CollabAgentTool` enum | `spawnAgent` \| `sendInput` \| `resumeAgent` \| `wait` \| `closeAgent` |
+| `status` | `CollabAgentToolCallStatus` | `inProgress` \| `completed` \| `failed` |
+| `senderThreadId` | string | threadId of the orchestrating agent |
+| `receiverThreadIds` | string[] | for `spawnAgent`: the new sub-agent's threadId; empty on `item/started`, populated on `item/completed` |
+| `agentsStates` | map threadId → CollabAgentState | `{status, message}` per known sub-agent |
+| `prompt` | string | the prompt sent to the sub-agent |
+| `model` | string | model chosen for the sub-agent |
+| `reasoningEffort` | string | effort setting passed to the sub-agent |
+
+### `CollabAgentStatus` enum
+
+`pendingInit` | `running` | `interrupted` | `completed` | `errored` |
+`shutdown` | `notFound`
+
+### `SubAgentSource` variants
+
+- `"review"` | `"compact"` | `"memory_consolidation"` — string enum for
+  well-known internal spawn reasons.
+- `ThreadSpawnSubAgentSource` — `{thread_spawn: {depth, parent_thread_id,
+  agent_nickname?, agent_path?, agent_role?}}` — structured spawn from a
+  thread (most tool-driven spawns).
+- `OtherSubAgentSource` — `{other: string}` — catch-all.
+
+### Sub-agent notification streams
+
+Each spawned sub-agent emits its **own full notification stream** tagged with
+its `threadId`:
+
+- `turn/started` — sub-agent turn begins
+- `item/started` + `item/completed` — items within the sub-agent turn
+- `item/agentMessage/delta` — streaming tokens from the sub-agent
+- `thread/tokenUsage/updated` — `{total, last, modelContextWindow}` for the
+  sub-agent's thread
+- `thread/status/changed`
+- `turn/completed` — includes `durationMs`; terminates the sub-agent's turn
+
+Per-sub-agent token counts, durations, and full lifecycle are all observable
+via these tagged notifications.
+
+### Known broker bug
+
+> **Bug:** `handleNotification` / `codexNotificationToEvent`
+> (`codexappserver.go` ~L661, `codexappserverwire.go` ~L374) do **not** filter
+> by `threadId`. With `multi_agent` on, sub-agent `agentMessage` completions
+> leak into the main chat as stray assistant messages, and a sub-agent
+> `turn/completed` can fire `endTurn()` / `finishTurn()` on the parent session
+> — prematurely ending the parent turn.
+>
+> Fix: gate all chat-emission and turn-lifecycle handling on `threadId ==
+> parentThreadID` (the value latched from the initial `thread/start` result).
+> Sub-agent notifications for other threadIds should be silently discarded (or
+> routed to a separate sub-agent observer if one is added later). A separate
+> fix is being tracked.
+
 ## Assessment: prose "numbered-list menu" -> tappable quick-replies heuristic
 
 (Item 3 — assessment only, NOT implemented.)

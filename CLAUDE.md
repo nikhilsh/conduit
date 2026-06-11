@@ -113,12 +113,29 @@ cycle; the About screen shows the git SHA to catch this.
 
 Re-run the job before touching either.
 
+**Worktree & branch hygiene:**
+
+1. **Reset to fresh origin/main before starting any task** — always branch off
+   a fetch: `git fetch origin && git checkout -B <branch> origin/main`. Never
+   start work on a stale local branch; stale main once shipped old code (v0.0.35).
+2. **Delete the worktree + branch after its PR merges** — `git worktree remove
+   --force <path>`, `git branch -D <branch>`, `git worktree prune`. Note:
+   `gh pr merge --delete-branch` silently fails to delete the local branch when
+   a worktree holds it (merge still succeeds). Squash-merged branches are NOT
+   ancestors of main, so `git merge-base --is-ancestor` can't detect them as
+   merged — key off the PR being merged (e.g. `gh pr view --json state`).
+3. **Always give implementer agents their own worktree.** An agent without an
+   isolated worktree commits into the shared checkout and leaks files (bit us
+   twice).
+
 **Roadmap verification pipeline** — four docs, four states:
 
 1. **ROADMAP.md** — backlog only. When starting work: cut from backlog, add an
    entry to **IN-PROGRESS.md** with branch + PR#.
 2. **IN-PROGRESS.md** — actively building. On merge: move the entry to
-   **VERIFY-CHECKLIST.md** under its release version.
+   **VERIFY-CHECKLIST.md** under its release version. Remove the merged
+   worktree + branch (`git worktree remove --force`, `git branch -D`, `git
+   worktree prune`).
 3. **VERIFY-CHECKLIST.md** — merged + released, awaiting owner on-device
    verification. When the owner verifies: move to **DONE.md**.
 4. **DONE.md** — verified complete. Nothing moves backwards.

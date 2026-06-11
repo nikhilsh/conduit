@@ -21,8 +21,10 @@ ORCHESTRATOR: plan in detail, delegate execution, gate, merge, clean up.
    (verify pwd; run gates; end at push+PR; do NOT watch CI) — it is already in
    each agent file, so a one-line task pointer suffices.
 
-2. EXECUTE. Branch off fresh origin/main. Agents implement + run local gates +
-   open the PR. You do not hand-code unless trivial.
+2. EXECUTE. Branch off a freshly-fetched origin/main — always
+   `git fetch origin && git checkout -B <branch> origin/main` before any
+   work. Agents implement + run local gates + open the PR. You do not
+   hand-code unless trivial.
 
 3. GATE + MERGE. Per PR run /merge-when-green <N>: watch via the
    `gh pr checks <N> || true` pending-count pattern (NEVER the exit code);
@@ -39,4 +41,5 @@ ORCHESTRATOR: plan in detail, delegate execution, gate, merge, clean up.
        / DONE — per the verification pipeline rule in CLAUDE.md
    [ ] memory updated (new footgun/decision -> a memory note + index entry)
    [ ] SHARED checkout clean: no leaked untracked files, finished worktrees
-       removed (`git worktree list`)
+       removed (`git worktree list`); after merge: `git worktree remove
+       --force <path>`, `git branch -D <branch>`, `git worktree prune`

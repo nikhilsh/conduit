@@ -42,3 +42,13 @@ IN-PROGRESS.md entry → VERIFY-CHECKLIST.md under the release version),
 memory updated, shared checkout clean (no leaked files / stale worktrees),
 broker redeployed IF broker/ changed (/broker-redeploy — tagging does NOT
 deploy the broker).
+
+Remove the merged worktree + branch explicitly — `gh pr merge
+--delete-branch` succeeds but silently leaves the local branch when a
+worktree holds it:
+
+```bash
+git worktree remove --force <path-to-worktree>
+git branch -D <branch-name>
+git worktree prune
+```
