@@ -1336,7 +1336,7 @@ private struct ConduitEventRow: View, Equatable {
         } else if event.role.lowercased() == "tool" {
             ConduitToolCard(event: event, sessionID: sessionID, collapseDefault: appearance.collapseTurns)
         } else {
-            ConduitChatMessageRow(event: event, isContinuation: isContinuation)
+            ConduitChatMessageRow(event: event, isContinuation: isContinuation, sessionID: sessionID)
         }
     }
 }
@@ -1361,6 +1361,9 @@ private struct ConduitChatMessageRow: View {
     /// When true, the role header is hidden and top spacing is tightened
     /// to visually group consecutive same-sender messages.
     var isContinuation: Bool = false
+    /// Live session id — threaded so the user bubble's failed-send retry can
+    /// re-deliver to the right session.
+    var sessionID: String = ""
     @Environment(AppearanceStore.self) private var appearance
     @Environment(\.neonTheme) private var neon
     /// chat-shell-v2 arm (§2). Arm A "Breathe" keeps ASSISTANT/YOU labels;
@@ -1450,7 +1453,7 @@ private struct ConduitChatMessageRow: View {
         if role == .user {
             // The bubble strips its own `[attached …]` reference lines
             // and renders them as chips/thumbnails instead of raw paths.
-            ConduitUserBubble(event: event)
+            ConduitUserBubble(event: event, sessionID: sessionID)
         } else {
             ConduitBlockStack(
                 blocks: ConversationRenderer.blocks(for: event.content),
@@ -1521,7 +1524,9 @@ final class AttachmentBytesCache {
 /// lines stripped from the visible text.
 private struct ConduitUserBubble: View {
     let event: ConversationItem
+    var sessionID: String = ""
     @Environment(\.neonTheme) private var neon
+    @Environment(SessionStore.self) private var store
 
     var body: some View {
         let parsed = ConduitUI.splitAttachmentReferences(event.content)
@@ -1545,6 +1550,39 @@ private struct ConduitUserBubble: View {
             ForEach(parsed.attachments, id: \.filename) { ref in
                 ConduitAttachmentChip(ref: ref)
             }
+            sendStatusFooter
+        }
+    }
+
+    /// "sending…" clock while the message is queued, or a "failed — retry"
+    /// affordance once delivery gives up. Cleared (collapsed) once the broker
+    /// acks the message (status flips to `done`). Mirrors litter / the Claude
+    /// app's pending-bubble UX. Reads `event.status` so a status flip rebuilds
+    /// the row (status is part of the row's Equatable digest).
+    @ViewBuilder
+    private var sendStatusFooter: some View {
+        switch event.status.lowercased() {
+        case "pending":
+            HStack(spacing: 4) {
+                Image(systemName: "clock")
+                Text("sending…")
+            }
+            .font(neon.mono(10))
+            .foregroundStyle(neon.textDim)
+        case "failed":
+            Button {
+                store.retryPendingChat(sessionID: sessionID, localID: event.id)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.arrow.circlepath")
+                    Text("failed — tap to retry")
+                }
+                .font(neon.mono(10).weight(.bold))
+                .foregroundStyle(neon.red)
+            }
+            .buttonStyle(.plain)
+        default:
+            EmptyView()
         }
     }
 }

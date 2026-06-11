@@ -578,6 +578,17 @@ final class SessionStore {
         didSet { SessionStore.persistBrokerTitles(brokerTitles) }
     }
 
+    /// Per-session optimistic-send queue: messages the user has sent that
+    /// haven't been acked by a successful WS write yet. Persisted to
+    /// `UserDefaults` so a backgrounding-mid-send (or a kill/relaunch) never
+    /// silently drops a typed message — the device-reported "sent then
+    /// backgrounded → never delivered" bug. Flushed on connect / foreground /
+    /// reconnect. The transcript echo reads `pendingChats` to draw the
+    /// clock / "failed" indicator. Mirror of Android `_pendingChats`.
+    var pendingChats: PendingChatQueue = SessionStore.loadPendingChats() {
+        didSet { SessionStore.persistPendingChats(pendingChats) }
+    }
+
     private var client: ConduitClient?
     private var delegate: StoreDelegate?
     private var foregroundObserver: NSObjectProtocol?
@@ -674,6 +685,10 @@ final class SessionStore {
             MainActor.assumeIsolated {
                 self?.nudgeNetworkChange()
                 self?.refreshSessions()
+                // Foregrounding may have re-armed a socket that died while
+                // suspended — flush any message the user sent right before
+                // they backgrounded the app (the lost-send bug).
+                self?.flushPendingChats()
             }
         }
 
@@ -739,6 +754,10 @@ final class SessionStore {
                     data: ["host": self.endpoint.displayHost,
                            "first_server": "\(self.savedServers.count == 1)"])
                 self.refreshSessions()
+                // Connection is live again — re-deliver any messages queued
+                // while we were disconnected (reconnect window / backgrounded
+                // mid-send / killed before the WS flushed).
+                self.flushPendingChats()
                 // Reconcile against the broker's authoritative live set:
                 // reattach only genuinely-running agents (so they resume
                 // after a cold launch / app termination) and demote any
@@ -1728,6 +1747,7 @@ final class SessionStore {
         sessions.removeAll { $0.id == sessionID }
         sessionLifecycle[sessionID] = nil
         if selectedSessionID == sessionID { selectedSessionID = nil }
+        pendingChats.clear(sessionID: sessionID)
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
         // Delete is terminal: sweep the persistent "Resume" index AND record
         // the tombstone so a status/list refresh (the broker's tmux can
@@ -1944,11 +1964,15 @@ final class SessionStore {
             ?? startedEpoch.map { $0 + 0.001 }
             ?? Date().timeIntervalSince1970
         let now = conduitConversationTsString(epoch: echoEpoch)
+        let localID = "local-\(UUID().uuidString)"
         let item = ConversationItem(
-            id: "local-\(UUID().uuidString)",
+            id: localID,
             role: "user",
             kind: "message",
-            status: "done",
+            // PENDING until a successful WS write acks it (flushPendingChats
+            // flips it to "done"). The user bubble draws a clock while
+            // pending and a retry affordance if it ultimately fails.
+            status: "pending",
             content: message,
             ts: now,
             files: [],
@@ -1981,25 +2005,94 @@ final class SessionStore {
             ensureRustSessionPresent(sessionID)
             _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
         }
+        // Register the message as pending and persist BEFORE attempting any
+        // WS write. This is the fix for the device-reported "send then
+        // background → message lost" bug: the queue (and the persisted copy)
+        // outlives a fire-and-forget WS write that the OS may suspend before
+        // it flushes, and outlives `client == nil` during a reconnect window.
+        // The flush — on connect / foreground / reconnect — re-delivers it.
+        pendingChats.enqueue(sessionID: sessionID, localID: localID, message: message, ts: now)
+        Telemetry.breadcrumb("chat", "queued", data: ["session": sessionID, "chars": "\(message.count)"])
+        // Attempt immediate delivery. If `client` is nil (reconnect window)
+        // we DON'T drop it — it stays queued for the next flush. Previously
+        // a nil client here silently abandoned the WS write.
+        attemptDeliver(sessionID: sessionID, localID: localID, message: message)
+    }
+
+    /// Attempt to deliver one queued message over the live WS, reporting the
+    /// outcome back to `pendingChats` (ack on success, attempt-bump on
+    /// failure) and flipping the transcript echo's status accordingly. Safe
+    /// to call when `client` is nil — it just leaves the entry queued for a
+    /// later flush. Shared by the send path and `flushPendingChats`.
+    private func attemptDeliver(sessionID: String, localID: String, message: String) {
         guard let client else { return }
-        // Don't swallow the send failure with `try?`: if the WS write
-        // throws (no session handle yet, reconnect window, NotConnected),
-        // the optimistic local echo above makes the message *look* sent
-        // while the agent never receives it — exactly the device-reported
-        // "appears in chat but the agent never sees it". Surface it so the
-        // failure is diagnosable instead of silent.
         Task {
             do {
                 try await client.sendChat(sessionId: sessionID, msg: message)
+                // Ack: drop from the queue and flip the echo to "done".
+                self.pendingChats.markDelivered(sessionID: sessionID, localID: localID)
+                self.setEchoStatus(sessionID: sessionID, localID: localID, status: "done")
             } catch {
-                Telemetry.capture(
-                    error: error,
-                    message: "chat send to agent failed",
-                    tags: ["surface": "ios", "phase": "chat_send"],
-                    extras: ["session": sessionID]
-                )
+                let gaveUp = self.pendingChats.markAttemptFailed(sessionID: sessionID, localID: localID)
+                if gaveUp {
+                    self.setEchoStatus(sessionID: sessionID, localID: localID, status: "failed")
+                    Telemetry.capture(
+                        error: error,
+                        message: "chat send to agent failed (gave up after retries)",
+                        tags: ["surface": "ios", "phase": "chat_send"],
+                        extras: ["session": sessionID]
+                    )
+                } else {
+                    // Transient: stays queued + pending for the next flush.
+                    Telemetry.breadcrumb("chat", "send attempt failed — keeping queued",
+                        data: ["session": sessionID])
+                }
             }
         }
+    }
+
+    /// Re-deliver every still-pending message for a session — called when the
+    /// connection/agent becomes ready again (connect success, app foreground,
+    /// reconnect). `failed` entries are skipped until the user retries them.
+    /// Pass `nil` to flush every session.
+    func flushPendingChats(sessionID: String? = nil) {
+        let sessionIDs = sessionID.map { [$0] } ?? Array(pendingChats.bySession.keys)
+        for sid in sessionIDs {
+            let due = pendingChats.flushable(for: sid)
+            guard !due.isEmpty else { continue }
+            Telemetry.breadcrumb("chat", "flush pending", data: ["session": sid, "count": "\(due.count)"])
+            for entry in due {
+                attemptDeliver(sessionID: sid, localID: entry.localID, message: entry.message)
+            }
+        }
+    }
+
+    /// User tapped retry on a failed message bubble — re-arm the entry and
+    /// attempt delivery again immediately.
+    func retryPendingChat(sessionID: String, localID: String) {
+        guard let entry = pendingChats.entries(for: sessionID).first(where: { $0.localID == localID }) else { return }
+        pendingChats.retry(sessionID: sessionID, localID: localID)
+        setEchoStatus(sessionID: sessionID, localID: localID, status: "pending")
+        attemptDeliver(sessionID: sessionID, localID: localID, message: entry.message)
+    }
+
+    /// Flip the `status` of a `local-…` transcript echo in place (e.g.
+    /// pending → done / failed). Drives the user-bubble indicator without
+    /// touching the message content or its position in the log.
+    private func setEchoStatus(sessionID: String, localID: String, status: String) {
+        guard var items = conversationLog[sessionID],
+              let idx = items.firstIndex(where: { $0.id == localID }) else { return }
+        let old = items[idx]
+        items[idx] = ConversationItem(
+            id: old.id, role: old.role, kind: old.kind, status: status,
+            content: old.content, ts: old.ts, files: old.files,
+            toolName: old.toolName, command: old.command, exitCode: old.exitCode,
+            durationMs: old.durationMs, diffSummary: old.diffSummary,
+            pendingOptions: old.pendingOptions, sourceAgent: old.sourceAgent,
+            targetAgent: old.targetAgent, taskText: old.taskText,
+            resultSummary: old.resultSummary, planSteps: old.planSteps
+        )
+        conversationLog[sessionID] = items
     }
 
     /// Routes a recognised `/`-command. Returns true when handled here
@@ -3011,6 +3104,26 @@ final class SessionStore {
         }
         if let data = try? JSONEncoder().encode(titles) {
             UserDefaults.standard.set(data, forKey: brokerTitlesKey)
+        }
+    }
+
+    private static let pendingChatsKey = "conduit.session.pendingChats"
+
+    static func loadPendingChats() -> PendingChatQueue {
+        guard let raw = UserDefaults.standard.data(forKey: pendingChatsKey),
+              let decoded = try? JSONDecoder().decode([String: [PendingChat]].self, from: raw) else {
+            return PendingChatQueue()
+        }
+        return PendingChatQueue(bySession: decoded)
+    }
+
+    static func persistPendingChats(_ queue: PendingChatQueue) {
+        if queue.bySession.isEmpty {
+            UserDefaults.standard.removeObject(forKey: pendingChatsKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(queue.bySession) {
+            UserDefaults.standard.set(data, forKey: pendingChatsKey)
         }
     }
 
