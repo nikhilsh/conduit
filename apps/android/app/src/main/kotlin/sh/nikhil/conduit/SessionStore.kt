@@ -2445,6 +2445,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val shellSessions: Boolean,
         /** Broker supports push registration (`features.push`). WS-P.1. */
         val push: Boolean = false,
+        /**
+         * URL of the ntfy server co-located on this box, or null when the
+         * broker does not advertise one (`features.ntfy_url` absent/empty).
+         * Older brokers that omit the key parse as null — no regression.
+         */
+        val ntfyUrl: String? = null,
     )
 
     /**
@@ -2571,10 +2577,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         runCatching {
             val features = JSONObject(raw).optJSONObject("features")
+            val rawNtfyUrl = features?.optString("ntfy_url", null)
             BoxFeatures(
                 hostMetrics = features?.optBoolean("host_metrics", false) ?: false,
                 shellSessions = features?.optBoolean("shell_sessions", false) ?: false,
                 push = features?.optBoolean("push", false) ?: false,
+                ntfyUrl = if (rawNtfyUrl.isNullOrBlank()) null else rawNtfyUrl,
             )
         }.getOrNull()
     }
