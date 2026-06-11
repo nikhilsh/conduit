@@ -23,6 +23,7 @@ extension ConduitUI {
 
     struct SessionInfoView: View {
         @Environment(SessionStore.self) private var store
+        @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
@@ -75,6 +76,9 @@ extension ConduitUI {
                         usageSection
                         limitsSection
                         activitySection
+                        if flags.showSubagentPanel {
+                            agentsSection
+                        }
                         detailsSection
                         actionRow
                     }
@@ -441,6 +445,88 @@ extension ConduitUI {
             if s.commandsCount > 0 { parts.append("\(s.commandsCount) cmds") }
             if let dur = durationLabel(s) { parts.append(dur) }
             return parts.joined(separator: " · ")
+        }
+
+        // MARK: 4.5 · Agents (debug-gated subagent roster)
+
+        private var agentsSection: some View {
+            let roster = store.subagentRosters[session.id] ?? []
+            return VStack(alignment: .leading, spacing: 8) {
+                eyebrow("Agents")
+                VStack(spacing: 0) {
+                    if roster.isEmpty {
+                        Text("No subagents this session")
+                            .font(neon.mono(12.5))
+                            .foregroundStyle(neon.textFaint)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                    } else {
+                        ForEach(Array(roster.enumerated()), id: \.element.id) { index, agent in
+                            if index > 0 {
+                                Rectangle().fill(neon.border).frame(height: 1)
+                            }
+                            agentRow(agent)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .neonCardSurface(neon, fill: neon.surface, cornerRadius: neon.radius - 4)
+            }
+        }
+
+        private func agentRow(_ agent: SubagentEntry) -> some View {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(agent.name.isEmpty ? "subagent" : agent.name)
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(1)
+                        agentStatusPill(agent.status)
+                    }
+                    let detail = agent.description.isEmpty ? agent.lastTool : agent.description
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(neon.mono(11.5))
+                            .foregroundStyle(neon.textDim)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 4)
+                if agent.tokens > 0 {
+                    Text(Self.fmtK(UInt64(agent.tokens)))
+                        .font(neon.mono(11).weight(.medium))
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+            .padding(12)
+        }
+
+        private func agentStatusPill(_ status: String) -> some View {
+            let (label, color): (String, Color) = {
+                switch status {
+                case "done":   return ("Done", neon.textDim)
+                case "failed": return ("Failed", neon.red)
+                default:       return ("Working", neon.accentBright)
+                }
+            }()
+            return HStack(spacing: 4) {
+                if status == "done" {
+                    Text("\u{2713}")
+                        .font(neon.mono(10).weight(.bold))
+                        .foregroundStyle(color)
+                }
+                Text(label)
+                    .font(neon.mono(10).weight(.semibold))
+                    .foregroundStyle(color)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(color.opacity(0.12))
+                    .overlay(Capsule().strokeBorder(color.opacity(0.3), lineWidth: 1))
+            )
         }
 
         // MARK: 5 · Details

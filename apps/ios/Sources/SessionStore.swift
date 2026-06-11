@@ -605,6 +605,50 @@ struct AIQuickReplies: Equatable {
     }
 }
 
+/// One subagent entry in the live roster delivered via `view:"agents"` view_event.
+/// JSON keys match the broker contract exactly (spec: subagent-panel-spec.md).
+struct SubagentEntry: Equatable, Identifiable {
+    var id: String { taskId }
+    var taskId: String
+    var name: String
+    var description: String
+    var status: String          // "working" | "done" | "failed"
+    var lastTool: String
+    var tokens: Int
+    var toolUses: Int
+    var durationMs: Int
+    var startedAt: String
+    var endedAt: String
+
+    /// Decode a single agent object from the JSON array in the view_event payload.
+    static func from(json: [String: Any]) -> SubagentEntry? {
+        guard let taskId = json["task_id"] as? String, !taskId.isEmpty else { return nil }
+        return SubagentEntry(
+            taskId:      taskId,
+            name:        json["name"]        as? String ?? "",
+            description: json["description"] as? String ?? "",
+            status:      json["status"]      as? String ?? "working",
+            lastTool:    json["last_tool"]   as? String ?? "",
+            tokens:      json["tokens"]      as? Int    ?? 0,
+            toolUses:    json["tool_uses"]   as? Int    ?? 0,
+            durationMs:  json["duration_ms"] as? Int    ?? 0,
+            startedAt:   json["started_at"]  as? String ?? "",
+            endedAt:     json["ended_at"]    as? String ?? ""
+        )
+    }
+
+    /// Decode the full roster from the core's flattened `on_view_event` payload.
+    /// The payload carries a single key "agents" whose value is a JSON-array string.
+    static func roster(from payload: [String: String]) -> [SubagentEntry]? {
+        guard
+            let raw = payload["agents"],
+            let data = raw.data(using: .utf8),
+            let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+        return arr.compactMap { SubagentEntry.from(json: $0) }
+    }
+}
+
 @Observable
 @MainActor
 final class SessionStore {
@@ -707,6 +751,12 @@ final class SessionStore {
     /// replacing the old client-side heuristic. Cleared when the user
     /// sends or a fresh assistant turn arrives.
     var quickReplies: [String: AIQuickReplies] = [:]
+
+    /// Live subagent roster per session. Populated by `view:"agents"` view_events
+    /// emitted by the broker on every task_started/task_progress/task_notification
+    /// frame. Full snapshot — newest arrived last. Displayed in the Information
+    /// tab Agents section (DEBUG-gated via FeatureFlags.showSubagentPanel).
+    var subagentRosters: [String: [SubagentEntry]] = [:]
 
     /// Manually pinned context per session — rendered above the
     /// composer as removable chips. PR ios-composer-parity introduces
@@ -3463,6 +3513,20 @@ final class SessionStore {
         brokerTitles[sessionID] = title
     }
 
+    /// Ingest a full subagent roster snapshot for a session (subagent-panel spec).
+    /// The broker emits a FULL snapshot on every task_* frame so reconnecting
+    /// clients get current state immediately via PublishText record+replay.
+    /// Mirrored on Android in `ingestAgents`.
+    func ingestAgents(_ sessionID: String, payload: [String: String]) {
+        guard let roster = SubagentEntry.roster(from: payload) else { return }
+        let isFirstPopulate = subagentRosters[sessionID] == nil || subagentRosters[sessionID]?.isEmpty == true
+        subagentRosters[sessionID] = roster
+        if isFirstPopulate && !roster.isEmpty {
+            Telemetry.breadcrumb("agents_panel", "roster first populate",
+                data: ["session": sessionID, "count": "\(roster.count)"])
+        }
+    }
+
     /// Friendly, user-facing name for a session. NEVER returns the raw
     /// UUID. Priority (see `SessionNaming`):
     ///   1. A genuine user-set custom name — one the user typed, never a
@@ -4247,6 +4311,8 @@ private final class StoreDelegate: ConduitDelegate {
                 self.store?.ingestQuickReplies(sessionId, payload: payload)
             } else if kind == "session_title" {
                 self.store?.ingestSessionTitle(sessionId, payload: payload)
+            } else if kind == "agents" {
+                self.store?.ingestAgents(sessionId, payload: payload)
             } else {
                 self.store?.routeAgentLoginViewEvent(kind: kind, payload: payload)
             }

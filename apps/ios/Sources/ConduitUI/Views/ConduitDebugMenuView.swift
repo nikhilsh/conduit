@@ -24,6 +24,7 @@ extension ConduitUI {
                         forceSection(flags: $flags)
                         newSessionSection(flags: $flags)
                         transportSection(flags: $flags)
+                        agentPanelSection(flags: $flags)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
@@ -122,6 +123,19 @@ extension ConduitUI {
                     title: "SSH tunnel",
                     subtitle: "Route SSH-paired boxes through the held tunnel (token stays in the SSH channel). Off = legacy public path.",
                     isOn: flags.sshTunnelTransport
+                )
+            }
+        }
+
+        // MARK: Agent panel (debug)
+
+        private func agentPanelSection(flags: Bindable<FeatureFlags>) -> some View {
+            sectionCard(title: "Subagent panel") {
+                ConduitUI.toggleRow(
+                    icon: "person.3",
+                    title: "Show Agents section",
+                    subtitle: "Agents roster in the Information tab (debug only, default OFF)",
+                    isOn: flags.showSubagentPanel
                 )
             }
         }

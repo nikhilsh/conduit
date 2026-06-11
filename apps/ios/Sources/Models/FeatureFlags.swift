@@ -63,6 +63,7 @@ final class FeatureFlags {
         static let onboardingGuide = "conduit.flags.onboarding.guide"
         static let replyHaptics = "conduit.flags.chat.replyHaptics"
         static let sshTunnelTransport = "conduit.flags.transport.sshTunnel"
+        static let showSubagentPanel = "conduit.flags.debug.showSubagentPanel"
     }
 
     // MARK: - SSH tunnel transport (connection-critical) — default ON
@@ -86,6 +87,15 @@ final class FeatureFlags {
     /// Mirrors the instance default (ON) so the two never diverge.
     static func sshTunnelTransportEnabled(defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
+    }
+
+    // MARK: - Subagent panel (debug) — default OFF
+
+    /// Show the "Agents" section in the session Information tab (DEBUG only).
+    /// When ON, the Information tab renders the live subagent roster delivered
+    /// via the `view:"agents"` view_event. Default OFF — never clutters chat.
+    var showSubagentPanel: Bool {
+        didSet { defaults.set(showSubagentPanel, forKey: Keys.showSubagentPanel) }
     }
 
     // MARK: - New-session flags (§3) — default ON (this is the shipping design)
@@ -186,6 +196,7 @@ final class FeatureFlags {
 
         self.replyHaptics = defaults.object(forKey: Keys.replyHaptics) as? Bool ?? true
         self.sshTunnelTransport = defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
+        self.showSubagentPanel = defaults.object(forKey: Keys.showSubagentPanel) as? Bool ?? false
 
         self.chatStylePreference = (defaults.string(forKey: Keys.chatStylePreference)
             .flatMap(ChatStylePreference.init(rawValue:))) ?? .auto
