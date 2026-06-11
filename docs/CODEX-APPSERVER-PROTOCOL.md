@@ -258,3 +258,128 @@ escalate past the read-only sandbox — that reliably triggers
 `whoami`) is auto-approved and never prompts. Respond with the request's echoed
 `id` and the chosen `decision`. The driver used for this capture lives in the
 job tmp dir (`drive2.py`).
+
+## turn/steer (mid-turn redirect) — captured live, v0.132.0
+
+`turn/steer` is the third turn verb (alongside `turn/start` and `turn/interrupt`).
+It is meant to redirect a RUNNING turn with new input WITHOUT interrupting it — a
+concept claude lacks (claude can only queue a follow-up after the turn ends).
+
+Captured live against `codex-cli 0.132.0` on the dev box (raw JSON-RPC driver in
+the job tmp dir, mirroring the approval capture technique). Findings below.
+
+### Request / response shape
+
+The param is `expectedTurnId` (NOT `turnId` — that name is rejected). The `input`
+array reuses the `turn/start` content shape.
+
+```
+C->S {"id":4,"method":"turn/steer","params":{
+        "threadId":"019eb462-c740-…",
+        "expectedTurnId":"019eb462-c7c9-…",
+        "input":[{"type":"text","text":"Change of plans: only output PINEAPPLE."}]}}
+S->C {"id":4,"result":{"turnId":"019eb462-c7c9-…"}}
+```
+
+On success the result is just `{"turnId": <same active turn id>}`. The turn is
+NOT interrupted: no `turn/completed` fires for it, no new turn id is allocated,
+and the existing notification stream (reasoning / agentMessage deltas) continues
+under the same `turnId`.
+
+### Error semantics (all JSON-RPC `code:-32600`)
+
+| Condition | Error message |
+|---|---|
+| `expectedTurnId` omitted | `Invalid request: missing field \`expectedTurnId\`` |
+| no turn in flight | `no active turn to steer` |
+| `expectedTurnId` != the active turn | ``expected active turn id `X` but found `Y` `` |
+
+The `expectedTurnId` is a compare-and-steer guard: the caller asserts which turn
+it believes is running, and codex rejects the steer if a different turn is active
+(prevents steering a turn that already rolled over). The broker already latches
+the active turn id from `turn/started` (`c.turnID`, used today to target
+`turn/interrupt`) — the exact value `turn/steer` needs.
+
+### CRITICAL: steer is accepted but a NO-OP for generation in v0.132.0
+
+Across three live attempts (steer sent during reasoning, before the first
+`agentMessage`, and mid-`agentMessage`), the RPC was acknowledged with
+`{"turnId":…}` every time, but the model **ignored the steered input entirely**
+and finished the ORIGINAL task. The steered text never appeared:
+
+- not as an injected `userMessage` / `item/started` notification on the wire, and
+- not in the persisted rollout session file
+  (`~/.codex/sessions/.../rollout-*.jsonl`) — grepping the steer text yields
+  nothing; only the original `user_message` is recorded.
+
+So in `codex-cli 0.132.0` the app-server accepts `turn/steer` at the protocol
+layer but does not (in the configs tested: `danger-full-access` + `never`, plain
+text turns with no tool/approval gap) feed the steered input into the in-flight
+turn's context. Whether steer only takes effect during a specific window (e.g. a
+tool-call / approval boundary), is gated by a config/collaboration-mode flag, or
+is simply not yet wired in this CLI version, could not be reproduced here. Treat
+steer as **protocol-present but functionally inert** until a newer codex shows it
+actually altering output.
+
+### Proposal: surfacing steer in Conduit
+
+UX concept (claude has no equivalent): when the user sends a message while a
+codex turn is ACTIVE, offer a choice — **Steer** (redirect the running turn via
+`turn/steer`) vs the current behavior (queue / wait for the turn to finish).
+Today the codex backend rejects a concurrent `Send` with `errCodexTurnInFlight`
+and the app composer is locked while a turn runs; steer would be the one path
+that accepts input mid-turn.
+
+Broker plumbing would be small and self-contained: a `Steer(text string)` method
+on `*codexAppServerProcess` that writes
+`turn/steer {threadId: c.threadID, expectedTurnId: c.turnID, input:[…]}` guarded
+by `c.turnActive && c.turnID != ""` (the same guard `Interrupt()` uses), plus a
+backend `Steer` entry on the codex `AgentBackend`. No new turn-lifecycle state is
+needed — the steered turn continues under the same id and terminates normally.
+
+**Decision for THIS change: proposal-only, NO broker plumbing added.** Reason:
+the live capture shows steer is a no-op for generation in v0.132.0, so wiring a
+"Steer" button now would ship a control that silently does nothing — worse than
+not having it. Re-capture against a newer codex; if steer demonstrably alters the
+in-flight turn, add the `Steer` method + backend entry behind the existing
+single-turn guard. The app send-path work belongs on the `optimistic-send-pending`
+branch and is deliberately untouched here.
+
+## Assessment: prose "numbered-list menu" -> tappable quick-replies heuristic
+
+(Item 3 — assessment only, NOT implemented.)
+
+**Idea.** Detect when an assistant's PROSE reply ends in a numbered (or bulleted)
+list that looks like a menu of choices (e.g. "What next? 1. Fix a bug 2. Add a
+feature 3. Review the code") and render those lines as tappable quick-reply
+chips, recovering the card UX even when the agent answered in plain text rather
+than via the structured ask.
+
+**Where it would live.** App-side, in the chat-message renderer (iOS
+`ChatMessageView` / Android equivalent), post-parsing the final assistant text.
+The broker streams assistant content verbatim; it has no per-line render model,
+so this is a client-side presentation concern, not a broker change.
+
+**Feasibility.** Mechanically easy: a regex for trailing `^\s*\d+[.)]\s+\S` (or
+`^\s*[-*]\s+`) lines, optionally requiring a preceding question line. The hard
+part is precision, not parsing.
+
+**False-positive risk (high).** Most numbered lists are NOT menus: step-by-step
+instructions, ranked findings, code-review items, a list of files changed, an
+ordered explanation. Turning "Here's what I did: 1. edited X 2. ran tests 3.
+pushed" into tappable buttons is actively wrong and confusing — tapping a
+"step" would send it back as a reply. Heuristics to narrow it (must follow a
+question, must be the trailing block, items must be short imperatives) shrink the
+hit rate and still misfire. There is no reliable signal in free text that
+separates "menu of choices for YOU" from "list I'm telling you about."
+
+**Recommendation: do NOT build the heuristic now.** Item 1 (the awareness-prompt
+nudge telling agents to route choices through AskUserQuestion / the structured
+ask, so they render as real cards by construction) is the clean,
+non-heuristic fix and is non-destructive — it changes how the agent ASKS, not how
+we guess after the fact. Ship Item 1, observe whether choices now reliably arrive
+as structured asks, and only revisit the heuristic if agents keep emitting prose
+menus despite the prompt. If revisited, scope it tightly: opt-in, trailing block
+only, gated behind a preceding interrogative, and render as low-commitment
+"suggested replies" (prefill the composer, not auto-send) to bound the
+false-positive cost.

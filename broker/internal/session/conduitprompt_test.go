@@ -54,6 +54,7 @@ func TestConduitAwarenessPromptContent(t *testing.T) {
 		"$CONDUIT_PREVIEW_PORT",
 		"uploads/<session>/",
 		"AskUserQuestion",
+		"Offering options is always a question", // numbered/bulleted choice -> tappable cards, not prose
 		".conduit/memory/",
 	} {
 		if !strings.Contains(p, want) {
