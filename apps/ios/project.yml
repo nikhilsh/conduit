@@ -25,20 +25,20 @@ settings:
 packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa
-    # Pinned to the latest major (9.x). The trigger was an INFRA break:
-    # 8.58.3's xcframework GitHub-release assets return 504 (verified from
-    # CI and the dev box; 8.58.0 and 9.16.x serve fine), and `from: 8.55.0`
-    # with no committed Package.resolved re-resolved to that broken 8.58.3
-    # on every build → every iOS build failed at package resolve.
-    # We move forward to 9.16.1 rather than back-pin: our usage is one file
-    # (Telemetry.swift — start/dsn/environment/enableMetricKit/capture/
-    # addBreadcrumb/configureScope), all present in 9.x, and the 9.0
-    # breaking changes don't touch us (no tracesSampleRate set, so the new
-    # perf/tracing defaults are inert; removed enableTracing/
-    # defaultIntegrations unused; min-iOS 15 < our target). EXACT pin so a
-    # future major bump is a deliberate, reviewed change. Needs on-device
-    # verification that a test crash + breadcrumbs still report.
-    exactVersion: 9.16.1
+    # REVERTED from 9.16.1 to 8.58.0 — 9.16.1 silently stopped delivering
+    # events (telemetry dark from v0.0.127 through v0.0.138, proven via
+    # Sentry releases API: all builds >=0.0.127 have lastEvent=None;
+    # <=0.0.126 have events). 8.58.0 is the last-known-good pin.
+    # Background: 8.58.3 xcframework assets returned 504 on every build,
+    # so we bumped to 9.16.1 (f578a27) — API-compatible for compilation but
+    # runtime event delivery was silently broken. 8.58.0 (NOT 8.58.3) has
+    # healthy xcframework assets and is the proven-good pin.
+    # All APIs in Telemetry.swift (configureProfiling, sessionReplay.*,
+    # sendDefaultPii, enableAppHangTracking, tracesSampleRate) are present
+    # in 8.58.0 — verified against the 8.58.0 source tree.
+    # Revisit 9.x ONLY with on-device event-delivery verification (confirm
+    # events appear in Sentry for the new build before merging any 9.x bump).
+    exactVersion: 8.58.0
   SnapshotTesting:
     # Point-Free's swift-snapshot-testing. De facto standard for
     # iOS visual regression — image + accessibility + text snapshots.
