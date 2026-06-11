@@ -89,8 +89,10 @@ import sh.nikhil.conduit.FeatureFlags
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sh.nikhil.conduit.PendingChatKind
 import sh.nikhil.conduit.PinnedContext
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.sortedByConversationTs
 import kotlinx.coroutines.launch
 import uniffi.conduit_core.ChatEvent
@@ -369,6 +371,9 @@ fun ChatPage(
     // Live per-session status (carries the broker's authoritative
     // `turn_active` for the typing indicator's reconnect fix).
     val statusBySession by store.statusBySession.collectAsState()
+    // "Queued Next" panel: observe the pending queue + agent descriptors.
+    val pendingChatsQueue by store.pendingChats.collectAsState()
+    val agentDescriptorsMap by store.agentDescriptors.collectAsState()
     // PR #111 + iOS ChatViewModel parity: render a SINGLE chronologically
     // sorted list, merging the typed `conversationLog` with the broker's
     // raw `chatLog`. Picking one source or the other (the prior
@@ -741,11 +746,20 @@ fun ChatPage(
             }
         }
 
-        // Read-only (exited/archived) sessions are a frozen transcript —
-        // no live WS to send into — so the composer + quick-reply bar are
+        // Read-only (exited/archived) sessions are a frozen transcript --
+        // no live WS to send into -- so the composer + quick-reply bar are
         // suppressed entirely (mirrors iOS `ConduitChatView` read-only mode).
         if (!readOnly) {
-            // Agent-tinted hairline above the composer — a quiet "you're
+            // "Queued Next" panel: compute queued entries + steer capability
+            // once so both the panel and the send-button glyph share the same
+            // derived state.
+            val queuedEntries = remember(pendingChatsQueue, session.id) {
+                pendingChatsQueue.queuedTurnEntries(session.id)
+            }
+            val supportsSteer = remember(agentDescriptorsMap, session.assistant) {
+                descriptorFor(session.assistant, agentDescriptorsMap).supportsSteer
+            }
+            // Agent-tinted hairline above the composer -- a quiet "you're
             // talking to X" cue. Pairs with the composer's tinted shadow
             // (see ConversationComposer's outer modifier) so the cluster
             // reads as agent-coloured without painting the surface.
@@ -753,6 +767,15 @@ fun ChatPage(
                 thickness = 1.5.dp,
                 color = agentAccent.copy(alpha = 0.55f),
             )
+            // "Queued Next" panel -- visible when there are queued-turn entries.
+            if (queuedEntries.isNotEmpty()) {
+                QueuedNextPanel(
+                    entries = queuedEntries,
+                    supportsSteer = supportsSteer,
+                    onSteer = { localId -> store.retrySteer(session.id, localId) },
+                    onCancel = { localId -> store.cancelQueued(session.id, localId) },
+                )
+            }
             ConversationComposer(
                 draft = draft,
                 // AI-generated chips from the broker (task #233) are
@@ -780,6 +803,8 @@ fun ChatPage(
                 },
                 onSend = dispatchSend,
                 agentWorking = agentWorking,
+                // Codex with an active turn: send button shows steer glyph.
+                sendIsSteer = agentWorking && supportsSteer,
                 onStop = { store.stopTurn(session.id) },
             )
         }
@@ -2798,8 +2823,14 @@ private fun ConversationComposer(
     onDraftChange: (String) -> Unit,
     onQuickReply: (String) -> Unit,
     onSend: () -> Unit,
-    /** True while the agent is producing output — the trailing button becomes Stop. */
+    /** True while the agent is producing output -- the trailing button becomes Stop. */
     agentWorking: Boolean = false,
+    /**
+     * True when the agent is codex with an active turn: the send button shows
+     * the steer glyph (subdirectory/arrow-turn-down-right) instead of the
+     * normal up-arrow, indicating that sending will queue + steer.
+     */
+    sendIsSteer: Boolean = false,
     /** Interrupt the agent's current turn (the Stop button). */
     onStop: () -> Unit = {},
 ) {
@@ -2960,7 +2991,15 @@ private fun ConversationComposer(
                             ),
                             modifier = Modifier.size(36.dp),
                         ) {
-                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Send")
+                            // Codex with active turn: steer glyph instead of up-arrow.
+                            if (sendIsSteer) {
+                                Icon(
+                                    Icons.Outlined.KeyboardArrowRight,
+                                    contentDescription = "Queue and steer",
+                                )
+                            } else {
+                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Send")
+                            }
                         }
                         // Empty composer while the agent is producing output: the
                         // send affordance becomes a Stop button that interrupts the
@@ -2986,6 +3025,144 @@ private fun ConversationComposer(
                         }
                     }
                 }
+        }
+    }
+}
+
+/**
+ * "Queued Next" panel -- shows above the composer when one or more messages
+ * are queued while a turn is active. Each card shows a truncated preview,
+ * a status badge, an optional Steer button (codex only), and an X to cancel.
+ *
+ * Badge tints match the spec:
+ *   Queued   = accent (neon.accent)
+ *   Steering = accentBright (brightest; button disabled)
+ *   Retrying = warning/orange (MaterialTheme.colorScheme.error tinted)
+ *
+ * Mirror of iOS `QueuedNextPanel`. Copy strings are spec-exact.
+ */
+@Composable
+private fun QueuedNextPanel(
+    entries: List<sh.nikhil.conduit.PendingChat>,
+    supportsSteer: Boolean,
+    onSteer: (localId: String) -> Unit,
+    onCancel: (localId: String) -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        // Header: "Queued Next" with optional count pill when >1 entry.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "Queued Next",
+                style = MaterialTheme.typography.labelSmall,
+                color = neon.textDim,
+                fontFamily = neon.sans,
+            )
+            if (entries.size > 1) {
+                Text(
+                    "${entries.size}",
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(neon.surface2)
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = neon.accent,
+                    fontFamily = neon.sans,
+                )
+            }
+        }
+        entries.forEach { entry ->
+            QueuedNextCard(
+                entry = entry,
+                supportsSteer = supportsSteer,
+                onSteer = { onSteer(entry.localId) },
+                onCancel = { onCancel(entry.localId) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueuedNextCard(
+    entry: sh.nikhil.conduit.PendingChat,
+    supportsSteer: Boolean,
+    onSteer: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    // Badge label + tint per spec.
+    val (badgeLabel, badgeColor) = when (entry.kind) {
+        PendingChatKind.steering -> "Steering" to neon.accentBright
+        PendingChatKind.retrying -> "Retrying" to MaterialTheme.colorScheme.error
+        else -> "Queued" to neon.accent
+    }
+    val steerEnabled = supportsSteer && entry.kind != PendingChatKind.steering
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(neon.surface)
+            .border(1.dp, neon.borderStrong, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Message preview (up to 2 lines).
+        Text(
+            text = entry.message,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = neon.text,
+            fontFamily = neon.sans,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        // Status badge.
+        Text(
+            text = badgeLabel,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(badgeColor.copy(alpha = 0.15f))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = badgeColor,
+            fontFamily = neon.sans,
+        )
+        // Steer button (codex only, disabled while in-flight).
+        if (supportsSteer) {
+            androidx.compose.material3.IconButton(
+                onClick = onSteer,
+                enabled = steerEnabled,
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.KeyboardArrowRight,
+                    contentDescription = "Steer",
+                    tint = if (steerEnabled) neon.accent else neon.textFaint,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        // Cancel (X) button.
+        androidx.compose.material3.IconButton(
+            onClick = onCancel,
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                Icons.Outlined.Close,
+                contentDescription = "Cancel queued message",
+                tint = neon.textFaint,
+                modifier = Modifier.size(14.dp),
+            )
         }
     }
 }
