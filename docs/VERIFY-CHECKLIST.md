@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## Unreleased (on main, not yet tagged)
+
+- **VPS backup helper** — `scripts/conduit-backup.sh` + `docs/BACKUP-RECOVERY.md`.
+  Verify by running the script on the live box: `scripts/conduit-backup.sh
+  /tmp/test-backup.tar.gz.gpg` (passphrase-prompt must appear; encrypted file
+  must be written; decrypt + inspect `manifest.txt` confirms tier-1 items were
+  staged). [script, local run — no device needed]
+
+---
+
 ## v0.0.138
 
 - **Subagent "Agents" panel in the Information tab** — debug-gated (default

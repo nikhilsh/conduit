@@ -98,3 +98,7 @@ pre-v0.0.117 broker hard-killed every socket at exactly 90s). The probe in
 | removing `CONDUIT_TOKEN` from the unit | both devices forced to re-pair | leave the pinned token alone |
 | `ssh root@103.107.51.48` | you're already on the box | run locally |
 | redeploy mid-turn | in-flight agent work dies | batch with device-test sessions; Resume restarts the agent |
+
+Before destructive maintenance (disk migration, VPS teardown) run
+`scripts/conduit-backup.sh` to snapshot the unit and all tier-1 secrets.
+See [`BACKUP-RECOVERY.md`](BACKUP-RECOVERY.md).
