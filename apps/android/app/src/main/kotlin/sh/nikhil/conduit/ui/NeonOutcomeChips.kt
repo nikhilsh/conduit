@@ -1,31 +1,42 @@
 package sh.nikhil.conduit.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sh.nikhil.conduit.Telemetry
 
 // Android mirror of the design's `OutcomeChips` (palette.jsx): a session's
 // result at a glance — landed diff (+add / −rem), the associated PR (#num +
 // state), and commit count. Fed by the broker's git/gh stats on
 // ProjectSession (lines_added / lines_removed / commits / pr_number /
-// pr_state). The tests chip is intentionally omitted until there's a
+// pr_state / pr_url). The tests chip is intentionally omitted until there's a
 // non-fragile test-result data source.
 //
 // Each value is gated on > 0 / present so an untouched session (or a non-git
 // workspace, where everything is null) renders nothing rather than a noisy
 // row of zeros.
+//
+// When prUrl is non-null the PR chip is tappable and opens the URL via an
+// ACTION_VIEW Intent. When null the chip is read-only (prior behaviour).
 @Composable
 fun NeonOutcomeChips(
     neon: NeonTheme,
@@ -34,6 +45,7 @@ fun NeonOutcomeChips(
     commits: Int?,
     prNumber: Int?,
     prState: String?,
+    prUrl: String? = null,
     modifier: Modifier = Modifier,
     dense: Boolean = false,
 ) {
@@ -62,8 +74,34 @@ fun NeonOutcomeChips(
                 "open" -> neon.green
                 else -> neon.textFaint // draft / closed
             }
-            Chip(prColor, dense) {
-                Text("#${prNumber} ${prState ?: ""}".trim(), fontFamily = neon.mono, fontSize = fs, fontWeight = FontWeight.SemiBold, color = prColor)
+            val label = "#${prNumber} ${prState ?: ""}".trim()
+            val context = LocalContext.current
+            val validUri = prUrl?.let { runCatching { Uri.parse(it).takeIf { u -> u.scheme != null } }.getOrNull() }
+            if (validUri != null) {
+                Chip(
+                    color = prColor,
+                    dense = dense,
+                    modifier = Modifier.clickable {
+                        Telemetry.breadcrumb(
+                            "pr_link",
+                            "tapped PR chip",
+                            mapOf("pr_number" to "${prNumber ?: 0}", "pr_state" to (prState ?: ""))
+                        )
+                        context.startActivity(Intent(Intent.ACTION_VIEW, validUri))
+                    },
+                ) {
+                    Text(label, fontFamily = neon.mono, fontSize = fs, fontWeight = FontWeight.SemiBold, color = prColor)
+                    Icon(
+                        imageVector = Icons.Default.OpenInBrowser,
+                        contentDescription = "Open PR",
+                        tint = prColor.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(start = 2.dp),
+                    )
+                }
+            } else {
+                Chip(prColor, dense) {
+                    Text(label, fontFamily = neon.mono, fontSize = fs, fontWeight = FontWeight.SemiBold, color = prColor)
+                }
             }
         }
         if (showCommits) {
@@ -76,11 +114,16 @@ fun NeonOutcomeChips(
 }
 
 @Composable
-private fun Chip(color: Color, dense: Boolean, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
+private fun Chip(
+    color: Color,
+    dense: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(99.dp))
             .background(color.copy(alpha = 0.08f))
             .border(1.dp, color.copy(alpha = 0.20f), RoundedCornerShape(99.dp))

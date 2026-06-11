@@ -191,6 +191,7 @@ private fun SessionCard(
             commits = session.commits?.toInt(),
             prNumber = session.prNumber?.toInt(),
             prState = session.prState,
+            prUrl = session.prUrl,
         )
     }
 }

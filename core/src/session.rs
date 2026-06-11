@@ -67,6 +67,13 @@ pub struct ProjectSession {
     pub pr_number: Option<u32>,
     #[serde(default)]
     pub pr_state: Option<String>,
+    /// Web URL of the PR/MR (e.g. https://github.com/org/repo/pull/123).
+    /// `None` when no PR/MR is associated or the broker hasn't fetched it yet.
+    #[serde(default)]
+    pub pr_url: Option<String>,
+    /// Provider that owns the PR/MR — "github" | "gitlab" | "".
+    #[serde(default)]
+    pub pr_provider: Option<String>,
     /// Account-level Claude subscription usage (on-demand /usage): 5-hour +
     /// weekly window utilization (percentage 0–100) and each window's ISO-8601
     /// reset instant. Rolled from the status frame; `None` until fetched.
@@ -204,6 +211,12 @@ impl ProjectSessionState {
         }
         if status.pr_state.is_some() {
             self.session.pr_state = status.pr_state.clone();
+        }
+        if status.pr_url.is_some() {
+            self.session.pr_url = status.pr_url.clone();
+        }
+        if status.pr_provider.is_some() {
+            self.session.pr_provider = status.pr_provider.clone();
         }
         // Account-level subscription usage — last frame wins (the broker
         // refetches on connect + on explicit refresh; the latest is current).

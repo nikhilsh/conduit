@@ -153,7 +153,8 @@ extension ConduitUI {
                             linesRemoved: session.linesRemoved.map(Int.init),
                             commits: session.commits.map(Int.init),
                             prNumber: session.prNumber.map(Int.init),
-                            prState: session.prState
+                            prState: session.prState,
+                            prUrl: session.prUrl
                         )
                     }
                 }

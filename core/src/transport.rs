@@ -791,6 +791,10 @@ async fn handle_text(
         #[serde(default)]
         pr_state: Option<String>,
         #[serde(default)]
+        pr_url: Option<String>,
+        #[serde(default)]
+        pr_provider: Option<String>,
+        #[serde(default)]
         account_5h_pct: Option<f64>,
         #[serde(default)]
         account_5h_resets_at: Option<String>,
@@ -848,6 +852,8 @@ async fn handle_text(
                 commits: env.commits,
                 pr_number: env.pr_number,
                 pr_state: env.pr_state,
+                pr_url: env.pr_url,
+                pr_provider: env.pr_provider,
                 account_5h_pct: env.account_5h_pct,
                 account_5h_resets_at: env.account_5h_resets_at,
                 account_7d_pct: env.account_7d_pct,

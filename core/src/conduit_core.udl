@@ -43,6 +43,8 @@ dictionary SessionStatus {
     u32? commits = null;
     u32? pr_number = null;
     string? pr_state = null;
+    string? pr_url = null;
+    string? pr_provider = null;
     f64? account_5h_pct = null;
     string? account_5h_resets_at = null;
     f64? account_7d_pct = null;
@@ -71,6 +73,8 @@ dictionary ProjectSession {
     u32? commits = null;
     u32? pr_number = null;
     string? pr_state = null;
+    string? pr_url = null;
+    string? pr_provider = null;
     f64? account_5h_pct = null;
     string? account_5h_resets_at = null;
     f64? account_7d_pct = null;

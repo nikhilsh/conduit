@@ -6,24 +6,29 @@ import SwiftUI
 // result at a glance — landed diff (+add / −rem), the associated PR
 // (#num + state), and commit count. Fed by the broker's git/gh stats
 // rolled onto `ProjectSession` (linesAdded / linesRemoved / commits /
-// prNumber / prState). The tests chip is intentionally omitted until
+// prNumber / prState / prUrl). The tests chip is intentionally omitted until
 // there's a non-fragile test-result data source.
 //
 // Each value is gated on > 0 / present, so an untouched session (or a
 // non-git workspace, where everything is nil) renders nothing rather than
 // a noisy row of zeros. Compact + few (≤3) chips, so a plain HStack is
 // enough — no flow layout needed.
+//
+// When prUrl is non-nil the PR chip is tappable and opens the URL in the
+// system browser. When nil the chip is read-only (prior behaviour).
 
 extension ConduitUI {
 
     struct OutcomeChips: View {
         @Environment(\.neonTheme) private var neon
+        @Environment(\.openURL) private var openURL
 
         let linesAdded: Int?
         let linesRemoved: Int?
         let commits: Int?
         let prNumber: Int?
         let prState: String?
+        var prUrl: String? = nil
         var dense: Bool = false
 
         private var showDiff: Bool { (linesAdded ?? 0) > 0 || (linesRemoved ?? 0) > 0 }
@@ -55,12 +60,7 @@ extension ConduitUI {
                         }
                     }
                     if showPR {
-                        chip(prColor) {
-                            Text("#\(prNumber ?? 0) \(prState ?? "")"
-                                .trimmingCharacters(in: .whitespaces))
-                                .font(neon.mono(fontSize).weight(.semibold))
-                                .foregroundStyle(prColor)
-                        }
+                        prChip
                     }
                     if showCommits {
                         let n = commits ?? 0
@@ -70,6 +70,38 @@ extension ConduitUI {
                                 .foregroundStyle(neon.textFaint)
                         }
                     }
+                }
+            }
+        }
+
+        // PR chip — tappable when prUrl is non-nil and parses to a valid URL.
+        @ViewBuilder
+        private var prChip: some View {
+            let label = "#\(prNumber ?? 0) \(prState ?? "")".trimmingCharacters(in: .whitespaces)
+            if let rawURL = prUrl, let url = URL(string: rawURL) {
+                Button {
+                    Telemetry.breadcrumb(
+                        "pr_link",
+                        "tapped PR chip",
+                        ["pr_number": "\(prNumber ?? 0)", "pr_state": prState ?? ""]
+                    )
+                    openURL(url)
+                } label: {
+                    chip(prColor) {
+                        Text(label)
+                            .font(neon.mono(fontSize).weight(.semibold))
+                            .foregroundStyle(prColor)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: fontSize - 1.5, weight: .semibold))
+                            .foregroundStyle(prColor.opacity(0.7))
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                chip(prColor) {
+                    Text(label)
+                        .font(neon.mono(fontSize).weight(.semibold))
+                        .foregroundStyle(prColor)
                 }
             }
         }

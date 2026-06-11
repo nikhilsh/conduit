@@ -102,7 +102,8 @@ extension ConduitUI {
                     linesRemoved: nil,
                     commits: session.commits.map(Int.init),
                     prNumber: session.prNumber.map(Int.init),
-                    prState: session.prState
+                    prState: session.prState,
+                    prUrl: session.prUrl
                 )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
