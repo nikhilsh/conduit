@@ -67,3 +67,8 @@ Features verified on-device and considered complete.
   #469. (v0.0.135)
 - **Buy-me-a-coffee link** — Settings row opening external donation URL. PR
   #462. (v0.0.135)
+- **ACP protocol research doc** — wire facts + conduit backend design notes for
+  ACP. PR #486. (v0.0.138, docs only)
+- **Harness hygiene rules + codex multi-agent protocol doc** — agent harness
+  conventions and codex collab-thread wire protocol documented. PR #493.
+  (v0.0.138, docs only)
