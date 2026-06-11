@@ -63,6 +63,13 @@ data class AgentDescriptor(
     val supportsPlanMode: Boolean,
     /** Agent has an account-level usage/limits endpoint. */
     val supportsUsage: Boolean,
+    /**
+     * Agent supports real-time turn steering (inject input into the RUNNING
+     * turn). True only for the codex app-server backend which exposes
+     * `turn/steer`. All other backends are false (default).
+     * Mirror of iOS `AgentDescriptor.supportsSteer`.
+     */
+    val supportsSteer: Boolean = false,
 )
 
 /**
@@ -88,6 +95,7 @@ internal val staticAgentDescriptors: Map<String, AgentDescriptor> = mapOf(
         supportsEffort = true,
         supportsPlanMode = true,
         supportsUsage = true,
+        supportsSteer = true,
     ),
 )
 
@@ -110,6 +118,7 @@ internal fun parseAgentDescriptors(raw: String): Map<String, AgentDescriptor> {
             supportsEffort = supports.optBoolean("effort", false),
             supportsPlanMode = supports.optBoolean("plan_mode", false),
             supportsUsage = supports.optBoolean("usage", false),
+            supportsSteer = supports.optBoolean("steer", false),
         )
     }
     return out
@@ -132,6 +141,7 @@ internal fun descriptorFor(assistant: String, descriptors: Map<String, AgentDesc
             supportsEffort = false,
             supportsPlanMode = false,
             supportsUsage = false,
+            supportsSteer = false,
         )
 }
 

@@ -68,6 +68,11 @@ type BackendCapabilities struct {
 	// (Usage returns ok=true). Drives the Session Info usage card's presence
 	// in the per-assistant descriptor.
 	Usage bool
+	// Steer: the protocol supports injecting input into a RUNNING turn
+	// (turn/steer). True only for the codex app-server backend; all others
+	// fall back to false (default). Drives the apps' "Queued Next" steer
+	// affordance (spec PR #481).
+	Steer bool
 }
 
 // AgentDescriptor is the per-assistant capability descriptor served in
@@ -92,6 +97,9 @@ type AgentSupports struct {
 	Effort          bool `json:"effort"`
 	PlanMode        bool `json:"plan_mode"`
 	Usage           bool `json:"usage"`
+	// Steer: protocol supports turn/steer (codex app-server only). Drives the
+	// apps' "Queued Next" steer affordance (spec PR #481).
+	Steer bool `json:"steer"`
 }
 
 // spawnRequest carries the per-spawn inputs a backend needs that aren't on the

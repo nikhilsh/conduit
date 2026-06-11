@@ -85,6 +85,7 @@ func (codexAppServerBackend) Capabilities() BackendCapabilities {
 		Resume:          true, // thread/resume across restarts
 		Interrupt:       true, // turn/interrupt
 		Usage:           true, // chatgpt.com /wham/usage
+		Steer:           true, // turn/steer: inject input into running turn
 	}
 }
 

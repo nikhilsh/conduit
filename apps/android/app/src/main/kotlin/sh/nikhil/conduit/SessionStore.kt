@@ -476,6 +476,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _connectionHealth = MutableStateFlow<Map<String, ConnectionHealth>>(emptyMap())
     val connectionHealth: StateFlow<Map<String, ConnectionHealth>> = _connectionHealth.asStateFlow()
 
+    /**
+     * Last known turnActive value per session. Tracked to detect the
+     * active->idle transition and trigger [flushOnTurnComplete]. Not
+     * persisted -- the live status frames rebuild this on reconnect.
+     * ConcurrentHashMap because [onStatus] arrives on UniFFI worker threads.
+     */
+    private val _lastTurnActive = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     /** SSH-bootstrap progress, observed by the SSH login sheet. */
     private val _sshBootstrap = MutableStateFlow<SshBootstrapState>(SshBootstrapState.Idle)
     val sshBootstrap: StateFlow<SshBootstrapState> = _sshBootstrap.asStateFlow()
@@ -1864,24 +1872,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if (handleSlashCommand(sessionId, msg)) return
-        // Optimistic local echo — harness doesn't loop user messages back
-        // as onChatEvent, so the chat tab would stay empty until the
-        // assistant replies. The `local-` id lets refreshConversation
-        // preserve this entry until the server's typed log catches up.
-        //
-        // CRITICAL: this echo + enqueue happens BEFORE any `client` guard.
-        // The old `val c = client ?: return` here dropped the message
-        // entirely (no echo, no record) if the user sent during a reconnect
-        // window — the device-reported lost-send bug. Now the message is
-        // always queued and persisted; the flush re-delivers it when the
-        // connection comes back.
-        //
+        // Build the optimistic echo timestamp (anchored to the server clock domain).
         // Timestamp must be ANCHORED to the server clock domain, not the
         // device wall-clock. Every persisted item already in the log is
         // broker-stamped; the assistant reply this message triggers will be
         // broker-stamped too. If we stamp the echo with the *device* clock and
         // it runs even slightly ahead of the broker, the echo sorts AFTER the
-        // reply → the agent's answer renders above the user's prompt (device
+        // reply -> the agent's answer renders above the user's prompt (device
         // bug, "brought up many times"). Stamping it one ms past the newest
         // known item keeps it ahead of any reply (whose broker ts is
         // necessarily later) regardless of how far the device clock drifts.
@@ -1890,7 +1887,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // the reply this message triggers is broker-stamped and necessarily
         // *after* session start, so start+1 keeps the echo ahead of it even
         // when the device clock runs ahead of the broker. This is the codex
-        // case — a one-shot reply with a tiny user→reply gap, where the old
+        // case -- a one-shot reply with a tiny user->reply gap, where the old
         // device-now() fallback flipped the order. Device now() is the last
         // resort (status not yet received). See [sortedByConversationTs].
         val nowMs = System.currentTimeMillis()
@@ -1909,6 +1906,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
             .atOffset(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
         val localId = "local-${java.util.UUID.randomUUID()}"
+        // "Queued Next" gate (spec PR #481): if a turn is currently active,
+        // queue the message in the "Queued Next" panel instead of delivering
+        // immediately. For codex (supports.steer): queue AND immediately attempt
+        // a steer into the running turn. For others: hold; auto-send on turn end.
+        //
+        // CRITICAL: this echo + enqueue happens BEFORE any `client` guard.
+        // The old `val c = client ?: return` here dropped the message
+        // entirely (no echo, no record) if the user sent during a reconnect
+        // window -- the device-reported lost-send bug. Now the message is
+        // always queued and persisted; the flush re-delivers it on connect /
+        // foreground.
+        val turnActive = _statusBySession.value[sessionId]?.turnActive == true
         val item = ConversationItem(
             id = localId,
             role = "user",
@@ -1939,9 +1948,29 @@ class SessionStore : ViewModel(), ConduitDelegate {
             m[sessionId] = (m[sessionId] ?: emptyList()) +
                 ChatEvent(role = "user", content = msg, ts = ts, files = emptyList())
         }
-        // Register as pending + persist BEFORE attempting any WS write, so a
-        // backgrounding-mid-send or a null client during reconnect never
-        // drops it. The flush re-delivers it on connect / foreground.
+        if (turnActive) {
+            val agent = _sessions.value.firstOrNull { it.id == sessionId }?.assistant ?: ""
+            val supportsSteer = descriptorFor(agent, _agentDescriptors.value).supportsSteer
+            // Register as queuedTurn (not normal) so flushable() skips it and
+            // only flushOnTurnComplete delivers it.
+            updatePendingChats { it.enqueueQueued(sessionId, localId, msg, ts) }
+            Telemetry.breadcrumb(
+                "chat",
+                "queued_turn",
+                mapOf("session" to sessionId, "chars" to msg.length.toString(), "steer" to supportsSteer.toString()),
+            )
+            if (supportsSteer) {
+                // Codex: immediately attempt a steer into the running turn.
+                attemptSteer(sessionId, localId, msg)
+            }
+            // For non-steer agents: the entry stays queuedTurn until
+            // flushOnTurnComplete delivers it when the turn ends.
+            return
+        }
+        // Normal (no active turn): register as pending + persist BEFORE
+        // attempting any WS write, so a backgrounding-mid-send or a null client
+        // during reconnect never drops it. The flush re-delivers it on connect /
+        // foreground.
         updatePendingChats { it.enqueue(sessionId, localId, msg, ts) }
         Telemetry.breadcrumb("chat", "queued", mapOf("session" to sessionId, "chars" to msg.length.toString()))
         attemptDeliver(sessionId, localId, msg)
@@ -1979,6 +2008,122 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 }
             }
         }
+    }
+
+    /**
+     * Attempt to steer a queued codex entry into the RUNNING turn (spec PR
+     * #481). Flips the entry to [PendingChatKind.steering], sends via the
+     * normal chat path (broker sees turn active -> turn/steer; broker falls back
+     * to turn/start if the turn already ended), then acks on success (removes
+     * the card) or flips to [PendingChatKind.retrying] on failure. Safe when
+     * [client] is null -- entry stays in queuedTurn/retrying for the next
+     * flush-on-turn-complete.
+     */
+    private fun attemptSteer(sessionId: String, localId: String, msg: String) {
+        val c = client ?: return
+        updatePendingChats { it.markSteering(sessionId, localId) }
+        Telemetry.breadcrumb(
+            "chat",
+            "steer_attempt",
+            mapOf("session" to sessionId, "local_id" to localId),
+        )
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
+            if (result.isSuccess) {
+                // Steer acked: remove the panel card and flip echo to done.
+                updatePendingChats { it.markDelivered(sessionId, localId) }
+                setEchoStatus(sessionId, localId, "done")
+                Telemetry.breadcrumb(
+                    "chat",
+                    "steer_ack",
+                    mapOf("session" to sessionId, "local_id" to localId),
+                )
+            } else {
+                // Steer failed: flip to retrying so the user can re-tap Steer.
+                updatePendingChats { it.markSteeringFailed(sessionId, localId) }
+                Telemetry.breadcrumb(
+                    "chat",
+                    "steer_failed",
+                    mapOf("session" to sessionId, "local_id" to localId),
+                )
+                Telemetry.capture(
+                    error = result.exceptionOrNull() ?: RuntimeException("steer failed"),
+                    message = "codex steer attempt failed",
+                    tags = mapOf("surface" to "android", "phase" to "chat_steer"),
+                    extras = mapOf("session" to sessionId),
+                )
+            }
+        }
+    }
+
+    /**
+     * User tapped the "Steer" button on a retrying codex card -- re-attempt
+     * the steer into the running turn. Mirror of iOS `retrySteer`.
+     */
+    fun retrySteer(sessionId: String, localId: String) {
+        val entry = _pendingChats.value.entries(sessionId).firstOrNull { it.localId == localId } ?: return
+        Telemetry.breadcrumb(
+            "chat",
+            "steer_retry",
+            mapOf("session" to sessionId, "local_id" to localId),
+        )
+        attemptSteer(sessionId, localId, entry.message)
+    }
+
+    /**
+     * User tapped X on a "Queued Next" panel card -- remove the entry so it
+     * is never auto-sent. Mirror of iOS `cancelQueued`.
+     */
+    fun cancelQueued(sessionId: String, localId: String) {
+        // Capture the ts before removing from the queue (for chatLog cleanup).
+        val entryTs = _pendingChats.value.entries(sessionId).firstOrNull { it.localId == localId }?.ts
+        Telemetry.breadcrumb(
+            "chat",
+            "queued_cancel",
+            mapOf("session" to sessionId, "local_id" to localId),
+        )
+        updatePendingChats { it.cancel(sessionId, localId) }
+        // Remove the optimistic echo so the message disappears from the log.
+        _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+            val list = m[sessionId] ?: return@also
+            m[sessionId] = list.filterNot { it.id == localId }
+        }
+        if (entryTs != null) {
+            _chatLog.value = _chatLog.value.toMutableMap().also { m ->
+                val list = m[sessionId] ?: return@also
+                m[sessionId] = list.filterNot { it.role == "user" && it.ts == entryTs }
+            }
+        }
+    }
+
+    /**
+     * Called when a turn transitions from active to idle (turnActive false in
+     * a status frame). Delivers the OLDEST queued-turn entry via the normal
+     * [sendChat] path (which starts a new turn); remaining entries stay
+     * queued and will flush on the NEXT turn-complete (natural serialization
+     * -- one at a time, not a blast). No-op when nothing is queued.
+     * Mirror of iOS `flushOnTurnComplete`.
+     */
+    internal fun flushOnTurnComplete(sessionId: String) {
+        val entry = _pendingChats.value.flushOnTurnComplete(sessionId) ?: return
+        Telemetry.breadcrumb(
+            "chat",
+            "flush_turn_complete",
+            mapOf("session" to sessionId, "local_id" to entry.localId, "chars" to entry.message.length.toString()),
+        )
+        // Flip the kind back to normal so attemptDeliver (the existing send path)
+        // treats this as a regular deliver and the echo shows as pending again.
+        updatePendingChats { q ->
+            q.markDelivered(sessionId, entry.localId)
+        }
+        // Deliver directly -- sendChat would re-check turnActive (which may
+        // already be false or race); use attemptDeliver so we don't double-echo.
+        // The echo was already appended to the log when the message was first
+        // queued, so we need only (re-)register it as a normal pending entry and
+        // attempt delivery.
+        val ts = entry.ts
+        updatePendingChats { it.enqueue(sessionId, entry.localId, entry.message, ts) }
+        attemptDeliver(sessionId, entry.localId, entry.message)
     }
 
     /**
@@ -2880,6 +3025,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // only live sessions). Idempotent; tombstoned ids are suppressed.
         recordSavedSession(status.session)
         refreshSessions()
+        // "Queued Next" flush-on-turn-complete: detect the active -> idle
+        // transition and auto-deliver the oldest queued entry. Only fire
+        // when turnActive is explicitly false and was previously true (edge
+        // trigger); null turnActive (old broker) is ignored.
+        val nowActive = status.turnActive
+        if (nowActive != null) {
+            val wasActive = _lastTurnActive[status.session]
+            _lastTurnActive[status.session] = nowActive
+            if (wasActive == true && !nowActive) {
+                flushOnTurnComplete(status.session)
+            }
+        }
     }
 
     override fun onSnapshot(sessionId: String, gunzipped: ByteArray) {

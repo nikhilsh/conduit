@@ -1661,6 +1661,7 @@ func (m *Manager) AgentDescriptors() map[string]AgentDescriptor {
 				Effort:          caps.Effort,
 				PlanMode:        planMode,
 				Usage:           caps.Usage,
+				Steer:           caps.Steer,
 			},
 			Models: catalog[name],
 		}
