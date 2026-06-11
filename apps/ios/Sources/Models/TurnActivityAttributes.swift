@@ -26,8 +26,8 @@ public struct TurnActivityAttributes: ActivityAttributes {
         public var tokensIn: Int
         public var tokensOut: Int
         public var status: String
-        /// When this snapshot was pushed — the widget's "synced Xm ago"
-        /// honesty stamp (round-3 §2).
+        /// When this snapshot was pushed -- the widget's "synced Xm ago"
+        /// honesty stamp (round-3 SS2).
         public var syncedAt: Date
         /// Done-state closing line ("exit 0"), nil while running.
         public var summary: String?
@@ -76,6 +76,58 @@ public struct TurnActivityAttributes: ActivityAttributes {
             self.interruptKind = interruptKind
             self.prompt = prompt
             self.optionCount = optionCount
+        }
+
+        // MARK: - Custom Codable (push-decodable, epoch-millis timestamps)
+        //
+        // APNs push content-state JSON uses epoch-millis Int keys
+        // "startedAtMs" / "syncedAtMs" (broker contract). Swift's default
+        // Date Codable expects a Double timeIntervalSinceReferenceDate,
+        // which would silently misparse the broker's millis values.
+        // We encode/decode using those Int millis keys so:
+        //   - push-decoded content-state (broker -> APNs -> iOS) works,
+        //   - local Activity.update round-trips through the same shape,
+        //   - the existing local-update path keeps using Date values.
+
+        enum CodingKeys: String, CodingKey {
+            case currentTool, currentCommand
+            case startedAtMs
+            case syncedAtMs
+            case tokensIn, tokensOut
+            case status, summary
+            case interruptKind, prompt, optionCount
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            currentTool     = try c.decodeIfPresent(String.self, forKey: .currentTool)
+            currentCommand  = try c.decodeIfPresent(String.self, forKey: .currentCommand)
+            let startMs     = try c.decode(Int.self, forKey: .startedAtMs)
+            let syncMs      = try c.decode(Int.self, forKey: .syncedAtMs)
+            startedAt       = Date(timeIntervalSince1970: Double(startMs) / 1000.0)
+            syncedAt        = Date(timeIntervalSince1970: Double(syncMs) / 1000.0)
+            tokensIn        = try c.decodeIfPresent(Int.self, forKey: .tokensIn) ?? 0
+            tokensOut       = try c.decodeIfPresent(Int.self, forKey: .tokensOut) ?? 0
+            status          = try c.decodeIfPresent(String.self, forKey: .status) ?? "running"
+            summary         = try c.decodeIfPresent(String.self, forKey: .summary)
+            interruptKind   = try c.decodeIfPresent(TurnInterruptKind.self, forKey: .interruptKind)
+            prompt          = try c.decodeIfPresent(String.self, forKey: .prompt)
+            optionCount     = try c.decodeIfPresent(Int.self, forKey: .optionCount) ?? 0
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(currentTool,    forKey: .currentTool)
+            try c.encodeIfPresent(currentCommand, forKey: .currentCommand)
+            try c.encode(Int(startedAt.timeIntervalSince1970 * 1000), forKey: .startedAtMs)
+            try c.encode(Int(syncedAt.timeIntervalSince1970 * 1000),  forKey: .syncedAtMs)
+            try c.encode(tokensIn,    forKey: .tokensIn)
+            try c.encode(tokensOut,   forKey: .tokensOut)
+            try c.encode(status,      forKey: .status)
+            try c.encodeIfPresent(summary,       forKey: .summary)
+            try c.encodeIfPresent(interruptKind, forKey: .interruptKind)
+            try c.encodeIfPresent(prompt,        forKey: .prompt)
+            try c.encode(optionCount, forKey: .optionCount)
         }
     }
 

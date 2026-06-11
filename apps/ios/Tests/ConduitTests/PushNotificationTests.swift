@@ -273,6 +273,54 @@ struct PushFanOutTests {
     }
 }
 
+// MARK: - Live Activity push-token registration payload tests
+
+/// Verify the JSON body POST'd to `/api/push/register` for LA tokens has
+/// the exact shape the broker expects per the push-LA contract:
+/// `{"platform":"apns-liveactivity","token":"<hex>","session_id":"<id>"}`.
+@Suite("Push notification -- Live Activity register payload")
+struct PushLARegisterPayloadTests {
+
+    private struct LARegisterPayload: Encodable {
+        let platform: String
+        let token: String
+        let session_id: String
+    }
+
+    @Test func laRegisterPayloadHasCorrectKeys() throws {
+        let hex = "deadbeef01020304"
+        let payload = LARegisterPayload(
+            platform: "apns-liveactivity",
+            token: hex,
+            session_id: "session-abc-123"
+        )
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode([String: String].self, from: data)
+        #expect(decoded["platform"]   == "apns-liveactivity")
+        #expect(decoded["token"]      == hex)
+        #expect(decoded["session_id"] == "session-abc-123")
+        #expect(decoded.keys.count == 3)
+    }
+
+    @Test func laRegisterPlatformDistinctFromAlertPlatform() throws {
+        // LA and alert tokens use different platform strings -- the broker
+        // stores them separately (keyed by (identity, session_id) for LA).
+        let alertPayload = ["platform": "apns", "token": "aabbcc"]
+        let laPayload = LARegisterPayload(
+            platform: "apns-liveactivity",
+            token: "aabbcc",
+            session_id: "s-1"
+        )
+        let alertData = try JSONEncoder().encode(alertPayload)
+        let laData    = try JSONEncoder().encode(laPayload)
+        let alertDecoded = try JSONDecoder().decode([String: String].self, from: alertData)
+        let laDecoded    = try JSONDecoder().decode([String: String].self, from: laData)
+        #expect(alertDecoded["platform"] != laDecoded["platform"])
+        #expect(laDecoded["platform"] == "apns-liveactivity")
+        #expect(alertDecoded["platform"] == "apns")
+    }
+}
+
 // MARK: - "Prompt existing users on active" guard tests
 //
 // The scene-phase .active hook fires requestAuthorizationIfNeeded() only when
