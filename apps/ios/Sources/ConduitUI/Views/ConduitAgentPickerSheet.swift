@@ -740,10 +740,26 @@ extension ConduitUI {
                 // the live catalog is in; the static fallback has none.
                 if let detail = ConduitUI.ForkOptions.modelDetail(model, catalog: catalog) {
                     Text(detail)
-                        .font(neon.mono(10.5))
-                        .foregroundStyle(neon.textFaint)
+                        .font(neon.sans(12))
+                        .foregroundStyle(neon.textDim)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if ConduitUI.ForkOptions.supportsFastMode(model, catalog: catalog) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 9, weight: .bold))
+                        Text("Fast mode available")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.yellow)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(Color.yellow.opacity(0.12))
+                            .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
+                    )
                 }
             }
         }

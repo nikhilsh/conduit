@@ -44,6 +44,10 @@ type ModelInfo struct {
 	// the agent's own order. nil/empty = the model has no effort control
 	// (e.g. claude haiku).
 	Efforts []string `json:"efforts,omitempty"`
+	// SupportsFastMode is true when the claude CLI advertises
+	// supportsFastMode:true for this model in the initialize control
+	// response. Only populated for claude; always false for codex.
+	SupportsFastMode bool `json:"supports_fast_mode,omitempty"`
 }
 
 // catalogTTL is how long a fetched catalog is considered fresh. Model lists
@@ -112,6 +116,7 @@ type claudeCatalogModel struct {
 	Description           string   `json:"description"`
 	SupportsEffort        bool     `json:"supportsEffort"`
 	SupportedEffortLevels []string `json:"supportedEffortLevels"`
+	SupportsFastMode      bool     `json:"supportsFastMode"`
 }
 
 // parseClaudeCatalogLine inspects one stream-json stdout line. If it is the
@@ -142,9 +147,10 @@ func parseClaudeCatalogLine(line []byte, requestID string) ([]ModelInfo, bool) {
 			continue
 		}
 		mi := ModelInfo{
-			ID:          id,
-			DisplayName: strings.TrimSpace(m.DisplayName),
-			Description: strings.TrimSpace(m.Description),
+			ID:               id,
+			DisplayName:      strings.TrimSpace(m.DisplayName),
+			Description:      strings.TrimSpace(m.Description),
+			SupportsFastMode: m.SupportsFastMode,
 		}
 		if m.SupportsEffort {
 			mi.Efforts = m.SupportedEffortLevels

@@ -589,6 +589,14 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (forkModelSupportsFastMode(forkModel, catalog)) {
+                        Text(
+                            "⚡ Fast mode available",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFD4A017),
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -959,6 +967,13 @@ internal fun forkModelLabel(option: String, catalog: List<SessionStore.AgentMode
  */
 internal fun forkModelDetail(option: String, catalog: List<SessionStore.AgentModel>?): String? =
     catalogEntryFor(option, catalog)?.description?.takeIf { it.isNotEmpty() }
+
+/**
+ * True when the resolved catalog entry for [option] advertises fast mode.
+ * Always false without a catalog or when the entry does not carry the flag.
+ */
+internal fun forkModelSupportsFastMode(option: String, catalog: List<SessionStore.AgentModel>?): Boolean =
+    catalogEntryFor(option, catalog)?.supportsFastMode ?: false
 
 /**
  * Effort levels for the chosen model from the discovered catalog

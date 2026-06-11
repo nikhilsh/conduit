@@ -108,6 +108,22 @@ extension ConduitUI {
                             .conduitGlassRoundedRect(cornerRadius: 14)
                         }
                         .neonAccentTint()
+                        if ForkOptions.supportsFastMode(model, catalog: catalog) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bolt.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text("Fast mode available")
+                                    .font(.system(size: 10, weight: .semibold))
+                            }
+                            .foregroundStyle(Color.yellow)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule()
+                                    .fill(Color.yellow.opacity(0.12))
+                                    .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
+                            )
+                        }
                         Text(ForkOptions.modelDetail(model, catalog: catalog)
                             ?? "Default keeps the current model. Pick an alias to fork onto a different one.")
                             .font(.caption2)
@@ -190,6 +206,9 @@ extension ConduitUI {
         var isDefault: Bool
         var defaultEffort: String
         var efforts: [String]
+        /// True when the claude CLI advertises supportsFastMode for this
+        /// model. Only set for claude; always false for codex.
+        var supportsFastMode: Bool
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -198,6 +217,7 @@ extension ConduitUI {
             case isDefault = "is_default"
             case defaultEffort = "default_effort"
             case efforts
+            case supportsFastMode = "supports_fast_mode"
         }
 
         init(
@@ -206,7 +226,8 @@ extension ConduitUI {
             description: String = "",
             isDefault: Bool = false,
             defaultEffort: String = "",
-            efforts: [String] = []
+            efforts: [String] = [],
+            supportsFastMode: Bool = false
         ) {
             self.id = id
             self.displayName = displayName
@@ -214,6 +235,7 @@ extension ConduitUI {
             self.isDefault = isDefault
             self.defaultEffort = defaultEffort
             self.efforts = efforts
+            self.supportsFastMode = supportsFastMode
         }
 
         init(from decoder: Decoder) throws {
@@ -224,6 +246,7 @@ extension ConduitUI {
             isDefault = try c.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
             defaultEffort = try c.decodeIfPresent(String.self, forKey: .defaultEffort) ?? ""
             efforts = try c.decodeIfPresent([String].self, forKey: .efforts) ?? []
+            supportsFastMode = try c.decodeIfPresent(Bool.self, forKey: .supportsFastMode) ?? false
         }
     }
 
@@ -408,11 +431,18 @@ extension ConduitUI {
             }
         }
 
+        /// True when the resolved catalog entry for `option` advertises fast
+        /// mode. Always false without a catalog or for the inherit sentinel
+        /// when the resolved default entry does not carry the flag.
+        static func supportsFastMode(_ option: String, catalog: [AgentModel]?) -> Bool {
+            catalogEntry(for: option, in: catalog)?.supportsFastMode ?? false
+        }
+
         /// The model name to show on the agent card: the discovered default
         /// model's display name ("GPT-5.5"); for claude's "Default
         /// (recommended)" alias entry, the resolved model is the first
-        /// "·"-chunk of its description ("Opus 4.8 with 1M context" →
-        /// "Opus 4.8"). nil without a catalog — caller keeps its static
+        /// "·"-chunk of its description ("Opus 4.8 with 1M context" ->
+        /// "Opus 4.8"). nil without a catalog -- caller keeps its static
         /// label.
         static func defaultModelTitle(forCatalog catalog: [AgentModel]?) -> String? {
             guard let entry = catalog?.first(where: { $0.isDefault }) ?? catalog?.first else { return nil }

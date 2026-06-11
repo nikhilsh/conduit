@@ -161,4 +161,44 @@ class AgentModelCatalogTest {
     fun parseModelCatalogWithoutModelsKeyIsEmpty() {
         assertTrue(parseModelCatalog("""{"name":"conduit-broker"}""").isEmpty())
     }
+
+    @Test
+    fun supportsFastModeOnlyOnAnnotatedEntries() {
+        val withFastMode = listOf(
+            SessionStore.AgentModel(
+                id = "", displayName = "Default (recommended)",
+                description = "Opus 4.8 with 1M context · Best for everyday, complex tasks",
+                isDefault = true, efforts = listOf("low", "medium", "high", "xhigh", "max"),
+                supportsFastMode = true,
+            ),
+            SessionStore.AgentModel(
+                id = "sonnet", displayName = "Sonnet",
+                description = "Sonnet 4.6 · Efficient for routine tasks",
+                efforts = listOf("low", "medium", "high", "max"),
+            ),
+        )
+        // Inherit sentinel resolves to the default entry — fast mode true.
+        assertTrue(forkModelSupportsFastMode("", withFastMode))
+        // Explicit sonnet entry — fast mode false.
+        assertFalse(forkModelSupportsFastMode("sonnet", withFastMode))
+        // No catalog — always false.
+        assertFalse(forkModelSupportsFastMode("", null))
+    }
+
+    @Test
+    fun parseModelCatalogDecodesSupportsFastMode() {
+        val raw = """
+            {"name":"conduit-broker","models":{
+              "claude":[
+                {"id":"","display_name":"Default (recommended)","is_default":true,
+                 "supports_fast_mode":true,"efforts":["low","medium","high","xhigh","max"]},
+                {"id":"sonnet","display_name":"Sonnet"}
+              ]
+            }}
+        """.trimIndent()
+        val parsed = parseModelCatalog(raw)
+        val claude = parsed.getValue("claude")
+        assertTrue(claude[0].supportsFastMode)
+        assertFalse(claude[1].supportsFastMode)
+    }
 }
