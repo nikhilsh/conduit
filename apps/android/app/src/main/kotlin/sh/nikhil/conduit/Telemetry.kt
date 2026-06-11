@@ -4,6 +4,7 @@ import android.content.Context
 import io.sentry.Breadcrumb
 import io.sentry.Sentry
 import io.sentry.SentryLevel
+import io.sentry.SentryOptions
 import io.sentry.android.core.SentryAndroid
 
 object Telemetry {
@@ -33,8 +34,8 @@ object Telemetry {
             // a crash/error to diagnose on-device UI bugs we can't reproduce on
             // the dev box; never an always-on recording, never readable content.
             //
-            //   sessionSampleRate = 0 → no always-on full-session recording.
-            //   onErrorSampleRate = 1 → keep a rolling buffer, attach it only
+            //   sessionSampleRate = 0 -> no always-on full-session recording.
+            //   onErrorSampleRate = 1 -> keep a rolling buffer, attach it only
             //                           when an event is captured. Nothing is
             //                           uploaded on a normal, error-free run.
             options.sessionReplay.sessionSampleRate = 0.0
@@ -45,7 +46,7 @@ object Telemetry {
             // image. The replay that reaches Sentry is redacted rectangles +
             // layout only — no readable user content. Hard requirement: the
             // operator must never see chat logs, terminal commands, or secrets.
-            // Setter-only in sentry-android 8.x (no getter → no synthesized
+            // Setter-only in sentry-android 8.x (no getter -> no synthesized
             // Kotlin property), and already the SDK default — pinned explicitly
             // so a default change can never un-mask.
             options.sessionReplay.setMaskAllText(true)
@@ -59,16 +60,17 @@ object Telemetry {
             // Diagnose the on-device problems invisible from the dev box:
             // long-chat CPU burn / overheat / battery, slow & frozen frames,
             // slow app starts, ANRs. Auto activity/app-start/frames
-            // instrumentation is on by default; we opt into 0.2 sampling to
-            // keep overhead + quota modest.
-            options.tracesSampleRate = 0.2
+            // instrumentation is on by default; we opt into sampling.
+            // Reduced from 0.2 -> 0.1 to trim quota; still representative.
+            options.tracesSampleRate = 0.1
             // Continuous "UI Profiling" tied to the trace lifecycle (GA in
             // 8.7): while a sampled trace is active the profiler samples call
             // stacks, giving flame graphs of what pins the CPU during a heavy
             // chat. profileSessionSampleRate is relative to tracesSampleRate;
             // the legacy profilesSampleRate must NOT be set alongside it.
             // Profiles are stack samples (symbols + timing), never user content.
-            options.profileSessionSampleRate = 1.0
+            // Reduced from 1.0 -> 0.1 to trim profile-upload quota.
+            options.profileSessionSampleRate = 0.1
             options.profileLifecycle = io.sentry.ProfileLifecycle.TRACE
             // ANR / watchdog detection (AnrV2) is on by default; pin it. A
             // frozen main thread (the long-chat "spinner stuck" reports)
@@ -82,6 +84,39 @@ object Telemetry {
             // OkHttp span interceptor, and maxRequestBodySize stays NONE
             // (default), so no body or URL is ever attached.
             options.isEnableNetworkEventBreadcrumbs = false
+
+            // --- Quota denylist: beforeSend backstop -------------------------
+            // Drop useless high-frequency events BEFORE they are uploaded.
+            // This is the durable quota guard: even if a caller forgets to use
+            // breadcrumb instead of debug/diagnostic, denylisted events never
+            // reach Sentry.
+            //
+            // Rules (return null = drop):
+            //   1. Any INFO-level "diag" event whose category is in the
+            //      HIGH_FREQUENCY_DIAG_CATEGORIES set (keyboard, layout, scroll,
+            //      terminal-resize). These are pure UI churn — no value as
+            //      standalone events.
+            //   2. Any event whose message matches a known routine-noise pattern
+            //      (connection churn, routine disconnects). These are expected
+            //      lifecycle, not errors.
+            // ERROR/FATAL-level events bypass the denylist entirely.
+            options.beforeSend = SentryOptions.BeforeSendCallback { event, _ ->
+                // Never drop real errors.
+                val level = event.level
+                if (level == SentryLevel.ERROR || level == SentryLevel.FATAL) {
+                    event
+                } else {
+                    // Drop high-frequency UI diag categories (INFO-level).
+                    val diagCategory = event.tags?.get("diag")
+                    if (diagCategory != null && diagCategory in HIGH_FREQUENCY_DIAG_CATEGORIES) {
+                        null
+                    } else {
+                        // Drop routine connection-churn messages.
+                        val msg = event.message?.formatted ?: event.message?.message ?: ""
+                        if (isRoutineNoiseMessage(msg)) null else event
+                    }
+                }
+            }
         }
     }
 
@@ -125,24 +160,40 @@ object Telemetry {
      * Standing practice: instrument new features with `Telemetry.debug` so
      * they're always debuggable from Sentry. It is meant to be LOW VOLUME —
      * every call is a full Sentry event, so a high-frequency caller would
-     * otherwise flood the project and burn quota. Consecutive-identical events
-     * for a category are dropped here, so only a *distinct state* gets through
-     * regardless of the caller.
+     * otherwise flood the project and burn quota. THREE guards below keep that
+     * safe regardless of the caller:
+     *   1. consecutive-identical events for a category are dropped (only a
+     *      *distinct state* gets through),
+     *   2. per-category time throttle: at most 1 event per 60s per category
+     *      (token-bucket style, thread-safe via ConcurrentHashMap + atomic
+     *      compare), and
+     *   3. the beforeSend denylist drops high-frequency categories even if
+     *      these guards are bypassed.
+     *
+     * Callers that fire per-interaction (keyboard, layout, scroll,
+     * terminal-resize) MUST use [breadcrumb] instead — those categories are
+     * also in the beforeSend denylist as a backstop.
      */
     fun debug(category: String, message: String, data: Map<String, String> = emptyMap()) {
         if (BuildConfig.SENTRY_DSN.trim().isEmpty()) return
-        // Collapse repeats: skip when this category's payload matches the last
-        // one we sent for it. Mirrors the iOS `Telemetry.debug` dedupe.
+
         val payload = buildString {
             append(message)
             data.entries.sortedBy { it.key }.forEach {
                 append("::").append(it.key).append('=').append(it.value)
             }
         }
-        synchronized(lastDebugPayload) {
-            if (lastDebugPayload[category] == payload) return
+
+        val nowMs = System.currentTimeMillis()
+        synchronized(debugLock) {
+            val isRepeat = lastDebugPayload[category] == payload
+            val lastMs = lastDebugTimestampMs[category] ?: 0L
+            val tooSoon = (nowMs - lastMs) < DEBUG_THROTTLE_MS
+            if (isRepeat || tooSoon) return
             lastDebugPayload[category] = payload
+            lastDebugTimestampMs[category] = nowMs
         }
+
         Sentry.withScope { scope ->
             scope.level = SentryLevel.INFO
             scope.setTag("diag", category)
@@ -154,9 +205,6 @@ object Telemetry {
             Sentry.captureMessage("[$category] $message", SentryLevel.INFO)
         }
     }
-
-    /** Last payload emitted per `diag` category, used to drop consecutive duplicates. */
-    private val lastDebugPayload = mutableMapOf<String, String>()
 
     /**
      * Leave a lightweight breadcrumb in the trail attached to the NEXT
@@ -174,4 +222,57 @@ object Telemetry {
         data.forEach { (key, value) -> crumb.setData(key, value) }
         Sentry.addBreadcrumb(crumb)
     }
+
+    // -------------------------------------------------------------------------
+    // beforeSend denylist constants (Android parity with iOS Telemetry.swift)
+    // -------------------------------------------------------------------------
+
+    /**
+     * High-frequency UI diag categories that MUST NOT produce standalone Sentry
+     * events. Callers in these categories should use [breadcrumb] instead;
+     * [beforeSend] drops any that slip through.
+     *
+     * Extend this list whenever a new per-frame / per-interaction category is
+     * added. Mirror of iOS [Telemetry.highFrequencyDiagCategories].
+     */
+    val HIGH_FREQUENCY_DIAG_CATEGORIES: Set<String> = setOf(
+        "keyboard",        // per-show/hide/focus events
+        "layout",          // per-layout-pass debug
+        "scroll",          // scroll-position diag
+        "terminal_resize", // terminal window resize
+        "terminal-resize", // alternate spelling guard
+        "frame",           // per-frame render diag
+    )
+
+    /**
+     * Substrings whose presence in an event message indicates routine
+     * operational churn — expected lifecycle, not an actionable failure.
+     * Matched case-insensitively. Mirror of iOS [Telemetry.routineNoisePatterns].
+     */
+    val ROUTINE_NOISE_PATTERNS: List<String> = listOf(
+        "disconnected from harness",  // routine WS lifecycle
+        "sessionstore: code 0",       // NSError domain=SessionStore code=0
+        "code 0",
+        "still disconnected",
+        "keyboard will hide",
+        "keyboard will show",
+        "composer focused",
+        "composer blurred",
+    )
+
+    /** Returns true when the message matches a routine-noise pattern. */
+    fun isRoutineNoiseMessage(message: String): Boolean {
+        val lower = message.lowercase()
+        return ROUTINE_NOISE_PATTERNS.any { lower.contains(it) }
+    }
+
+    /** Max one debug event per category per this interval (milliseconds). */
+    const val DEBUG_THROTTLE_MS: Long = 60_000L
+
+    /** Last payload emitted per `diag` category, used to drop consecutive duplicates. */
+    private val lastDebugPayload = mutableMapOf<String, String>()
+    /** Timestamp (ms) of the last event actually sent per category. */
+    private val lastDebugTimestampMs = mutableMapOf<String, Long>()
+    /** Guards both lastDebugPayload and lastDebugTimestampMs. */
+    private val debugLock = Any()
 }

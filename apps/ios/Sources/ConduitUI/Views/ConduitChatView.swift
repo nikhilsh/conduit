@@ -877,11 +877,17 @@ extension ConduitUI {
             }
         }
 
-        /// Emit a `diag=keyboard` Sentry breadcrumb capturing the keyboard
-        /// intrusion height, screen height, window safe-area bottom inset, and
-        /// the composer focus/active state — the inputs that determine whether
-        /// the `.safeAreaInset(.bottom)` composer is lifted clear of the soft
+        /// Emit a keyboard breadcrumb capturing the keyboard intrusion height,
+        /// screen height, window safe-area bottom inset, and the composer
+        /// focus/active state — the inputs that determine whether the
+        /// `.safeAreaInset(.bottom)` composer is lifted clear of the soft
         /// keyboard or hidden behind it.
+        ///
+        /// This is a BREADCRUMB (not a Telemetry.debug event) because keyboard
+        /// show/hide fires on every interaction — ~1090 useless standalone Sentry
+        /// events per quota window. The geometry is still captured and attached
+        /// to the next real error, which is exactly what we need to debug the
+        /// keyboard-occlusion bug (device bug #19).
         private func logKeyboardDiag(_ reason: String, keyboardFrame: CGRect? = nil) {
             var safeBottom: CGFloat = 0
             var kbHeight: CGFloat = 0
@@ -895,10 +901,10 @@ extension ConduitUI {
                     kbTop = frame.minY
                 }
             }
-            // overlap > 0 ⇒ the composer's bottom edge is BELOW the keyboard top,
+            // overlap > 0 => the composer's bottom edge is BELOW the keyboard top,
             // i.e. hidden behind it. The definitive signal for this bug.
             let overlap = (kbTop > 0) ? max(0, composerMaxY - kbTop) : 0
-            Telemetry.debug("keyboard", reason, data: [
+            Telemetry.breadcrumb("keyboard", reason, data: [
                 "composerFocused": "\(composerFocused)",
                 "isActive": "\(isActive)",
                 "kbHeight": String(format: "%.0f", kbHeight),

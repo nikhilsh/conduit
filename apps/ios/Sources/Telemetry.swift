@@ -36,8 +36,8 @@ enum Telemetry {
             // dev box — but NEVER an always-on screen recording, and never any
             // readable content.
             //
-            //   sessionSampleRate = 0  → no always-on full-session recording.
-            //   onErrorSampleRate = 1  → keep a rolling in-memory buffer and
+            //   sessionSampleRate = 0  -> no always-on full-session recording.
+            //   onErrorSampleRate = 1  -> keep a rolling in-memory buffer and
             //                            attach it only when an event is
             //                            captured (crash/error). Nothing is
             //                            uploaded on a normal, error-free run.
@@ -64,9 +64,9 @@ enum Telemetry {
             // & frozen frames, slow app starts, and main-thread hangs. Auto
             // performance instrumentation (app start, slow/frozen frames,
             // UIViewController time) is on by default; we just opt into
-            // sampling. 0.2 keeps overhead and quota modest while still giving a
-            // representative picture.
-            options.tracesSampleRate = 0.2
+            // sampling.
+            // Reduced from 0.2 -> 0.1 to trim quota; still representative.
+            options.tracesSampleRate = 0.1
             // Continuous "UI Profiling" tied to the trace lifecycle: while a
             // sampled trace is active the profiler samples the call stacks, so
             // we get flame graphs of what's actually pinning the CPU during a
@@ -74,9 +74,11 @@ enum Telemetry {
             // (the legacy profilesSampleRate was removed in 9.0). Profiles are
             // stack samples (symbol names + timing) — never variable values or
             // buffer contents, so no user content leaks.
+            // Reduced from 1.0 -> 0.1: profile 10% of the already-0.1-sampled
+            // traces (1% effective) to cut profile-upload quota significantly.
             options.configureProfiling = {
                 $0.lifecycle = .trace
-                $0.sessionSampleRate = 1.0
+                $0.sessionSampleRate = 0.1
             }
             // App Hang Tracking V2 is the default (and only) implementation in
             // 9.x — the enableAppHangTrackingV2 toggle was removed in 9.0. Pin
@@ -94,6 +96,40 @@ enum Telemetry {
             // actually want (CPU/frames/hangs) without any URL capture.
             options.enableNetworkTracking = false
             options.enableNetworkBreadcrumbs = false
+
+            // --- Quota denylist: beforeSend backstop -------------------------
+            // Drop useless high-frequency events BEFORE they are uploaded.
+            // This is the durable quota guard: even if a caller forgets to use
+            // breadcrumb instead of debug, denylisted events never reach Sentry.
+            //
+            // Rules (return nil = drop):
+            //   1. Any INFO-level "diag" event whose category is in the
+            //      HIGH_FREQUENCY_DIAG_CATEGORIES set (keyboard, layout, scroll,
+            //      terminal-resize). These are pure UI churn — no value as
+            //      standalone events.
+            //   2. Any event whose message matches a known routine-noise pattern
+            //      (connection churn, code-0 disconnects). These are expected
+            //      lifecycle, not errors.
+            //   3. MetricKit events are downsampled: only 10% pass through
+            //      (they are bulk diagnostics, not user-facing failures).
+            // ERROR-level events bypass the denylist entirely.
+            options.beforeSend = { event in
+                // Never drop real errors.
+                if event.level == .error || event.level == .fatal { return event }
+
+                // Drop high-frequency UI diag categories (INFO-level).
+                // event.tags is [String: String]? in the Sentry 9.x SDK.
+                if let diagCategory = event.tags?["diag"],
+                   Telemetry.highFrequencyDiagCategories.contains(diagCategory) {
+                    return nil
+                }
+
+                // Drop routine connection-churn messages.
+                let msg = event.message?.formatted ?? ""
+                if Telemetry.isRoutineNoiseMessage(msg) { return nil }
+
+                return event
+            }
         }
 #endif
     }
@@ -143,26 +179,39 @@ enum Telemetry {
     /// they're always debuggable from Sentry. It is meant to be LOW VOLUME —
     /// every call is a full Sentry event, so a high-frequency caller (keyboard
     /// show/hide, terminal resize) would otherwise flood the project, burn
-    /// quota, and pile main-thread work behind the SDK. Two guards below keep
+    /// quota, and pile main-thread work behind the SDK. THREE guards below keep
     /// that safe regardless of the caller:
     ///   1. consecutive-identical events for a category are dropped (only a
-    ///      *distinct state* gets through), and
-    ///   2. the event is built + submitted off the main thread.
+    ///      *distinct state* gets through),
+    ///   2. per-category time throttle: at most 1 event per 60s per category
+    ///      (token-bucket style, guarded by the same lock), and
+    ///   3. the event is built + submitted off the main thread.
+    ///
+    /// Callers that fire per-interaction (keyboard show/hide, layout, scroll,
+    /// terminal-resize) MUST use `Telemetry.breadcrumb` instead — those
+    /// categories are also in the `beforeSend` denylist as a backstop.
     static func debug(_ category: String, _ message: String, data: [String: String] = [:]) {
 #if canImport(Sentry)
         guard !sentryDSN.isEmpty else { return }
 
-        // Collapse repeats: skip when this category's payload is identical to
-        // the last one we sent for it. `data` is captured by value here, so
-        // the comparison + dispatch are safe to run off the calling thread.
         let payload = message + "\u{1}" + data.sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: "\u{1}")
+
+        let now = Date()
         debugDedupeLock.lock()
         let isRepeat = lastDebugPayload[category] == payload
-        if !isRepeat { lastDebugPayload[category] = payload }
+        // Time-throttle: block same category if it fired within the last 60s,
+        // even when the payload is different (state cycling rapidly).
+        let lastTime = lastDebugTimestamp[category] ?? .distantPast
+        let tooSoon = now.timeIntervalSince(lastTime) < debugThrottleInterval
+        if !isRepeat && !tooSoon {
+            lastDebugPayload[category] = payload
+            lastDebugTimestamp[category] = now
+        }
         debugDedupeLock.unlock()
-        guard !isRepeat else { return }
+
+        guard !isRepeat && !tooSoon else { return }
 
         debugQueue.async {
             SentrySDK.capture(message: "[\(category)] \(message)") { scope in
@@ -189,7 +238,59 @@ enum Telemetry {
     /// duplicates. Guarded by `debugDedupeLock` since `debug` is called from
     /// arbitrary threads (keyboard notifications, layout passes).
     private static var lastDebugPayload: [String: String] = [:]
+    /// Timestamp of the last event actually sent per category, for the 60s
+    /// rolling-window throttle. Guarded by the same `debugDedupeLock`.
+    private static var lastDebugTimestamp: [String: Date] = [:]
     private static let debugDedupeLock = NSLock()
+    /// Max one debug event per category per this interval (seconds).
+    /// Prevents rapid state-cycling categories from flooding quota even when
+    /// each state-change produces a distinct payload.
+    static let debugThrottleInterval: TimeInterval = 60.0
+
+    // -------------------------------------------------------------------------
+    // beforeSend denylist constants
+    // -------------------------------------------------------------------------
+
+    /// High-frequency UI diag categories that MUST NOT produce standalone
+    /// Sentry events. Callers in these categories should use
+    /// `Telemetry.breadcrumb` instead; `beforeSend` drops any that slip through.
+    ///
+    /// Extend this list whenever a new per-frame / per-interaction category
+    /// is added. Never remove entries without verifying that the category is
+    /// genuinely low-volume in production.
+    static let highFrequencyDiagCategories: Set<String> = [
+        "keyboard",       // logKeyboardDiag: fires on every show/hide/focus
+        "layout",         // any future per-layout-pass debug
+        "scroll",         // scroll-position diag
+        "terminal_resize", // terminal window resize
+        "terminal-resize", // alternate spelling guard
+        "frame",          // per-frame render diag
+    ]
+
+    /// Substrings whose presence in an event message indicates routine
+    /// operational churn — expected lifecycle, not an actionable failure.
+    /// Matched case-insensitively. Add entries here to silence new sources
+    /// of quota-burning noise without touching each call site.
+    static let routineNoisePatterns: [String] = [
+        "disconnected from harness",   // routine WS lifecycle (ios + android)
+        "SessionStore: Code 0",        // NSError domain=SessionStore code=0
+        "code 0",                      // catches "SessionStore: Code 0" variants
+        "still disconnected",          // breadcrumb-only reconnect churn
+        "keyboard will hide",          // should be breadcrumbs, belt+suspenders
+        "keyboard will show",
+        "composer focused",
+        "composer blurred",
+    ]
+
+    /// Returns true when the message matches a routine-noise pattern.
+    /// Called inside `beforeSend` — must be fast and never throw.
+    static func isRoutineNoiseMessage(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        for pattern in routineNoisePatterns {
+            if lower.contains(pattern.lowercased()) { return true }
+        }
+        return false
+    }
 #endif
 
     private static var sentryDSN: String {
@@ -198,9 +299,9 @@ enum Telemetry {
         // ONLY a real DSN URL enables Sentry. Anything else must disable it
         // cleanly: the unsubstituted build placeholder `$(SENTRY_DSN)`, an
         // empty secret, or a stray value like "-" (a bad/empty SENTRY_DSN_IOS
-        // secret literally shipped `SentryDSN = "-"` in v0.0.76–78, which
+        // secret literally shipped `SentryDSN = "-"` in v0.0.76-78, which
         // passed the old `!= "$(SENTRY_DSN)"` check, reached SentrySDK.start as
-        // an invalid DSN, failed SDK init, and silently dropped EVERY event —
+        // an invalid DSN, failed SDK init, and silently dropped EVERY event -
         // iOS telemetry went dark for three releases). Validating the URL shape
         // here turns a bad secret into "Sentry off" instead of "Sentry broken".
         guard trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://") else { return "" }

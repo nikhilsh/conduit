@@ -89,7 +89,9 @@ class AgentLoginCoordinator(
             this.provider = provider
             _state.value = State.WaitingForBrokerURL
         }
-        Telemetry.debug("agent_login", "start", mapOf("provider" to provider.wireName))
+        // Breadcrumb, not debug event: fires on every login attempt and
+        // belongs to the trail leading to a success or failure capture.
+        Telemetry.breadcrumb("agent_login", "start", mapOf("provider" to provider.wireName))
         scope.launch { transport.sendStartAgentLogin(provider.wireName) }
     }
 
@@ -110,9 +112,10 @@ class AgentLoginCoordinator(
         // code-paste flow: the CLI advertised a remote redirect
         // (platform.claude.com), not a localhost loopback, so this
         // listener can never receive the callback and the flow stalls
-        // until timeout. Surfaced to Sentry so the mismatch is visible
-        // without a device in hand.
-        Telemetry.debug(
+        // until timeout.
+        // Breadcrumb (not debug event): captures the loopback_port for
+        // post-failure diagnosis without burning a Sentry quota event.
+        Telemetry.breadcrumb(
             "agent_login",
             "url received",
             mapOf(
