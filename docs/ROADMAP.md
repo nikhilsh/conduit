@@ -283,14 +283,17 @@ Companion plans where they exist: `docs/PLAN-AGENT-PLATFORM.md`, `docs/PLAN-PUSH
     "OpenCode Zen" default; the broker could pass provider env keys or configure the
     provider in the session `$HOME`.
 
-19. **Codex `turn/steer`** — the codex app-server exposes steering a running turn
-    mid-generation (redirect without interrupting); claude has no equivalent. **Investigated
-    live (codex 0.132.0): protocol-present but functionally inert** — `turn/steer` (param
-    `expectedTurnId`, not `turnId`) is ACKed and the turn continues under the same id, but
-    the model ignores the steered text and finishes the original task (verified ×3; nothing
-    on the wire or in the rollout file). Plumbing deferred — a `Steer(text)` guarded like
-    `Interrupt()` is scoped in `docs/CODEX-APPSERVER-PROTOCOL.md`, to wire once a newer
-    codex demonstrably steers. No app "Steer" button until then (would silently no-op).
+19. **Codex `turn/steer`** — steer a running turn mid-generation (redirect without
+    interrupting); claude has no equivalent. **Confirmed WORKING in codex 0.132.0** (live
+    re-test with litter's exact frames; an earlier "inert" reading was a test artifact —
+    we steered short turns that had already completed, getting `-32600 no active turn to
+    steer`). Mechanism: `turn/steer` with `{threadId, input:[{type:text,text}],
+    expectedTurnId:<active turn id>}` → `{result:{turnId:<same id>}}`, no new
+    `turn/started`; steered text streams under the same turn and changes the output at the
+    next reasoning/step boundary (does not delete already-emitted tokens). On `-32600`
+    (turn finished / stale id) fall back to `turn/start` so the message is never lost
+    (litter's pattern). Genuine same-turn append, not interrupt+resend. Implementing:
+    broker `codexappserver.go` `Steer(text)` + app send-while-codex-turn-active → steer.
 
 20. **Choice-cards over prose** — agents often offer options as a plain numbered list
     (renders as text, not tappable cards). Fix: nudge in the awareness prompt to use
