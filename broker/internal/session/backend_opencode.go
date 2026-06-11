@@ -129,7 +129,17 @@ const opencodeServerReadyTimeout = 90 * time.Second
 // opencodeTurnSilenceTimeout force-ends a turn that has produced no SSE frame
 // for this long, so a hung server / dropped stream self-heals instead of
 // wedging the composer forever. Every frame for the owned session resets it.
-const opencodeTurnSilenceTimeout = 10 * time.Minute
+//
+// opencode streams message.part.delta tokens as the provider generates, so
+// genuine silence means the provider has not produced ANYTHING — it is either
+// stalled (Zen rate-limited / slow / down) or dead. 2 minutes is long enough
+// to absorb a slow first-token from the free "OpenCode Zen" provider (empirical
+// cold-start ~5-10s, even on a busy box well under 60s) while still surfacing a
+// dead-provider situation in a reasonable time instead of the previous 10-minute
+// wait. The codex backend keeps its own separate 10-minute value (codex streams
+// lines of reasoning so short silences are normal); opencode's SSE model makes
+// silence unambiguous.
+const opencodeTurnSilenceTimeout = 2 * time.Minute
 
 // opencodeServerProcess drives one session's `opencode serve` child + its
 // REST/SSE control plane.
