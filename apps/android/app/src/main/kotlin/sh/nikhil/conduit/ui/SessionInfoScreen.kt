@@ -246,10 +246,29 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                                 fontWeight = FontWeight.SemiBold,
                                 color = tint,
                             )
-                            session.branch?.takeIf { it.isNotBlank() }?.let { b ->
+                            // Live git state: branch + compact dirty/ahead/behind.
+                            // Prefer status-frame git_branch over static create-time branch.
+                            val liveBranch = status?.gitBranch?.takeIf { it.isNotBlank() }
+                                ?: session.gitBranch?.takeIf { it.isNotBlank() }
+                                ?: session.branch?.takeIf { it.isNotBlank() }
+                            liveBranch?.let { b ->
+                                val dirty = status?.gitDirty ?: session.gitDirty ?: 0u
+                                val ahead = status?.gitAhead ?: session.gitAhead ?: 0u
+                                val behind = status?.gitBehind ?: session.gitBehind ?: 0u
+                                val parts = buildList {
+                                    add(b)
+                                    if (dirty > 0u) add("●$dirty")
+                                    if (ahead > 0u || behind > 0u) {
+                                        val ab = buildList {
+                                            if (ahead > 0u) add("↑$ahead")
+                                            if (behind > 0u) add("↓$behind")
+                                        }
+                                        add(ab.joinToString(" "))
+                                    }
+                                }
                                 Text("·", fontFamily = neon.mono, color = neon.textFaint)
                                 Text(
-                                    b,
+                                    parts.joinToString(" · "),
                                     style = MaterialTheme.typography.labelMedium,
                                     fontFamily = neon.mono,
                                     color = neon.textDim,
@@ -428,6 +447,12 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         )
                         Hairline(neon)
                         InfoDetailRow("Started", startedTimeLabel(status?.startedAt ?: session.startedAt), neon)
+                        val liveWorktree = status?.worktreeName?.takeIf { it.isNotBlank() }
+                            ?: session.worktreeName?.takeIf { it.isNotBlank() }
+                        if (liveWorktree != null) {
+                            Hairline(neon)
+                            InfoDetailRow("Worktree", liveWorktree, neon)
+                        }
                     }
                 }
             }

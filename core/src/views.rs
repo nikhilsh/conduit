@@ -129,6 +129,21 @@ pub struct SessionStatus {
     pub account_7d_pct: Option<f64>,
     #[serde(default)]
     pub account_7d_resets_at: Option<String>,
+    /// Live git state for the session's workspace (broker §gitstate.go).
+    /// `None` on old brokers or non-git workspaces — apps hide git UI when absent.
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    /// Dirty-file count from `git status --porcelain`. 0 = clean.
+    #[serde(default)]
+    pub git_dirty: Option<u32>,
+    #[serde(default)]
+    pub git_ahead: Option<u32>,
+    #[serde(default)]
+    pub git_behind: Option<u32>,
+    /// Per-session worktree name (e.g. "conduit/session-<id>"); None when
+    /// the session is not in a dedicated worktree.
+    #[serde(default)]
+    pub worktree_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

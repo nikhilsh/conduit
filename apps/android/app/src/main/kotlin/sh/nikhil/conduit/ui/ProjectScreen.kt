@@ -768,16 +768,25 @@ data class ProjectHeaderModel(
                 ?: session.displayName?.trim()?.takeIf { it.isNotEmpty() }
                 ?: session.name
 
-            // `repo · branch`: the repo is the last path component of the
-            // session cwd — the old full-width path row folded down to the
+            // `repo · branch[●dirty]`: the repo is the last path component of
+            // the session cwd — the old full-width path row folded down to the
             // bit that identifies the project. An exited/failed lifecycle
             // stays visible as a suffix (honest read-only signal).
+            // Live git_branch from the status frame is preferred over the
+            // static create-time branch; dirty indicator appended when > 0.
             val cwd = status?.cwd?.trim()?.takeIf { it.isNotEmpty() }
                 ?: session.cwd?.trim()?.takeIf { it.isNotEmpty() }
             val repo = cwd?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
+            val liveBranch = status?.gitBranch?.takeIf { it.isNotBlank() }
+                ?: session.gitBranch?.takeIf { it.isNotBlank() }
+                ?: session.branch?.takeIf { it.isNotBlank() }
+            val dirty = status?.gitDirty ?: session.gitDirty ?: 0u
+            val branchToken = liveBranch?.let {
+                if (dirty > 0u) "$it ●$dirty" else it
+            }
             val contextLine = listOfNotNull(
                 repo,
-                session.branch?.takeIf { it.isNotBlank() },
+                branchToken,
                 lifecycleLabel,
             ).joinToString(" · ").takeIf { it.isNotEmpty() }
 

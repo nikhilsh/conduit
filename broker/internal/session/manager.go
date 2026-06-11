@@ -153,6 +153,11 @@ type Session struct {
 	// rename lands; persists for the lifetime of the in-memory session.
 	displayName string
 
+	// gitStateCache caches the live git state (branch/dirty/ahead/behind)
+	// computed for the session's workspace directory so the hot status-emit
+	// path doesn't shell out on every broadcast. See gitstate.go.
+	gitStateCache sessionGitCache
+
 	// aiTitle is the broker AI-generated session title (task:
 	// ai-session-titles) — a short human label minted from the first
 	// meaningful exchange. SEPARATE from displayName: a manual rename

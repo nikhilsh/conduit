@@ -78,6 +78,25 @@ pub struct ProjectSession {
     pub account_7d_pct: Option<f64>,
     #[serde(default)]
     pub account_7d_resets_at: Option<String>,
+    /// Live git state for the session's workspace directory, streamed from
+    /// the broker's status frame on every emission. None when the workspace
+    /// is not a git repo or the broker predates this field.
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    /// Number of dirty (uncommitted) lines from `git status --porcelain`.
+    /// 0 = clean working tree. Only meaningful when git_branch is Some.
+    #[serde(default)]
+    pub git_dirty: Option<u32>,
+    /// Commits ahead of the base branch (origin/main or main).
+    #[serde(default)]
+    pub git_ahead: Option<u32>,
+    /// Commits behind the base branch (origin/main or main).
+    #[serde(default)]
+    pub git_behind: Option<u32>,
+    /// The per-session worktree name (e.g. "conduit/session-<id>"), or None
+    /// when the session is not running in a dedicated worktree.
+    #[serde(default)]
+    pub worktree_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -218,6 +237,25 @@ impl ProjectSessionState {
         }
         if status.account_7d_resets_at.is_some() {
             self.session.account_7d_resets_at = status.account_7d_resets_at.clone();
+        }
+        // Live git state — last frame wins. The broker gates these on the
+        // workspace being a git repo; when absent, previous values are kept
+        // so a transient status frame without git data doesn't wipe a good
+        // earlier value.
+        if status.git_branch.is_some() {
+            self.session.git_branch = status.git_branch.clone();
+        }
+        if status.git_dirty.is_some() {
+            self.session.git_dirty = status.git_dirty;
+        }
+        if status.git_ahead.is_some() {
+            self.session.git_ahead = status.git_ahead;
+        }
+        if status.git_behind.is_some() {
+            self.session.git_behind = status.git_behind;
+        }
+        if status.worktree_name.is_some() {
+            self.session.worktree_name = status.worktree_name.clone();
         }
         self.terminal.rows = status.rows;
         self.terminal.cols = status.cols;
