@@ -283,9 +283,15 @@ func TestCodexAppServerLiveSubagents(t *testing.T) {
 				t.Logf("  roster update: %d agent(s)", len(frame.Event.Agents))
 				for i, a := range frame.Event.Agents {
 					var tid, status, name string
-					json.Unmarshal(a["task_id"], &tid)
-					json.Unmarshal(a["status"], &status)
-					json.Unmarshal(a["name"], &name)
+					if err := json.Unmarshal(a["task_id"], &tid); err != nil {
+						t.Logf("    [%d] task_id decode err: %v", i, err)
+					}
+					if err := json.Unmarshal(a["status"], &status); err != nil {
+						t.Logf("    [%d] status decode err: %v", i, err)
+					}
+					if err := json.Unmarshal(a["name"], &name); err != nil {
+						t.Logf("    [%d] name decode err: %v", i, err)
+					}
 					t.Logf("    [%d] task_id=%s status=%s name=%.40q", i, tid[:min(len(tid), 20)], status, name)
 				}
 			}

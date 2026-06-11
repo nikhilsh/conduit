@@ -51,12 +51,6 @@ func makeTestProcess(parentThreadID string, publish func([]byte), subH *subagent
 	}
 }
 
-// jsonNotification builds a raw JSON params bytes for a notification.
-func jsonNotification(kv map[string]any) json.RawMessage {
-	b, _ := json.Marshal(kv)
-	return b
-}
-
 // mustJSON marshals v, panicking on error (test helper).
 func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)

@@ -1184,14 +1184,3 @@ func codexTurnStatusToRoster(turnStatus string) string {
 		return "done"
 	}
 }
-
-// firstLineOf returns the first non-empty line from s, trimmed. "" when s is
-// all whitespace. Used for short description labels.
-func firstLineOf(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(line); t != "" {
-			return t
-		}
-	}
-	return ""
-}
