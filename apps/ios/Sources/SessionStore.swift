@@ -1564,6 +1564,13 @@ final class SessionStore {
         let host = credentials.host
         let port = credentials.port
         let user = credentials.username
+        // Breadcrumb before anything else so we can confirm this function was
+        // reached even if the Task or bootstrap throws before the first await.
+        Telemetry.breadcrumb("ssh_addbox", "connectViaSSH reached", data: [
+            "host": host,
+            "port": "\(port)",
+            "user": user,
+        ])
         sshBootstrapState = .running(message: "Connecting to \(user)@\(host):\(port)…")
 
         Task {

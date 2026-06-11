@@ -14,7 +14,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,6 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -46,6 +48,7 @@ import sh.nikhil.conduit.SavedSshCredential
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SshBootstrapState
 import sh.nikhil.conduit.SshCredentialStore
+import sh.nikhil.conduit.Telemetry
 import uniffi.conduit_core.SshAuth
 import uniffi.conduit_core.SshCredentials
 
@@ -134,7 +137,11 @@ fun SSHLoginSheet(
                     onValueChange = { host = it },
                     label = { Text("hostname or IP") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrect = false,
+                    ),
                     modifier = Modifier.weight(1f),
                 )
                 OutlinedTextField(
@@ -151,6 +158,10 @@ fun SSHLoginSheet(
                 onValueChange = { username = it },
                 label = { Text("Username") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -172,6 +183,11 @@ fun SSHLoginSheet(
                         label = { Text("Password") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrect = false,
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -181,20 +197,72 @@ fun SSHLoginSheet(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // No autocorrect/autocap/smart-quotes on the key field --
+                    // those silently corrupt a pasted PEM key.
                     OutlinedTextField(
                         value = privateKey,
                         onValueChange = { privateKey = it },
                         label = { Text("PEM Private Key") },
                         minLines = 6,
                         maxLines = 12,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Ascii,
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrect = false,
+                            imeAction = ImeAction.Default,
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // PEM sanity warnings (client-side only; no key body logged)
+                    val trimmedKey = privateKey.trim()
+                    if (trimmedKey.isNotEmpty()) {
+                        if (!trimmedKey.contains("-----BEGIN") || !trimmedKey.contains("PRIVATE KEY-----")) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.width(16.dp),
+                                )
+                                Text(
+                                    "This does not look like a PEM private key -- it should start with -----BEGIN ...PRIVATE KEY-----",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        } else if ((trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED")) && passphrase.isBlank()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.width(16.dp),
+                                )
+                                Text(
+                                    "This key appears encrypted -- enter the passphrase below.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
                     OutlinedTextField(
                         value = passphrase,
                         onValueChange = { passphrase = it },
                         label = { Text("Passphrase (optional)") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrect = false,
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -222,6 +290,10 @@ fun SSHLoginSheet(
                 label = { Text("ANTHROPIC_API_KEY") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
@@ -230,6 +302,10 @@ fun SSHLoginSheet(
                 label = { Text("OPENAI_API_KEY") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -253,16 +329,61 @@ fun SSHLoginSheet(
                 is SshBootstrapState.Idle -> Unit
             }
 
+            // Disabled-reason line so the user sees WHY the button is inactive
+            // instead of a silent dead button.
+            val reasons = connectDisabledReasons(host, port, username, mode, password, privateKey, bootstrap)
+            if (reasons.isNotEmpty()) {
+                Text(
+                    reasons.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
             Button(
                 onClick = {
+                    Telemetry.breadcrumb(
+                        "ssh_addbox",
+                        "connect tapped",
+                        mapOf(
+                            "enabled" to reasons.isEmpty().toString(),
+                            "disabled_reason" to reasons.joinToString("; "),
+                        ),
+                    )
                     val portValue = port.toIntOrNull()
                         ?.takeIf { it in 1..65535 }
                         ?.toUShort()
                         ?: return@Button
+                    val trimmedKey = privateKey.trim()
+
+                    // Log key metadata only -- never the key body or passphrase.
+                    if (mode == AuthMode.PrivateKey) {
+                        val header = trimmedKey.lines().firstOrNull().orEmpty()
+                        val looksLikePem = trimmedKey.contains("-----BEGIN") && trimmedKey.contains("PRIVATE KEY-----")
+                        val looksEncrypted = trimmedKey.contains("ENCRYPTED") || trimmedKey.contains("Proc-Type: 4,ENCRYPTED")
+                        Telemetry.breadcrumb(
+                            "ssh_addbox",
+                            "key metadata",
+                            mapOf(
+                                "header" to header,
+                                "length" to trimmedKey.length.toString(),
+                                "looks_pem" to looksLikePem.toString(),
+                                "looks_encrypted" to looksEncrypted.toString(),
+                                "has_passphrase" to passphrase.isNotBlank().toString(),
+                            ),
+                        )
+                    }
+
+                    Telemetry.breadcrumb(
+                        "ssh_addbox",
+                        "connect() entry",
+                        mapOf("host" to host.trim(), "port" to port, "mode" to mode.name),
+                    )
+
                     val auth: SshAuth = when (mode) {
                         AuthMode.Password -> SshAuth.Password(password)
                         AuthMode.PrivateKey -> SshAuth.PrivateKey(
-                            privateKey,
+                            trimmedKey,
                             passphrase.ifBlank { null },
                         )
                     }
@@ -283,7 +404,7 @@ fun SSHLoginSheet(
                                     SavedSshCredential.Kind.Password
                                 else
                                     SavedSshCredential.Kind.PrivateKey,
-                                secret = if (mode == AuthMode.Password) password else privateKey,
+                                secret = if (mode == AuthMode.Password) password else trimmedKey,
                                 passphrase = if (mode == AuthMode.PrivateKey && passphrase.isNotEmpty()) passphrase else null,
                             )
                         )
@@ -297,7 +418,7 @@ fun SSHLoginSheet(
                         imageRef = null,
                     )
                 },
-                enabled = canConnect(host, port, username, mode, password, privateKey, bootstrap),
+                enabled = reasons.isEmpty(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Default.Bolt, contentDescription = null)
@@ -313,6 +434,32 @@ private enum class AuthMode(val label: String) {
     PrivateKey("SSH Key"),
 }
 
+/**
+ * Returns human-readable reasons the Connect button is disabled.
+ * Empty list means all preconditions pass and the button should be enabled.
+ */
+private fun connectDisabledReasons(
+    host: String,
+    port: String,
+    username: String,
+    mode: AuthMode,
+    password: String,
+    privateKey: String,
+    bootstrap: SshBootstrapState,
+): List<String> {
+    if (bootstrap is SshBootstrapState.Running) return listOf("Connecting...")
+    val reasons = mutableListOf<String>()
+    if (host.isBlank()) reasons.add("Enter host")
+    if (username.isBlank()) reasons.add("Enter username")
+    val p = port.toIntOrNull()
+    if (p == null || p !in 1..65535) reasons.add("Port must be 1-65535")
+    when (mode) {
+        AuthMode.Password -> if (password.isEmpty()) reasons.add("Enter password")
+        AuthMode.PrivateKey -> if (privateKey.isBlank()) reasons.add("Paste a private key")
+    }
+    return reasons
+}
+
 private fun canConnect(
     host: String,
     port: String,
@@ -321,13 +468,4 @@ private fun canConnect(
     password: String,
     privateKey: String,
     bootstrap: SshBootstrapState,
-): Boolean {
-    if (bootstrap is SshBootstrapState.Running) return false
-    if (host.isBlank() || username.isBlank()) return false
-    val p = port.toIntOrNull() ?: return false
-    if (p !in 1..65535) return false
-    return when (mode) {
-        AuthMode.Password -> password.isNotEmpty()
-        AuthMode.PrivateKey -> privateKey.isNotEmpty()
-    }
-}
+): Boolean = connectDisabledReasons(host, port, username, mode, password, privateKey, bootstrap).isEmpty()
