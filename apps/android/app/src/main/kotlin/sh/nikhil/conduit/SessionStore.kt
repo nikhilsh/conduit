@@ -2130,6 +2130,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val isDefault: Boolean = false,
         val defaultEffort: String = "",
         val efforts: List<String> = emptyList(),
+        /** True when the claude CLI advertises supportsFastMode for this model. */
+        val supportsFastMode: Boolean = false,
     )
 
     /**

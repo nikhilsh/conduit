@@ -218,4 +218,34 @@ struct ConduitForkOptionsCatalogTests {
         #expect(!models[1].isDefault)
         #expect(models[1].defaultEffort == "")
     }
+
+    @Test func supportsFastModeOnlyOnAnnotatedEntries() {
+        let withFastMode: [ConduitUI.AgentModel] = [
+            .init(id: "", displayName: "Default (recommended)",
+                  description: "Opus 4.8 with 1M context · Best for everyday, complex tasks",
+                  isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max"],
+                  supportsFastMode: true),
+            .init(id: "sonnet", displayName: "Sonnet",
+                  description: "Sonnet 4.6 · Efficient for routine tasks",
+                  efforts: ["low", "medium", "high", "max"]),
+        ]
+        // Inherit sentinel resolves to the default entry — fast mode true.
+        #expect(ConduitUI.ForkOptions.supportsFastMode("", catalog: withFastMode))
+        // Explicit sonnet entry — fast mode false.
+        #expect(!ConduitUI.ForkOptions.supportsFastMode("sonnet", catalog: withFastMode))
+        // No catalog — always false.
+        #expect(!ConduitUI.ForkOptions.supportsFastMode("", catalog: nil))
+    }
+
+    @Test func supportsFastModeDecodesFromWireFormat() throws {
+        let json = """
+        [{"id":"","display_name":"Default (recommended)",
+          "is_default":true,"supports_fast_mode":true,
+          "efforts":["low","medium","high","xhigh","max"]},
+         {"id":"sonnet","display_name":"Sonnet"}]
+        """.data(using: .utf8)!
+        let models = try JSONDecoder().decode([ConduitUI.AgentModel].self, from: json)
+        #expect(models[0].supportsFastMode)
+        #expect(!models[1].supportsFastMode)
+    }
 }
