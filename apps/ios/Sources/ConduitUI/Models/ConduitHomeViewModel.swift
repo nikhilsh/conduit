@@ -36,6 +36,11 @@ extension ConduitUI {
         /// per-session work dir (`…/sessions/<id>/work`) is deliberately
         /// dropped — it's not a meaningful project path.
         var workingDir: String?
+        /// Live git branch from the broker's status frame. nil when the
+        /// workspace isn't a git repo or the broker predates this field.
+        var gitBranch: String? = nil
+        /// Dirty-file count from `git status --porcelain`. nil = unknown.
+        var gitDirty: UInt32? = nil
         /// One-line preview of the latest activity in the session (the
         /// most recent assistant reply / tool action), condensed to a
         /// single line. Empty when the transcript carries nothing useful
@@ -154,6 +159,11 @@ extension ConduitUI {
         /// rather than "running" (green). Defaults to `true` so existing
         /// tests / call sites that omit it keep the prior behavior.
         var isConfirmedLive: Bool
+        /// Live git branch from the broker's status frame. nil when the
+        /// workspace isn't a git repo or the broker predates this field.
+        var gitBranch: String?
+        /// Dirty-file count from `git status --porcelain`. nil = unknown.
+        var gitDirty: UInt32?
 
         init(
             id: String,
@@ -163,7 +173,9 @@ extension ConduitUI {
             lastActivityAt: String? = nil,
             workingDir: String? = nil,
             lastActivityPreview: String? = nil,
-            isConfirmedLive: Bool = true
+            isConfirmedLive: Bool = true,
+            gitBranch: String? = nil,
+            gitDirty: UInt32? = nil
         ) {
             self.id = id
             self.displayName = displayName
@@ -173,6 +185,8 @@ extension ConduitUI {
             self.workingDir = workingDir
             self.lastActivityPreview = lastActivityPreview
             self.isConfirmedLive = isConfirmedLive
+            self.gitBranch = gitBranch
+            self.gitDirty = gitDirty
         }
     }
 
@@ -213,7 +227,9 @@ extension ConduitUI {
                     lastActivityPreview: s.lastActivityPreview ?? "",
                     isSelected: snap.selectedSessionID == s.id,
                     isRunning: isRunning,
-                    isStarting: isStarting
+                    isStarting: isStarting,
+                    gitBranch: s.gitBranch,
+                    gitDirty: s.gitDirty
                 ))
             }
             for p in snap.placeholders {
@@ -226,7 +242,8 @@ extension ConduitUI {
                     workingDir: nil,
                     lastActivityPreview: "",
                     isSelected: false,
-                    isRunning: false
+                    isRunning: false,
+                    gitBranch: nil
                 ))
             }
             return rows

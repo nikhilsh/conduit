@@ -799,6 +799,16 @@ async fn handle_text(
         #[serde(default)]
         account_7d_resets_at: Option<String>,
         #[serde(default)]
+        git_branch: Option<String>,
+        #[serde(default)]
+        git_dirty: Option<u32>,
+        #[serde(default)]
+        git_ahead: Option<u32>,
+        #[serde(default)]
+        git_behind: Option<u32>,
+        #[serde(default)]
+        worktree_name: Option<String>,
+        #[serde(default)]
         code: Option<i32>,
         #[serde(default)]
         view: Option<String>,
@@ -852,6 +862,11 @@ async fn handle_text(
                 account_5h_resets_at: env.account_5h_resets_at,
                 account_7d_pct: env.account_7d_pct,
                 account_7d_resets_at: env.account_7d_resets_at,
+                git_branch: env.git_branch,
+                git_dirty: env.git_dirty,
+                git_ahead: env.git_ahead,
+                git_behind: env.git_behind,
+                worktree_name: env.worktree_name,
             };
             delegate.on_status(status);
             if let Some(p) = env.preview {

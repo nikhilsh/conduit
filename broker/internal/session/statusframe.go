@@ -106,7 +106,37 @@ func (s *Session) StatusPayload() map[string]any {
 		payload["account_7d_pct"] = a.SevenDayPct
 		payload["account_7d_resets_at"] = a.SevenDayResetsAt
 	}
+	// Live git state — computed against the session's workspace directory
+	// using a short per-session cache so back-to-back status broadcasts
+	// don't each shell out. All git fields are gated on Branch being
+	// non-empty (which only holds when isGitRepo passed) so old clients and
+	// non-git sessions see no new keys.
+	gs := s.liveGitState()
+	if gs.Branch != "" {
+		payload["git_branch"] = gs.Branch
+		payload["git_dirty"] = gs.Dirty
+		if gs.Ahead != 0 {
+			payload["git_ahead"] = gs.Ahead
+		}
+		if gs.Behind != 0 {
+			payload["git_behind"] = gs.Behind
+		}
+		if gs.WorktreeName != "" {
+			payload["worktree_name"] = gs.WorktreeName
+		}
+	}
 	return payload
+}
+
+// liveGitState returns the cached (or freshly computed) GitState for the
+// session's workspace directory.
+func (s *Session) liveGitState() GitState {
+	if gs, ok := s.gitStateCache.get(); ok {
+		return gs
+	}
+	gs := computeGitState(s.WorkspaceDir(), worktreeNameFor(s))
+	s.gitStateCache.set(gs)
+	return gs
 }
 
 // statusFrameJSON marshals StatusPayload for broadcast via PublishText.

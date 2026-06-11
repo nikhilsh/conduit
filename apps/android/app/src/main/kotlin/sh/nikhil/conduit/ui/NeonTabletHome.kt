@@ -102,7 +102,11 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
                     firstUserMessage = firstUserMessageOf(conversationLog[id]),
                 )
                 val preview = latestActivityPreviewOf(conversationLog[id])
-                SessionCard(neon, title, session.assistant, isRunning, preview, session) { onOpenSession(id) }
+                val cardStatus = statuses[id]
+                val cardBranch = cardStatus?.gitBranch?.takeIf { it.isNotBlank() }
+                    ?: session.gitBranch?.takeIf { it.isNotBlank() }
+                val cardDirty = cardStatus?.gitDirty ?: session.gitDirty
+                SessionCard(neon, title, session.assistant, isRunning, preview, session, cardBranch, cardDirty) { onOpenSession(id) }
             }
             Spacer(Modifier.size(24.dp))
         }
@@ -163,6 +167,8 @@ private fun SessionCard(
     isRunning: Boolean,
     preview: String?,
     session: uniffi.conduit_core.ProjectSession,
+    gitBranch: String? = null,
+    gitDirty: UInt? = null,
     onClick: () -> Unit,
 ) {
     val tint = neonAgentColor(assistant, neon)
@@ -180,7 +186,15 @@ private fun SessionCard(
             Box(Modifier.size(8.dp).clip(RoundedCornerShape(99.dp)).background(if (isRunning) neon.green else neon.textFaint))
             Text(title, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = neon.text, maxLines = 1)
         }
-        Text(assistant, fontFamily = neon.mono, fontSize = 10.5.sp, color = tint)
+        // Agent chip + live branch (when available).
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(assistant, fontFamily = neon.mono, fontSize = 10.5.sp, color = tint)
+            if (!gitBranch.isNullOrBlank()) {
+                Text("·", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
+                val branchLabel = if ((gitDirty ?: 0u) > 0u) "$gitBranch ●$gitDirty" else gitBranch
+                Text(branchLabel, fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textDim, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
+        }
         if (!preview.isNullOrBlank()) {
             Text(preview, fontFamily = neon.sans, fontSize = 12.5.sp, color = neon.textDim, maxLines = 2)
         }

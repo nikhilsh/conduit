@@ -464,6 +464,7 @@ fun HomeScreen(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     // Secondary line: agent chip + status + relative time.
+                                    val rowStatus = statuses[session.id]
                                     SessionMetaRow(
                                         agent = session.assistant,
                                         statusLabel = sessionStatusLabel(connected, phase, confirmedLive),
@@ -478,6 +479,9 @@ fun HomeScreen(
                                                 ?: session.lastActivityAt
                                                 ?: session.startedAt,
                                         ),
+                                        gitBranch = rowStatus?.gitBranch?.takeIf { it.isNotBlank() }
+                                            ?: session.gitBranch?.takeIf { it.isNotBlank() },
+                                        gitDirty = rowStatus?.gitDirty ?: session.gitDirty,
                                     )
                                     // Tertiary line: latest-activity preview
                                     // (iOS #238). Muted, single line, only
@@ -936,6 +940,8 @@ private fun SessionMetaRow(
     running: Boolean,
     relativeTime: String,
     starting: Boolean = false,
+    gitBranch: String? = null,
+    gitDirty: UInt? = null,
 ) {
     val neon = LocalNeonTheme.current
     Row(
@@ -992,6 +998,20 @@ private fun SessionMetaRow(
                 fontFamily = neon.mono,
                 color = neon.textFaint,
                 maxLines = 1,
+            )
+        }
+        // Live git branch + dirty dot. Hidden when branch is unknown
+        // (old broker or non-git workspace).
+        if (!gitBranch.isNullOrBlank()) {
+            Text("·", style = MaterialTheme.typography.labelSmall, color = neon.textFaint)
+            val branchLabel = if ((gitDirty ?: 0u) > 0u) "$gitBranch ●$gitDirty" else gitBranch
+            Text(
+                branchLabel,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

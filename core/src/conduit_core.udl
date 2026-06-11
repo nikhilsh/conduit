@@ -47,6 +47,13 @@ dictionary SessionStatus {
     string? account_5h_resets_at = null;
     f64? account_7d_pct = null;
     string? account_7d_resets_at = null;
+    // Live git state (broker §gitstate.go). Absent on old brokers / non-git
+    // workspaces — apps treat None as "unknown" and hide git indicators.
+    string? git_branch = null;
+    u32? git_dirty = null;
+    u32? git_ahead = null;
+    u32? git_behind = null;
+    string? worktree_name = null;
 };
 
 dictionary ProjectSession {
@@ -75,6 +82,13 @@ dictionary ProjectSession {
     string? account_5h_resets_at = null;
     f64? account_7d_pct = null;
     string? account_7d_resets_at = null;
+    // Live git state rolled from the status frame. None on old brokers /
+    // non-git workspaces; apps treat None as "unknown" and hide git UI.
+    string? git_branch = null;
+    u32? git_dirty = null;
+    u32? git_ahead = null;
+    u32? git_behind = null;
+    string? worktree_name = null;
 };
 
 dictionary ChatEvent {

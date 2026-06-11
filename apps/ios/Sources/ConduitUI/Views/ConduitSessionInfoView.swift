@@ -192,6 +192,30 @@ extension ConduitUI {
 
         // MARK: 1 · Identity
 
+        /// Live git branch: prefer the status frame value, fall back to the
+        /// session's create-time branch param (nil until first status arrives).
+        private var liveBranch: String? {
+            let b = store.statusBySession[session.id]?.gitBranch ?? session.gitBranch
+            return b?.isEmpty == false ? b : nil
+        }
+
+        /// Compact git state indicator: `feature-x · ●3 · ↑2 ↓1`
+        /// Hides ↑/↓ when zero; "clean" when dirty==0 (and no ahead/behind).
+        private var gitStateLabel: String? {
+            guard let branch = liveBranch else { return nil }
+            let status = store.statusBySession[session.id]
+            let dirty = status?.gitDirty ?? session.gitDirty ?? 0
+            let ahead = status?.gitAhead ?? session.gitAhead ?? 0
+            let behind = status?.gitBehind ?? session.gitBehind ?? 0
+            var parts: [String] = [branch]
+            if dirty > 0 { parts.append("●\(dirty)") }
+            var ab: [String] = []
+            if ahead > 0  { ab.append("↑\(ahead)") }
+            if behind > 0 { ab.append("↓\(behind)") }
+            if !ab.isEmpty { parts.append(ab.joined(separator: " ")) }
+            return parts.joined(separator: " · ")
+        }
+
         private var identityCard: some View {
             let agent = liveAssistant
             let tint = neon.agentTint(forAgent: agent)
@@ -215,7 +239,16 @@ extension ConduitUI {
                         Text(agent.lowercased())
                             .font(neon.mono(11.5).weight(.semibold))
                             .foregroundStyle(tint)
-                        if let branch = session.branch, !branch.isEmpty {
+                        // Show live git state when available; fall back to
+                        // the static create-time branch param.
+                        if let gitLabel = gitStateLabel {
+                            Text("·").font(neon.mono(11.5)).foregroundStyle(neon.textFaint)
+                            Text(gitLabel)
+                                .font(neon.mono(11.5))
+                                .foregroundStyle(neon.textDim)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        } else if let branch = session.branch, !branch.isEmpty {
                             Text("·").font(neon.mono(11.5)).foregroundStyle(neon.textFaint)
                             Text(branch)
                                 .font(neon.mono(11.5))
@@ -532,7 +565,8 @@ extension ConduitUI {
         // MARK: 5 · Details
 
         private var detailsSection: some View {
-            VStack(alignment: .leading, spacing: 8) {
+            let liveWorktree = store.statusBySession[session.id]?.worktreeName ?? session.worktreeName
+            return VStack(alignment: .leading, spacing: 8) {
                 eyebrow("Details")
                 VStack(spacing: 0) {
                     detailRow("Working dir", session.cwd ?? store.statusBySession[session.id]?.cwd ?? "—", mono: true)
@@ -540,6 +574,10 @@ extension ConduitUI {
                     detailRow("Box", boxLine, mono: true)
                     hairline
                     detailRow("Started", startedLabel, mono: true)
+                    if let wt = liveWorktree, !wt.isEmpty {
+                        hairline
+                        detailRow("Worktree", wt, mono: true)
+                    }
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)

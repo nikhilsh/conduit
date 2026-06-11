@@ -235,6 +235,10 @@ extension ConduitUI {
             let sessions = store.sessions.map { s -> ConduitUI.HomeSnapshotSession in
                 let status = store.statusBySession[s.id]
                 let cwd = status?.cwd ?? s.cwd
+                // Live git branch from the status frame; falls back to the
+                // session's static create-time branch when the broker hasn't
+                // yet emitted a status frame with git_branch.
+                let liveBranch = status?.gitBranch ?? s.gitBranch
                 return ConduitUI.HomeSnapshotSession(
                     id: s.id,
                     displayName: store.displayName(for: s),
@@ -246,7 +250,9 @@ extension ConduitUI {
                     lastActivityAt: s.lastActivityAt ?? s.startedAt ?? status?.lastActivityAt,
                     workingDir: SessionNaming.meaningfulWorkingDir(cwd),
                     lastActivityPreview: railActivityPreview(for: s.id),
-                    isConfirmedLive: store.isConfirmedLive(sessionID: s.id)
+                    isConfirmedLive: store.isConfirmedLive(sessionID: s.id),
+                    gitBranch: liveBranch?.isEmpty == false ? liveBranch : nil,
+                    gitDirty: status?.gitDirty ?? s.gitDirty
                 )
             }
             return ConduitUI.HomeSnapshot(
@@ -369,7 +375,7 @@ private struct RailRowView: View {
         .contentShape(Rectangle())
     }
 
-    /// `agent · repo:branch` (or status) mono subline — what the row runs.
+    /// `agent · branch[●N] · dir` (or status) mono subline — what the row runs.
     private var subtitle: String {
         switch row.kind {
         case .creatingPlaceholder:
@@ -377,7 +383,14 @@ private struct RailRowView: View {
         case .session:
             var parts: [String] = []
             if !row.agent.isEmpty { parts.append(row.agent) }
-            if let dir = row.workingDir, !dir.isEmpty {
+            if let branch = row.gitBranch, !branch.isEmpty {
+                // Show branch + dirty indicator (● count when > 0).
+                if let dirty = row.gitDirty, dirty > 0 {
+                    parts.append("\(branch) ●\(dirty)")
+                } else {
+                    parts.append(branch)
+                }
+            } else if let dir = row.workingDir, !dir.isEmpty {
                 parts.append(shortDir(dir))
             } else {
                 parts.append(row.statusText)
