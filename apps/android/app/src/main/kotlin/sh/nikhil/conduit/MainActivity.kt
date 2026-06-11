@@ -59,11 +59,29 @@ class MainActivity : ComponentActivity() {
         // Mirror the active broker endpoint into plain SharedPrefs so the
         // UnifiedPush BroadcastReceiver can POST without EncryptedSharedPrefs.
         // Persists the initial endpoint, then re-persists whenever it changes
-        // (box switch, new pairing).
+        // (box switch, new pairing). Also re-registers push token with all
+        // paired boxes when the active endpoint changes.
         pushStore.persistBrokerEndpoint(store.endpoint.value)
         lifecycleScope.launch {
             store.endpoint.collect { ep ->
                 pushStore.persistBrokerEndpoint(ep)
+                // Re-register with all paired boxes when the active box changes.
+                val allEndpoints = store.savedServers.value.map { it.endpoint }
+                pushStore.onEndpointChanged(ep, allEndpoints)
+            }
+        }
+
+        // Unregister push from any box that is removed from savedServers.
+        lifecycleScope.launch {
+            var prevServers = store.savedServers.value
+            store.savedServers.collect { current ->
+                val removed = prevServers.filter { prev ->
+                    current.none { it.id == prev.id }
+                }
+                for (server in removed) {
+                    pushStore.unregisterFromServer(server.endpoint)
+                }
+                prevServers = current
             }
         }
 

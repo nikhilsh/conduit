@@ -26,7 +26,8 @@ struct PushSettingsState: Equatable {
     var auth: PushAuthState
     /// True when the broker advertises `features.push = true`.
     var brokerSupported: Bool
-    /// True when we have a token AND the broker confirmed the registration.
+    /// True when we have a token AND the broker confirmed the registration
+    /// for the ACTIVE endpoint.
     var registered: Bool
 
     init(
@@ -60,13 +61,12 @@ struct PushSettingsState: Equatable {
 ///      onboarding, which is accounts-free by design per PLAN-PUSH.md).
 ///   2. Call `UIApplication.shared.registerForRemoteNotifications()`.
 ///   3. Receive the APNs device token from the system and POST it to
-///      the active broker endpoint via `POST /api/push/register`.
-///   4. Re-register when the active endpoint changes (box switch) or
-///      when APNs rotates the token.
-///   5. Expose `PushSettingsState` for the honest-state Settings row.
-///
-/// V1 scope: registers with the active box only. Multi-box registration
-/// is a follow-up (limitation noted in PR body).
+///      ALL paired broker endpoints via `POST /api/push/register`.
+///   4. Re-register with ALL known servers when the active endpoint
+///      changes (box switch) or when APNs rotates the token.
+///   5. Unregister from a server when it is removed from savedServers.
+///   6. Expose `PushSettingsState` for the honest-state Settings row
+///      (reflects the ACTIVE endpoint's registration state only).
 @Observable
 @MainActor
 final class PushNotificationManager {
@@ -80,10 +80,6 @@ final class PushNotificationManager {
     /// The raw APNs device token last received from the system. Stored
     /// as hex-encoded string (Apple's canonical format for the broker).
     private(set) var deviceTokenHex: String?
-
-    /// The endpoint we last successfully registered with. Used to
-    /// detect when the active box has changed so we re-register.
-    private var lastRegisteredEndpoint: StoredEndpoint?
 
     // MARK: - Singleton
 
@@ -136,13 +132,18 @@ final class PushNotificationManager {
     }
 
     /// Called by the AppDelegate bridge when APNs delivers a device token.
-    /// Stores it and registers with the active endpoint.
-    func didRegisterDeviceToken(_ tokenData: Data, endpoint: StoredEndpoint) {
+    /// Registers with ALL paired endpoints; `settingsState.registered`
+    /// reflects the active endpoint's result.
+    func didRegisterDeviceToken(
+        _ tokenData: Data,
+        endpoint: StoredEndpoint,
+        allEndpoints: [StoredEndpoint]
+    ) {
         let hex = tokenData.map { String(format: "%02x", $0) }.joined()
         Telemetry.breadcrumb("push", "APNs token received", data: ["hexLen": "\(hex.count)"])
         deviceTokenHex = hex
         settingsState.auth = .authorized
-        registerWithBroker(hex: hex, endpoint: endpoint)
+        registerWithAllServers(hex: hex, activeEndpoint: endpoint, allEndpoints: allEndpoints)
     }
 
     /// Called by the AppDelegate bridge when APNs registration fails.
@@ -158,12 +159,42 @@ final class PushNotificationManager {
     }
 
     /// Called when the active endpoint changes (box switch). Re-registers
-    /// the existing token with the new endpoint if we have one.
-    func endpointChanged(to newEndpoint: StoredEndpoint) {
+    /// the existing token with ALL known endpoints so every paired box
+    /// stays current (token may have rotated, or a box may have lost its
+    /// registration).
+    func endpointChanged(to newEndpoint: StoredEndpoint, allEndpoints: [StoredEndpoint]) {
         guard newEndpoint.isComplete, let hex = deviceTokenHex else { return }
-        if newEndpoint != lastRegisteredEndpoint {
-            Telemetry.breadcrumb("push", "endpoint changed — re-registering token", data: ["host": newEndpoint.displayHost])
-            registerWithBroker(hex: hex, endpoint: newEndpoint)
+        Telemetry.breadcrumb("push", "endpoint changed — re-registering with all servers",
+            data: ["host": newEndpoint.displayHost, "count": "\(allEndpoints.count)"])
+        registerWithAllServers(hex: hex, activeEndpoint: newEndpoint, allEndpoints: allEndpoints)
+    }
+
+    /// Best-effort unregister POST to a single endpoint. Called when a
+    /// server is removed from savedServers.
+    func unregisterFromServer(endpoint: StoredEndpoint) {
+        guard endpoint.isComplete else { return }
+        Telemetry.breadcrumb("push", "fan-out unregister: box removed",
+            data: ["host": endpoint.displayHost])
+        Task { @MainActor in
+            guard let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/push/unregister"
+            guard let url = components?.url else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = "{}".data(using: .utf8)
+            guard let (_, resp) = try? await URLSession.shared.data(for: req),
+                  let http = resp as? HTTPURLResponse
+            else {
+                Telemetry.breadcrumb("push", "unregister POST network error",
+                    data: ["host": endpoint.displayHost])
+                return
+            }
+            Telemetry.breadcrumb("push", "unregister POST result",
+                data: ["host": endpoint.displayHost, "status": "\(http.statusCode)"])
         }
     }
 
@@ -258,46 +289,86 @@ final class PushNotificationManager {
 
     // MARK: - Private
 
-    /// POST the device token to the broker's push registry.
-    private func registerWithBroker(hex: String, endpoint: StoredEndpoint) {
-        guard endpoint.isComplete else { return }
-        Task { @MainActor in
-            Telemetry.breadcrumb("push", "register POST start", data: ["host": endpoint.displayHost])
-            guard let base = endpoint.httpBaseURL else { return }
-            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
-            components?.path = "/api/push/register"
-            guard let url = components?.url else { return }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.timeoutInterval = 15
-            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            let payload = ["platform": "apns", "token": hex]
-            guard let body = try? JSONEncoder().encode(payload) else { return }
-            req.httpBody = body
-            guard let (_, resp) = try? await URLSession.shared.data(for: req),
-                  let http = resp as? HTTPURLResponse
-            else {
-                Telemetry.breadcrumb("push", "register POST network error", data: ["host": endpoint.displayHost])
-                return
+    /// Fan out registration to ALL endpoints concurrently. Each box is an
+    /// independent Task so one failure does not cancel others (best-effort
+    /// per box). `settingsState.registered` reflects the ACTIVE endpoint's
+    /// result only; other boxes are breadcrumbed.
+    private func registerWithAllServers(
+        hex: String,
+        activeEndpoint: StoredEndpoint,
+        allEndpoints: [StoredEndpoint]
+    ) {
+        // Deduplicate: always include active endpoint; merge with all others.
+        let endpoints: [StoredEndpoint] = {
+            var seen = Set<StoredEndpoint>()
+            var result: [StoredEndpoint] = []
+            let candidates = activeEndpoint.isComplete
+                ? [activeEndpoint] + allEndpoints
+                : allEndpoints
+            for ep in candidates {
+                guard ep.isComplete, seen.insert(ep).inserted else { continue }
+                result.append(ep)
             }
-            if (200..<300).contains(http.statusCode) {
-                lastRegisteredEndpoint = endpoint
-                settingsState.registered = true
-                Telemetry.breadcrumb("push", "register POST success", data: [
-                    "host": endpoint.displayHost,
-                    "status": "\(http.statusCode)",
-                ])
-            } else {
-                Telemetry.breadcrumb("push", "register POST failed", data: [
-                    "host": endpoint.displayHost,
-                    "status": "\(http.statusCode)",
-                ])
-                // 503 = push registry not configured on broker (no relay URL set)
-                // Don't mark as error — the broker just doesn't have the relay wired.
-                settingsState.registered = false
+            return result
+        }()
+
+        Telemetry.breadcrumb("push", "fan-out register: N boxes",
+            data: ["count": "\(endpoints.count)"])
+
+        for ep in endpoints {
+            let isActive = (ep == activeEndpoint)
+            Task { @MainActor in
+                let success = await postRegister(hex: hex, endpoint: ep)
+                Telemetry.breadcrumb("push", "fan-out register result",
+                    data: ["host": ep.displayHost, "success": "\(success)"])
+                if isActive {
+                    settingsState.registered = success
+                }
             }
         }
+    }
+
+    /// POST the device token to one broker's push registry.
+    /// Returns `true` on HTTP 2xx, `false` on any failure.
+    private func postRegister(hex: String, endpoint: StoredEndpoint) async -> Bool {
+        guard endpoint.isComplete, let base = endpoint.httpBaseURL else { return false }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/push/register"
+        guard let url = components?.url else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload = ["platform": "apns", "token": hex]
+        guard let body = try? JSONEncoder().encode(payload) else { return false }
+        req.httpBody = body
+        Telemetry.breadcrumb("push", "register POST start", data: ["host": endpoint.displayHost])
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse
+        else {
+            Telemetry.breadcrumb("push", "register POST network error",
+                data: ["host": endpoint.displayHost])
+            return false
+        }
+        let ok = (200..<300).contains(http.statusCode)
+        if ok {
+            Telemetry.breadcrumb("push", "register POST success",
+                data: ["host": endpoint.displayHost, "status": "\(http.statusCode)"])
+        } else {
+            Telemetry.breadcrumb("push", "register POST failed",
+                data: ["host": endpoint.displayHost, "status": "\(http.statusCode)"])
+        }
+        return ok
+    }
+}
+
+// MARK: - StoredEndpoint: Hashable (needed for dedup set)
+
+extension StoredEndpoint: Hashable {
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(url)
+        hasher.combine(token)
     }
 }
 

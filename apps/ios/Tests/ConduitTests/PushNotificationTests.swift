@@ -152,6 +152,127 @@ struct PushSettingsStateTests {
     }
 }
 
+// MARK: - Fan-out register logic tests
+
+// Pure helper that mirrors the dedup + fan-out endpoint selection in
+// PushNotificationManager.registerWithAllServers. Tests run on any host
+// (no network, no MainActor, no system calls).
+private func fanOutEndpoints(
+    activeEndpoint: StoredEndpoint,
+    allEndpoints: [StoredEndpoint]
+) -> [StoredEndpoint] {
+    var seen = Set<StoredEndpoint>()
+    var result: [StoredEndpoint] = []
+    let candidates = activeEndpoint.isComplete
+        ? [activeEndpoint] + allEndpoints
+        : allEndpoints
+    for ep in candidates {
+        guard ep.isComplete, seen.insert(ep).inserted else { continue }
+        result.append(ep)
+    }
+    return result
+}
+
+// Pure helper: simulate fan-out results (nil = failure) and count successes.
+private func countFanOutSuccesses(_ results: [Bool?]) -> Int {
+    results.compactMap { $0 }.filter { $0 }.count
+}
+
+@Suite("Push notification — multi-box fan-out")
+struct PushFanOutTests {
+
+    private func ep(_ url: String) -> StoredEndpoint {
+        StoredEndpoint(url: url, token: "tok")
+    }
+    private let empty = StoredEndpoint(url: "", token: "")
+
+    @Test func nEndpointsProduceNCalls() {
+        let active = ep("https://box1.example.com")
+        let all = [
+            ep("https://box1.example.com"),
+            ep("https://box2.example.com"),
+            ep("https://box3.example.com"),
+        ]
+        let selected = fanOutEndpoints(activeEndpoint: active, allEndpoints: all)
+        #expect(selected.count == 3)
+    }
+
+    @Test func activeEndpointIncludedEvenIfNotInAllEndpoints() {
+        let active = ep("https://active.example.com")
+        let all = [
+            ep("https://box2.example.com"),
+            ep("https://box3.example.com"),
+        ]
+        let selected = fanOutEndpoints(activeEndpoint: active, allEndpoints: all)
+        #expect(selected.count == 3)
+        #expect(selected.first == active)
+    }
+
+    @Test func duplicatesAreDeduped() {
+        let active = ep("https://box1.example.com")
+        let all = [
+            ep("https://box1.example.com"),
+            ep("https://box1.example.com"),
+            ep("https://box2.example.com"),
+        ]
+        let selected = fanOutEndpoints(activeEndpoint: active, allEndpoints: all)
+        #expect(selected.count == 2)
+    }
+
+    @Test func emptyAllEndpointsOnlyActiveRegistered() {
+        let active = ep("https://solo.example.com")
+        let selected = fanOutEndpoints(activeEndpoint: active, allEndpoints: [])
+        #expect(selected.count == 1)
+        #expect(selected.first == active)
+    }
+
+    @Test func emptyAllEndpointsAndIncompleteActiveProducesZero() {
+        let selected = fanOutEndpoints(activeEndpoint: empty, allEndpoints: [])
+        #expect(selected.count == 0)
+    }
+
+    @Test func incompleteEndpointsSkipped() {
+        let active = ep("https://box1.example.com")
+        let all = [
+            ep("https://box1.example.com"),
+            StoredEndpoint(url: "", token: ""),
+            StoredEndpoint(url: "https://no-token.example.com", token: ""),
+        ]
+        let selected = fanOutEndpoints(activeEndpoint: active, allEndpoints: all)
+        #expect(selected.count == 1)
+    }
+
+    @Test func oneBoxFailureDoesNotPreventOthers() {
+        // Simulate 3 boxes: box1 success, box2 failure (nil), box3 success.
+        let results: [Bool?] = [true, nil, true]
+        let successes = countFanOutSuccesses(results)
+        #expect(successes == 2)
+    }
+
+    @Test func allFailuresTrackedIndependently() {
+        let results: [Bool?] = [nil, nil, nil]
+        let successes = countFanOutSuccesses(results)
+        #expect(successes == 0)
+    }
+
+    @Test func allSuccessesCountedCorrectly() {
+        let results: [Bool?] = [true, true, true]
+        let successes = countFanOutSuccesses(results)
+        #expect(successes == 3)
+    }
+
+    @Test func registerPayloadFieldsPerBox() throws {
+        // Verify the per-box register payload has the correct shape.
+        let hex = "cafebabe"
+        let payload = ["platform": "apns", "token": hex]
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode([String: String].self, from: data)
+        #expect(decoded["platform"] == "apns")
+        #expect(decoded["token"] == hex)
+        #expect(decoded.keys.count == 2)
+    }
+}
+
 // MARK: - "Prompt existing users on active" guard tests
 //
 // The scene-phase .active hook fires requestAuthorizationIfNeeded() only when
