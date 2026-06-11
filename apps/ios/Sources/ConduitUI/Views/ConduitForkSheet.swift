@@ -332,9 +332,20 @@ extension ConduitUI {
         /// first), or the static list when no catalog is available.
         static func models(forAssistant assistant: String, catalog: [AgentModel]?) -> [String] {
             guard let catalog, !catalog.isEmpty else { return models(forAssistant: assistant) }
-            var ids = catalog.map(\.id)
-            if !ids.contains(inheritModel) { ids.insert(inheritModel, at: 0) }
-            return ids
+            let ids = catalog.map(\.id)
+            // When the catalog has an explicit non-empty isDefault entry (e.g. codex's
+            // "gpt-5.5"), that entry IS the recommended row — do NOT prepend the ""
+            // inherit sentinel, which would create a duplicate recommended row.
+            // When no explicit non-empty isDefault exists (e.g. claude whose catalog
+            // already has a "" entry, or a catalog with no isDefault), fall through to
+            // prepend "" if absent so the user can always select "no override".
+            let hasExplicitDefault = catalog.contains { $0.isDefault && !$0.id.isEmpty }
+            if hasExplicitDefault {
+                return ids
+            }
+            var mutable = ids
+            if !mutable.contains(inheritModel) { mutable.insert(inheritModel, at: 0) }
+            return mutable
         }
 
         /// Display label for a model option, preferring the agent's own
@@ -355,17 +366,21 @@ extension ConduitUI {
         static func modelLabel(_ option: String, catalog: [AgentModel]?) -> String {
             guard let catalog, !catalog.isEmpty else { return modelLabel(option) }
             if let entry = catalog.first(where: { $0.id == option }) {
-                // Exact match found (e.g. claude's literal "" entry).
-                // Default/inherit entry: show the resolved model name.
-                if entry.displayName.lowercased().hasPrefix("default") || entry.id == inheritModel {
+                // Show "(recommended)" on the default entry, whether its id is "" (claude)
+                // or a real model id (codex). Also catches claude's "Default (recommended)"
+                // displayName prefix path.
+                let isRecommendedRow = entry.isDefault ||
+                    entry.displayName.lowercased().hasPrefix("default") ||
+                    entry.id == inheritModel
+                if isRecommendedRow {
                     if let resolved = defaultModelTitle(forCatalog: catalog) {
                         return "\(resolved) (recommended)"
                     }
                 }
                 return entry.displayName.isEmpty ? modelLabel(option) : entry.displayName
             }
-            // No exact match. For the inherit sentinel (codex-style catalogs
-            // that have no "" entry), resolve through the isDefault entry.
+            // No exact match. For the inherit sentinel (static-fallback path or catalogs
+            // with no "" entry that are queried with ""), resolve via isDefault entry.
             if option == inheritModel,
                let resolved = defaultModelTitle(forCatalog: catalog) {
                 return "\(resolved) (recommended)"

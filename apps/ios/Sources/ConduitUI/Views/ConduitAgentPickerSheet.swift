@@ -861,7 +861,7 @@ extension ConduitUI {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Recent")
                 VStack(spacing: 6) {
-                    ForEach(store.recentDirectories, id: \.self) { path in
+                    ForEach(Array(store.recentDirectories.prefix(3)), id: \.self) { path in
                         Button {
                             onCreate(path, selectedModel, selectedEffort, selectedPermissionMode, nil)
                         } label: {
