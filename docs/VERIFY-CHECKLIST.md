@@ -9,13 +9,31 @@ release, the section for that version is the device-test punch list.
 
 ---
 
-## Unreleased (on main, not yet tagged)
+## v0.0.139
 
+- **Push-driven Live Activities** — iOS Live Activities now updated via APNs
+  push while the app is backgrounded (PRs #500 iOS / #501 broker+relay). Verify
+  a running turn advances the lock-screen LA without the app in the foreground.
+  [iOS, on-device]
+- **UnifiedPush ntfy Android surface** — ntfy-backed UnifiedPush now wired into
+  Android; push notifications arrive without Firebase. PR #499. Verify a push
+  notification arrives via ntfy on a device without GCM/FCM. [Android, on-device]
+- **SSH forced-capture + add-box fixes** — SSH sessions now capture the terminal
+  even when another process holds the PTY; add-box em-dash/smart-quote
+  corruption fixed, disabled-reasons shown inline. PR #502. [app, on-device]
+- **Sentry quota hygiene** — `beforeSend` denylist suppresses noisy
+  diagnostic/disconnect noise as breadcrumbs rather than events; real errors
+  still captured. PR #504. Verify a real error still reaches Sentry and that
+  noisy diag events no longer appear as full events in the quota. [app, on-device]
 - **VPS backup helper** — `scripts/conduit-backup.sh` + `docs/BACKUP-RECOVERY.md`.
-  Verify by running the script on the live box: `scripts/conduit-backup.sh
-  /tmp/test-backup.tar.gz.gpg` (passphrase-prompt must appear; encrypted file
-  must be written; decrypt + inspect `manifest.txt` confirms tier-1 items were
-  staged). [script, local run — no device needed]
+  Verify: `scripts/conduit-backup.sh /tmp/test-backup.tar.gz.gpg`
+  (passphrase-prompt must appear; encrypted file written; decrypt + inspect
+  `manifest.txt` confirms tier-1 items staged). PR #498. [script, local run]
+- **Codex extra-approval/elicitation cards** — confirmed already rendered
+  app-side (verify-only, no build needed). Verify a codex
+  `item/fileChange/requestApproval`, `item/tool/requestUserInput`, and
+  `mcpServer/elicitation/request` each surface a tappable card in the app.
+  [app, on-device, verify-only]
 
 ---
 
