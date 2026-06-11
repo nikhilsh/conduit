@@ -3,7 +3,11 @@ package session
 import (
 	"strings"
 	"testing"
+
+	"github.com/nikhilsh/conduit/broker/internal/agents"
 )
+
+func boolPtr(b bool) *bool { return &b }
 
 func TestSpawnOverrideIsZero(t *testing.T) {
 	if !(SpawnOverride{}).IsZero() {
@@ -17,6 +21,76 @@ func TestSpawnOverrideIsZero(t *testing.T) {
 	}
 	if (SpawnOverride{Model: "opus"}).IsZero() {
 		t.Fatal("model override should not be zero")
+	}
+	if (SpawnOverride{FastMode: boolPtr(true)}).IsZero() {
+		t.Fatal("fast-mode override should not be zero")
+	}
+	if (SpawnOverride{FastMode: boolPtr(false)}).IsZero() {
+		t.Fatal("fast-mode=false override should not be zero (it is an explicit choice)")
+	}
+}
+
+// claudeAdapter / codexAdapter mirror the built-in manifest defaults that
+// applyLegacyDefaults fills in (see registry.go). Constructed inline so the
+// override arg-expansion is tested against the real templates without
+// loading the embedded registry.
+func claudeAdapter() agents.Adapter {
+	return agents.Adapter{
+		Name:         "claude",
+		EffortArgs:   []string{"--effort", "{effort}"},
+		ModelArgs:    []string{"--model", "{model}"},
+		FastModeArgs: []string{"--settings", `{"fastMode":{fast}}`},
+	}
+}
+
+func codexAdapter() agents.Adapter {
+	return agents.Adapter{
+		Name:       "codex",
+		EffortArgs: []string{"-c", "model_reasoning_effort={effort}"},
+		ModelArgs:  []string{"--model", "{model}"},
+		// No FastModeArgs — codex ignores fast mode.
+	}
+}
+
+func TestSpawnOverrideFastModeAdapterArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		adapter agents.Adapter
+		o       SpawnOverride
+		// substr that must be present (or "" for none), and whether the
+		// --settings flag should appear at all.
+		wantSettings bool
+		wantSubstr   string
+	}{
+		{"claude nil → absent", claudeAdapter(), SpawnOverride{}, false, ""},
+		{"claude true", claudeAdapter(), SpawnOverride{FastMode: boolPtr(true)}, true, `{"fastMode":true}`},
+		{"claude false", claudeAdapter(), SpawnOverride{FastMode: boolPtr(false)}, true, `{"fastMode":false}`},
+		// Fast mode is orthogonal to model/effort.
+		{"claude true + model", claudeAdapter(), SpawnOverride{Model: "opus", FastMode: boolPtr(true)}, true, `{"fastMode":true}`},
+		// Non-claude adapter: fast mode is a no-op even when set.
+		{"codex true → no settings", codexAdapter(), SpawnOverride{FastMode: boolPtr(true)}, false, ""},
+		{"codex false → no settings", codexAdapter(), SpawnOverride{FastMode: boolPtr(false)}, false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args := c.o.extraArgsForAdapter(c.adapter)
+			joined := strings.Join(args, " ")
+			hasSettings := false
+			for _, a := range args {
+				if a == "--settings" {
+					hasSettings = true
+				}
+			}
+			if hasSettings != c.wantSettings {
+				t.Fatalf("--settings present=%v, want %v (args=%v)", hasSettings, c.wantSettings, args)
+			}
+			if c.wantSubstr != "" && !strings.Contains(joined, c.wantSubstr) {
+				t.Fatalf("args %v missing %q", args, c.wantSubstr)
+			}
+			if !c.wantSettings && strings.Contains(joined, "fastMode") {
+				t.Fatalf("args %v unexpectedly carry fastMode", args)
+			}
+		})
 	}
 }
 

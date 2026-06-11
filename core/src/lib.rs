@@ -217,6 +217,7 @@ impl ConduitClient {
     /// query params on the WS connect, and the broker applies them to the
     /// spawned agent's CLI flags. Empty / None = the adapter's defaults
     /// unchanged (the normal create path).
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_session(
         &self,
         assistant: String,
@@ -225,6 +226,7 @@ impl ConduitClient {
         model: Option<String>,
         cwd: Option<String>,
         permission_mode: Option<String>,
+        fast_mode: Option<bool>,
     ) -> Result<String, ConduitError> {
         let inner = Arc::clone(&self.inner);
         run_on_core(async move {
@@ -238,6 +240,7 @@ impl ConduitClient {
                     model,
                     cwd,
                     permission_mode,
+                    fast_mode,
                 )
                 .await?;
             Ok(session_id)
@@ -256,6 +259,7 @@ impl ConduitClient {
                 .open_session(
                     session_id,
                     assistant.unwrap_or_else(|| "claude".to_string()),
+                    None,
                     None,
                     None,
                     None,
@@ -533,6 +537,7 @@ impl Inner {
         model: Option<String>,
         cwd: Option<String>,
         permission_mode: Option<String>,
+        fast_mode: Option<bool>,
     ) -> Result<(), ConduitError> {
         let delegate = self
             .delegate
@@ -589,6 +594,7 @@ impl Inner {
                 model,
                 cwd,
                 permission_mode,
+                fast_mode,
             },
             Arc::new(ClientDelegate {
                 sessions: Arc::clone(&self.sessions),

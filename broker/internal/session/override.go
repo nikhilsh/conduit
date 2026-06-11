@@ -27,6 +27,12 @@ type SpawnOverride struct {
 	// --dangerously-skip-permissions); "plan" = read-only planning. See
 	// applyClaudePermissionMode for the verified flag mapping.
 	PermissionMode string
+	// FastMode is the claude-only "fast mode" toggle. nil = unchanged (the
+	// normal start path, byte-identical argv to before). Non-nil appends the
+	// adapter's FastModeArgs with {fast} expanded to "true"/"false" — for
+	// claude that is `--settings '{"fastMode":true|false}'`. Adapters with no
+	// FastModeArgs (codex/opencode/gemini) ignore it entirely.
+	FastMode *bool
 }
 
 // applyClaudePermissionMode rewrites a claude argv for the chosen
@@ -106,7 +112,8 @@ var codexEfforts = map[string]bool{
 func (o SpawnOverride) IsZero() bool {
 	return strings.TrimSpace(o.ReasoningEffort) == "" &&
 		strings.TrimSpace(o.Model) == "" &&
-		strings.TrimSpace(o.PermissionMode) == ""
+		strings.TrimSpace(o.PermissionMode) == "" &&
+		o.FastMode == nil
 }
 
 // extraArgsFor returns the additional CLI args that apply the override for
@@ -181,7 +188,7 @@ func (o SpawnOverride) effectiveEffort(assistant, adapterDefault string) string 
 func (o SpawnOverride) extraArgsForAdapter(adapter agents.Adapter) []string {
 	effort := strings.TrimSpace(o.ReasoningEffort)
 	model := strings.TrimSpace(o.Model)
-	if effort == "" && model == "" {
+	if effort == "" && model == "" && o.FastMode == nil {
 		return nil
 	}
 	var args []string
@@ -193,6 +200,17 @@ func (o SpawnOverride) extraArgsForAdapter(adapter agents.Adapter) []string {
 	if model != "" {
 		for _, tmpl := range adapter.ModelArgs {
 			args = append(args, strings.ReplaceAll(tmpl, "{model}", model))
+		}
+	}
+	// Fast mode (claude-only): expand {fast} → "true"/"false". Adapters with
+	// no FastModeArgs (codex/opencode/gemini) drop it — the range is empty.
+	if o.FastMode != nil {
+		fast := "false"
+		if *o.FastMode {
+			fast = "true"
+		}
+		for _, tmpl := range adapter.FastModeArgs {
+			args = append(args, strings.ReplaceAll(tmpl, "{fast}", fast))
 		}
 	}
 	return args

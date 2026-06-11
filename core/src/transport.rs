@@ -194,6 +194,12 @@ pub struct SpawnOverride {
     /// the broker as `permission_mode=` on the WS connect; the broker rewrites
     /// the agent argv accordingly (see broker override.go).
     pub permission_mode: Option<String>,
+    /// Claude-only "fast mode" toggle. None = unchanged (the normal connect
+    /// path, byte-identical argv to today). Some(true)/Some(false) ride to the
+    /// broker as `fast_mode=true` / `fast_mode=false` on the WS connect; the
+    /// broker appends `--settings '{"fastMode":...}'` to the claude argv (and
+    /// ignores it for every other adapter). See broker override.go.
+    pub fast_mode: Option<bool>,
 }
 
 /// Open a WebSocket session against the harness and spawn a worker that
@@ -617,6 +623,13 @@ fn build_initial_ws_url(
             raw.push_str("&permission_mode=");
             raw.push_str(&urlencode(mode));
         }
+    }
+    if let Some(fast) = override_.fast_mode {
+        raw.push_str(if fast {
+            "&fast_mode=true"
+        } else {
+            "&fast_mode=false"
+        });
     }
     Url::parse(&raw).map_err(|e| ConduitError::Connection(e.to_string()))
 }
@@ -1286,24 +1299,27 @@ mod tests {
                 model: Some("claude-sonnet-4-6".into()),
                 cwd: Some("/home/me/proj".into()),
                 permission_mode: Some("plan".into()),
+                fast_mode: Some(true),
             },
         )
         .unwrap();
         assert!(with_both.as_str().contains("reasoning_effort=high"));
         assert!(with_both.as_str().contains("model=claude-sonnet-4-6"));
         assert!(with_both.as_str().contains("permission_mode=plan"));
+        assert!(with_both.as_str().contains("fast_mode=true"));
         // cwd rides as a url-encoded query param.
         assert!(with_both.as_str().contains("cwd="));
         assert!(!with_both.as_str().contains("cwd=/home"));
 
         // No override: query is the plain assistant+token shape (no
-        // empty reasoning_effort=/model=/cwd=/permission_mode= leaks).
+        // empty reasoning_effort=/model=/cwd=/permission_mode=/fast_mode= leaks).
         let plain =
             build_initial_ws_url(&base, "s1", "claude", "tok", &SpawnOverride::default()).unwrap();
         assert!(!plain.as_str().contains("reasoning_effort"));
         assert!(!plain.as_str().contains("model="));
         assert!(!plain.as_str().contains("cwd="));
         assert!(!plain.as_str().contains("permission_mode"));
+        assert!(!plain.as_str().contains("fast_mode"));
 
         // Empty-string fields behave like None.
         let empties = build_initial_ws_url(
@@ -1316,6 +1332,7 @@ mod tests {
                 model: Some(String::new()),
                 cwd: Some(String::new()),
                 permission_mode: Some(String::new()),
+                fast_mode: None,
             },
         )
         .unwrap();
@@ -1323,6 +1340,21 @@ mod tests {
         assert!(!empties.as_str().contains("model="));
         assert!(!empties.as_str().contains("cwd="));
         assert!(!empties.as_str().contains("permission_mode"));
+        assert!(!empties.as_str().contains("fast_mode"));
+
+        // fast_mode=false rides explicitly as false (distinct from None).
+        let off = build_initial_ws_url(
+            &base,
+            "s1",
+            "claude",
+            "tok",
+            &SpawnOverride {
+                fast_mode: Some(false),
+                ..SpawnOverride::default()
+            },
+        )
+        .unwrap();
+        assert!(off.as_str().contains("fast_mode=false"));
     }
 
     #[test]

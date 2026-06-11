@@ -162,7 +162,7 @@ extension ConduitUI {
                         agentKind: kind,
                         agentTint: neon.agentTint(forAgent: kind),
                         initialPrompt: initialPrompt,
-                        onCreate: { cwd, model, effort, permissionMode, seedPrompt in
+                        onCreate: { cwd, model, effort, permissionMode, fastMode, seedPrompt in
                             // Part B: a "Set up agent harness" tap passes the
                             // bootstrap prompt as seedPrompt; otherwise fall
                             // back to the sheet's initialPrompt (voice transcript).
@@ -177,6 +177,7 @@ extension ConduitUI {
                                     reasoningEffort: effort,
                                     model: model,
                                     permissionMode: permissionMode,
+                                    fastMode: fastMode,
                                     initialPrompt: seed
                                 )
                             } else {
@@ -186,6 +187,7 @@ extension ConduitUI {
                                     reasoningEffort: effort,
                                     model: model,
                                     permissionMode: permissionMode,
+                                    fastMode: fastMode,
                                     initialPrompt: seed
                                 )
                             }
@@ -542,7 +544,7 @@ extension ConduitUI {
         /// default; "plan" = read-only planning), and an optional seed prompt
         /// override (Part B: the "Set up agent harness" bootstrap prompt; nil
         /// falls back to the sheet's own initialPrompt, e.g. a voice transcript).
-        let onCreate: (String?, String?, String?, String?, String?) -> Void
+        let onCreate: (String?, String?, String?, String?, Bool?, String?) -> Void
 
         @Environment(SessionStore.self) private var store
         @Environment(FeatureFlags.self) private var flags
@@ -574,12 +576,17 @@ extension ConduitUI {
         /// the app's current full-auto default — sent as nil so the spawn
         /// carries no override, identical to before this picker existed.
         @State private var permissionMode: String = ConduitUI.ForkOptions.autoMode
+        /// Claude-only "fast mode" toggle. Defaults OFF; only shown (and only
+        /// passed to onCreate) when the selected model advertises
+        /// `supportsFastMode`. Sent as nil otherwise so the start path is
+        /// byte-identical to before.
+        @State private var fastMode: Bool = false
 
         init(
             agentKind: String,
             agentTint: Color? = nil,
             initialPrompt: String? = nil,
-            onCreate: @escaping (String?, String?, String?, String?, String?) -> Void
+            onCreate: @escaping (String?, String?, String?, String?, Bool?, String?) -> Void
         ) {
             self.agentKind = agentKind
             self.agentTint = agentTint
@@ -652,6 +659,12 @@ extension ConduitUI {
 
         /// The agent mode to hand to onCreate: Auto (sentinel) maps to nil.
         private var selectedPermissionMode: String? { permissionMode.isEmpty ? nil : permissionMode }
+
+        /// The fast-mode toggle to hand to onCreate: nil unless the selected
+        /// model supports it, so an unsupported model never sends an override.
+        private var selectedFastMode: Bool? {
+            ConduitUI.ForkOptions.supportsFastMode(model, catalog: catalog) ? fastMode : nil
+        }
 
         var body: some View {
             ZStack {
@@ -771,20 +784,16 @@ extension ConduitUI {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if ConduitUI.ForkOptions.supportsFastMode(model, catalog: catalog) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 9, weight: .bold))
-                        Text("Fast mode available")
-                            .font(.system(size: 10, weight: .semibold))
+                    Toggle(isOn: $fastMode) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("Fast mode")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(Color.yellow)
                     }
-                    .foregroundStyle(Color.yellow)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule()
-                            .fill(Color.yellow.opacity(0.12))
-                            .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
-                    )
+                    .tint(Color.yellow)
                 }
             }
         }
@@ -888,7 +897,7 @@ extension ConduitUI {
                 VStack(spacing: 6) {
                     ForEach(Array(store.recentDirectories.prefix(3)), id: \.self) { path in
                         Button {
-                            onCreate(path, selectedModel, selectedEffort, selectedPermissionMode, nil)
+                            onCreate(path, selectedModel, selectedEffort, selectedPermissionMode, selectedFastMode, nil)
                         } label: {
                             ConduitUI.ListRow(
                                 icon: "clock.arrow.circlepath",
@@ -1006,7 +1015,7 @@ extension ConduitUI {
                     launchLine
                 }
                 Button {
-                    onCreate(listing?.path, selectedModel, selectedEffort, selectedPermissionMode, nil)
+                    onCreate(listing?.path, selectedModel, selectedEffort, selectedPermissionMode, selectedFastMode, nil)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
@@ -1027,7 +1036,7 @@ extension ConduitUI {
                 .opacity(listing == nil ? 0.5 : 1.0)
 
                 Button {
-                    onCreate(nil, selectedModel, selectedEffort, selectedPermissionMode, nil)
+                    onCreate(nil, selectedModel, selectedEffort, selectedPermissionMode, selectedFastMode, nil)
                 } label: {
                     Text("Start without a folder")
                         .font(neon.sans(13).weight(.medium))
@@ -1132,7 +1141,7 @@ extension ConduitUI {
             .onTapGesture {
                 onCreate(
                     listing?.path, selectedModel, selectedEffort,
-                    selectedPermissionMode, SessionStore.harnessBootstrapPrompt)
+                    selectedPermissionMode, selectedFastMode, SessionStore.harnessBootstrapPrompt)
             }
             .accessibilityIdentifier("ConduitDirectoryPicker.harnessChip")
         }

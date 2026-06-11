@@ -33,6 +33,11 @@ extension ConduitUI {
         /// the app's full-auto default — sent to forkSession as nil so the
         /// fork carries no permission override.
         @State private var permissionMode: String = ForkOptions.autoMode
+        /// Claude-only "fast mode" toggle. Defaults OFF; only shown (and only
+        /// sent to the fork) when the selected model advertises
+        /// `supportsFastMode`. nil-when-unsupported keeps the fork's override
+        /// absent so non-fast forks are byte-identical to before.
+        @State private var fastMode: Bool = false
 
         init(session: ProjectSession, currentEffort: String?) {
             self.session = session
@@ -109,20 +114,16 @@ extension ConduitUI {
                         }
                         .neonAccentTint()
                         if ForkOptions.supportsFastMode(model, catalog: catalog) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "bolt.fill")
-                                    .font(.system(size: 9, weight: .bold))
-                                Text("Fast mode available")
-                                    .font(.system(size: 10, weight: .semibold))
+                            Toggle(isOn: $fastMode) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 11, weight: .bold))
+                                    Text("Fast mode")
+                                        .font(.system(size: 13, weight: .semibold))
+                                }
+                                .foregroundStyle(Color.yellow)
                             }
-                            .foregroundStyle(Color.yellow)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(
-                                Capsule()
-                                    .fill(Color.yellow.opacity(0.12))
-                                    .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
-                            )
+                            .tint(Color.yellow)
                         }
                         Text(ForkOptions.modelDetail(model, catalog: catalog)
                             ?? "Default keeps the current model. Pick an alias to fork onto a different one.")
@@ -158,7 +159,10 @@ extension ConduitUI {
                                 sessionID: session.id,
                                 reasoningEffort: effort.isEmpty ? nil : effort,
                                 model: model.isEmpty ? nil : model,
-                                permissionMode: permissionMode.isEmpty ? nil : permissionMode
+                                permissionMode: permissionMode.isEmpty ? nil : permissionMode,
+                                // Only send the toggle when the model supports
+                                // it; otherwise leave the override absent.
+                                fastMode: ForkOptions.supportsFastMode(model, catalog: catalog) ? fastMode : nil
                             )
                             dismiss()
                         }

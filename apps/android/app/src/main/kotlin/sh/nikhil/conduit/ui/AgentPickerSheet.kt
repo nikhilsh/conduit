@@ -138,14 +138,14 @@ fun AgentPickerSheet(
                 store = store,
                 assistant = agent,
                 agentTint = neonAgentColor(agent, neon),
-                onCreate = { cwd, model, effort, permissionMode, seedPrompt ->
+                onCreate = { cwd, model, effort, permissionMode, fastMode, seedPrompt ->
                     val target = savedServers.firstOrNull { it.id == resolvedServerId }
                     if (target != null && target.endpoint != endpoint) {
                         // Session targeted at a different box: switch
                         // endpoint → connect → create.
-                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, initialPrompt = seedPrompt)
+                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = seedPrompt)
                     } else {
-                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, initialPrompt = seedPrompt)
+                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = seedPrompt)
                     }
                     onDismiss()
                 },
@@ -446,9 +446,11 @@ private fun DirectoryStep(
     store: SessionStore,
     assistant: String,
     agentTint: Color,
-    // cwd, model, effort, permissionMode, seedPrompt. seedPrompt is the Part B
-    // "Set up agent harness" bootstrap prompt (null on the normal start paths).
-    onCreate: (String?, String?, String?, String?, String?) -> Unit,
+    // cwd, model, effort, permissionMode, fastMode, seedPrompt. seedPrompt is
+    // the Part B "Set up agent harness" bootstrap prompt (null on the normal
+    // start paths). fastMode is the claude-only toggle (null = unsupported /
+    // no override).
+    onCreate: (String?, String?, String?, String?, Boolean?, String?) -> Unit,
 ) {
     val appearance = sh.nikhil.conduit.LocalAppearanceStore.current
     val useDial by appearance.newSessionEffortDial.collectAsState()
@@ -501,6 +503,10 @@ private fun DirectoryStep(
     // sentinel "" maps to null on the way to onCreate, mirroring model.
     var permissionMode by remember { mutableStateOf("") }
     val selectedMode = permissionMode.trim().ifEmpty { null }
+    // Claude-only "fast mode" toggle. Defaults OFF; only shown / only sent
+    // when the selected model supports it (null otherwise → no override).
+    var fastMode by remember { mutableStateOf(false) }
+    val selectedFastMode = if (forkModelSupportsFastMode(model, catalog)) fastMode else null
 
     LaunchedEffect(currentPath) {
         isLoading = true
@@ -547,6 +553,8 @@ private fun DirectoryStep(
                 model = model,
                 catalog = catalog,
                 onSelect = { model = it },
+                fastMode = fastMode,
+                onFastModeChange = { fastMode = it },
             )
 
             // Effort + Mode: side by side on a wide (tablet) modal, stacked
@@ -615,7 +623,7 @@ private fun DirectoryStep(
                 SectionLabel("Recent")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     recent.take(3).forEach { path ->
-                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode, null) })
+                        RecentRow(path = path, onTap = { onCreate(path, selectedModel, selectedEffort, selectedMode, selectedFastMode, null) })
                     }
                 }
             }
@@ -680,7 +688,7 @@ private fun DirectoryStep(
                     onTap = {
                         onCreate(
                             listing?.path, selectedModel, selectedEffort, selectedMode,
-                            SessionStore.HARNESS_BOOTSTRAP_PROMPT,
+                            selectedFastMode, SessionStore.HARNESS_BOOTSTRAP_PROMPT,
                         )
                     },
                     onDismiss = { harnessChipDismissed = true },
@@ -704,7 +712,7 @@ private fun DirectoryStep(
                 )
             }
             Button(
-                onClick = { onCreate(listing?.path, selectedModel, selectedEffort, selectedMode, null) },
+                onClick = { onCreate(listing?.path, selectedModel, selectedEffort, selectedMode, selectedFastMode, null) },
                 enabled = listing != null,
                 shape = RoundedCornerShape(14.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
@@ -717,7 +725,7 @@ private fun DirectoryStep(
                 Spacer(Modifier.width(8.dp))
                 Text("Use this folder", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
             }
-            TextButton(onClick = { onCreate(null, selectedModel, selectedEffort, selectedMode, null) }) {
+            TextButton(onClick = { onCreate(null, selectedModel, selectedEffort, selectedMode, selectedFastMode, null) }) {
                 Text(
                     "Start without a folder",
                     fontFamily = neon.sans,
@@ -795,6 +803,8 @@ private fun ModelPicker(
     model: String,
     catalog: List<sh.nikhil.conduit.SessionStore.AgentModel>?,
     onSelect: (String) -> Unit,
+    fastMode: Boolean,
+    onFastModeChange: (Boolean) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     val options = forkModelOptions(assistant, catalog)
@@ -853,9 +863,9 @@ private fun ModelPicker(
                 color = neon.textFaint,
             )
         }
-        // Fast-mode badge — yellow capsule with bolt icon, mirrors iOS picker.
+        // Fast-mode toggle — actionable when the selected model supports it.
         if (forkModelSupportsFastMode(model, catalog)) {
-            FastModeBadge()
+            FastModeToggle(checked = fastMode, onCheckedChange = onFastModeChange)
         }
     }
 }

@@ -1505,6 +1505,7 @@ final class SessionStore {
         reasoningEffort: String? = nil,
         model: String? = nil,
         permissionMode: String? = nil,
+        fastMode: Bool? = nil,
         initialPrompt: String? = nil
     ) {
         if let nextEndpoint {
@@ -1530,6 +1531,7 @@ final class SessionStore {
                     reasoningEffort: reasoningEffort,
                     model: model,
                     permissionMode: permissionMode,
+                    fastMode: fastMode,
                     initialPrompt: initialPrompt
                 )
             } catch {
@@ -1790,6 +1792,7 @@ final class SessionStore {
         reasoningEffort: String? = nil,
         model: String? = nil,
         permissionMode: String? = nil,
+        fastMode: Bool? = nil,
         initialPrompt: String? = nil
     ) {
         guard let client else { return }
@@ -1823,7 +1826,7 @@ final class SessionStore {
                 let pickedEffort = (trimmedEffort?.isEmpty == false) ? trimmedEffort : nil
                 let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
-                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode)
+                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode, fastMode: fastMode)
                 Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
                 // Funnel: first-ever session creation (no prior sessions on any launch).
                 if self.sessions.isEmpty {
@@ -3893,7 +3896,7 @@ final class SessionStore {
     /// (the broker falls back to the adapter default). Reasoning effort
     /// can't be changed mid-session — that's why this is a fork (new
     /// session), not a live switch.
-    func forkSession(sessionID: String, reasoningEffort: String? = nil, model: String? = nil, permissionMode: String? = nil) {
+    func forkSession(sessionID: String, reasoningEffort: String? = nil, model: String? = nil, permissionMode: String? = nil, fastMode: Bool? = nil) {
         guard let original = sessions.first(where: { $0.id == sessionID }) else { return }
         guard let client else { return }
         let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3906,7 +3909,8 @@ final class SessionStore {
                     reasoningEffort: reasoningEffort,
                     model: model,
                     cwd: nil,
-                    permissionMode: pickedMode
+                    permissionMode: pickedMode,
+                    fastMode: fastMode
                 )
                 let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."
                 try? await client.sendChat(sessionId: newID, msg: seed)

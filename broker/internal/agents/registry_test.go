@@ -131,6 +131,9 @@ chat_mode = "stream-json"
 	if len(a.ModelArgs) == 0 || a.ModelArgs[0] != "--model" {
 		t.Errorf("ModelArgs = %v, want [--model {model}]", a.ModelArgs)
 	}
+	if len(a.FastModeArgs) != 2 || a.FastModeArgs[0] != "--settings" || a.FastModeArgs[1] != `{"fastMode":{fast}}` {
+		t.Errorf("FastModeArgs = %v, want [--settings {\"fastMode\":{fast}}]", a.FastModeArgs)
+	}
 	if len(a.ResumeArgs) == 0 || a.ResumeArgs[0] != "--resume" {
 		t.Errorf("ResumeArgs = %v, want [--resume {session_id}]", a.ResumeArgs)
 	}
@@ -179,6 +182,10 @@ chat_mode = "codex-app-server"
 	}
 	if len(a.EffortArgs) == 0 || a.EffortArgs[0] != "-c" {
 		t.Errorf("EffortArgs = %v, want [-c model_reasoning_effort={effort}]", a.EffortArgs)
+	}
+	// codex has no fast-mode concept — the toggle must be a no-op.
+	if len(a.FastModeArgs) != 0 {
+		t.Errorf("FastModeArgs = %v, want [] (codex ignores fast mode)", a.FastModeArgs)
 	}
 	// codex resume is via protocol, not CLI args
 	if len(a.ResumeArgs) != 0 {
