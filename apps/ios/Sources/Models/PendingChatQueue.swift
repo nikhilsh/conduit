@@ -2,43 +2,67 @@ import Foundation
 
 /// One user chat message awaiting delivery to the agent.
 ///
-/// The shell appends an optimistic transcript echo (a `local-…`
+/// The shell appends an optimistic transcript echo (a `local-\u{2026}`
 /// `ConversationItem`) the instant the user hits send, then enqueues the
 /// same text here. The queue survives backgrounding and process death
-/// (persisted per-session), so a message typed during a reconnect window —
-/// or sent the moment the user backgrounds the app — is no longer lost.
+/// (persisted per-session), so a message typed during a reconnect window --
+/// or sent the moment the user backgrounds the app -- is no longer lost.
 ///
 /// `localID` ties the queue entry to its transcript echo: when delivery
-/// succeeds the shell flips that echo from `pending` → `done`; when it
+/// succeeds the shell flips that echo from `pending` -> `done`; when it
 /// ultimately fails it flips to `failed` with a retry affordance. Mirrors
 /// Android `PendingChat`.
+///
+/// `kind` distinguishes the entry's delivery context:
+///   - `normal`      = today's optimistic fire-and-deliver (NO turn active). UNCHANGED.
+///   - `queuedTurn`  = held because a turn is active; flush on turn-complete (claude;
+///                     also codex if not steered).
+///   - `steering`    = codex entry currently being injected into the running turn.
+///   - `retrying`    = a steer/send attempt failed; show "Retrying", offer the Steer button.
 struct PendingChat: Codable, Equatable {
-    /// The `local-…` id of the optimistic transcript echo this entry backs.
+    /// The `local-\u{2026}` id of the optimistic transcript echo this entry backs.
     let localID: String
     /// The raw message text to deliver (already slash-command-filtered).
     let message: String
     /// Broker-clock-anchored timestamp string of the echo (for ordering).
     let ts: String
-    /// Delivery attempts made so far. Drives the give-up → `failed` decision.
+    /// Delivery attempts made so far. Drives the give-up -> `failed` decision.
     var attempts: Int = 0
     /// Set once the entry has exhausted retries and is surfaced as failed.
     /// A failed entry stays in the queue (so the user can retry) but is NOT
     /// auto-flushed again until the user explicitly retries it.
     var failed: Bool = false
+    /// Delivery context for this entry (spec: status enum).
+    var kind: EntryKind = .normal
+
+    enum EntryKind: String, Codable, Equatable {
+        /// Normal optimistic fire-and-deliver (no active turn). Unchanged from #479.
+        case normal
+        /// Held because a turn is active; flush on turn-complete.
+        case queuedTurn
+        /// Codex entry currently being injected into the running turn via steer.
+        case steering
+        /// A steer/send attempt failed; offer the Steer button again.
+        case retrying
+    }
 }
 
 /// Pure, dependency-free state machine for the optimistic-send pending
-/// queue. Holds NO transport and NO clock — the shell injects delivery and
-/// persistence — so the queue/flush/ack/failure transitions are unit-
+/// queue. Holds NO transport and NO clock -- the shell injects delivery and
+/// persistence -- so the queue/flush/ack/failure transitions are unit-
 /// testable without a live WS. Mirrors Android `PendingChatQueue`.
 ///
-/// State lives in `bySession`. The shell drives it with four moves:
-///   1. `enqueue`  — on send, register the message as pending.
-///   2. `flushable(for:)` — when ready (connected + agent live), ask which
-///      entries to (re)attempt; the shell delivers each and reports back.
-///   3. `markDelivered` — the WS write succeeded → drop the entry (ack).
-///   4. `markAttemptFailed` — the WS write threw → bump attempts; past the
-///      cap the entry becomes `failed` (surfaced with retry).
+/// State lives in `bySession`. The shell drives it with these moves:
+///   1. `enqueue`              -- on send, register the message as pending.
+///   2. `enqueueForActiveTurn` -- on send-while-turn-active, mark as queuedTurn.
+///   3. `flushable(for:)`      -- when ready (connected + agent live), ask which
+///                               entries to (re)attempt; the shell delivers each.
+///   4. `flushOnTurnComplete`  -- on turn-end, return ONE queuedTurn entry.
+///   5. `markDelivered`        -- the WS write succeeded -> drop the entry (ack).
+///   6. `markAttemptFailed`    -- the WS write threw -> bump attempts; past the
+///                               cap the entry becomes `failed` (surfaced with retry).
+///   7. `markSteering`         -- set kind to .steering for a codex steer in-flight.
+///   8. `markRetrying`         -- a steer failed; set kind to .retrying for re-offer.
 struct PendingChatQueue: Equatable {
     /// Give up after this many delivery attempts and surface the entry as
     /// failed. Three covers a transient reconnect blip without spamming the
@@ -67,23 +91,53 @@ struct PendingChatQueue: Equatable {
         (bySession[sessionID] ?? []).contains { $0.localID == localID && $0.failed }
     }
 
-    /// Register a freshly-sent message as pending. Idempotent on `localID`.
+    /// Register a freshly-sent message as pending with kind `.normal`.
+    /// Idempotent on `localID`.
     mutating func enqueue(sessionID: String, localID: String, message: String, ts: String) {
         var list = bySession[sessionID] ?? []
         guard !list.contains(where: { $0.localID == localID }) else { return }
-        list.append(PendingChat(localID: localID, message: message, ts: ts))
+        list.append(PendingChat(localID: localID, message: message, ts: ts, kind: .normal))
         bySession[sessionID] = list
     }
 
-    /// Entries the shell should (re)attempt now: everything not yet marked
-    /// `failed`. A `failed` entry waits for an explicit `retry` before it
-    /// re-enters the flush set, so an unreachable box doesn't hammer the
-    /// agent on every foreground.
-    func flushable(for sessionID: String) -> [PendingChat] {
-        (bySession[sessionID] ?? []).filter { !$0.failed }
+    /// Register a freshly-sent message as pending with kind `.queuedTurn` (turn was
+    /// active when the user hit send). Idempotent on `localID`.
+    mutating func enqueueForActiveTurn(sessionID: String, localID: String, message: String, ts: String) {
+        var list = bySession[sessionID] ?? []
+        guard !list.contains(where: { $0.localID == localID }) else { return }
+        list.append(PendingChat(localID: localID, message: message, ts: ts, kind: .queuedTurn))
+        bySession[sessionID] = list
     }
 
-    /// The WS write for `localID` succeeded — drop it from the queue (ack).
+    /// Entries the shell should (re)attempt now: `normal` entries not yet
+    /// `failed`. `.queuedTurn`, `.steering`, and `.retrying` entries are
+    /// NOT returned here -- they are flushed via `flushOnTurnComplete` or
+    /// re-steered explicitly. This preserves #479: a `normal` entry still
+    /// flushes on connect/foreground/reconnect exactly as before.
+    func flushable(for sessionID: String) -> [PendingChat] {
+        (bySession[sessionID] ?? []).filter { $0.kind == .normal && !$0.failed }
+    }
+
+    /// Queued-turn entries visible in the "Queued Next" panel: all entries
+    /// whose kind is `.queuedTurn`, `.steering`, or `.retrying`.
+    func queuedTurnEntries(for sessionID: String) -> [PendingChat] {
+        (bySession[sessionID] ?? []).filter {
+            $0.kind == .queuedTurn || $0.kind == .steering || $0.kind == .retrying
+        }
+    }
+
+    /// On turn-complete: return the OLDEST `.queuedTurn` or `.retrying`
+    /// entry for the session (not a `.steering` one -- that is already
+    /// in-flight). Returns nil when there is nothing queued. The caller
+    /// delivers the returned entry via the normal send path; remaining
+    /// entries stay queued for the NEXT turn-complete (natural serialization).
+    func flushOnTurnComplete(sessionID: String) -> PendingChat? {
+        (bySession[sessionID] ?? []).first {
+            $0.kind == .queuedTurn || $0.kind == .retrying
+        }
+    }
+
+    /// The WS write for `localID` succeeded -- drop it from the queue (ack).
     /// The shell flips the transcript echo to `done`.
     mutating func markDelivered(sessionID: String, localID: String) {
         guard var list = bySession[sessionID] else { return }
@@ -106,7 +160,24 @@ struct PendingChatQueue: Equatable {
         return crossed
     }
 
-    /// User tapped retry on a failed entry — clear the failed flag and reset
+    /// Mark a codex entry as in-flight steer (kind -> `.steering`).
+    mutating func markSteering(sessionID: String, localID: String) {
+        guard var list = bySession[sessionID],
+              let idx = list.firstIndex(where: { $0.localID == localID }) else { return }
+        list[idx].kind = .steering
+        bySession[sessionID] = list
+    }
+
+    /// A steer attempt failed -- revert to `.retrying` so the panel shows
+    /// "Retrying" and offers the Steer button again.
+    mutating func markRetrying(sessionID: String, localID: String) {
+        guard var list = bySession[sessionID],
+              let idx = list.firstIndex(where: { $0.localID == localID }) else { return }
+        list[idx].kind = .retrying
+        bySession[sessionID] = list
+    }
+
+    /// User tapped retry on a failed entry -- clear the failed flag and reset
     /// attempts so the next `flushable` picks it up again.
     mutating func retry(sessionID: String, localID: String) {
         guard var list = bySession[sessionID],
