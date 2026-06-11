@@ -1,0 +1,34 @@
+name                = "gemini"
+command             = ["gemini"]
+args                = ["--acp"]                     # ACP JSON-RPC over stdio (the backend drives the handshake)
+# gemini reads provider creds from ~/.gemini; an API key (GEMINI_API_KEY) is the
+# alternative to the materialized Google-OAuth credentials.
+env_passthrough     = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+workdir             = "/workspace"
+
+# --- Phase 1: manifest-driven fields (WS-1.1) ---
+protocol            = "acp"                         # new protocol family — ACP backend dispatch key (backend_acp.go)
+# ~/.gemini holds settings + OAuth creds; resolved under the session's
+# ephemeral $HOME.
+config_dir          = ".gemini"
+cred_files          = [".gemini/gemini-credentials.json", ".gemini/google_accounts.json"]
+# session/load resumes a prior session by id (gated by the agent's loadSession
+# capability); no CLI flag, no separate data_dir store.
+resume_args         = []
+continue_args       = []
+# Model + effort/mode are PROTOCOL-LEVEL in ACP (model from session/new,
+# mode via session/set_mode) — NOT argv flags. The backend reads the
+# conduit override and applies it over the wire, so these templates are empty
+# (the codex/opencode posture for non-argv model/effort).
+model_args          = []
+effort_args         = []
+login_provider      = "google"
+
+# Plan mode is protocol-level in ACP (session/set_mode "plan"), not an argv
+# rewrite. This rule exists so the per-assistant descriptor reports
+# plan_mode=true (AgentDescriptors keys off PermissionModes["plan"]); the
+# backend applies the mode via the wire, so the drop/add args are intentionally
+# empty no-ops.
+[permission_modes.plan]
+drop_args = []
+add_args  = []
