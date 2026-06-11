@@ -366,6 +366,7 @@ done
 		nil,
 		"",
 		func(id string) { threads <- id },
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("newCodexAppServerProcess: %v", err)
@@ -498,6 +499,7 @@ done
 		nil,
 		"",
 		func(id string) { threads <- id },
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("newCodexAppServerProcess: %v", err)

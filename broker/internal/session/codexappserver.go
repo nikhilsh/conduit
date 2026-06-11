@@ -165,6 +165,28 @@ type codexAppServerProcess struct {
 	// item/fileChange/requestApproval — which carries ONLY the itemId — can join
 	// to it and render the real path/diff. Reset at turn end. Guarded by c.mu.
 	lastFileChange *codexFileChangeItem
+
+	// --- codex multi-agent / sub-agent tracking ---
+
+	// subagentH is the session-level roster handle (borrows Session.mu + the
+	// subagentRegistry). Set once at construction; nil on the exec-path fallback
+	// and in unit tests that don't need roster output. All roster mutations go
+	// through this handle — never touch the registry directly.
+	subagentH *subagentRegistryHandle
+	// subThreads is the set of threadIds that are known sub-agent threads (the
+	// values are the sub-agent threadIds, populated when item/completed carries
+	// a spawnAgent with non-empty receiverThreadIds). Guarded by c.mu.
+	// A notification whose params.threadId is in this set belongs to a
+	// sub-agent and must NOT drive parent chat events or turn lifecycle.
+	subThreads map[string]bool
+	// spawnPending maps a spawnAgent call id (item.id from item/started) to
+	// the prompt string, so when item/completed arrives we can pick up the
+	// prompt for the roster node's description. Guarded by c.mu.
+	spawnPending map[string]string
+	// subagentTokens is a snapshot of the most-recently-seen token count per
+	// sub-agent threadId, so roster nodes show tokens even before turn/completed.
+	// Guarded by c.mu.
+	subagentTokens map[string]uint64
 }
 
 // setTurnHook installs the AI-niceties turn-end callback (titles + quick
@@ -220,7 +242,7 @@ const codexTurnSilenceTimeout = 10 * time.Minute
 // error) so the session lifecycle stays identical to the exec path — except a
 // hard spawn failure (binary missing) returns the error so the caller can fall
 // back. Errors are surfaced to chat via publishChatSystem.
-func newCodexAppServerProcess(binary, dir string, env []string, override SpawnOverride, publish func([]byte), onUsage func(usageDelta), seedThreadID string, onThread func(string)) (*codexAppServerProcess, error) {
+func newCodexAppServerProcess(binary, dir string, env []string, override SpawnOverride, publish func([]byte), onUsage func(usageDelta), seedThreadID string, onThread func(string), subagentH *subagentRegistryHandle) (*codexAppServerProcess, error) {
 	c := &codexAppServerProcess{
 		binary:   binary,
 		dir:      dir,
@@ -236,6 +258,10 @@ func newCodexAppServerProcess(binary, dir string, env []string, override SpawnOv
 		// reader's turn-response correlation can't alias a handshake response.
 		nextID:         2,
 		silenceTimeout: codexTurnSilenceTimeout,
+		subagentH:      subagentH,
+		subThreads:     make(map[string]bool),
+		spawnPending:   make(map[string]string),
+		subagentTokens: make(map[string]uint64),
 	}
 	if err := c.spawn(); err != nil {
 		return nil, err
@@ -658,12 +684,36 @@ func (c *codexAppServerProcess) readLoop(stdout io.Reader, resp chan<- json.RawM
 // for thread/tokenUsage/updated, and turn lifecycle (turn/completed, the
 // `error` notification, thread/status/changed). Any notification arriving for
 // an active turn counts as activity and pushes the silence watchdog out.
+//
+// threadId FILTER: notifications that carry a params.threadId that is NOT the
+// parent thread (c.threadID) belong to a sub-agent thread and are routed to
+// handleSubagentNotification instead of the parent chat path. This prevents
+// sub-agent agentMessage deltas from leaking into the main chat and prevents
+// a sub-agent turn/completed from prematurely ending the parent turn.
+// Notifications without a params.threadId (thread/started, configWarning,
+// mcpServer/*, etc.) are always handled on the parent path.
 func (c *codexAppServerProcess) handleNotification(method string, params json.RawMessage) {
 	c.mu.Lock()
 	if c.turnActive {
 		c.lastActivity = claudeChatNow()
 	}
+	parentThreadID := c.threadID
 	c.mu.Unlock()
+
+	// Route by threadId: if the notification carries a threadId that does NOT
+	// match the parent, it belongs to a sub-agent. Notifications without a
+	// threadId (thread/started, configWarning, mcpServer/*, etc.) always go
+	// to the parent path.
+	notifThreadID := codexNotificationThreadID(params)
+	if notifThreadID != "" && notifThreadID != parentThreadID {
+		// Check whether this is a KNOWN sub-agent thread, or an item/started|
+		// completed on a collabAgentToolCall that we need to process to learn
+		// about the sub-agent. Either way, route sub-agent notifications here.
+		c.handleSubagentOrCollabNotification(method, params, notifThreadID, parentThreadID)
+		return
+	}
+
+	// --- parent-thread path (unchanged behavior) ---
 
 	switch method {
 	case "thread/started":
@@ -690,20 +740,34 @@ func (c *codexAppServerProcess) handleNotification(method string, params json.Ra
 			}
 		}
 	case "item/started":
-		// Stash a fileChange item's path/diff so a following
-		// item/fileChange/requestApproval (which carries only the itemId) can
-		// join to it and render the real change. Other item/started kinds are
-		// nothing to render here.
-		if fc, ok := parseCodexFileChangeItem(params); ok {
+		// Detect collabAgentToolCall spawnAgent on item/started: stash the
+		// call id → prompt for correlation when item/completed provides the
+		// receiverThreadIds. Non-collab item/started types may still stash a
+		// fileChange item.
+		if collab, ok := codexParseCollabItem(params); ok && collab.Tool == "spawnAgent" {
+			c.mu.Lock()
+			c.spawnPending[collab.CallID] = collab.Prompt
+			c.mu.Unlock()
+			fmt.Fprintf(os.Stderr, "codex app-server: spawnAgent started (call %s, prompt %.40q)\n", collab.CallID, collab.Prompt)
+		} else if fc, ok := parseCodexFileChangeItem(params); ok {
+			// Stash a fileChange item's path/diff so a following
+			// item/fileChange/requestApproval (which carries only the itemId) can
+			// join to it and render the real change.
 			c.mu.Lock()
 			cp := fc
 			c.lastFileChange = &cp
 			c.mu.Unlock()
 		}
 	case "item/agentMessage/delta", "item/completed":
-		// item/completed for a fileChange also refreshes the stashed change
-		// (the completed item carries the final diff).
+		// On item/completed: detect collabAgentToolCall spawnAgent completion to
+		// register the new sub-agent thread. Also refresh the fileChange stash.
 		if method == "item/completed" {
+			if collab, ok := codexParseCollabItem(params); ok && collab.Tool == "spawnAgent" && len(collab.ReceiverThreadIDs) > 0 {
+				c.handleCollabSpawnCompleted(collab)
+				// Don't fall through to codexNotificationToEvent for a
+				// collabAgentToolCall — it's not a renderable chat item.
+				return
+			}
 			if fc, ok := parseCodexFileChangeItem(params); ok {
 				c.mu.Lock()
 				cp := fc
@@ -745,8 +809,145 @@ func (c *codexAppServerProcess) handleNotification(method string, params json.Ra
 			c.endTurn()
 		}
 	default:
-		// item/started, turn/started, account/rateLimits/updated,
-		// configWarning, mcpServer/*, etc. Nothing to render.
+		// account/rateLimits/updated, configWarning, mcpServer/*, etc.
+		// Nothing to render.
+	}
+}
+
+// handleCollabSpawnCompleted registers a newly-spawned sub-agent thread when
+// a spawnAgent item/completed arrives with a non-empty receiverThreadIds.
+// It creates the initial roster node (status="working") and emits the first
+// view_event(agents) snapshot. Called under the parent-thread path only.
+func (c *codexAppServerProcess) handleCollabSpawnCompleted(collab codexCollabSpawnEvent) {
+	subThreadID := collab.ReceiverThreadIDs[0]
+
+	c.mu.Lock()
+	// Drain the pending prompt that was stashed on item/started.
+	prompt := collab.Prompt
+	if stored, ok := c.spawnPending[collab.CallID]; ok {
+		if stored != "" {
+			prompt = stored
+		}
+		delete(c.spawnPending, collab.CallID)
+	}
+	// Register as a known sub-agent thread so future notifications are routed
+	// to the roster path and not the parent chat path.
+	c.subThreads[subThreadID] = true
+	c.mu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "codex app-server: sub-agent spawned (thread %s, prompt %.40q)\n", subThreadID, prompt)
+
+	if c.subagentH == nil {
+		return
+	}
+	name := codexSubagentNameFromPrompt(prompt, subThreadID)
+	ev := subagentTaskEvent{
+		Subtype:      "task_started",
+		TaskID:       subThreadID,
+		SubagentType: name,
+		Description:  prompt,
+	}
+	c.subagentH.onTaskEvent(ev)
+}
+
+// handleSubagentOrCollabNotification routes notifications whose threadId does
+// NOT match the parent thread. Two categories:
+//
+//  1. Notifications on the PARENT thread that are part of collab mechanics
+//     (item/started for spawnAgent when receiverThreadIds is still empty) —
+//     these carry the parent threadId so they were already handled above, but
+//     any new collab type we didn't expect lands here safely as a no-op.
+//
+//  2. Notifications on a KNOWN sub-agent thread — update the roster node and
+//     emit an updated view_event(agents) snapshot.
+//
+// This function must NEVER drive parent turn lifecycle (endTurn / failTurn) or
+// emit parent chat events — those are parent-only concerns.
+func (c *codexAppServerProcess) handleSubagentOrCollabNotification(method string, params json.RawMessage, notifThreadID, parentThreadID string) {
+	c.mu.Lock()
+	isKnownSubThread := c.subThreads[notifThreadID]
+	c.mu.Unlock()
+
+	if !isKnownSubThread {
+		// A notification for a thread we don't know about yet. This can happen
+		// for thread/status/changed (the idle→active transition) that arrives
+		// BEFORE the spawnAgent item/completed that registers the thread id.
+		// Log and ignore — once item/completed fires, the sub-agent is
+		// registered and subsequent notifications will be routed correctly.
+		fmt.Fprintf(os.Stderr, "codex app-server: notification %q for unknown thread %s (not yet registered as sub-agent)\n", method, notifThreadID)
+		return
+	}
+
+	if c.subagentH == nil {
+		return
+	}
+
+	// Route sub-agent thread notifications to roster updates.
+	switch method {
+	case "thread/tokenUsage/updated":
+		toks := codexSubagentLastTokens(params)
+		if toks == 0 {
+			return
+		}
+		c.mu.Lock()
+		c.subagentTokens[notifThreadID] = toks
+		c.mu.Unlock()
+		ev := subagentTaskEvent{
+			Subtype: "task_progress",
+			TaskID:  notifThreadID,
+			Usage: subagentUsage{
+				TotalTokens: toks,
+			},
+		}
+		c.subagentH.onTaskEvent(ev)
+
+	case "turn/completed":
+		// Sub-agent's OWN turn/completed — update duration + final status.
+		// Must NOT drive the parent turn lifecycle.
+		turnStatus := codexSubagentTurnStatus(params)
+		durationMS := codexSubagentTurnDurationMS(params)
+		rosterStatus := codexTurnStatusToRoster(turnStatus)
+		c.mu.Lock()
+		toks := c.subagentTokens[notifThreadID]
+		c.mu.Unlock()
+		ev := subagentTaskEvent{
+			Subtype: "task_notification",
+			TaskID:  notifThreadID,
+			Status:  turnStatus,
+			Usage: subagentUsage{
+				TotalTokens: toks,
+				DurationMS:  durationMS,
+			},
+		}
+		// task_notification maps "completed"/"failed" to the roster; default
+		// "done" for other statuses (interrupted, etc.).
+		if rosterStatus == "failed" {
+			ev.Status = "failed"
+		} else {
+			ev.Status = "completed"
+		}
+		fmt.Fprintf(os.Stderr, "codex app-server: sub-agent %s turn completed (status=%q, durationMs=%d)\n", notifThreadID, turnStatus, durationMS)
+		c.subagentH.onTaskEvent(ev)
+
+	case "thread/status/changed":
+		// Map CollabAgentStatus → roster. Running/idle → "working" (the
+		// turn_completed above handles the terminal done/failed). Only
+		// explicitly terminal statuses update the roster here.
+		statusType := codexThreadStatusType(params)
+		switch statusType {
+		case "systemError":
+			ev := subagentTaskEvent{
+				Subtype: "task_notification",
+				TaskID:  notifThreadID,
+				Status:  "failed",
+			}
+			c.subagentH.onTaskEvent(ev)
+		}
+		// idle, active → no roster update (turn/completed will follow).
+
+	default:
+		// item/agentMessage/delta, item/completed, item/started, turn/started, etc.
+		// on the sub-agent thread — NOT rendered in the parent chat.
 	}
 }
 

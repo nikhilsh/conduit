@@ -357,6 +357,7 @@ func TestCodexUserInputIntegration(t *testing.T) {
 		fake, dir, nil, SpawnOverride{},
 		func(p []byte) { events <- p },
 		nil, "", func(string) {},
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("construct: %v", err)
@@ -429,6 +430,7 @@ func TestCodexElicitationIntegration(t *testing.T) {
 		fake, dir, nil, SpawnOverride{},
 		func(p []byte) { events <- p },
 		nil, "", func(string) {},
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("construct: %v", err)

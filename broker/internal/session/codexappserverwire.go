@@ -1007,3 +1007,180 @@ func codexRPCErrorCode(errRaw json.RawMessage) int {
 // turn/steer is sent after the active turn has already completed.
 // Confirmed live (codex-cli 0.132.0): {"code":-32600,"message":"no active turn to steer"}.
 const codexSteerNoActiveTurnCode = -32600
+
+// ---- codex multi-agent / sub-agent wire helpers ----
+
+// codexNotificationThreadID lifts the top-level params.threadId field present
+// on all turn/item/thread-status notifications (but NOT thread/started, which
+// puts the id inside params.thread.id). Returns "" when absent.
+func codexNotificationThreadID(params json.RawMessage) string {
+	var p struct {
+		ThreadID string `json:"threadId"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return ""
+	}
+	return p.ThreadID
+}
+
+// codexCollabSpawnEvent is extracted from an item/started or item/completed
+// notification whose item.type == "collabAgentToolCall". It captures the
+// fields the sub-agent roster needs.
+type codexCollabSpawnEvent struct {
+	// CallID is item.id — used to correlate item/started → item/completed for
+	// the same spawn call (the receiverThreadIds is only populated on completed).
+	CallID string
+	// Tool is item.tool (spawnAgent / sendInput / resumeAgent / wait / closeAgent).
+	Tool string
+	// Prompt is item.prompt — used as the sub-agent description.
+	Prompt string
+	// ReceiverThreadIDs is item.receiverThreadIds — the spawned sub-agent's
+	// threadId (populated on spawnAgent/completed, empty on started).
+	ReceiverThreadIDs []string
+	// Status is item.status (inProgress / completed / failed).
+	Status string
+	// AgentsStates is item.agentsStates — optional per-thread status map.
+	AgentsStates map[string]codexCollabAgentState
+}
+
+// codexCollabAgentState is the per-thread entry in item.agentsStates.
+type codexCollabAgentState struct {
+	Status  string  `json:"status"`
+	Message *string `json:"message"`
+}
+
+// codexParseCollabItem attempts to parse an item/started or item/completed
+// notification as a collabAgentToolCall frame. Returns (event, true) only when
+// item.type == "collabAgentToolCall"; all other item types return (_, false).
+func codexParseCollabItem(params json.RawMessage) (codexCollabSpawnEvent, bool) {
+	var p struct {
+		Item struct {
+			Type              string                           `json:"type"`
+			ID                string                           `json:"id"`
+			Tool              string                           `json:"tool"`
+			Status            string                           `json:"status"`
+			Prompt            *string                          `json:"prompt"`
+			ReceiverThreadIDs []string                         `json:"receiverThreadIds"`
+			AgentsStates      map[string]codexCollabAgentState `json:"agentsStates"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return codexCollabSpawnEvent{}, false
+	}
+	if p.Item.Type != "collabAgentToolCall" {
+		return codexCollabSpawnEvent{}, false
+	}
+	var prompt string
+	if p.Item.Prompt != nil {
+		prompt = *p.Item.Prompt
+	}
+	return codexCollabSpawnEvent{
+		CallID:            p.Item.ID,
+		Tool:              p.Item.Tool,
+		Prompt:            prompt,
+		ReceiverThreadIDs: p.Item.ReceiverThreadIDs,
+		Status:            p.Item.Status,
+		AgentsStates:      p.Item.AgentsStates,
+	}, true
+}
+
+// codexSubagentTurnDurationMS extracts the turn.durationMs field from a
+// turn/completed notification, used to update the sub-agent roster node's
+// duration_ms. Returns 0 when absent or the turn is not completed.
+func codexSubagentTurnDurationMS(params json.RawMessage) uint64 {
+	var p struct {
+		Turn struct {
+			DurationMs *uint64 `json:"durationMs"`
+			Status     string  `json:"status"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return 0
+	}
+	if p.Turn.DurationMs == nil {
+		return 0
+	}
+	return *p.Turn.DurationMs
+}
+
+// codexSubagentTurnStatus extracts the turn.status from a turn/completed
+// notification: "completed" | "interrupted" | "failed" | "inProgress".
+func codexSubagentTurnStatus(params json.RawMessage) string {
+	var p struct {
+		Turn struct {
+			Status string `json:"status"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return ""
+	}
+	return p.Turn.Status
+}
+
+// codexSubagentLastTokens extracts the thread/tokenUsage/updated `last`
+// breakdown's totalTokens for sub-agent roster token tracking. Using `last`
+// (not cumulative `total`) matches the existing per-turn token-gauge fix in
+// codexUsageFromNotification.
+func codexSubagentLastTokens(params json.RawMessage) uint64 {
+	var p struct {
+		TokenUsage struct {
+			Last struct {
+				TotalTokens uint64 `json:"totalTokens"`
+			} `json:"last"`
+		} `json:"tokenUsage"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return 0
+	}
+	return p.TokenUsage.Last.TotalTokens
+}
+
+// codexSubagentNameFromPrompt derives a short display label from the prompt
+// text the parent sent to spawnAgent. It returns the first non-empty line of
+// the prompt capped at 40 characters, falling back to "agent "+last6(threadID)
+// when the prompt is empty or whitespace-only.
+func codexSubagentNameFromPrompt(prompt, threadID string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 40 {
+			return line[:40]
+		}
+		return line
+	}
+	// Fallback: "agent " + last 6 chars of threadId.
+	if len(threadID) >= 6 {
+		return "agent " + threadID[len(threadID)-6:]
+	}
+	return "agent"
+}
+
+// codexCollabStatusToRoster maps a CollabAgentStatus string (from
+// agentsStates or thread/status/changed) to the roster node status
+// ("working" | "done" | "failed").
+func codexCollabStatusToRoster(collabStatus string) string {
+	switch collabStatus {
+	case "completed", "shutdown":
+		return "done"
+	case "errored", "interrupted", "notFound":
+		return "failed"
+	default:
+		// pendingInit, running → "working"
+		return "working"
+	}
+}
+
+// codexTurnStatusToRoster maps a TurnStatus string from a turn/completed
+// notification to a roster status.
+func codexTurnStatusToRoster(turnStatus string) string {
+	switch turnStatus {
+	case "completed":
+		return "done"
+	case "failed":
+		return "failed"
+	default:
+		return "done"
+	}
+}

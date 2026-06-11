@@ -292,6 +292,7 @@ func TestCodexApprovalAcceptIntegration(t *testing.T) {
 		fake, dir, nil, SpawnOverride{},
 		func(p []byte) { events <- p },
 		nil, "", func(string) {},
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("construct: %v", err)
@@ -345,6 +346,7 @@ func TestCodexApprovalDenyIntegration(t *testing.T) {
 		fake, dir, nil, SpawnOverride{},
 		func(p []byte) { events <- p },
 		nil, "", func(string) {},
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("construct: %v", err)
@@ -412,6 +414,7 @@ func TestCodexApprovalDenyDeclineIntegration(t *testing.T) {
 		fake, dir, nil, SpawnOverride{},
 		func(p []byte) { events <- p },
 		nil, "", func(string) {},
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("construct: %v", err)
@@ -448,6 +451,7 @@ func TestCodexApprovalTimeoutDenies(t *testing.T) {
 		fake, dir, nil, SpawnOverride{},
 		func(p []byte) { events <- p },
 		nil, "", func(string) {},
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("construct: %v", err)

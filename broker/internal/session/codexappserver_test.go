@@ -324,6 +324,7 @@ done
 		func(u usageDelta) { usages <- u },
 		"", // no seed → thread/start
 		func(id string) { threads <- id },
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("newCodexAppServerProcess: %v", err)
@@ -389,7 +390,7 @@ done
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake: %v", err)
 	}
-	proc, err := newCodexAppServerProcess(fake, dir, nil, SpawnOverride{}, func([]byte) {}, nil, "", func(string) {})
+	proc, err := newCodexAppServerProcess(fake, dir, nil, SpawnOverride{}, func([]byte) {}, nil, "", func(string) {}, nil)
 	if err != nil {
 		t.Fatalf("construct: %v", err)
 	}
