@@ -98,6 +98,12 @@ func (s *Session) StatusPayload() map[string]any {
 		if o.HasPR {
 			payload["pr_number"] = o.PRNumber
 			payload["pr_state"] = o.PRState
+			if o.PRURL != "" {
+				payload["pr_url"] = o.PRURL
+			}
+			if o.PRProvider != "" {
+				payload["pr_provider"] = o.PRProvider
+			}
 		}
 	}
 	if a := s.AccountUsage(); a.HasUsage {

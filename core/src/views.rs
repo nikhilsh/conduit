@@ -116,6 +116,14 @@ pub struct SessionStatus {
     /// PR lifecycle state — "open" | "draft" | "merged" | "closed".
     #[serde(default)]
     pub pr_state: Option<String>,
+    /// Web URL of the PR/MR (e.g. https://github.com/org/repo/pull/123).
+    /// `None` when no PR/MR is associated or the broker hasn't fetched it yet.
+    #[serde(default)]
+    pub pr_url: Option<String>,
+    /// Provider that owns the PR/MR — "github" | "gitlab" | "".
+    /// Derived from the workspace's git remote.
+    #[serde(default)]
+    pub pr_provider: Option<String>,
     /// Account-level Claude SUBSCRIPTION usage (the on-demand /usage feature):
     /// the 5-hour rolling window and the weekly (7-day) window utilization, as
     /// a percentage 0–100, plus each window's ISO-8601 reset instant. Distinct

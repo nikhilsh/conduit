@@ -132,6 +132,8 @@ type Session struct {
 	outcomeCommits      int
 	outcomePRNumber     int
 	outcomePRState      string
+	outcomePRURL        string // web URL of the PR/MR (pr_url in status frame)
+	outcomePRProvider   string // "github" | "gitlab" | ""
 	outcomeGitAt        time.Time
 	outcomePRAt         time.Time
 	// Account-level subscription usage (5-hour + weekly windows) — the data
