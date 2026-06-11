@@ -83,7 +83,7 @@ extension ConduitUI {
                     Telemetry.breadcrumb(
                         "pr_link",
                         "tapped PR chip",
-                        ["pr_number": "\(prNumber ?? 0)", "pr_state": prState ?? ""]
+                        data: ["pr_number": "\(prNumber ?? 0)", "pr_state": prState ?? ""]
                     )
                     openURL(url)
                 } label: {
