@@ -149,23 +149,104 @@ response arrives. The broker mirrors claude's `askcontrol.go` policy: on
 timeout, session close, or a lost client, respond `cancel` (deny) so the turn
 unwedges rather than hanging forever.
 
-## Generic question / elicitation (probed, not the primary path)
+## File-change approval (`item/fileChange/requestApproval`) — LIVE-CAPTURED
 
-Two server→client requests are the codex analogues of claude's AskUserQuestion
-"choice" card, distinct from a command approval. Neither fired during ordinary
-shell-command turns (they require specific tool / MCP-server conditions to
-trigger), so the shapes below are from the JSON Schema, not a live capture:
+A file edit needs approval. Trigger live: `thread/start` with
+`approvalPolicy:"on-request"` + `sandbox:"read-only"`, then a turn that edits an
+existing file (e.g. "append a line to notes.txt with apply_patch"). The write
+escalates past read-only and prompts.
+
+**Verbatim request (codex-cli 0.132.0):**
+
+```
+S->C {"method":"item/started","params":{"item":{"type":"fileChange","id":"call_Xpd…","changes":[{"path":"/tmp/w/notes.txt","kind":{"type":"update","move_path":null},"diff":"@@ -2 +2,2 @@\n this is a seed file\n+GOODBYE\n"}],"status":"inProgress"},"threadId":"019eb43d-…","turnId":"019eb43d-…","startedAtMs":1781140384431}}
+S->C {"method":"item/fileChange/requestApproval","id":0,"params":{"threadId":"019eb43d-5099-…","turnId":"019eb43d-511c-…","itemId":"call_XpdYgBBNHRXxKymuVa1GTgaA","startedAtMs":1781140384431,"reason":null,"grantRoot":null}}
+C->S {"id":0,"result":{"decision":"accept"}}   # (or "decline")
+S->C {"method":"turn/completed","params":{"turn":{"status":"completed", …}}}
+```
+
+**CRITICAL — the approval params carry NO diff/path.** Unlike the
+command-execution approval (which inlines `command`/`cwd`), the
+`FileChangeRequestApprovalParams` is just
+`{itemId, startedAtMs, threadId, turnId, reason?, grantRoot?}`. The actual change
+(path + unified diff) lives in the **preceding `fileChange` item**
+(`item/started` then `item/completed`, `item.type=="fileChange"`), correlated by
+**`itemId == item.id`**. The broker stashes the most recent fileChange item
+(`lastFileChange`) and joins it to the approval request to render a card with the
+real path. (The raw diff is deliberately NOT embedded in the card body — core's
+`extract_pending_options` would mis-read `- …` diff lines as bullet options.)
+
+**Response shape** (`FileChangeRequestApprovalResponse`):
+
+```json
+{"id": <echo>, "result": {"decision": <FileChangeApprovalDecision>}}
+```
+
+`FileChangeApprovalDecision` = `accept` / `acceptForSession` / `decline` /
+`cancel` (string-only; no execpolicy variants). Unlike command-execution, the
+request omits `availableDecisions`, but `decline` is ALWAYS valid for a file
+change — **live-verified**: `{"decision":"decline"}` → the change is blocked and
+the turn **continues** (`turn/completed` status `completed`). The broker therefore
+maps a denied fileChange → `decline` (turn continues), never `cancel`. Timeout /
+disconnect / close → `cancel` (the turn can't continue).
+
+## Generic question / elicitation (schema-captured, not the primary path)
+
+Two more server→client requests are the codex analogues of claude's
+AskUserQuestion "choice" card, distinct from a command/file approval. Neither
+fired during ordinary turns on this box: `item/tool/requestUserInput` is an
+EXPERIMENTAL tool the model invokes only under specific app/MCP conditions (it is
+NOT a togglable `experimentalFeature/list` entry — verified: no such feature in
+0.132's list), and `mcpServer/elicitation/request` needs an MCP server that
+elicits input. So the shapes below are from `codex app-server
+generate-json-schema` (0.132.0), not a live capture. The broker handles both
+(table-tested with the captured frames + stub-driven integration tests):
 
 - **`item/tool/requestUserInput`** (EXPERIMENTAL) —
   `ToolRequestUserInputParams {itemId, threadId, turnId, questions[]}` where each
   question is `{id, header, question, options?:[{label,description}], isOther?, isSecret?}`.
-  Response: `ToolRequestUserInputResponse {answers}`. This is the closest twin of
-  AskUserQuestion (a labeled multi-question prompt). Left for a follow-up — it is
-  EXPERIMENTAL and did not surface in normal turns.
-- **`mcpServer/elicitation/request`** —
-  `McpServerElicitationRequestParams {serverName, threadId, turnId?}`. Response:
-  `McpServerElicitationRequestResponse {action, content?, _meta?}`. Fires only
-  with an MCP server that elicits input.
+  The broker surfaces the FIRST question as a pending-input card (numbered menu
+  when `options` are present, free-text otherwise — the app shows a text field
+  for a sentinel card with no options). Response shape:
+
+  ```json
+  {"id": <echo>, "result": {"answers": {"<questionId>": {"answers": ["<reply>"]}}}}
+  ```
+
+  (`ToolRequestUserInputResponse`.) The broker answers the first question with the
+  user's tap/typed reply; any remaining questions get an empty `answers:[]` so the
+  response is well-formed. Safety net (abandoned card): empty `answers:[]` for all.
+
+- **`mcpServer/elicitation/request`** — `McpServerElicitationRequestParams` is a
+  `oneOf` over **form mode** `{serverName, threadId, turnId?, mode:"form", message,
+  requestedSchema}` and **url mode** `{…, mode:"url", message, url, elicitationId}`.
+  The broker surfaces `message` (+ the url for url-mode) as an **Approve/Decline**
+  pending-input card rather than rendering the full typed form (the `requestedSchema`
+  is an arbitrary typed object — string/number/boolean/enum fields — too complex for
+  the current card UI). Response shape:
+
+  ```json
+  {"id": <echo>, "result": {"action": <accept|decline|cancel>, "content"?: {…}}}
+  ```
+
+  (`McpServerElicitationRequestResponse`.) Approve → `accept` (no `content` — the
+  broker doesn't collect form fields yet, so an accept may fail server-side for a
+  required-field schema; this is the documented limitation). Anything else, plus
+  the safety net (timeout / EOF / close / parse failure) → `decline` so the turn
+  never hangs silently.
+
+### Routing summary (broker)
+
+`handleServerRequest` (codexappserver.go) routes by method via
+`codexServerRequestKindFor`:
+
+| Method | Kind | Card | Response |
+|---|---|---|---|
+| `item/commandExecution/requestApproval` | approval | command + Approve/Deny | `{decision}` |
+| `item/fileChange/requestApproval` | approval | path (joined by itemId) + Approve/Deny | `{decision}` (deny→decline) |
+| `item/tool/requestUserInput` | userInput | first question + options/free-text | `{answers:{id:{answers:[…]}}}` |
+| `mcpServer/elicitation/request` | elicitation | message + Approve/Decline | `{action}` |
+| anything else | unknown | — | `{}` (empty ack) |
 
 ## Capture technique
 
