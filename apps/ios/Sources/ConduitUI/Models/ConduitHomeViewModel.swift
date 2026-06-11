@@ -224,12 +224,12 @@ extension ConduitUI {
                     ),
                     relativeTime: relativeTime(s.lastActivityAt, now: now),
                     workingDir: s.workingDir,
+                    gitBranch: s.gitBranch,
+                    gitDirty: s.gitDirty,
                     lastActivityPreview: s.lastActivityPreview ?? "",
                     isSelected: snap.selectedSessionID == s.id,
                     isRunning: isRunning,
-                    isStarting: isStarting,
-                    gitBranch: s.gitBranch,
-                    gitDirty: s.gitDirty
+                    isStarting: isStarting
                 ))
             }
             for p in snap.placeholders {
@@ -240,10 +240,10 @@ extension ConduitUI {
                     statusText: p.label,
                     relativeTime: "",
                     workingDir: nil,
+                    gitBranch: nil,
                     lastActivityPreview: "",
                     isSelected: false,
-                    isRunning: false,
-                    gitBranch: nil
+                    isRunning: false
                 ))
             }
             return rows
