@@ -49,6 +49,11 @@ public final class TurnLiveActivityController {
     /// Last-seen lifecycle phase per session for the session-exit signal.
     private var lastSeenPhase: [String: String] = [:]
 
+    /// The broker endpoint to use for Live Activity push-token registration.
+    /// Set by the bridge (which owns the store) whenever it evaluates,
+    /// so the controller always has the current base URL + bearer token.
+    public var registrationEndpoint: StoredEndpoint?
+
     private init() {}
 
     /// Drive the controller from a `SessionStore` snapshot. Idempotent —
@@ -212,6 +217,9 @@ public final class TurnLiveActivityController {
 
         let attrs = TurnActivityAttributes(from: attributes)
         let content = TurnActivityAttributes.ContentState(from: Self.stamped(state))
+        // Capture registration endpoint at start time so the push-token
+        // task closure below can post without racing a later endpoint change.
+        let endpoint = registrationEndpoint
         do {
             let activity = try Activity<TurnActivityAttributes>.request(
                 attributes: attrs,
@@ -219,16 +227,36 @@ public final class TurnLiveActivityController {
                     state: content,
                     staleDate: Date().addingTimeInterval(Self.staleInterval)
                 ),
-                pushType: nil
+                pushType: .token
             )
             activeActivityIDs[sessionID] = activity.id
-            Telemetry.breadcrumb("live_activity", "started", data: ["session": sessionID])
+            Telemetry.breadcrumb("push_la", "activity started with pushType .token",
+                data: ["session": sessionID, "activityID": activity.id])
+
+            // Consume push token updates for the lifetime of this activity.
+            // Each token from the system must be registered with the broker
+            // so it can target this specific Live Activity via APNs.
+            Task { @MainActor in
+                for await tokenData in activity.pushTokenUpdates {
+                    let hex = tokenData.apnsTokenHex
+                    Telemetry.breadcrumb("push_la", "LA push token received",
+                        data: ["session": sessionID, "hexLen": "\(hex.count)"])
+                    guard let ep = endpoint else {
+                        Telemetry.breadcrumb("push_la", "LA push token: no endpoint, skipping",
+                            data: ["session": sessionID])
+                        continue
+                    }
+                    PushNotificationManager.shared.registerLAToken(
+                        hex: hex, sessionID: sessionID, endpoint: ep
+                    )
+                }
+            }
         } catch {
             // `Activity.request` throws on: simulators without a Mac host
             // recent enough, Live Activities disabled in Settings, or a
             // mismatch between the host + widget `ActivityAttributes`
             // shape. The controller stays functional and the next turn's
-            // effect will retry — but capture it so a release build that
+            // effect will retry -- but capture it so a release build that
             // silently shows no Live Activity is diagnosable from Sentry
             // (e.g. the widget extension isn't embedded in the IPA).
             Telemetry.capture(error: error, message: "Live Activity request failed", tags: ["flow": "liveactivity"], extras: ["session": sessionID])

@@ -287,6 +287,55 @@ final class PushNotificationManager {
         return errMsg
     }
 
+    // MARK: - Live Activity push token
+
+    /// Register a Live Activity push token with one broker endpoint.
+    /// Called once per token update from `Activity.pushTokenUpdates`.
+    /// Body: `{"platform":"apns-liveactivity","token":"<hex>","session_id":"<id>"}`.
+    /// Best-effort: failures are breadcrumbed but not surfaced to the UI.
+    func registerLAToken(hex: String, sessionID: String, endpoint: StoredEndpoint) {
+        guard endpoint.isComplete else {
+            Telemetry.breadcrumb("push_la", "registerLAToken skipped: endpoint incomplete",
+                data: ["session": sessionID])
+            return
+        }
+        Task { @MainActor in
+            guard let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/push/register"
+            guard let url = components?.url else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            struct LARegisterPayload: Encodable {
+                let platform: String
+                let token: String
+                let session_id: String
+            }
+            let payload = LARegisterPayload(
+                platform: "apns-liveactivity",
+                token: hex,
+                session_id: sessionID
+            )
+            guard let body = try? JSONEncoder().encode(payload) else { return }
+            req.httpBody = body
+            Telemetry.breadcrumb("push_la", "LA token register POST start",
+                data: ["session": sessionID, "host": endpoint.displayHost])
+            guard let (_, resp) = try? await URLSession.shared.data(for: req),
+                  let http = resp as? HTTPURLResponse
+            else {
+                Telemetry.breadcrumb("push_la", "LA token register POST network error",
+                    data: ["session": sessionID, "host": endpoint.displayHost])
+                return
+            }
+            Telemetry.breadcrumb("push_la", "LA token register POST result",
+                data: ["session": sessionID, "host": endpoint.displayHost,
+                       "status": "\(http.statusCode)"])
+        }
+    }
+
     // MARK: - Private
 
     /// Fan out registration to ALL endpoints concurrently. Each box is an

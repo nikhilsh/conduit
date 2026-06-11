@@ -279,6 +279,10 @@ public final class TurnLiveActivityBridge {
     /// the bridge core, and apply the resulting intents.
     private func evaluate() {
         guard let store else { return }
+        // Keep the controller's registration endpoint current so that
+        // any activity started in this evaluation cycle has the right
+        // broker base URL + bearer for LA push-token registration.
+        controller.registrationEndpoint = store.endpoint
         let frame = Self.frame(from: store)
         let intents = core.ingest(frame: frame, now: Date())
         for intent in intents {
