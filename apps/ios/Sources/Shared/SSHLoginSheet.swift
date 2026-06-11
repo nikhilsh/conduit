@@ -47,6 +47,7 @@ struct SSHLoginSheet: View {
                     .padding(.vertical, 18)
                 }
                 .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle("Add via SSH")
             .navigationBarTitleDisplayMode(.inline)
@@ -56,6 +57,15 @@ struct SSHLoginSheet: View {
                     Button("Cancel") {
                         store.clearSshBootstrap()
                         dismiss()
+                    }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder),
+                            to: nil, from: nil, for: nil
+                        )
                     }
                 }
             }
