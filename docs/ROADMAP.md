@@ -117,8 +117,6 @@ documented in the frozen contracts above and the archived plans.
 - **VPS backup/disaster-recovery helper** — a `conduit backup` doc or script for
   the tier-1 secrets tarball (`.p8` APNs key, systemd unit with pinned token,
   agent creds); GH/Cloudflare secret stores are write-only and are not a backup.
-- **codex picker dedup** — codex shows both "GPT-5.5 (recommended)" inherit and
-  "GPT-5.5" pinned in the model picker (redundant); cleanup needed.
 
 ---
 
