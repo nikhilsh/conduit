@@ -3,8 +3,7 @@ import UIKit
 import GhosttyVT
 
 // MARK: - Donation URL
-// TODO(nikhil): Replace with your real Buy Me a Coffee / donation URL before shipping.
-private let kSupportDonationURL = "https://buymeacoffee.com/nikhilsh"
+private let kSupportDonationURL = "https://buymeacoffee.com/conduitapp"
 
 // MARK: - ConduitSettingsView
 //
