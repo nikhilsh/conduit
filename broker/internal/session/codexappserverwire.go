@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -394,16 +395,50 @@ func codexNotificationToEvent(method string, params json.RawMessage) (codexAppEv
 // Verified live (codex-cli 0.132.0, docs/CODEX-APPSERVER-PROTOCOL.md):
 //   - item/commandExecution/requestApproval — a shell command needs approval.
 //   - item/fileChange/requestApproval — a file edit/patch needs approval.
-//
-// The EXPERIMENTAL item/tool/requestUserInput and mcpServer/elicitation/request
-// (generic question / MCP elicitation) are NOT handled here — they need specific
-// tool/MCP conditions to fire and are a documented follow-up.
 func codexIsApprovalMethod(method string) bool {
 	switch method {
-	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+	case codexMethodCommandApproval, codexMethodFileChangeApproval:
 		return true
 	}
 	return false
+}
+
+// codexServerRequestKind classifies a server→client request into how the broker
+// surfaces it to the user. Each kind maps to a pending-input card and a
+// distinct JSON-RPC response shape (built by codexBuildResponse).
+type codexServerRequestKind int
+
+const (
+	// codexReqUnknown — not a request we render a card for (auto-ack empty result).
+	codexReqUnknown codexServerRequestKind = iota
+	// codexReqApproval — command/file-change approval → {"decision": …}.
+	codexReqApproval
+	// codexReqUserInput — item/tool/requestUserInput → {"answers": {id:{answers:[…]}}}.
+	codexReqUserInput
+	// codexReqElicitation — mcpServer/elicitation/request → {"action": …, "content"?}.
+	codexReqElicitation
+)
+
+// The server→client request method strings (see ServerRequest.json,
+// codex-cli 0.132.0). Centralized so the routing switch and the doc agree.
+const (
+	codexMethodCommandApproval    = "item/commandExecution/requestApproval"
+	codexMethodFileChangeApproval = "item/fileChange/requestApproval"
+	codexMethodRequestUserInput   = "item/tool/requestUserInput"
+	codexMethodMcpElicitation     = "mcpServer/elicitation/request"
+)
+
+// codexServerRequestKindFor maps a method to its handling kind.
+func codexServerRequestKindFor(method string) codexServerRequestKind {
+	switch method {
+	case codexMethodCommandApproval, codexMethodFileChangeApproval:
+		return codexReqApproval
+	case codexMethodRequestUserInput:
+		return codexReqUserInput
+	case codexMethodMcpElicitation:
+		return codexReqElicitation
+	}
+	return codexReqUnknown
 }
 
 // codexApprovalRequest is a parsed approval request: the human-facing summary
@@ -421,14 +456,66 @@ type codexApprovalRequest struct {
 	declineAvailable bool
 }
 
+// codexFileChange is the path + diff of one pending file edit, lifted from a
+// `fileChange` item notification (item/started|completed). The fileChange
+// APPROVAL request (item/fileChange/requestApproval) carries only the itemId —
+// the actual changes live in the preceding fileChange item — so the broker joins
+// the two by itemId to render a card with the real path/diff. Verified live
+// (codex-cli 0.132.0): the approval params are {itemId,startedAtMs,threadId,
+// turnId,reason?,grantRoot?} with NO command/cwd/changes.
+type codexFileChange struct {
+	path string
+	diff string
+}
+
+// codexFileChangeItem holds the changes of the most recently seen fileChange
+// item, keyed by its id, so a later fileChange approval request can join to it.
+type codexFileChangeItem struct {
+	id      string
+	changes []codexFileChange
+}
+
+// parseCodexFileChangeItem lifts an item/started|completed notification's
+// fileChange item (id + changes[].{path,diff}). ok=false unless it is a
+// fileChange item with an id (so the caller only stashes real file edits).
+func parseCodexFileChangeItem(params json.RawMessage) (codexFileChangeItem, bool) {
+	var p struct {
+		Item struct {
+			Type    string `json:"type"`
+			ID      string `json:"id"`
+			Changes []struct {
+				Path string `json:"path"`
+				Diff string `json:"diff"`
+			} `json:"changes"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return codexFileChangeItem{}, false
+	}
+	if p.Item.Type != "fileChange" || strings.TrimSpace(p.Item.ID) == "" {
+		return codexFileChangeItem{}, false
+	}
+	item := codexFileChangeItem{id: p.Item.ID}
+	for _, c := range p.Item.Changes {
+		item.changes = append(item.changes, codexFileChange{
+			path: strings.TrimSpace(c.Path),
+			diff: c.Diff,
+		})
+	}
+	return item, true
+}
+
 // parseCodexApprovalRequest decodes an approval request's params into the bits
-// the card needs. ok=false when params don't decode at all (the caller then
-// denies with cancel so the turn doesn't wedge).
-func parseCodexApprovalRequest(method string, params json.RawMessage) (codexApprovalRequest, bool) {
+// the card needs. `joined` is the fileChange item the broker matched by itemId
+// (nil for command approvals or when no match was found) — it supplies the
+// path/diff a fileChange approval request omits. ok=false when params don't
+// decode at all (the caller then denies with cancel so the turn doesn't wedge).
+func parseCodexApprovalRequest(method string, params json.RawMessage, joined *codexFileChangeItem) (codexApprovalRequest, bool) {
 	var p struct {
 		Command string `json:"command"`
 		Cwd     string `json:"cwd"`
-		// file-change requests don't carry `command`; surface a generic summary.
+		// Legacy/embedded file-change shape (some versions inline changes); the
+		// 0.132 fileChange approval omits these and we fall back to `joined`.
 		Changes []struct {
 			Path string `json:"path"`
 		} `json:"changes"`
@@ -442,15 +529,8 @@ func parseCodexApprovalRequest(method string, params json.RawMessage) (codexAppr
 		return codexApprovalRequest{}, false
 	}
 	summary := strings.TrimSpace(p.Command)
-	if summary == "" && method == "item/fileChange/requestApproval" {
-		switch {
-		case len(p.Changes) == 1 && strings.TrimSpace(p.Changes[0].Path) != "":
-			summary = "edit " + strings.TrimSpace(p.Changes[0].Path)
-		case len(p.Changes) > 1:
-			summary = fmt.Sprintf("apply changes to %d files", len(p.Changes))
-		default:
-			summary = "apply file changes"
-		}
+	if summary == "" && method == codexMethodFileChangeApproval {
+		summary = codexFileChangeSummary(p.Changes, joined)
 	}
 	declineAvailable := false
 	for _, d := range p.AvailableDecisions {
@@ -460,11 +540,49 @@ func parseCodexApprovalRequest(method string, params json.RawMessage) (codexAppr
 			break
 		}
 	}
+	// fileChange responses ALWAYS accept `decline` per the schema
+	// (FileChangeApprovalDecision), even though the request omits
+	// availableDecisions — so a denied file edit lets the turn continue rather
+	// than interrupting it (verified live: decline → turn completes).
+	if method == codexMethodFileChangeApproval {
+		declineAvailable = true
+	}
 	return codexApprovalRequest{
 		summary:          summary,
 		cwd:              strings.TrimSpace(p.Cwd),
 		declineAvailable: declineAvailable,
 	}, true
+}
+
+// codexFileChangeSummary renders a human file-change summary from whichever
+// source carries the paths: the inline `changes` (legacy) or the joined
+// fileChange item (0.132). Falls back to a generic line so the card is never
+// blank.
+func codexFileChangeSummary(inline []struct {
+	Path string `json:"path"`
+}, joined *codexFileChangeItem) string {
+	type pathOnly struct{ path string }
+	var paths []pathOnly
+	for _, c := range inline {
+		if p := strings.TrimSpace(c.Path); p != "" {
+			paths = append(paths, pathOnly{p})
+		}
+	}
+	if len(paths) == 0 && joined != nil {
+		for _, c := range joined.changes {
+			if c.path != "" {
+				paths = append(paths, pathOnly{c.path})
+			}
+		}
+	}
+	switch {
+	case len(paths) == 1:
+		return "edit " + paths[0].path
+	case len(paths) > 1:
+		return fmt.Sprintf("apply changes to %d files", len(paths))
+	default:
+		return "apply file changes"
+	}
 }
 
 // codexApprovalApproveLabel / codexApprovalDenyLabel are the tappable option
@@ -482,14 +600,24 @@ const (
 // (core/src/conversation.rs) turns into a tappable approval card — so the iOS /
 // Android approval UI renders it with ZERO app changes. ok=false on an empty
 // summary (caller falls back to auto-deny rather than a blank card).
-func codexApprovalCardContent(req codexApprovalRequest) (string, bool) {
+//
+// NOTE: the raw diff is deliberately NOT embedded in the body — core's
+// extract_pending_options scans every line and treats a "- foo" diff line as a
+// bullet option, which would inject garbage choices into the card. The summary
+// (the file path[s]) is enough; the diff already surfaced as the preceding
+// fileChange tool card.
+func codexApprovalCardContent(method string, req codexApprovalRequest) (string, bool) {
 	summary := strings.TrimSpace(req.summary)
 	if summary == "" {
 		return "", false
 	}
 	var b strings.Builder
 	b.WriteString(pendingInputSentinel)
-	b.WriteString("\nAllow codex to run this command?\n\n")
+	if method == codexMethodFileChangeApproval {
+		b.WriteString("\nAllow codex to make this file change?\n\n")
+	} else {
+		b.WriteString("\nAllow codex to run this command?\n\n")
+	}
 	b.WriteString(summary)
 	if req.cwd != "" {
 		b.WriteString("\nin ")
@@ -529,6 +657,215 @@ func codexApprovalDecisionFor(answer string, declineAvailable bool) string {
 		return codexDecisionDecline
 	}
 	return codexDecisionCancel
+}
+
+// ---------------------------------------------------------------------------
+// item/tool/requestUserInput (EXPERIMENTAL) — the codex twin of claude's
+// AskUserQuestion. Captured schema-only (codex-cli 0.132.0,
+// ToolRequestUserInputParams): a labeled set of questions, each with optional
+// {label,description} options or free-text. The response maps each question id
+// to {answers:[…]}. We render the FIRST question as a pending-input card (the
+// card UI is single-question; multi-question prompts are rare for this tool) and
+// answer that one; remaining questions get an empty answer so the response is
+// well-formed and the turn doesn't wedge.
+// ---------------------------------------------------------------------------
+
+// codexUserInputQuestion is one parsed requestUserInput question.
+type codexUserInputQuestion struct {
+	id      string
+	header  string
+	prompt  string
+	options []string // option labels; empty → free-text answer
+}
+
+// codexUserInputRequest is the parsed requestUserInput payload: the ordered
+// questions (first is the one we surface as a card).
+type codexUserInputRequest struct {
+	questions []codexUserInputQuestion
+}
+
+// parseCodexUserInputRequest decodes a ToolRequestUserInputParams. ok=false when
+// it has no answerable question (caller then auto-declines the safety-net way).
+func parseCodexUserInputRequest(params json.RawMessage) (codexUserInputRequest, bool) {
+	var p struct {
+		Questions []struct {
+			ID       string `json:"id"`
+			Header   string `json:"header"`
+			Question string `json:"question"`
+			Options  []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return codexUserInputRequest{}, false
+	}
+	var req codexUserInputRequest
+	for _, q := range p.Questions {
+		if strings.TrimSpace(q.ID) == "" || strings.TrimSpace(q.Question) == "" {
+			continue
+		}
+		cq := codexUserInputQuestion{
+			id:     q.ID,
+			header: strings.TrimSpace(q.Header),
+			prompt: strings.TrimSpace(q.Question),
+		}
+		for _, o := range q.Options {
+			if l := strings.TrimSpace(o.Label); l != "" {
+				cq.options = append(cq.options, l)
+			}
+		}
+		req.questions = append(req.questions, cq)
+	}
+	if len(req.questions) == 0 {
+		return codexUserInputRequest{}, false
+	}
+	return req, true
+}
+
+// codexUserInputCardContent renders the FIRST question of a requestUserInput as
+// a pending-input card: the sentinel, the header/question, and a numbered menu
+// of options (free-text when there are none — the apps show a text field for a
+// sentinel card with no options). ok=false when there's nothing to ask.
+func codexUserInputCardContent(req codexUserInputRequest) (string, bool) {
+	if len(req.questions) == 0 {
+		return "", false
+	}
+	q := req.questions[0]
+	var b strings.Builder
+	b.WriteString(pendingInputSentinel)
+	b.WriteString("\n")
+	if q.header != "" && !strings.EqualFold(q.header, q.prompt) {
+		b.WriteString(q.header)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(q.prompt)
+	for i, opt := range q.options {
+		b.WriteString("\n")
+		b.WriteString(strconv.Itoa(i + 1))
+		b.WriteString(". ")
+		b.WriteString(opt)
+	}
+	return b.String(), true
+}
+
+// codexBuildUserInputResult builds the ToolRequestUserInputResponse for the
+// user's answer to the first question; remaining questions get an empty answer
+// array so the response stays well-formed. The answer is sent verbatim (the
+// app sends the tapped option label or typed free text).
+func codexBuildUserInputResult(req codexUserInputRequest, answer string) map[string]any {
+	answers := map[string]any{}
+	for i, q := range req.questions {
+		if i == 0 {
+			answers[q.id] = map[string]any{"answers": []string{strings.TrimSpace(answer)}}
+		} else {
+			answers[q.id] = map[string]any{"answers": []string{}}
+		}
+	}
+	return map[string]any{"answers": answers}
+}
+
+// codexBuildEmptyUserInputResult builds a well-formed ToolRequestUserInputResponse
+// with an empty answer array for every question — the safety-net deny when an
+// outstanding requestUserInput card is abandoned (timeout / EOF / close).
+func codexBuildEmptyUserInputResult(req codexUserInputRequest) map[string]any {
+	answers := map[string]any{}
+	for _, q := range req.questions {
+		answers[q.id] = map[string]any{"answers": []string{}}
+	}
+	return map[string]any{"answers": answers}
+}
+
+// ---------------------------------------------------------------------------
+// mcpServer/elicitation/request — an MCP server asks the user for structured
+// input. Captured schema-only (codex-cli 0.132.0, McpServerElicitationRequest
+// Params): a `form` mode with a typed `requestedSchema`, or a `url` mode. The
+// response is {action: accept|decline|cancel, content?}. Full form rendering is
+// complex (typed fields); the broker surfaces the message as a card with an
+// Approve/Decline choice and responds accept (empty content) / decline — the
+// safety-net principle: never hang the turn silently.
+// ---------------------------------------------------------------------------
+
+// codexElicitationRequest is the parsed elicitation payload the broker acts on.
+type codexElicitationRequest struct {
+	serverName string
+	message    string
+	mode       string // "form" | "url" | ""
+	url        string // set for url mode
+}
+
+// parseCodexElicitationRequest decodes an McpServerElicitationRequestParams.
+// ok=false when it doesn't decode (caller declines as a safety net).
+func parseCodexElicitationRequest(params json.RawMessage) (codexElicitationRequest, bool) {
+	var p struct {
+		ServerName string `json:"serverName"`
+		Message    string `json:"message"`
+		Mode       string `json:"mode"`
+		URL        string `json:"url"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return codexElicitationRequest{}, false
+	}
+	return codexElicitationRequest{
+		serverName: strings.TrimSpace(p.ServerName),
+		message:    strings.TrimSpace(p.Message),
+		mode:       strings.TrimSpace(p.Mode),
+		url:        strings.TrimSpace(p.URL),
+	}, true
+}
+
+// codexElicitationApproveLabel / codexElicitationDeclineLabel are the elicitation
+// card's choices. Approve → action "accept"; anything else → "decline".
+const (
+	codexElicitationApproveLabel = "Approve"
+	codexElicitationDeclineLabel = "Decline"
+)
+
+// codexElicitationActionDecline / Accept are McpServerElicitationAction values.
+const (
+	codexElicitationAccept  = "accept"
+	codexElicitationDecline = "decline"
+)
+
+// codexElicitationCardContent renders an elicitation as a pending-input card:
+// the server's message + an Approve/Decline menu. A url-mode elicitation
+// includes the URL in the body so the user can open it. ok=false when there's
+// no message to show (caller declines as a safety net).
+func codexElicitationCardContent(req codexElicitationRequest) (string, bool) {
+	msg := req.message
+	if msg == "" && req.serverName != "" {
+		msg = req.serverName + " is requesting input."
+	}
+	if msg == "" {
+		return "", false
+	}
+	var b strings.Builder
+	b.WriteString(pendingInputSentinel)
+	b.WriteString("\n")
+	if req.serverName != "" {
+		b.WriteString(req.serverName)
+		b.WriteString(": ")
+	}
+	b.WriteString(msg)
+	if req.mode == "url" && req.url != "" {
+		b.WriteString("\n")
+		b.WriteString(req.url)
+	}
+	b.WriteString("\n\n1. ")
+	b.WriteString(codexElicitationApproveLabel)
+	b.WriteString("\n2. ")
+	b.WriteString(codexElicitationDeclineLabel)
+	return b.String(), true
+}
+
+// codexElicitationActionFor maps the user's answer to an McpServerElicitation
+// action. Approve → accept; anything else → decline (the safe default).
+func codexElicitationActionFor(answer string) string {
+	if strings.EqualFold(strings.TrimSpace(answer), codexElicitationApproveLabel) {
+		return codexElicitationAccept
+	}
+	return codexElicitationDecline
 }
 
 // isCodexCompactCommand reports whether the user's composer text is exactly the
