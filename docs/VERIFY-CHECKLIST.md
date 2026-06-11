@@ -9,6 +9,24 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.141
+
+- **Fast-mode toggle (actionable)** — the read-only "Fast mode available" label
+  is now an actionable Toggle (iOS) / Switch (Android) in the new-session picker
+  + fork sheets; turning it on launches claude with `--settings '{"fastMode":true}'`
+  (core→broker). PR #509. Verify: on a claude model that advertises fast mode,
+  the toggle appears, flips, and a forked/new session honors it.
+  [app, on-device, tablet+phone]
+- **SSH host-key prompt deadlock fix** — the TOFU "unknown host key" prompt is
+  now an alert that presents OVER the Add-via-SSH sheet (previously a root
+  `.sheet` that couldn't present over it, so first-connect hung on "Starting
+  server" forever). Connect is disabled while bootstrapping; a 120s host-key
+  timeout prevents any eternal hang; `ssh_hostkey` breadcrumbs added. PR #510.
+  Verify: add a box via SSH to a NEW host → the host-key alert appears → Trust
+  & Connect → the session connects (no infinite "Starting server"). [iOS, on-device]
+
+---
+
 ## v0.0.140
 
 - **SSH add-box connect no longer hangs (broker-first bootstrap)** — broker
