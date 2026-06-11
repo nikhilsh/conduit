@@ -596,6 +596,20 @@ func (s *Session) startChatBackend(
 		return
 	}
 
+	// Part A (harness bootstrap): codex has no clean --append-system-prompt
+	// flag, so the conduit-awareness addendum is injected as a managed section
+	// in the workspace's AGENTS.md (codex reads AGENTS.md from cwd natively —
+	// this covers both the app-server and exec backends). claude takes the
+	// merged --append-system-prompt path inside claudeStreamCommand instead.
+	// Idempotent + flag-gated; a write failure never blocks the spawn.
+	if conduitAwarenessEnabled() && isCodexProtocol(adapter.Protocol) {
+		if err := s.injectConduitAwarenessAgentsMD(); err != nil {
+			fmt.Fprintf(os.Stderr, "session %s: conduit-awareness AGENTS.md: %v (session continues)\n", s.ID, err)
+		} else {
+			logConduitAwarenessInjected(s.ID, adapter.Name, "codex:AGENTS.md")
+		}
+	}
+
 	res, serr := backend.Spawn(s, adapter, spawnRequest{
 		aiGen:               aiGen,
 		resumeChatSessionID: resumeChatSessionID,

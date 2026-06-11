@@ -16,7 +16,7 @@ WorkingDirectory=/root, KillMode=process, Restart=always.
 # 1. Build off a throwaway worktree on fresh origin/main (never a dirty tree)
 git fetch origin
 TMP=$(mktemp -d); git worktree add --detach "$TMP" origin/main
-(cd "$TMP/broker" && go build -o /root/.conduit/broker-new ./cmd/conduit-broker)
+(cd "$TMP/broker" && go build -ldflags "-X main.version=$(git -C "$TMP" describe --tags --always)" -o /root/.conduit/broker-new ./cmd/conduit-broker)
 /root/.conduit/broker-new --help        # smoke test
 git worktree remove --force "$TMP"
 

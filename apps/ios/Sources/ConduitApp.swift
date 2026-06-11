@@ -165,14 +165,30 @@ struct ConduitApp: App {
                             PushNotificationManager.shared.requestAuthorizationIfNeeded()
                         }
                     }
-                    // Re-register with the new box when the active endpoint
-                    // changes (multi-box: user switches servers). V1 covers
-                    // the active box only; all-boxes registration is a follow-up.
+                    // Re-register with ALL paired boxes when the active endpoint
+                    // changes (box switch). The token may have rotated or a
+                    // server may have lost its registration.
                     .onChange(of: store.endpoint) { _, newEndpoint in
-                        PushNotificationManager.shared.endpointChanged(to: newEndpoint)
+                        let allEndpoints = store.savedServers.map { $0.endpoint }
+                        PushNotificationManager.shared.endpointChanged(
+                            to: newEndpoint,
+                            allEndpoints: allEndpoints
+                        )
                         Task { @MainActor in
                             await PushNotificationManager.shared.probeCapabilities(
                                 endpoint: newEndpoint)
+                        }
+                    }
+                    // Unregister push from any server that was removed from
+                    // savedServers (best-effort: one Task per removed box).
+                    .onChange(of: store.savedServers) { old, new in
+                        let removed = old.filter { prev in
+                            !new.contains(where: { $0.id == prev.id })
+                        }
+                        for server in removed {
+                            PushNotificationManager.shared.unregisterFromServer(
+                                endpoint: server.endpoint
+                            )
                         }
                     }
                     .sheet(item: hostKeyBinding) { prompt in
@@ -356,13 +372,15 @@ struct ConduitApp: App {
     private func applyPairingURL(_ url: URL) {
         guard let parsed = PairingURL.parse(url.absoluteString) else { return }
         let next = StoredEndpoint(url: parsed.endpoint, token: parsed.token)
+        Telemetry.breadcrumb("onboarding", OnboardingStep.pairingSucceeded,
+            data: ["transport": "deep_link", "host": next.displayHost])
         store.endpoint = next
         store.upsertSavedServer(name: next.displayHost, endpoint: next, makeDefault: true)
         store.disconnect()
         store.connect()
         // After dialling in, drop the user straight onto the agent
-        // picker so a deep-link tap is a single user motion: tap →
-        // (paired) → pick Claude/Codex → in.
+        // picker so a deep-link tap is a single user motion: tap ->
+        // (paired) -> pick Claude/Codex -> in.
         store.pendingAgentPick = PendingAgentPick(hostNote: next.displayHost)
     }
 }

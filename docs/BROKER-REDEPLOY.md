@@ -42,10 +42,12 @@ Build in a throwaway worktree so a dirty/feature-branch tree never ships:
 ```sh
 TMP=$(mktemp -d)
 git worktree add --detach "$TMP" origin/main
-(cd "$TMP/broker" && go build -o /root/.conduit/broker-new ./cmd/conduit-broker)
+(cd "$TMP/broker" && go build -ldflags "-X main.version=$(git -C "$TMP" describe --tags --always)" -o /root/.conduit/broker-new ./cmd/conduit-broker)
 /root/.conduit/broker-new --help   # smoke test
 git worktree remove --force "$TMP"
 ```
+
+The `-ldflags "-X main.version=…"` injection ensures `/api/capabilities` reports the real tag (or short SHA when between tags) instead of `"dev"`, keeping the readiness block and the self-update banner accurate.
 
 ### 2. Swap with `mv`, NEVER `cp`
 

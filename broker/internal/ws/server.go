@@ -169,6 +169,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/sessions", s.serveSessions)
 	mux.HandleFunc("/api/recent-projects", s.serveRecentProjects)
 	mux.HandleFunc("/api/fs/list", s.serveFSList)
+	// GET /api/fs/harness-status?path=<dir> — does the dir already have a
+	// CLAUDE.md / AGENTS.md? Powers the app's "Set up agent harness" chip
+	// (Part B of harness bootstrap); fs/list is dirs-only so it can't tell.
+	mux.HandleFunc("/api/fs/harness-status", s.serveFSHarnessStatus)
 	// /preview/<session-id>/… reverse-proxies the session's dev server
 	// ($PORT) so the in-app Browser tab can load it. See preview.go.
 	mux.HandleFunc("/preview/", s.servePreview)

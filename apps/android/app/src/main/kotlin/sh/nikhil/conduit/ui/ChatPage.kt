@@ -38,6 +38,8 @@ import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Terminal
@@ -1727,6 +1729,11 @@ private fun ConversationBubble(
                     if (ev.files.isNotEmpty()) FileStrip(ev.files)
                 }
             }
+            // "sending…" clock while queued, or a "failed — retry" affordance
+            // once delivery gives up. Collapsed once the broker acks (status
+            // flips to `done`). Mirror of iOS `sendStatusFooter`. Reads
+            // `ev.status` so a status flip rebuilds the row.
+            SendStatusFooter(ev)
         } else {
             ConversationRenderer.blocks(ev.content).forEach { block ->
                 when (block) {
@@ -1736,6 +1743,66 @@ private fun ConversationBubble(
             }
             if (ev.files.isNotEmpty()) FileStrip(ev.files)
         }
+    }
+}
+
+/**
+ * Optimistic-send status under a user bubble: a "sending…" clock while the
+ * message is queued, or a "failed — tap to retry" affordance once delivery
+ * gives up. Renders nothing once the broker acks (status `done`). Reads
+ * [LocalSessionStore]/[LocalSessionId] for the retry action so the dispatch
+ * site stays thin. Mirror of iOS `sendStatusFooter`.
+ */
+@Composable
+private fun SendStatusFooter(ev: ConversationItem) {
+    val neon = LocalNeonTheme.current
+    when (ev.status.lowercase()) {
+        "pending" -> {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Schedule,
+                    contentDescription = null,
+                    tint = neon.textDim,
+                    modifier = Modifier.size(11.dp),
+                )
+                Text(
+                    "sending…",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
+                )
+            }
+        }
+        "failed" -> {
+            val store = LocalSessionStore.current
+            val sessionId = LocalSessionId.current
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.clickable(enabled = store != null && sessionId != null) {
+                    if (store != null && sessionId != null) {
+                        store.retryPendingChat(sessionId, ev.id)
+                    }
+                },
+            ) {
+                Icon(
+                    Icons.Outlined.Refresh,
+                    contentDescription = null,
+                    tint = neon.red,
+                    modifier = Modifier.size(12.dp),
+                )
+                Text(
+                    "failed — tap to retry",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = neon.red,
+                )
+            }
+        }
+        else -> Unit
     }
 }
 

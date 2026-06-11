@@ -338,6 +338,70 @@ func TestFSListMetadataAndPagination(t *testing.T) {
 	}
 }
 
+func TestFSHarnessStatus(t *testing.T) {
+	srv, tok := newTestServer(t)
+	get := func(dir string) fsHarnessStatusResponse {
+		t.Helper()
+		rawURL := srv.URL + "/api/fs/harness-status?token=" + url.QueryEscape(tok) +
+			"&path=" + url.QueryEscape(dir)
+		resp, err := http.Get(rawURL)
+		if err != nil {
+			t.Fatalf("GET harness-status: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d", resp.StatusCode)
+		}
+		var out fsHarnessStatusResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return out
+	}
+
+	t.Run("bare dir has no harness", func(t *testing.T) {
+		out := get(t.TempDir())
+		if out.HasClaudeMD || out.HasAgentsMD || out.HasHarness {
+			t.Fatalf("bare dir should have no harness: %+v", out)
+		}
+	})
+
+	t.Run("CLAUDE.md present", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		out := get(dir)
+		if !out.HasClaudeMD || out.HasAgentsMD || !out.HasHarness {
+			t.Fatalf("CLAUDE.md should set has_harness: %+v", out)
+		}
+	})
+
+	t.Run("AGENTS.md present", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		out := get(dir)
+		if out.HasClaudeMD || !out.HasAgentsMD || !out.HasHarness {
+			t.Fatalf("AGENTS.md should set has_harness: %+v", out)
+		}
+	})
+
+	t.Run("missing path 400s", func(t *testing.T) {
+		rawURL := srv.URL + "/api/fs/harness-status?token=" + url.QueryEscape(tok) +
+			"&path=" + url.QueryEscape(filepath.Join(t.TempDir(), "nope"))
+		resp, err := http.Get(rawURL)
+		if err != nil {
+			t.Fatalf("GET: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 for missing path, got %d", resp.StatusCode)
+		}
+	})
+}
+
 func TestRecentProjectsEndpoint(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "proj")

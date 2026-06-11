@@ -25,10 +25,10 @@ ORDER MATTERS:
    roll back the tag: fix forward + cut the next patch tag.
 
 Version-ldflags note: CI release builds inject
-`-ldflags "-X main.version=$TAG"`; a hand-built (box) broker reports version
-"dev" because the runbook uses plain `go build`. Harmless until the broker
-self-update banner ships; add the ldflag to a hand build if truthful readiness
-matters.
+`-ldflags "-X main.version=$TAG"`; the manual redeploy runbook (docs/BROKER-REDEPLOY.md)
+and /broker-redeploy skill now also inject the ldflag via
+`-ldflags "-X main.version=$(git -C $TMP describe --tags --always)"` so
+/api/capabilities reports the real tag (or short SHA) instead of "dev".
 
 After: update docs/ROADMAP.md + memory; confirm the About screen shows the
 expected git SHA (catches a stale ship).

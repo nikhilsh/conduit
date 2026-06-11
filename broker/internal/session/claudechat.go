@@ -64,9 +64,26 @@ func claudeStreamCommand(command, args []string, resumeSessionID string, continu
 		// turn and renders the tappable, waiting card; a prose question
 		// just ends the turn. This makes "the agent asked me to choose"
 		// reliably interactive (device feedback, round 4).
-		"--append-system-prompt", askUserQuestionNudge,
+		//
+		// Part A (harness bootstrap): the conduit-awareness addendum is
+		// MERGED into the same --append-system-prompt value (one flag, not a
+		// second one) so it doesn't clobber the askUserQuestionNudge. The
+		// merge is gated by the kill-switch env; OFF leaves the argv
+		// byte-identical to the pre-feature flag value.
+		"--append-system-prompt", claudeAppendSystemPrompt(),
 	)
 	return argv
+}
+
+// claudeAppendSystemPrompt is the value passed to claude's
+// --append-system-prompt. It is the askUserQuestionNudge, plus the shared
+// conduit-awareness addendum when the kill-switch is ON (default). Kept a pure
+// function of the env so it is deterministically table-testable.
+func claudeAppendSystemPrompt() string {
+	if !conduitAwarenessEnabled() {
+		return askUserQuestionNudge
+	}
+	return askUserQuestionNudge + "\n\n" + conduitAwarenessPrompt()
 }
 
 // askUserQuestionNudge steers the agent toward the interactive path.

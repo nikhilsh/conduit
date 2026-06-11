@@ -30,6 +30,7 @@ internal fun parseModelCatalog(raw: String): Map<String, List<SessionStore.Agent
                         isDefault = o.optBoolean("is_default", false),
                         defaultEffort = o.optString("default_effort", ""),
                         efforts = efforts,
+                        supportsFastMode = o.optBoolean("supports_fast_mode", false),
                     ),
                 )
             }

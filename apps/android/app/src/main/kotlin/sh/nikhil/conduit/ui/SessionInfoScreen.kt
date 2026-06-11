@@ -589,6 +589,14 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (forkModelSupportsFastMode(forkModel, catalog)) {
+                        Text(
+                            "⚡ Fast mode available",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFD4A017),
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -938,9 +946,14 @@ internal fun catalogEntryFor(option: String, catalog: List<SessionStore.AgentMod
  */
 internal fun forkModelOptions(assistant: String, catalog: List<SessionStore.AgentModel>?): List<String> {
     if (catalog.isNullOrEmpty()) return forkModelOptions(assistant)
-    val ids = catalog.map { it.id }.toMutableList()
-    if (forkModelInherit !in ids) ids.add(0, forkModelInherit)
-    return ids
+    val ids = catalog.map { it.id }
+    // When the catalog has an explicit non-empty isDefault entry (codex "gpt-5.5"),
+    // that entry IS the recommended row — do NOT prepend the "" inherit sentinel.
+    val hasExplicitDefault = catalog.any { it.isDefault && it.id.isNotEmpty() }
+    if (hasExplicitDefault) return ids
+    val mutable = ids.toMutableList()
+    if (forkModelInherit !in mutable) mutable.add(0, forkModelInherit)
+    return mutable
 }
 
 /**
@@ -949,7 +962,22 @@ internal fun forkModelOptions(assistant: String, catalog: List<SessionStore.Agen
  */
 internal fun forkModelLabel(option: String, catalog: List<SessionStore.AgentModel>?): String {
     val entry = catalog?.firstOrNull { it.id == option }
-    return if (entry != null && entry.displayName.isNotEmpty()) entry.displayName else forkModelLabel(option)
+    if (entry != null) {
+        val isRecommendedRow = entry.isDefault ||
+            entry.displayName.lowercase().startsWith("default") ||
+            entry.id == forkModelInherit
+        if (isRecommendedRow) {
+            val resolved = defaultModelTitle(catalog)
+            if (resolved != null) return "$resolved (recommended)"
+        }
+        return if (entry.displayName.isNotEmpty()) entry.displayName else forkModelLabel(option)
+    }
+    // No exact match. Inherit sentinel fallback.
+    if (option == forkModelInherit) {
+        val resolved = defaultModelTitle(catalog)
+        if (resolved != null) return "$resolved (recommended)"
+    }
+    return forkModelLabel(option)
 }
 
 /**
@@ -959,6 +987,13 @@ internal fun forkModelLabel(option: String, catalog: List<SessionStore.AgentMode
  */
 internal fun forkModelDetail(option: String, catalog: List<SessionStore.AgentModel>?): String? =
     catalogEntryFor(option, catalog)?.description?.takeIf { it.isNotEmpty() }
+
+/**
+ * True when the resolved catalog entry for [option] advertises fast mode.
+ * Always false without a catalog or when the entry does not carry the flag.
+ */
+internal fun forkModelSupportsFastMode(option: String, catalog: List<SessionStore.AgentModel>?): Boolean =
+    catalogEntryFor(option, catalog)?.supportsFastMode ?: false
 
 /**
  * Effort levels for the chosen model from the discovered catalog

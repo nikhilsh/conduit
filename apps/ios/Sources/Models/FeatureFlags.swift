@@ -62,6 +62,30 @@ final class FeatureFlags {
         static let onboardingFurthestStep = "conduit.flags.onboarding.furthestStep"
         static let onboardingGuide = "conduit.flags.onboarding.guide"
         static let replyHaptics = "conduit.flags.chat.replyHaptics"
+        static let sshTunnelTransport = "conduit.flags.transport.sshTunnel"
+    }
+
+    // MARK: - SSH tunnel transport (connection-critical) — default ON
+
+    /// Route SSH-paired boxes through the held `SshTunnel` (core #451): the
+    /// bootstrap keeps the SSH session alive and the WS/HTTP client dials
+    /// `ws://127.0.0.1:<tunnel.localPort>`, so the bearer token never leaves
+    /// the SSH-encrypted channel and the box needs no public broker port.
+    ///
+    /// When OFF, the SSH-bootstrap flow falls back to the legacy
+    /// `sshBootstrap(...)` call, which spawns a fire-and-forget tunnel and
+    /// (historically) dialed the same loopback port without a held handle.
+    /// Token-paired boxes (`conduit://` QR pairing) are UNAFFECTED either
+    /// way — only the SSH-bootstrap path consults this flag.
+    var sshTunnelTransport: Bool {
+        didSet { defaults.set(sshTunnelTransport, forKey: Keys.sshTunnelTransport) }
+    }
+
+    /// Static read of the SSH-tunnel flag for non-`@Observable` call sites
+    /// (e.g. `SessionStore`, which isn't handed the `FeatureFlags` object).
+    /// Mirrors the instance default (ON) so the two never diverge.
+    static func sshTunnelTransportEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
     }
 
     // MARK: - New-session flags (§3) — default ON (this is the shipping design)
@@ -161,6 +185,7 @@ final class FeatureFlags {
         self.onboardingGuide = defaults.object(forKey: Keys.onboardingGuide) as? Bool ?? true
 
         self.replyHaptics = defaults.object(forKey: Keys.replyHaptics) as? Bool ?? true
+        self.sshTunnelTransport = defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
 
         self.chatStylePreference = (defaults.string(forKey: Keys.chatStylePreference)
             .flatMap(ChatStylePreference.init(rawValue:))) ?? .auto

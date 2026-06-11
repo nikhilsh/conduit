@@ -31,7 +31,7 @@ func TestParseClaudeCatalogLine(t *testing.T) {
 		t.Fatal("expected fixture to parse")
 	}
 	want := []ModelInfo{
-		{ID: "", DisplayName: "Default (recommended)", Description: "Opus 4.8 with 1M context · Best for everyday, complex tasks", IsDefault: true, Efforts: []string{"low", "medium", "high", "xhigh", "max"}},
+		{ID: "", DisplayName: "Default (recommended)", Description: "Opus 4.8 with 1M context · Best for everyday, complex tasks", IsDefault: true, Efforts: []string{"low", "medium", "high", "xhigh", "max"}, SupportsFastMode: true},
 		{ID: "claude-fable-5[1m]", DisplayName: "Fable", Description: "Fable 5 · Most capable for your hardest tasks", Efforts: []string{"low", "medium", "high", "xhigh", "max"}},
 		{ID: "sonnet", DisplayName: "Sonnet", Description: "Sonnet 4.6 · Efficient for routine tasks", Efforts: []string{"low", "medium", "high", "max"}},
 		{ID: "haiku", DisplayName: "Haiku", Description: "Haiku 4.5 · Fastest for quick answers"},

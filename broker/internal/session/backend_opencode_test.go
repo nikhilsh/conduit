@@ -253,6 +253,264 @@ func TestOpencodeBackend_AbortErrorIsQuiet(t *testing.T) {
 	}
 }
 
+// TestOpencodeBackend_HeartbeatDoesNotStarveWatchdog is the regression for the
+// REAL device hang that survived #459: a turn goes busy, the hosted provider
+// then stalls (rate-limited / slow / down) emitting NO further per-session
+// frames and NO session.idle/session.error — but opencode keeps the SSE alive
+// with a server-wide `server.heartbeat` (no sessionID) every ~10s. Those
+// heartbeats MUST NOT reset the per-turn silence watchdog, or the 10-minute
+// backstop never fires and the composer's typing indicator spins forever.
+// Drives handleEvent directly (no real server) for a deterministic check.
+func TestOpencodeBackend_HeartbeatDoesNotStarveWatchdog(t *testing.T) {
+	events := make(chan []byte, 8)
+	c := &opencodeServerProcess{
+		publish:        func(p []byte) { events <- p },
+		sessionID:      "ses_hb",
+		silenceTimeout: 60 * time.Millisecond,
+	}
+	// Start a turn (busy for our session).
+	c.handleEvent(opencodeEvent{
+		Type:       "session.status",
+		Properties: opencodeEventProperties{SessionID: "ses_hb", Status: &opencodeStatus{Type: "busy"}},
+	})
+	if !c.TurnActive() {
+		t.Fatal("turn should be active after busy")
+	}
+	// Pump server-wide heartbeats (empty sessionID) faster than the silence
+	// window. Pre-fix these reset lastActivity and the watchdog never fired.
+	hb := opencodeEvent{Type: "server.heartbeat"}
+	stop := make(chan struct{})
+	go func() {
+		tk := time.NewTicker(15 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				c.handleEvent(hb)
+			}
+		}
+	}()
+	defer close(stop)
+
+	// The watchdog must still fire and surface the no-response system message.
+	waitForSystemEvent(t, events, "no response from the agent")
+	if c.TurnActive() {
+		t.Fatal("turn should be cleared after the watchdog fires")
+	}
+}
+
+// TestOpencodeBackend_SilenceTimeoutValue pins the opencode silence timeout to
+// its intended value (2 minutes). This is separate from the codex value (10
+// minutes) — opencode streams message.part.delta tokens during active
+// generation so any silence means the provider is completely stalled, and 2
+// minutes is the agreed UX budget for a dead-provider diagnosis.
+func TestOpencodeBackend_SilenceTimeoutValue(t *testing.T) {
+	const want = 2 * time.Minute
+	if opencodeTurnSilenceTimeout != want {
+		t.Fatalf("opencodeTurnSilenceTimeout = %v, want %v (see backend_opencode.go comment for rationale)", opencodeTurnSilenceTimeout, want)
+	}
+}
+
+// TestOpencodeBackend_WatchdogFiresNoResponseEndsTurn asserts end-to-end that
+// a turn which goes busy and then produces zero SSE frames (dead provider, no
+// heartbeats) is ended by the silence watchdog, which surfaces the "no
+// response" system message and clears turn-active. This is the regression
+// companion to the timeout-value test: if the constant changes AND this
+// behaviour breaks, both tests fail.
+func TestOpencodeBackend_WatchdogFiresNoResponseEndsTurn(t *testing.T) {
+	events := make(chan []byte, 8)
+	c := &opencodeServerProcess{
+		publish:        func(p []byte) { events <- p },
+		sessionID:      "ses_watchdog",
+		silenceTimeout: 40 * time.Millisecond, // accelerated for test
+	}
+	// Trigger a turn with a busy frame for our session.
+	c.handleEvent(opencodeEvent{
+		Type:       "session.status",
+		Properties: opencodeEventProperties{SessionID: "ses_watchdog", Status: &opencodeStatus{Type: "busy"}},
+	})
+	if !c.TurnActive() {
+		t.Fatal("turn should be active after session.status busy")
+	}
+	// No further frames — simulate a dead provider.
+	// The watchdog must fire and post the no-response system message.
+	waitForSystemEvent(t, events, "no response from the agent")
+	if c.TurnActive() {
+		t.Fatal("turn should be cleared after the watchdog fires")
+	}
+}
+
+// TestOpencodeBackend_WatchdogResetOnDelta verifies that a turn producing
+// real message.part.delta frames (active generation) is NOT killed by the
+// watchdog — each delta for the owned session resets the activity timer.
+func TestOpencodeBackend_WatchdogResetOnDelta(t *testing.T) {
+	events := make(chan []byte, 8)
+	c := &opencodeServerProcess{
+		publish:        func(p []byte) { events <- p },
+		sessionID:      "ses_delta",
+		silenceTimeout: 60 * time.Millisecond, // short enough to fire if not reset
+	}
+	// Start a turn.
+	c.handleEvent(opencodeEvent{
+		Type:       "session.status",
+		Properties: opencodeEventProperties{SessionID: "ses_delta", Status: &opencodeStatus{Type: "busy"}},
+	})
+	// Pump real deltas for 120ms — twice the silence window — to keep resetting
+	// the watchdog. A delta for our session must count as activity.
+	deadline := time.Now().Add(120 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		c.handleEvent(opencodeEvent{
+			Type: "message.part.delta",
+			Properties: opencodeEventProperties{
+				SessionID: "ses_delta",
+				PartID:    "prt_t",
+				Field:     "text",
+				Delta:     "x",
+			},
+		})
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !c.TurnActive() {
+		// Drain events to check for the system message.
+		select {
+		case p := <-events:
+			role, content := chatEventRoleContent(p)
+			t.Fatalf("watchdog fired during active delta stream (got %q %q); deltas must reset the silence timer", role, content)
+		default:
+			t.Fatal("turn cleared during active delta stream but no system message — unexpected")
+		}
+	}
+	// Clean up: drive the turn to completion.
+	c.handleEvent(opencodeEvent{
+		Type:       "session.idle",
+		Properties: opencodeEventProperties{SessionID: "ses_delta"},
+	})
+}
+
+// TestOpencodeBackend_StaleSessionRecreatedOnSend covers the resume-after-DB-
+// loss path: the persisted ses_ id no longer exists (opencode's global store was
+// wiped/rotated), so prompt_async 404s with no SSE frames. The backend must
+// create a fresh session, re-persist the new id, and retry the prompt once —
+// rather than bouncing every turn with a "prompt rejected (404)" forever.
+func TestOpencodeBackend_StaleSessionRecreatedOnSend(t *testing.T) {
+	const staleID, freshID = "ses_stale", "ses_fresh"
+	var (
+		mu       sync.Mutex
+		sseW     http.ResponseWriter
+		sseF     http.Flusher
+		sseReady = make(chan struct{})
+		promptsF int // prompts that hit the fresh id
+	)
+	push := func(body string) {
+		mu.Lock()
+		w, f := sseW, sseF
+		mu.Unlock()
+		if w == nil {
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", body)
+		if f != nil {
+			f.Flush()
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"healthy":true,"version":"1.17.0"}`)
+	})
+	mux.HandleFunc("/session", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"id":%q,"projectID":"global"}`, freshID)
+	})
+	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
+		f, _ := w.(http.Flusher)
+		w.Header().Set("content-type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"server.connected\",\"properties\":{}}\n\n")
+		if f != nil {
+			f.Flush()
+		}
+		mu.Lock()
+		sseW, sseF = w, f
+		mu.Unlock()
+		close(sseReady)
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("/session/"+staleID+"/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+		// Stale session no longer exists in the (rotated) store.
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"name":"NotFoundError","data":{"message":"Session not found: %s"}}`, staleID)
+	})
+	mux.HandleFunc("/session/"+freshID+"/prompt_async", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		promptsF++
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		go func() {
+			push(fmt.Sprintf(`{"type":"session.status","properties":{"sessionID":%q,"status":{"type":"busy"}}}`, freshID))
+			push(fmt.Sprintf(`{"type":"message.part.updated","properties":{"sessionID":%q,"part":{"id":"prt_t","type":"text","text":"recovered"}}}`, freshID))
+			push(fmt.Sprintf(`{"type":"session.idle","properties":{"sessionID":%q}}`, freshID))
+		}()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	events := make(chan []byte, 16)
+	relatched := make(chan string, 2)
+	c := &opencodeServerProcess{
+		publish:        func(p []byte) { events <- p },
+		onSession:      func(id string) { relatched <- id },
+		sessionID:      staleID, // resume the stale id
+		baseURL:        srv.URL,
+		hc:             &http.Client{Timeout: 5 * time.Second},
+		silenceTimeout: opencodeTurnSilenceTimeout,
+	}
+	if err := c.connect(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close()
+	<-sseReady
+
+	if err := c.Send("hi"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// The recovered session id must be persisted for the next resume.
+	select {
+	case id := <-relatched:
+		if id != freshID {
+			t.Fatalf("re-latched %q, want %q", id, freshID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale session was not recreated/re-latched")
+	}
+
+	// The retried prompt must produce a real assistant bubble — no "rejected".
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case p := <-events:
+			role, content := chatEventRoleContent(p)
+			if role == "system" {
+				t.Fatalf("unexpected system bubble (should self-heal): %q", content)
+			}
+			if role == "assistant" {
+				if content != "recovered" {
+					t.Fatalf("assistant bubble = %q, want recovered", content)
+				}
+				mu.Lock()
+				n := promptsF
+				mu.Unlock()
+				if n != 1 {
+					t.Fatalf("fresh prompt issued %d times, want 1", n)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("no assistant bubble after stale-session recovery")
+		}
+	}
+}
+
 func TestOpencodeBackend_Interrupt(t *testing.T) {
 	stub := newStubOpencodeServer("ses_int")
 	defer stub.close()

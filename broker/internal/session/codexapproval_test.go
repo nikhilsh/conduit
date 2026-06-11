@@ -18,6 +18,7 @@ func TestCodexApprovalCardContent(t *testing.T) {
 	req, ok := parseCodexApprovalRequest(
 		"item/commandExecution/requestApproval",
 		json.RawMessage(`{"command":"/bin/bash -lc 'echo hi > hello.txt'","cwd":"/work","itemId":"call_1","threadId":"thr-1","turnId":"turn-1"}`),
+		nil,
 	)
 	if !ok {
 		t.Fatal("parse failed")
@@ -28,7 +29,7 @@ func TestCodexApprovalCardContent(t *testing.T) {
 	if req.cwd != "/work" {
 		t.Fatalf("cwd = %q", req.cwd)
 	}
-	content, ok := codexApprovalCardContent(req)
+	content, ok := codexApprovalCardContent("item/commandExecution/requestApproval", req)
 	if !ok {
 		t.Fatal("card content failed")
 	}
@@ -50,27 +51,50 @@ func TestCodexApprovalCardContent(t *testing.T) {
 }
 
 // TestCodexApprovalCardFileChange: a file-change approval (no `command`) gets a
-// synthesized human summary so the card is never blank.
+// synthesized human summary so the card is never blank. Covers both the legacy
+// inline `changes` shape and the real 0.132 shape where the request carries only
+// the itemId and the path/diff is JOINED from the preceding fileChange item.
 func TestCodexApprovalCardFileChange(t *testing.T) {
 	cases := []struct {
 		name   string
 		params string
+		joined *codexFileChangeItem
 		want   string
 	}{
-		{"single", `{"changes":[{"path":"a.txt"}],"cwd":"/w"}`, "edit a.txt"},
-		{"multi", `{"changes":[{"path":"a.txt"},{"path":"b.txt"}],"cwd":"/w"}`, "apply changes to 2 files"},
-		{"none", `{"changes":[],"cwd":"/w"}`, "apply file changes"},
+		// Legacy inline shape (some versions embed `changes`).
+		{"inline single", `{"changes":[{"path":"a.txt"}],"cwd":"/w"}`, nil, "edit a.txt"},
+		{"inline multi", `{"changes":[{"path":"a.txt"},{"path":"b.txt"}],"cwd":"/w"}`, nil, "apply changes to 2 files"},
+		{"inline none", `{"changes":[],"cwd":"/w"}`, nil, "apply file changes"},
+		// Real 0.132 shape: request has only itemId; summary comes from `joined`.
+		{
+			"joined single",
+			`{"itemId":"call_1","threadId":"t","turnId":"u","reason":null,"grantRoot":null}`,
+			&codexFileChangeItem{id: "call_1", changes: []codexFileChange{{path: "notes.txt", diff: "@@\n+x\n"}}},
+			"edit notes.txt",
+		},
+		{
+			"joined multi",
+			`{"itemId":"call_2"}`,
+			&codexFileChangeItem{id: "call_2", changes: []codexFileChange{{path: "a.txt"}, {path: "b.txt"}}},
+			"apply changes to 2 files",
+		},
+		// No inline changes AND no join → generic, never blank.
+		{"unjoined", `{"itemId":"call_3"}`, nil, "apply file changes"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req, ok := parseCodexApprovalRequest("item/fileChange/requestApproval", json.RawMessage(tc.params))
+			req, ok := parseCodexApprovalRequest("item/fileChange/requestApproval", json.RawMessage(tc.params), tc.joined)
 			if !ok {
 				t.Fatal("parse failed")
 			}
 			if req.summary != tc.want {
 				t.Fatalf("summary = %q, want %q", req.summary, tc.want)
 			}
-			if _, ok := codexApprovalCardContent(req); !ok {
+			// fileChange always allows decline per the schema.
+			if !req.declineAvailable {
+				t.Fatal("fileChange should always offer decline")
+			}
+			if _, ok := codexApprovalCardContent("item/fileChange/requestApproval", req); !ok {
 				t.Fatal("card content failed")
 			}
 		})
@@ -125,7 +149,7 @@ func TestParseCodexApprovalDeclineAvailable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req, ok := parseCodexApprovalRequest("item/commandExecution/requestApproval", json.RawMessage(tc.params))
+			req, ok := parseCodexApprovalRequest("item/commandExecution/requestApproval", json.RawMessage(tc.params), nil)
 			if !ok {
 				t.Fatal("parse failed")
 			}

@@ -175,6 +175,16 @@ struct RemoteDirectoryListing: Codable, Equatable {
     var entries: [RemoteDirectoryEntry]
 }
 
+/// Wire shape of `GET /api/fs/harness-status?path=` — whether a directory
+/// already carries an agent harness (CLAUDE.md / AGENTS.md). Powers the
+/// "Set up agent harness" chip (Part B); `fs/list` is dirs-only so it can't
+/// surface these files.
+struct RemoteHarnessStatus: Codable, Equatable {
+    var has_claude_md: Bool
+    var has_agents_md: Bool
+    var has_harness: Bool
+}
+
 /// Wire shape of `GET /api/session/conversation/<id>` (broker PR #196).
 /// The persisted transcript is a flat list of role/content/ts/files
 /// rows — the same `conversation.jsonl` the broker replays into a live
@@ -606,6 +616,26 @@ final class SessionStore {
     /// SSH-bootstrap progress. Observed by the SSH login sheet.
     var sshBootstrapState: SshBootstrapState = .idle
 
+    /// Live SSH tunnel for an SSH-bootstrapped session (core #451). Held for
+    /// the session's lifetime so the russh session — and therefore the
+    /// loopback port-forward the WS dials — stays up. Dropping this would
+    /// tear the SSH session down and kill the tunnel, so it is `stop()`ed and
+    /// released only on disconnect / re-bootstrap. `nil` for token-paired
+    /// (`conduit://`) boxes and when the SSH-tunnel flag is off (legacy path).
+    private var sshTunnel: SshTunnel?
+
+    /// True once the held tunnel has reported `isAlive() == false` (the SSH
+    /// session died: network flap, server reboot, idle kill, iOS suspend).
+    /// Drives a "connection to your server was lost — reconnect" affordance.
+    /// Reset whenever a fresh tunnel is established. Token-paired boxes never
+    /// set this (no tunnel).
+    var sshTunnelLost: Bool = false
+
+    /// Background liveness watcher for the held tunnel. Polls `isAlive()` and,
+    /// on first `false`, flips `sshTunnelLost` and surfaces the re-pair state.
+    /// Cancelled when the tunnel is replaced or stopped.
+    private var sshTunnelWatcher: Task<Void, Never>?
+
     /// Active TOFU prompt. ConduitApp observes this and presents a sheet.
     var pendingHostKey: HostKeyPrompt?
 
@@ -715,6 +745,17 @@ final class SessionStore {
         didSet { SessionStore.persistBrokerTitles(brokerTitles) }
     }
 
+    /// Per-session optimistic-send queue: messages the user has sent that
+    /// haven't been acked by a successful WS write yet. Persisted to
+    /// `UserDefaults` so a backgrounding-mid-send (or a kill/relaunch) never
+    /// silently drops a typed message — the device-reported "sent then
+    /// backgrounded → never delivered" bug. Flushed on connect / foreground /
+    /// reconnect. The transcript echo reads `pendingChats` to draw the
+    /// clock / "failed" indicator. Mirror of Android `_pendingChats`.
+    var pendingChats: PendingChatQueue = SessionStore.loadPendingChats() {
+        didSet { SessionStore.persistPendingChats(pendingChats) }
+    }
+
     private var client: ConduitClient?
     private var delegate: StoreDelegate?
     private var foregroundObserver: NSObjectProtocol?
@@ -811,6 +852,10 @@ final class SessionStore {
             MainActor.assumeIsolated {
                 self?.nudgeNetworkChange()
                 self?.refreshSessions()
+                // Foregrounding may have re-armed a socket that died while
+                // suspended — flush any message the user sent right before
+                // they backgrounded the app (the lost-send bug).
+                self?.flushPendingChats()
             }
         }
 
@@ -872,7 +917,14 @@ final class SessionStore {
             do {
                 try await newClient.connect(delegate: newDelegate)
                 self.harness = .linked
+                Telemetry.breadcrumb("onboarding", "endpoint_connected",
+                    data: ["host": self.endpoint.displayHost,
+                           "first_server": "\(self.savedServers.count == 1)"])
                 self.refreshSessions()
+                // Connection is live again — re-deliver any messages queued
+                // while we were disconnected (reconnect window / backgrounded
+                // mid-send / killed before the WS flushed).
+                self.flushPendingChats()
                 // Reconcile against the broker's authoritative live set:
                 // reattach only genuinely-running agents (so they resume
                 // after a cold launch / app termination) and demote any
@@ -894,16 +946,95 @@ final class SessionStore {
     }
 
     func disconnect() {
+        disconnectClient()
+        // Tear down any held SSH tunnel so we never leak the russh session /
+        // loopback listener. No-op for token-paired boxes (tunnel is nil).
+        teardownSshTunnel()
+    }
+
+    /// Tear down only the WS client, leaving any held SSH tunnel intact. Used
+    /// by `reconnect()` so a WS-only blip on an SSH-tunneled box re-dials the
+    /// SAME live loopback port instead of killing (and leaking) the russh
+    /// session it depends on.
+    private func disconnectClient() {
         client?.disconnect()
         client = nil
         delegate = nil
         harness = .disconnected
     }
 
+    // MARK: - SSH tunnel lifecycle (core #451)
+
+    /// Install a freshly-bootstrapped tunnel (or clear to the legacy path when
+    /// `nil`) and start the liveness watcher. Always stops the prior tunnel
+    /// first so a re-bootstrap never leaks the old russh session.
+    private func adoptSshTunnel(_ tunnel: SshTunnel?) {
+        teardownSshTunnel()
+        sshTunnel = tunnel
+        sshTunnelLost = false
+        guard tunnel != nil else { return }
+        startSshTunnelWatcher()
+    }
+
+    /// Stop + release the held tunnel and cancel its watcher. Idempotent.
+    private func teardownSshTunnel() {
+        sshTunnelWatcher?.cancel()
+        sshTunnelWatcher = nil
+        if let tunnel = sshTunnel {
+            Telemetry.breadcrumb("ssh_tunnel", "tunnel stop", data: ["local_port": "\(tunnel.localPort())"])
+            tunnel.stop()
+        }
+        sshTunnel = nil
+    }
+
+    /// Poll the held tunnel's `isAlive()` on a slow cadence. On the first
+    /// `false` (SSH session died) flip `sshTunnelLost` so the UI can surface a
+    /// "connection lost — reconnect" affordance, drop the harness to failed,
+    /// and exit (no busy loop). The user re-runs `connectViaSSH`, which
+    /// re-bootstraps through the TOFU gate (never a silent re-accept).
+    private func startSshTunnelWatcher() {
+        sshTunnelWatcher = Task { [weak self] in
+            // ~3s cadence: cheap, non-blocking `is_closed()` check. The WS
+            // reconnect worker usually notices the dead loopback dial first;
+            // this is the authoritative SSH-level signal.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if Task.isCancelled { return }
+                guard let self, let tunnel = self.sshTunnel else { return }
+                if !tunnel.isAlive() {
+                    Telemetry.breadcrumb("ssh_tunnel", "tunnel lost", data: [
+                        "local_port": "\(tunnel.localPort())",
+                    ])
+                    Telemetry.capture(
+                        error: NSError(domain: "ios.ssh_tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "tunnel lost"]),
+                        message: "iOS SSH tunnel lost",
+                        tags: ["surface": "ios", "phase": "ssh_tunnel"],
+                        extras: ["local_port": "\(tunnel.localPort())"]
+                    )
+                    self.sshTunnelLost = true
+                    self.harness = .failed("Connection to your server was lost. Reconnect to continue.")
+                    return
+                }
+            }
+        }
+    }
+
     /// Re-establish the link using the currently stored endpoint.
+    ///
+    /// If an SSH tunnel is held AND still alive, this is a WS-only restart:
+    /// the tunnel is preserved so we re-dial the same live loopback port
+    /// rather than tearing down (and leaking) the russh session the endpoint
+    /// depends on. If there's no tunnel (token-paired box) or the tunnel is
+    /// dead, fall back to a full disconnect — a dead tunnel can only be fixed
+    /// by re-running `connectViaSSH` (TOFU-gated), not a plain reconnect.
     func reconnect() {
-        disconnect()
-        connect()
+        if let tunnel = sshTunnel, tunnel.isAlive() {
+            disconnectClient()
+            connect()
+        } else {
+            disconnect()
+            connect()
+        }
     }
 
     func listDirectories(path: String?) async throws -> RemoteDirectoryListing {
@@ -926,6 +1057,35 @@ final class SessionStore {
         }
         return try JSONDecoder().decode(RemoteDirectoryListing.self, from: data)
     }
+
+    /// Whether a directory already has an agent harness (CLAUDE.md / AGENTS.md).
+    /// Returns nil on any failure so callers default to NOT nagging (the chip
+    /// only shows on a definite has_harness=false). Best-effort; never throws.
+    func harnessStatus(path: String?) async -> RemoteHarnessStatus? {
+        guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let base = endpoint.httpBaseURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/fs/harness-status"
+        components?.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = components?.url else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let status = try? JSONDecoder().decode(RemoteHarnessStatus.self, from: data)
+        else { return nil }
+        return status
+    }
+
+    /// The curated bootstrap prompt seeded when the user taps "Set up agent
+    /// harness" (Part B). Audits the repo and writes a CLAUDE.md + AGENTS.md
+    /// with VERIFIED gate commands, asking before committing.
+    static let harnessBootstrapPrompt =
+        "Audit this repository and set up its agent harness. Identify the real "
+        + "build, test, and lint commands by inspecting the project (do not guess) "
+        + "and verify each one actually runs. Then write a concise CLAUDE.md and "
+        + "AGENTS.md documenting those verified gate commands and the project "
+        + "layout, and propose sensible CI gates. Ask me before committing anything."
 
     /// Host health snapshot from `GET /api/host/metrics` (broker v0.0.111+).
     /// Percentages are 0–100; see broker/internal/hostmetrics.
@@ -998,6 +1158,9 @@ final class SessionStore {
         }
         if let models = caps.models, !models.isEmpty {
             modelCatalog = models
+            Telemetry.breadcrumb("onboarding", OnboardingStep.capabilitiesFetched,
+                data: ["host": endpoint.displayHost,
+                       "agents": models.keys.sorted().joined(separator: ",")])
             Telemetry.breadcrumb(
                 "model_catalog", "refreshed",
                 data: [
@@ -1349,14 +1512,42 @@ final class SessionStore {
             let bridge = SshHostKeyBridge(store: self, host: host, port: port)
             do {
                 self.sshBootstrapState = .running(message: "Starting server on \(host)…")
-                let result = try await sshBootstrap(
-                    credentials: credentials,
-                    preAllocatedToken: preToken,
-                    anthropicApiKey: anthropicApiKey,
-                    openaiApiKey: openaiApiKey,
-                    imageRef: imageRef,
-                    hostKeyDelegate: bridge
-                )
+
+                // SSH-tunnel transport (core #451): hold the returned
+                // `SshTunnel` for the session's lifetime so the token rides
+                // the SSH-encrypted channel and the box needs no public port.
+                // Gated behind a flag so the legacy fire-and-forget path stays
+                // available as a one-release fallback. Token-paired boxes never
+                // reach here — this is the SSH-bootstrap flow only.
+                let useTunnel = FeatureFlags.sshTunnelTransportEnabled()
+                let result: SshBootstrapResult
+                var tunnel: SshTunnel?
+                if useTunnel {
+                    Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", data: ["host": host])
+                    let bootstrap = try await sshBootstrapTunneled(
+                        credentials: credentials,
+                        preAllocatedToken: preToken,
+                        anthropicApiKey: anthropicApiKey,
+                        openaiApiKey: openaiApiKey,
+                        imageRef: imageRef,
+                        hostKeyDelegate: bridge
+                    )
+                    result = bootstrap.result
+                    tunnel = bootstrap.tunnel
+                    Telemetry.breadcrumb("ssh_tunnel", "tunnel open", data: [
+                        "host": host,
+                        "local_port": "\(bootstrap.tunnel.localPort())",
+                    ])
+                } else {
+                    result = try await sshBootstrap(
+                        credentials: credentials,
+                        preAllocatedToken: preToken,
+                        anthropicApiKey: anthropicApiKey,
+                        openaiApiKey: openaiApiKey,
+                        imageRef: imageRef,
+                        hostKeyDelegate: bridge
+                    )
+                }
                 let endpoint = StoredEndpoint(
                     url: "ws://127.0.0.1:\(result.localPort)",
                     token: result.token
@@ -1367,12 +1558,23 @@ final class SessionStore {
                 self.endpoint = endpoint
                 self.upsertSavedServer(name: name, endpoint: endpoint, makeDefault: true)
                 self.disconnect()
+                // `disconnect()` stops + releases any prior tunnel; install the
+                // new one (if tunneled) and start watching its liveness BEFORE
+                // dialing so a drop during connect is observed.
+                self.adoptSshTunnel(tunnel)
                 self.connect()
                 self.sshBootstrapState = .idle
+                Telemetry.breadcrumb("onboarding", OnboardingStep.pairingSucceeded,
+                    data: ["transport": "ssh", "host": host])
                 Telemetry.capture(
                     error: NSError(domain: "ios.ssh_bootstrap", code: 0, userInfo: [NSLocalizedDescriptionKey: "ok"]),
                     message: "iOS SSH bootstrap success",
-                    tags: ["surface": "ios", "phase": "ssh_bootstrap", "reused": result.reused ? "1" : "0"],
+                    tags: [
+                        "surface": "ios",
+                        "phase": "ssh_bootstrap",
+                        "reused": result.reused ? "1" : "0",
+                        "tunneled": useTunnel ? "1" : "0",
+                    ],
                     extras: [
                         "host": host,
                         "remote_port": "\(result.remotePort)",
@@ -1557,6 +1759,11 @@ final class SessionStore {
                 let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
                 let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode)
                 Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
+                // Funnel: first-ever session creation (no prior sessions on any launch).
+                if self.sessions.isEmpty {
+                    Telemetry.breadcrumb("onboarding", OnboardingStep.firstSessionCreated,
+                        data: ["assistant": assistant, "host": self.endpoint.displayHost])
+                }
                 // Record the explicit --model override so the title menu's
                 // identity header can show the real model (the broker never
                 // reports one back). Inherit (nil) stays absent on purpose.
@@ -1734,6 +1941,7 @@ final class SessionStore {
         sessions.removeAll { $0.id == sessionID }
         sessionLifecycle[sessionID] = nil
         if selectedSessionID == sessionID { selectedSessionID = nil }
+        pendingChats.clear(sessionID: sessionID)
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
         // Delete is terminal: sweep the persistent "Resume" index AND record
         // the tombstone so a status/list refresh (the broker's tmux can
@@ -1950,11 +2158,15 @@ final class SessionStore {
             ?? startedEpoch.map { $0 + 0.001 }
             ?? Date().timeIntervalSince1970
         let now = conduitConversationTsString(epoch: echoEpoch)
+        let localID = "local-\(UUID().uuidString)"
         let item = ConversationItem(
-            id: "local-\(UUID().uuidString)",
+            id: localID,
             role: "user",
             kind: "message",
-            status: "done",
+            // PENDING until a successful WS write acks it (flushPendingChats
+            // flips it to "done"). The user bubble draws a clock while
+            // pending and a retry affordance if it ultimately fails.
+            status: "pending",
             content: message,
             ts: now,
             files: [],
@@ -1973,6 +2185,13 @@ final class SessionStore {
         conversationLog[sessionID, default: []].append(item)
         let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
         chatLog[sessionID, default: []].append(localEvent)
+        // Funnel: first ever turn sent — first session, no prior conversation items.
+        let priorItems = (conversationLog[sessionID] ?? []).filter { !$0.id.hasPrefix("local-") }
+        if sessions.count <= 1, priorItems.isEmpty {
+            Telemetry.breadcrumb("onboarding", OnboardingStep.firstTurnSent,
+                data: ["session": sessionID,
+                       "chars": "\(message.count)"])
+        }
         // The user has answered — clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233).
         quickReplies[sessionID] = nil
@@ -1980,25 +2199,94 @@ final class SessionStore {
             ensureRustSessionPresent(sessionID)
             _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
         }
+        // Register the message as pending and persist BEFORE attempting any
+        // WS write. This is the fix for the device-reported "send then
+        // background → message lost" bug: the queue (and the persisted copy)
+        // outlives a fire-and-forget WS write that the OS may suspend before
+        // it flushes, and outlives `client == nil` during a reconnect window.
+        // The flush — on connect / foreground / reconnect — re-delivers it.
+        pendingChats.enqueue(sessionID: sessionID, localID: localID, message: message, ts: now)
+        Telemetry.breadcrumb("chat", "queued", data: ["session": sessionID, "chars": "\(message.count)"])
+        // Attempt immediate delivery. If `client` is nil (reconnect window)
+        // we DON'T drop it — it stays queued for the next flush. Previously
+        // a nil client here silently abandoned the WS write.
+        attemptDeliver(sessionID: sessionID, localID: localID, message: message)
+    }
+
+    /// Attempt to deliver one queued message over the live WS, reporting the
+    /// outcome back to `pendingChats` (ack on success, attempt-bump on
+    /// failure) and flipping the transcript echo's status accordingly. Safe
+    /// to call when `client` is nil — it just leaves the entry queued for a
+    /// later flush. Shared by the send path and `flushPendingChats`.
+    private func attemptDeliver(sessionID: String, localID: String, message: String) {
         guard let client else { return }
-        // Don't swallow the send failure with `try?`: if the WS write
-        // throws (no session handle yet, reconnect window, NotConnected),
-        // the optimistic local echo above makes the message *look* sent
-        // while the agent never receives it — exactly the device-reported
-        // "appears in chat but the agent never sees it". Surface it so the
-        // failure is diagnosable instead of silent.
         Task {
             do {
                 try await client.sendChat(sessionId: sessionID, msg: message)
+                // Ack: drop from the queue and flip the echo to "done".
+                self.pendingChats.markDelivered(sessionID: sessionID, localID: localID)
+                self.setEchoStatus(sessionID: sessionID, localID: localID, status: "done")
             } catch {
-                Telemetry.capture(
-                    error: error,
-                    message: "chat send to agent failed",
-                    tags: ["surface": "ios", "phase": "chat_send"],
-                    extras: ["session": sessionID]
-                )
+                let gaveUp = self.pendingChats.markAttemptFailed(sessionID: sessionID, localID: localID)
+                if gaveUp {
+                    self.setEchoStatus(sessionID: sessionID, localID: localID, status: "failed")
+                    Telemetry.capture(
+                        error: error,
+                        message: "chat send to agent failed (gave up after retries)",
+                        tags: ["surface": "ios", "phase": "chat_send"],
+                        extras: ["session": sessionID]
+                    )
+                } else {
+                    // Transient: stays queued + pending for the next flush.
+                    Telemetry.breadcrumb("chat", "send attempt failed — keeping queued",
+                        data: ["session": sessionID])
+                }
             }
         }
+    }
+
+    /// Re-deliver every still-pending message for a session — called when the
+    /// connection/agent becomes ready again (connect success, app foreground,
+    /// reconnect). `failed` entries are skipped until the user retries them.
+    /// Pass `nil` to flush every session.
+    func flushPendingChats(sessionID: String? = nil) {
+        let sessionIDs = sessionID.map { [$0] } ?? Array(pendingChats.bySession.keys)
+        for sid in sessionIDs {
+            let due = pendingChats.flushable(for: sid)
+            guard !due.isEmpty else { continue }
+            Telemetry.breadcrumb("chat", "flush pending", data: ["session": sid, "count": "\(due.count)"])
+            for entry in due {
+                attemptDeliver(sessionID: sid, localID: entry.localID, message: entry.message)
+            }
+        }
+    }
+
+    /// User tapped retry on a failed message bubble — re-arm the entry and
+    /// attempt delivery again immediately.
+    func retryPendingChat(sessionID: String, localID: String) {
+        guard let entry = pendingChats.entries(for: sessionID).first(where: { $0.localID == localID }) else { return }
+        pendingChats.retry(sessionID: sessionID, localID: localID)
+        setEchoStatus(sessionID: sessionID, localID: localID, status: "pending")
+        attemptDeliver(sessionID: sessionID, localID: localID, message: entry.message)
+    }
+
+    /// Flip the `status` of a `local-…` transcript echo in place (e.g.
+    /// pending → done / failed). Drives the user-bubble indicator without
+    /// touching the message content or its position in the log.
+    private func setEchoStatus(sessionID: String, localID: String, status: String) {
+        guard var items = conversationLog[sessionID],
+              let idx = items.firstIndex(where: { $0.id == localID }) else { return }
+        let old = items[idx]
+        items[idx] = ConversationItem(
+            id: old.id, role: old.role, kind: old.kind, status: status,
+            content: old.content, ts: old.ts, files: old.files,
+            toolName: old.toolName, command: old.command, exitCode: old.exitCode,
+            durationMs: old.durationMs, diffSummary: old.diffSummary,
+            pendingOptions: old.pendingOptions, sourceAgent: old.sourceAgent,
+            targetAgent: old.targetAgent, taskText: old.taskText,
+            resultSummary: old.resultSummary, planSteps: old.planSteps
+        )
+        conversationLog[sessionID] = items
     }
 
     /// Routes a recognised `/`-command. Returns true when handled here
@@ -2390,6 +2678,16 @@ final class SessionStore {
     }
 
     func ingestChat(_ sessionID: String, _ event: ChatEvent) {
+        // Funnel: first assistant reply on the very first session.
+        // Guard: no prior assistant items in the chat log for this session.
+        if event.role == "assistant" {
+            let priorAssistant = (chatLog[sessionID] ?? []).filter { $0.role == "assistant" }
+            if sessions.count <= 1, priorAssistant.isEmpty {
+                Telemetry.breadcrumb("onboarding", OnboardingStep.firstReplyReceived,
+                    data: ["session": sessionID,
+                           "chars": "\(event.content.count)"])
+            }
+        }
         chatLog[sessionID, default: []].append(event)
         // A fresh user/assistant turn invalidates the previous turn's AI
         // chips — clear them so stale suggestions don't linger. The
@@ -3000,6 +3298,26 @@ final class SessionStore {
         }
         if let data = try? JSONEncoder().encode(titles) {
             UserDefaults.standard.set(data, forKey: brokerTitlesKey)
+        }
+    }
+
+    private static let pendingChatsKey = "conduit.session.pendingChats"
+
+    static func loadPendingChats() -> PendingChatQueue {
+        guard let raw = UserDefaults.standard.data(forKey: pendingChatsKey),
+              let decoded = try? JSONDecoder().decode([String: [PendingChat]].self, from: raw) else {
+            return PendingChatQueue()
+        }
+        return PendingChatQueue(bySession: decoded)
+    }
+
+    static func persistPendingChats(_ queue: PendingChatQueue) {
+        if queue.bySession.isEmpty {
+            UserDefaults.standard.removeObject(forKey: pendingChatsKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(queue.bySession) {
+            UserDefaults.standard.set(data, forKey: pendingChatsKey)
         }
     }
 

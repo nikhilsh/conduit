@@ -157,10 +157,11 @@ class PushStore : ViewModel() {
 
     /**
      * Called from [ConduitFcmService.onNewToken] when FCM rotates the token.
-     * Re-registers the new token with the broker so the relay's copy stays live.
-     * No-op when no broker endpoint is known yet (deferred until first session).
+     * Re-registers the new token with ALL paired broker endpoints so every
+     * box stays current. [settingsState] reflects the active endpoint's result.
+     * No-op when no broker endpoints are known yet (deferred until first session).
      */
-    fun onNewFcmToken(token: String, endpoint: Endpoint?) {
+    fun onNewFcmToken(token: String, endpoint: Endpoint?, allEndpoints: List<Endpoint> = emptyList()) {
         Telemetry.breadcrumb(
             "push", "FCM onNewToken",
             mapOf("hasActiveBroker" to (endpoint != null).toString()),
@@ -172,15 +173,19 @@ class PushStore : ViewModel() {
         _registeredEndpointUrl.value = token
 
         val ep = endpoint ?: return
-        appScope.launch {
-            registerWithBroker(ep, token, "fcm")
-        }
+        registerWithAllEndpoints(
+            activeEndpoint = ep,
+            allEndpoints = allEndpoints,
+            token = token,
+            platform = "fcm",
+        )
     }
 
     /**
      * Called from [ConduitUnifiedPushReceiver.onNewEndpoint].
+     * Fans out registration to ALL paired endpoints concurrently.
      */
-    fun updateEndpoint(endpointUrl: String, endpoint: Endpoint?) {
+    fun updateEndpoint(endpointUrl: String, endpoint: Endpoint?, allEndpoints: List<Endpoint> = emptyList()) {
         Telemetry.breadcrumb(
             "push", "UP onNewEndpoint",
             mapOf("hasActiveBroker" to (endpoint != null).toString()),
@@ -192,9 +197,108 @@ class PushStore : ViewModel() {
             ?.apply()
 
         val ep = endpoint ?: return
-        appScope.launch {
-            registerWithBroker(ep, endpointUrl, "unifiedpush")
+        registerWithAllEndpoints(
+            activeEndpoint = ep,
+            allEndpoints = allEndpoints,
+            token = endpointUrl,
+            platform = "unifiedpush",
+        )
+    }
+
+    /**
+     * Re-register the stored push token with ALL paired endpoints when the
+     * active endpoint changes. No-op when no token has been registered yet.
+     * Called from MainActivity when [SessionStore.endpoint] changes.
+     */
+    fun onEndpointChanged(activeEndpoint: Endpoint, allEndpoints: List<Endpoint>) {
+        val token = _registeredEndpointUrl.value ?: return
+        if (!activeEndpoint.isComplete) return
+        val platform = prefs?.getString(KEY_PLATFORM, "unifiedpush") ?: "unifiedpush"
+        Telemetry.breadcrumb(
+            "push", "endpoint changed — re-registering with all boxes",
+            mapOf("host" to activeEndpoint.displayHost, "count" to allEndpoints.size.toString()),
+        )
+        registerWithAllEndpoints(
+            activeEndpoint = activeEndpoint,
+            allEndpoints = allEndpoints,
+            token = token,
+            platform = platform,
+        )
+    }
+
+    /**
+     * Fan out registration to ALL endpoints concurrently under a SupervisorJob
+     * so one failure does not cancel others. The [_registrationState] is updated
+     * based on the ACTIVE endpoint's result; other boxes are breadcrumbed only.
+     */
+    fun registerWithAllEndpoints(
+        activeEndpoint: Endpoint,
+        allEndpoints: List<Endpoint>,
+        token: String,
+        platform: String,
+    ) {
+        // Deduplicate endpoints; active endpoint is always first.
+        val seen = mutableSetOf<String>()
+        val endpoints = buildList<Endpoint> {
+            if (activeEndpoint.isComplete && seen.add(activeEndpoint.url)) add(activeEndpoint)
+            for (ep in allEndpoints) {
+                if (ep.isComplete && seen.add(ep.url)) add(ep)
+            }
         }
+
+        Telemetry.breadcrumb(
+            "push", "fan-out register: N boxes",
+            mapOf("count" to endpoints.size.toString()),
+        )
+
+        for (ep in endpoints) {
+            val isActive = (ep.url == activeEndpoint.url)
+            appScope.launch {
+                val ok = postRegisterToEndpoint(ep, token, platform)
+                Telemetry.breadcrumb(
+                    "push", "fan-out register result",
+                    mapOf("host" to ep.displayHost, "success" to ok.toString()),
+                )
+                if (!ok && isActive) {
+                    Telemetry.capture(
+                        error = IllegalStateException("fan-out register failed"),
+                        message = "Android push fan-out register failed",
+                        tags = mapOf("surface" to "android", "phase" to "push_register_fanout"),
+                        extras = mapOf("host" to ep.displayHost, "isActive" to "true"),
+                    )
+                }
+                // Active endpoint result drives the visible registration state.
+                if (isActive) {
+                    withContext(Dispatchers.Main) {
+                        if (ok) {
+                            _registeredEndpointUrl.value = token
+                            _registrationState.value = when (platform) {
+                                "fcm" -> PushRegistrationState.RegisteredFcm
+                                else -> PushRegistrationState.RegisteredUnifiedPush("ntfy")
+                            }
+                        } else {
+                            _registrationState.value = PushRegistrationState.Error(
+                                "Failed to register push with broker"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Best-effort unregister from a single endpoint. Called when a server
+     * is removed from savedServers. Does NOT clear local prefs (the active
+     * registration is preserved for the remaining boxes).
+     */
+    fun unregisterFromServer(endpoint: Endpoint) {
+        if (!endpoint.isComplete) return
+        Telemetry.breadcrumb(
+            "push", "fan-out unregister: box removed",
+            mapOf("host" to endpoint.displayHost),
+        )
+        appScope.launch(Dispatchers.IO) { unregisterWithBroker(endpoint) }
     }
 
     /**
@@ -233,11 +337,16 @@ class PushStore : ViewModel() {
         }
     }
 
-    private suspend fun registerWithBroker(
+    /**
+     * POST /api/push/register to one endpoint. Returns true on HTTP 2xx,
+     * false on any failure. Pure HTTP — no state side effects.
+     * Must be called from within Dispatchers.IO context.
+     */
+    private suspend fun postRegisterToEndpoint(
         endpoint: Endpoint,
         token: String,
         platform: String,
-    ) = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO) {
         Telemetry.breadcrumb(
             "push", "register POST start",
             mapOf("platform" to platform, "host" to endpoint.displayHost),
@@ -250,9 +359,29 @@ class PushStore : ViewModel() {
                 put("token", token)
             }.toString(),
         )
+        val ok = result != null
+        if (ok) {
+            Telemetry.breadcrumb("push", "register POST success",
+                mapOf("platform" to platform, "host" to endpoint.displayHost))
+        } else {
+            Telemetry.breadcrumb("push", "register POST failed",
+                mapOf("platform" to platform, "host" to endpoint.displayHost))
+        }
+        ok
+    }
+
+    /**
+     * Register with a single broker endpoint and update [_registrationState].
+     * Used by [register] (single active endpoint path, e.g. first session).
+     */
+    private suspend fun registerWithBroker(
+        endpoint: Endpoint,
+        token: String,
+        platform: String,
+    ) = withContext(Dispatchers.IO) {
+        val ok = postRegisterToEndpoint(endpoint, token, platform)
         withContext(Dispatchers.Main) {
-            if (result != null) {
-                Telemetry.breadcrumb("push", "register POST success", mapOf("platform" to platform))
+            if (ok) {
                 _registeredEndpointUrl.value = token
                 _registrationState.value = when (platform) {
                     "fcm" -> PushRegistrationState.RegisteredFcm

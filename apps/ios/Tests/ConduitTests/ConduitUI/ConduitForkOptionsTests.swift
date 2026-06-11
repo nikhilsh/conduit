@@ -85,10 +85,12 @@ struct ConduitForkOptionsCatalogTests {
     ]
 
     @Test func catalogModelsPrependInheritWhenAbsent() {
-        // codex's catalog has no "" entry → the inherit sentinel is added.
+        // codex's catalog has an explicit non-empty isDefault ("gpt-5.5") — that
+        // entry IS the recommended row, so the "" sentinel is NOT prepended (no duplicate).
         let codex = ConduitUI.ForkOptions.models(forAssistant: "codex", catalog: codexCatalog)
-        #expect(codex == ["", "gpt-5.5", "gpt-5.4-mini"])
-        // claude's catalog already leads with the normalized "" entry.
+        #expect(codex == ["gpt-5.5", "gpt-5.4-mini"])
+        #expect(!codex.contains(""))
+        // claude's catalog already leads with the normalized "" entry (id="" isDefault).
         let claude = ConduitUI.ForkOptions.models(forAssistant: "claude", catalog: claudeCatalog)
         #expect(claude == ["", "claude-fable-5[1m]", "sonnet", "haiku"])
     }
@@ -129,15 +131,16 @@ struct ConduitForkOptionsCatalogTests {
     }
 
     @Test func modelLabelAndDetailComeFromCatalog() {
-        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5")
+        // codex's gpt-5.5 is the isDefault entry — show "(recommended)" suffix.
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5 (recommended)")
         // Fix A: the default/inherit entry shows the resolved model name so
         // Opus is discoverable after the user has switched to another model.
         // claude: catalog has an entry with id "" and displayName
         // "Default (recommended)" → resolved to "Opus 4.8 (recommended)".
         #expect(ConduitUI.ForkOptions.modelLabel("", catalog: claudeCatalog) == "Opus 4.8 (recommended)")
-        // codex: no catalog entry with id "" → falls back to the no-catalog
-        // static label "Default (inherit)".
-        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "Default (inherit)")
+        // codex: no catalog entry with id "" but isDefault=gpt-5.5 →
+        // inherit sentinel resolves to "GPT-5.5 (recommended)".
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "GPT-5.5 (recommended)")
         // Unknown id (stale selection) falls back to verbatim.
         #expect(ConduitUI.ForkOptions.modelLabel("opus", catalog: codexCatalog) == "opus")
         #expect(ConduitUI.ForkOptions.modelDetail("sonnet", catalog: claudeCatalog)
@@ -164,6 +167,23 @@ struct ConduitForkOptionsCatalogTests {
         #expect(ConduitUI.ForkOptions.modelLabel("", catalog: []) == "Default (inherit)")
         // Unknown id with catalog: no matching entry → falls back to verbatim.
         #expect(ConduitUI.ForkOptions.modelLabel("unknown-model", catalog: claudeCatalog) == "unknown-model")
+    }
+
+    // codex has an explicit non-empty isDefault entry ("gpt-5.5") — the picker
+    // options list contains no "" sentinel, so there is no duplicate recommended row.
+    // The isDefault entry itself shows "(recommended)" via modelLabel.
+    @Test func codexCatalogOptionsHaveNoInheritSentinelAndDefaultRowIsLabeled() {
+        // Options list has no "" entry — no duplicate.
+        let options = ConduitUI.ForkOptions.models(forAssistant: "codex", catalog: codexCatalog)
+        #expect(options == ["gpt-5.5", "gpt-5.4-mini"])
+        #expect(!options.contains(""))
+        // The isDefault entry shows "(recommended)" directly on its own id.
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.5", catalog: codexCatalog) == "GPT-5.5 (recommended)")
+        // Non-default entry shows verbatim display name.
+        #expect(ConduitUI.ForkOptions.modelLabel("gpt-5.4-mini", catalog: codexCatalog) == "GPT-5.4-Mini")
+        // Querying "" (inherit sentinel, e.g. static-fallback path) still resolves
+        // through isDefault to "GPT-5.5 (recommended)".
+        #expect(ConduitUI.ForkOptions.modelLabel("", catalog: codexCatalog) == "GPT-5.5 (recommended)")
     }
 
     @Test func defaultModelTitleResolvesCardLabel() {
@@ -203,5 +223,35 @@ struct ConduitForkOptionsCatalogTests {
         #expect(models[1].efforts.isEmpty)
         #expect(!models[1].isDefault)
         #expect(models[1].defaultEffort == "")
+    }
+
+    @Test func supportsFastModeOnlyOnAnnotatedEntries() {
+        let withFastMode: [ConduitUI.AgentModel] = [
+            .init(id: "", displayName: "Default (recommended)",
+                  description: "Opus 4.8 with 1M context · Best for everyday, complex tasks",
+                  isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max"],
+                  supportsFastMode: true),
+            .init(id: "sonnet", displayName: "Sonnet",
+                  description: "Sonnet 4.6 · Efficient for routine tasks",
+                  efforts: ["low", "medium", "high", "max"]),
+        ]
+        // Inherit sentinel resolves to the default entry — fast mode true.
+        #expect(ConduitUI.ForkOptions.supportsFastMode("", catalog: withFastMode))
+        // Explicit sonnet entry — fast mode false.
+        #expect(!ConduitUI.ForkOptions.supportsFastMode("sonnet", catalog: withFastMode))
+        // No catalog — always false.
+        #expect(!ConduitUI.ForkOptions.supportsFastMode("", catalog: nil))
+    }
+
+    @Test func supportsFastModeDecodesFromWireFormat() throws {
+        let json = """
+        [{"id":"","display_name":"Default (recommended)",
+          "is_default":true,"supports_fast_mode":true,
+          "efforts":["low","medium","high","xhigh","max"]},
+         {"id":"sonnet","display_name":"Sonnet"}]
+        """.data(using: .utf8)!
+        let models = try JSONDecoder().decode([ConduitUI.AgentModel].self, from: json)
+        #expect(models[0].supportsFastMode)
+        #expect(!models[1].supportsFastMode)
     }
 }

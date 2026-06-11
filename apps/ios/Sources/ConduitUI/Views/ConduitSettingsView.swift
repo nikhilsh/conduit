@@ -2,6 +2,10 @@ import SwiftUI
 import UIKit
 import GhosttyVT
 
+// MARK: - Donation URL
+// TODO(nikhil): Replace with your real Buy Me a Coffee / donation URL before shipping.
+private let kSupportDonationURL = "https://buymeacoffee.com/nikhilsh"
+
 // MARK: - ConduitSettingsView
 //
 // Conduit redesign Settings screen (handoff Part A). The shipped build
@@ -36,6 +40,7 @@ extension ConduitUI {
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.openURL) private var openURL
 
         /// When true the screen is hosted inline as a tablet section pane
         /// (not a sheet), so the "Done" affordance is dropped — there's
@@ -73,6 +78,7 @@ extension ConduitUI {
                             notificationsSection
                             conversationSection
                             labsSection
+                            supportSection
                             aboutSection
                         }
                         .padding(.horizontal, 16)
@@ -848,6 +854,33 @@ extension ConduitUI {
                     }
                     .buttonStyle(.plain)
                 }
+            }
+        }
+
+        // MARK: Support / Buy me a coffee
+
+        /// External donation link (not an IAP — Apple explicitly permits
+        /// genuine tip-jar links that open outside the app).
+        private var supportSection: some View {
+            sectionCard(title: "Support") {
+                Button {
+                    Telemetry.breadcrumb("settings", "buy-me-a-coffee tapped")
+                    if let url = URL(string: kSupportDonationURL) {
+                        openURL(url)
+                    }
+                } label: {
+                    ConduitUI.ListRow(
+                        icon: "cup.and.saucer.fill",
+                        title: "Buy me a coffee",
+                        subtitle: "Support Conduit development",
+                        iconTint: neon.accent
+                    ) {
+                        Image(systemName: "arrow.up.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                }
+                .buttonStyle(.plain)
             }
         }
 

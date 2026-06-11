@@ -129,7 +129,17 @@ const opencodeServerReadyTimeout = 90 * time.Second
 // opencodeTurnSilenceTimeout force-ends a turn that has produced no SSE frame
 // for this long, so a hung server / dropped stream self-heals instead of
 // wedging the composer forever. Every frame for the owned session resets it.
-const opencodeTurnSilenceTimeout = 10 * time.Minute
+//
+// opencode streams message.part.delta tokens as the provider generates, so
+// genuine silence means the provider has not produced ANYTHING — it is either
+// stalled (Zen rate-limited / slow / down) or dead. 2 minutes is long enough
+// to absorb a slow first-token from the free "OpenCode Zen" provider (empirical
+// cold-start ~5-10s, even on a busy box well under 60s) while still surfacing a
+// dead-provider situation in a reasonable time instead of the previous 10-minute
+// wait. The codex backend keeps its own separate 10-minute value (codex streams
+// lines of reasoning so short silences are normal); opencode's SSE model makes
+// silence unambiguous.
+const opencodeTurnSilenceTimeout = 2 * time.Minute
 
 // opencodeServerProcess drives one session's `opencode serve` child + its
 // REST/SSE control plane.
@@ -406,15 +416,28 @@ func (c *opencodeServerProcess) handleEvent(ev opencodeEvent) {
 	sid := ev.Properties.SessionID
 	c.mu.Lock()
 	mySID := c.sessionID
+	c.mu.Unlock()
+	// Drop frames for sessions we don't own (the stream is server-wide). A
+	// frame with no sessionID (server.connected / server.heartbeat) is also
+	// dropped. The silence watchdog (lastActivity) is reset BELOW — only by
+	// frames that belong to OUR session. Resetting it here, before the filter,
+	// was the silent-hang root cause: opencode emits a server-wide
+	// `server.heartbeat` (empty properties, no sessionID) every ~10s, so a turn
+	// that went `busy` and then stalled — the hosted "OpenCode Zen" provider
+	// rate-limited / slow / down, producing NO further per-session frames and
+	// NO session.idle/session.error — had its watchdog perpetually rearmed by
+	// those heartbeats. The 10-minute silence backstop could therefore NEVER
+	// fire, so the composer's typing indicator spun forever with no reply and
+	// no error (the device-reported hang that survived #459).
+	if sid == "" || (mySID != "" && sid != mySID) {
+		return
+	}
+	// A frame for our session is real turn activity: reset the silence watchdog.
+	c.mu.Lock()
 	if c.turnActive {
 		c.lastActivity = opencodeNow()
 	}
 	c.mu.Unlock()
-	// Drop frames for sessions we don't own (the stream is server-wide). A
-	// frame with no sessionID (server.connected / heartbeat) is also dropped.
-	if sid == "" || (mySID != "" && sid != mySID) {
-		return
-	}
 
 	switch ev.Type {
 	case "session.status":
@@ -579,25 +602,62 @@ func (c *opencodeServerProcess) Send(text string) error {
 	}
 	c.mu.Unlock()
 
+	status, err := c.postPrompt(sid, text)
+	if err != nil {
+		publishChatSystem(c.publish, "⚠️ opencode: prompt failed to send: "+err.Error())
+		return nil
+	}
+	if status == http.StatusNotFound {
+		// The persisted ses_ id no longer exists in opencode's global DB —
+		// the conversation store was wiped/rotated under us (broker redeploy
+		// against a fresh agent-home, a GC of the data_dir, or a DB reset) while
+		// meta.json still carried the stale id we resumed. Re-prompting it 404s
+		// EVERY turn with no SSE frames at all, so without recovery the session
+		// is permanently dead. Self-heal: create a fresh server session and
+		// retry the prompt once, so the conversation continues (a new ses_, the
+		// old transcript stays in the app's own log).
+		fmt.Fprintf(os.Stderr, "opencode serve: prompt_async 404 (stale session %s); recreating\n", sid)
+		newID, cerr := c.createSession()
+		if cerr != nil {
+			publishChatSystem(c.publish, "⚠️ opencode: session was lost and could not be recreated: "+cerr.Error())
+			return nil
+		}
+		c.mu.Lock()
+		c.sessionID = newID
+		c.mu.Unlock()
+		if c.onSession != nil {
+			c.onSession(newID) // re-persist so the next resume targets the live id
+		}
+		status, err = c.postPrompt(newID, text)
+		if err != nil {
+			publishChatSystem(c.publish, "⚠️ opencode: prompt failed to send: "+err.Error())
+			return nil
+		}
+	}
+	if status/100 != 2 {
+		publishChatSystem(c.publish, fmt.Sprintf("⚠️ opencode: prompt rejected (status %d)", status))
+	}
+	return nil
+}
+
+// postPrompt POSTs one turn to /session/{id}/prompt_async and returns the HTTP
+// status. The body is drained/closed. Split from Send so the stale-session
+// (404) recovery can re-issue against a freshly created session.
+func (c *opencodeServerProcess) postPrompt(sid, text string) (int, error) {
 	body, _ := json.Marshal(opencodePromptBody(text))
 	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/session/"+sid+"/prompt_async", bytes.NewReader(body))
 	if err != nil {
-		publishChatSystem(c.publish, "⚠️ opencode: failed to build prompt: "+err.Error())
-		return nil
+		return 0, err
 	}
 	req.Header.Set("content-type", "application/json")
 	fmt.Fprintf(os.Stderr, "opencode serve: prompt_async (session %s)\n", sid)
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		publishChatSystem(c.publish, "⚠️ opencode: prompt failed to send: "+err.Error())
-		return nil
+		return 0, err
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode/100 != 2 {
-		publishChatSystem(c.publish, fmt.Sprintf("⚠️ opencode: prompt rejected (status %d)", resp.StatusCode))
-	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 // Interrupt aborts the active turn via POST /session/{id}/abort (the Stop

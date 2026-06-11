@@ -23,6 +23,7 @@ extension ConduitUI {
                         experimentSection
                         forceSection(flags: $flags)
                         newSessionSection(flags: $flags)
+                        transportSection(flags: $flags)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
@@ -109,6 +110,19 @@ extension ConduitUI {
                         isOn: flags.newSessionLaunchLine
                     )
                 }
+            }
+        }
+
+        // MARK: Transport
+
+        private func transportSection(flags: Bindable<FeatureFlags>) -> some View {
+            sectionCard(title: "Transport") {
+                ConduitUI.toggleRow(
+                    icon: "lock.shield",
+                    title: "SSH tunnel",
+                    subtitle: "Route SSH-paired boxes through the held tunnel (token stays in the SSH channel). Off = legacy public path.",
+                    isOn: flags.sshTunnelTransport
+                )
             }
         }
 

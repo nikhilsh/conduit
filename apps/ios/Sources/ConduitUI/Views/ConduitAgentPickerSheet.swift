@@ -162,7 +162,11 @@ extension ConduitUI {
                         agentKind: kind,
                         agentTint: neon.agentTint(forAgent: kind),
                         initialPrompt: initialPrompt,
-                        onCreate: { cwd, model, effort, permissionMode in
+                        onCreate: { cwd, model, effort, permissionMode, seedPrompt in
+                            // Part B: a "Set up agent harness" tap passes the
+                            // bootstrap prompt as seedPrompt; otherwise fall
+                            // back to the sheet's initialPrompt (voice transcript).
+                            let seed = seedPrompt ?? initialPrompt
                             if let target = resolvedServer, target.endpoint != store.endpoint {
                                 // Session targeted at a different box:
                                 // switch endpoint → connect → create.
@@ -173,7 +177,7 @@ extension ConduitUI {
                                     reasoningEffort: effort,
                                     model: model,
                                     permissionMode: permissionMode,
-                                    initialPrompt: initialPrompt
+                                    initialPrompt: seed
                                 )
                             } else {
                                 store.createSession(
@@ -182,7 +186,7 @@ extension ConduitUI {
                                     reasoningEffort: effort,
                                     model: model,
                                     permissionMode: permissionMode,
-                                    initialPrompt: initialPrompt
+                                    initialPrompt: seed
                                 )
                             }
                             // Defer the dismiss one runloop tick. createSession
@@ -220,6 +224,13 @@ extension ConduitUI {
             // not-signed-in readiness row (informational, never blocking).
             .sheet(isPresented: $showAgentLogin) {
                 ConduitUI.AgentLoginSheet()
+            }
+            .onAppear {
+                // Funnel: agent picker opened (new-session flow or post-pair deep link).
+                let isFirstSession = store.sessions.isEmpty
+                Telemetry.breadcrumb("onboarding", OnboardingStep.agentPickerOpened,
+                    data: ["first_session": "\(isFirstSession)",
+                           "host": store.endpoint.displayHost])
             }
             .appearanceColorScheme()
         }
@@ -527,9 +538,11 @@ extension ConduitUI {
         /// Called with the absolute path to cd into (or nil to start with no
         /// working directory), the selected model alias (nil = inherit the
         /// agent's default model), the chosen reasoning effort (nil = the
-        /// agent's default effort), and the agent mode (nil = Auto / full-auto
-        /// default; "plan" = read-only planning).
-        let onCreate: (String?, String?, String?, String?) -> Void
+        /// agent's default effort), the agent mode (nil = Auto / full-auto
+        /// default; "plan" = read-only planning), and an optional seed prompt
+        /// override (Part B: the "Set up agent harness" bootstrap prompt; nil
+        /// falls back to the sheet's own initialPrompt, e.g. a voice transcript).
+        let onCreate: (String?, String?, String?, String?, String?) -> Void
 
         @Environment(SessionStore.self) private var store
         @Environment(FeatureFlags.self) private var flags
@@ -542,6 +555,13 @@ extension ConduitUI {
         @State private var loadError: String?
         /// Path currently being browsed. nil = the harness default (home).
         @State private var currentPath: String?
+        /// Part B: whether the currently-browsed dir already has CLAUDE.md /
+        /// AGENTS.md. nil = unknown / not yet checked (default: don't nag).
+        /// Refetched alongside each listing in load().
+        @State private var harnessStatus: RemoteHarnessStatus?
+        /// User dismissed the "Set up agent harness" chip for this session —
+        /// keep it hidden for the rest of the sheet (honest, non-nagging).
+        @State private var harnessChipDismissed = false
         /// Selected model option. `ForkOptions.inheritModel` (empty string)
         /// means "no override — use the agent's default model", which is the
         /// default and keeps the start path identical to before.
@@ -554,17 +574,12 @@ extension ConduitUI {
         /// the app's current full-auto default — sent as nil so the spawn
         /// carries no override, identical to before this picker existed.
         @State private var permissionMode: String = ConduitUI.ForkOptions.autoMode
-        /// Controls the fully-opaque model picker confirmation dialog.
-        /// A system Menu renders its popover with a translucent material that
-        /// lets scroll content show through (device feedback: recent-dir rows
-        /// visible through the dropdown). A confirmationDialog is fully opaque.
-        @State private var modelPickerPresented: Bool = false
 
         init(
             agentKind: String,
             agentTint: Color? = nil,
             initialPrompt: String? = nil,
-            onCreate: @escaping (String?, String?, String?, String?) -> Void
+            onCreate: @escaping (String?, String?, String?, String?, String?) -> Void
         ) {
             self.agentKind = agentKind
             self.agentTint = agentTint
@@ -724,13 +739,12 @@ extension ConduitUI {
         private var modelSection: some View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Model")
-                // Opaque trigger row — tapping opens a confirmationDialog
-                // picker. A system Menu renders its popover with a translucent
-                // material; on iOS 26 the recent-dir rows below were visible
-                // through it (device feedback). confirmationDialog is fully
-                // opaque (system sheet presented from the bottom).
-                Button {
-                    modelPickerPresented = true
+                Menu {
+                    Picker("Model", selection: $model) {
+                        ForEach(modelOptions, id: \.self) { option in
+                            Text(ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)).tag(option)
+                        }
+                    }
                 } label: {
                     HStack {
                         Text(ConduitUI.ForkOptions.modelLabel(model, catalog: catalog))
@@ -743,33 +757,34 @@ extension ConduitUI {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .fill(neon.surfaceSolid)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .stroke(neon.border, lineWidth: 1)
-                            )
-                    )
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
                 }
-                .buttonStyle(.plain)
-                .confirmationDialog("Model", isPresented: $modelPickerPresented, titleVisibility: .visible) {
-                    ForEach(modelOptions, id: \.self) { option in
-                        Button(ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)) {
-                            model = option
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                }
+                .tint(neon.accent)
                 // The agent's own description of the (resolved) selection —
                 // e.g. "Sonnet 4.6 · Efficient for routine tasks". Only when
                 // the live catalog is in; the static fallback has none.
                 if let detail = ConduitUI.ForkOptions.modelDetail(model, catalog: catalog) {
                     Text(detail)
-                        .font(neon.mono(10.5))
-                        .foregroundStyle(neon.textFaint)
+                        .font(neon.sans(12))
+                        .foregroundStyle(neon.textDim)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if ConduitUI.ForkOptions.supportsFastMode(model, catalog: catalog) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 9, weight: .bold))
+                        Text("Fast mode available")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.yellow)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(Color.yellow.opacity(0.12))
+                            .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
+                    )
                 }
             }
         }
@@ -871,9 +886,9 @@ extension ConduitUI {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Recent")
                 VStack(spacing: 6) {
-                    ForEach(store.recentDirectories, id: \.self) { path in
+                    ForEach(Array(store.recentDirectories.prefix(3)), id: \.self) { path in
                         Button {
-                            onCreate(path, selectedModel, selectedEffort, selectedPermissionMode)
+                            onCreate(path, selectedModel, selectedEffort, selectedPermissionMode, nil)
                         } label: {
                             ConduitUI.ListRow(
                                 icon: "clock.arrow.circlepath",
@@ -984,11 +999,14 @@ extension ConduitUI {
 
         private var bottomBar: some View {
             VStack(spacing: 10) {
+                if showHarnessChip {
+                    harnessChip
+                }
                 if flags.newSessionLaunchLine {
                     launchLine
                 }
                 Button {
-                    onCreate(listing?.path, selectedModel, selectedEffort, selectedPermissionMode)
+                    onCreate(listing?.path, selectedModel, selectedEffort, selectedPermissionMode, nil)
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
@@ -1009,7 +1027,7 @@ extension ConduitUI {
                 .opacity(listing == nil ? 0.5 : 1.0)
 
                 Button {
-                    onCreate(nil, selectedModel, selectedEffort, selectedPermissionMode)
+                    onCreate(nil, selectedModel, selectedEffort, selectedPermissionMode, nil)
                 } label: {
                     Text("Start without a folder")
                         .font(neon.sans(13).weight(.medium))
@@ -1026,6 +1044,10 @@ extension ConduitUI {
             // behind a safe-area inset to hide it, so the bar must be
             // solid. A hairline on top keeps it visually separated from
             // the scrolling content above.
+            // ignoresSafeArea(.bottom) extends the solid fill through the
+            // home-indicator gap to the physical screen edge so folder rows
+            // can't peek through in the safe-area gutter below "Start without
+            // a folder" (device feedback: "go" folder visible at the bottom).
             .background(
                 neon.surfaceSolid
                     .overlay(alignment: .top) {
@@ -1033,6 +1055,7 @@ extension ConduitUI {
                             .fill(neon.border)
                             .frame(height: 1)
                     }
+                    .ignoresSafeArea(edges: .bottom)
             )
         }
 
@@ -1062,6 +1085,58 @@ extension ConduitUI {
             .padding(.horizontal, 2)
         }
 
+        /// Part B: a tasteful, dismissible suggestion shown only when the
+        /// chosen folder has neither CLAUDE.md nor AGENTS.md. Tapping seeds the
+        /// session with the curated bootstrap prompt (audit repo → write
+        /// CLAUDE.md + AGENTS.md with verified gates, ask before committing)
+        /// and starts cd'd into the folder. An x dismisses it for the session.
+        private var harnessChip: some View {
+            HStack(spacing: 10) {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Set up agent harness")
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.text)
+                    Text("No CLAUDE.md or AGENTS.md here. Have the agent audit the repo and write them.")
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    harnessChipDismissed = true
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(neon.textFaint)
+                        .padding(6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss harness suggestion")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(tint.opacity(0.10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onCreate(
+                    listing?.path, selectedModel, selectedEffort,
+                    selectedPermissionMode, SessionStore.harnessBootstrapPrompt)
+            }
+            .accessibilityIdentifier("ConduitDirectoryPicker.harnessChip")
+        }
+
         // MARK: Helpers
 
         private var canGoUp: Bool {
@@ -1086,11 +1161,24 @@ extension ConduitUI {
             isLoading = true
             loadError = nil
             do {
-                listing = try await store.listDirectories(path: currentPath)
+                let result = try await store.listDirectories(path: currentPath)
+                listing = result
+                // Part B: refresh the harness check for the resolved path the
+                // broker actually listed (currentPath may be nil = home).
+                // Best-effort — nil leaves the chip hidden.
+                harnessStatus = await store.harnessStatus(path: result.path)
             } catch {
                 loadError = "Couldn't list this folder."
             }
             isLoading = false
+        }
+
+        /// Part B: show the "Set up agent harness" chip only when the broker
+        /// confirmed BOTH CLAUDE.md and AGENTS.md are absent, and the user
+        /// hasn't dismissed it for this session.
+        private var showHarnessChip: Bool {
+            guard let status = harnessStatus, !status.has_harness else { return false }
+            return !harnessChipDismissed && listing != nil
         }
     }
 }

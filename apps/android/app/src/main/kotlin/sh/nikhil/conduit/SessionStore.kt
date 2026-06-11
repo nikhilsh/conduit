@@ -46,6 +46,10 @@ import sh.nikhil.conduit.auth.AgentLoginCoordinator
 import uniffi.conduit_core.ConduitDelegate
 import uniffi.conduit_core.ViewEventFile
 import uniffi.conduit_core.sshBootstrap as ffiSshBootstrap
+import uniffi.conduit_core.sshBootstrapTunneled as ffiSshBootstrapTunneled
+import uniffi.conduit_core.SshTunnel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import java.util.concurrent.CountDownLatch
 
 /**
@@ -218,6 +222,18 @@ data class RemoteDirectoryListing(
     val path: String,
     val parent: String,
     val entries: List<RemoteDirectoryEntry>,
+)
+
+/**
+ * Wire shape of `GET /api/fs/harness-status?path=` — whether a directory
+ * already carries an agent harness (CLAUDE.md / AGENTS.md). Powers the
+ * "Set up agent harness" chip (Part B); `fs/list` is dirs-only so it can't
+ * surface these files. Mirror of iOS `RemoteHarnessStatus`.
+ */
+data class RemoteHarnessStatus(
+    val hasClaudeMd: Boolean,
+    val hasAgentsMd: Boolean,
+    val hasHarness: Boolean,
 )
 
 /**
@@ -425,6 +441,25 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val conversationLog: StateFlow<Map<String, List<ConversationItem>>> = _conversationLog.asStateFlow()
 
     /**
+     * Per-session optimistic-send queue: messages the user has sent that
+     * haven't been acked by a successful WS write yet. Persisted to
+     * EncryptedSharedPreferences so a backgrounding-mid-send (or a
+     * kill/relaunch) never silently drops a typed message — the
+     * device-reported "send then background -> never delivered" bug. Flushed
+     * on connect / foreground / reconnect. The transcript echo reads this to
+     * draw the clock / "failed" indicator. Mirror of iOS `pendingChats`.
+     */
+    private val _pendingChats = MutableStateFlow(PendingChatQueue())
+    val pendingChats: StateFlow<PendingChatQueue> = _pendingChats.asStateFlow()
+
+    /** Mutate the pending queue and persist it in one step. */
+    private fun updatePendingChats(transform: (PendingChatQueue) -> PendingChatQueue) {
+        val next = transform(_pendingChats.value)
+        _pendingChats.value = next
+        prefs?.edit()?.putString(KEY_PENDING_CHATS, PendingChatQueue.encode(next))?.apply()
+    }
+
+    /**
      * AI-generated quick replies per session (task #233). The broker
      * emits a `view:"quick_replies"` view_event when an assistant turn
      * completes; the chat composer renders these as tap-able chips,
@@ -444,6 +479,28 @@ class SessionStore : ViewModel(), ConduitDelegate {
     /** SSH-bootstrap progress, observed by the SSH login sheet. */
     private val _sshBootstrap = MutableStateFlow<SshBootstrapState>(SshBootstrapState.Idle)
     val sshBootstrap: StateFlow<SshBootstrapState> = _sshBootstrap.asStateFlow()
+
+    /**
+     * Live SSH tunnel for an SSH-bootstrapped session (core #451). Held for
+     * the session's lifetime so the russh session — and therefore the loopback
+     * port-forward the WS dials — stays up. It's an AutoCloseable-style
+     * object; we [SshTunnel.stop] + release it on disconnect / re-bootstrap so
+     * we never leak the russh session. `null` for token-paired boxes and when
+     * the SSH-tunnel flag is off (legacy fire-and-forget path).
+     */
+    private var sshTunnel: SshTunnel? = null
+
+    /** Liveness watcher for [sshTunnel]; cancelled when the tunnel is replaced. */
+    private var sshTunnelWatcher: Job? = null
+
+    /**
+     * True once the held tunnel reported `isAlive() == false` (the SSH session
+     * died: network flap, server reboot, idle kill, app suspend). Drives a
+     * "connection lost — reconnect" affordance. Reset on a fresh tunnel.
+     * Token-paired boxes never set this (no tunnel).
+     */
+    private val _sshTunnelLost = MutableStateFlow(false)
+    val sshTunnelLost: StateFlow<Boolean> = _sshTunnelLost.asStateFlow()
 
     /** Outstanding TOFU prompt; MainActivity observes this and shows a dialog. */
     private val _pendingHostKey = MutableStateFlow<HostKeyPrompt?>(null)
@@ -706,6 +763,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun applyDeepLink(raw: String) {
         val parsed = sh.nikhil.conduit.PairingURL.parse(raw) ?: return
         val ep = Endpoint(url = parsed.endpoint, token = parsed.token)
+        Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.PAIRING_SUCCEEDED,
+            mapOf("transport" to "deep_link", "host" to ep.displayHost))
         setEndpoint(ep.url, ep.token)
         upsertSavedServer(name = ep.displayHost, endpoint = ep, makeDefault = true)
         disconnect()
@@ -741,6 +800,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
             // the typing indicator spins forever. Mirror of iOS.
             client?.notifyNetworkChange()
             refreshSessions()
+            // Foregrounding may have re-armed a socket that died while
+            // suspended — flush any message the user sent right before they
+            // backgrounded the app (the lost-send bug).
+            flushPendingChats()
         }
 
         override fun onStop(owner: LifecycleOwner) {
@@ -773,6 +836,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             _brokerTitles.value = decodeDisplayNames(p.getString(KEY_BROKER_TITLES, null))
             _deletedIds.value = decodeDeletedIds(p.getString(KEY_DELETED_IDS, null))
             _savedSessions.value = SavedSessionsReducer.decode(p.getString(KEY_SAVED_SESSIONS, null))
+            _pendingChats.value = PendingChatQueue.decode(p.getString(KEY_PENDING_CHATS, null))
             refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
@@ -815,6 +879,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         reachability?.stop()
         reachability = null
+        // Never leak the russh session / loopback listener when the VM dies.
+        teardownSshTunnel()
     }
 
     fun setEndpoint(url: String, token: String) {
@@ -874,6 +940,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         reasoningEffort: String? = null,
         model: String? = null,
         permissionMode: String? = null,
+        initialPrompt: String? = null,
     ) {
         Telemetry.breadcrumb(
             "session",
@@ -886,7 +953,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 harness.first { it.canIssueCommands }
             }
             if (ready != null) {
-                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model, permissionMode = permissionMode)
+                createSession(assistant = assistant, startupCwd = cwd, reasoningEffort = reasoningEffort, model = model, permissionMode = permissionMode, initialPrompt = initialPrompt)
             } else {
                 Telemetry.capture(
                     IllegalStateException("connect+start timed out"),
@@ -961,7 +1028,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
             try {
                 withContext(Dispatchers.IO) { c.connect(this@SessionStore) }
                 _harness.value = HarnessState.Linked
+                Telemetry.breadcrumb("onboarding", "endpoint_connected",
+                    mapOf("host" to _endpoint.value.displayHost,
+                          "first_server" to (_savedServers.value.size == 1).toString()))
                 refreshSessions()
+                // Connection is live again — re-deliver any messages queued
+                // while disconnected (reconnect window / backgrounded
+                // mid-send / killed before the WS flushed).
+                flushPendingChats()
             } catch (t: Throwable) {
                 val detail = describe(t)
                 _harness.value = HarnessState.Failed(detail)
@@ -976,14 +1050,107 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     fun disconnect() {
+        disconnectClient()
+        // Tear down any held SSH tunnel so we never leak the russh session /
+        // loopback listener. No-op for token-paired boxes (tunnel is null).
+        teardownSshTunnel()
+    }
+
+    /**
+     * Tear down only the WS client, leaving any held SSH tunnel intact. Used
+     * by [reconnect] so a WS-only blip on an SSH-tunneled box re-dials the
+     * SAME live loopback port instead of killing (and leaking) the russh
+     * session it depends on.
+     */
+    private fun disconnectClient() {
         client?.disconnect()
         client = null
         _harness.value = HarnessState.Disconnected
     }
 
+    /**
+     * Re-establish the link using the currently stored endpoint.
+     *
+     * If an SSH tunnel is held AND still alive, this is a WS-only restart: the
+     * tunnel is preserved so we re-dial the same live loopback port rather
+     * than tearing down (and leaking) the russh session the endpoint depends
+     * on. Otherwise (token-paired box, or a dead tunnel) fall back to a full
+     * disconnect — a dead tunnel can only be fixed by re-running
+     * [connectViaSSH] (TOFU-gated), not a plain reconnect.
+     */
     fun reconnect() {
-        disconnect()
-        connect()
+        val tunnel = sshTunnel
+        if (tunnel != null && tunnel.isAlive()) {
+            disconnectClient()
+            connect()
+        } else {
+            disconnect()
+            connect()
+        }
+    }
+
+    // MARK: - SSH tunnel lifecycle (core #451)
+
+    /** Whether SSH-paired boxes route through the held tunnel. Default ON;
+     *  flip off to fall back to the legacy public path for one release. */
+    private fun sshTunnelTransportEnabled(): Boolean =
+        prefs?.getBoolean(KEY_SSH_TUNNEL, true) ?: true
+
+    /**
+     * Install a freshly-bootstrapped tunnel (or clear to the legacy path when
+     * null) and start the liveness watcher. Always stops the prior tunnel
+     * first so a re-bootstrap never leaks the old russh session.
+     */
+    private fun adoptSshTunnel(tunnel: SshTunnel?) {
+        teardownSshTunnel()
+        sshTunnel = tunnel
+        _sshTunnelLost.value = false
+        if (tunnel == null) return
+        startSshTunnelWatcher()
+    }
+
+    /** Stop + release the held tunnel and cancel its watcher. Idempotent. */
+    private fun teardownSshTunnel() {
+        sshTunnelWatcher?.cancel()
+        sshTunnelWatcher = null
+        sshTunnel?.let { tunnel ->
+            Telemetry.breadcrumb("ssh_tunnel", "tunnel stop", mapOf("local_port" to tunnel.localPort().toInt().toString()))
+            tunnel.stop()
+            tunnel.close()
+        }
+        sshTunnel = null
+    }
+
+    /**
+     * Poll the held tunnel's `isAlive()` on a slow cadence. On the first
+     * `false` (SSH session died) flip [sshTunnelLost] so the UI can surface a
+     * "connection lost — reconnect" affordance, drop the harness to Failed,
+     * and exit (no busy loop). The user re-runs [connectViaSSH], which
+     * re-bootstraps through the TOFU gate (never a silent re-accept).
+     */
+    private fun startSshTunnelWatcher() {
+        sshTunnelWatcher = viewModelScope.launch {
+            // ~3s cadence: cheap, non-blocking `is_closed()` check. The WS
+            // reconnect worker usually notices the dead loopback dial first;
+            // this is the authoritative SSH-level signal.
+            while (isActive) {
+                delay(3_000)
+                val tunnel = sshTunnel ?: return@launch
+                if (!withContext(Dispatchers.IO) { tunnel.isAlive() }) {
+                    val portStr = tunnel.localPort().toInt().toString()
+                    Telemetry.breadcrumb("ssh_tunnel", "tunnel lost", mapOf("local_port" to portStr))
+                    Telemetry.capture(
+                        error = IllegalStateException("ssh tunnel lost"),
+                        message = "Android SSH tunnel lost",
+                        tags = mapOf("surface" to "android", "phase" to "ssh_tunnel"),
+                        extras = mapOf("local_port" to portStr),
+                    )
+                    _sshTunnelLost.value = true
+                    _harness.value = HarnessState.Failed("Connection to your server was lost. Reconnect to continue.")
+                    return@launch
+                }
+            }
+        }
     }
 
     // MARK: - SSH bootstrap
@@ -1010,15 +1177,45 @@ class SessionStore : ViewModel(), ConduitDelegate {
             val preToken = java.util.UUID.randomUUID().toString()
             try {
                 _sshBootstrap.value = SshBootstrapState.Running("Starting server on $host…")
-                val result = withContext(Dispatchers.IO) {
-                    ffiSshBootstrap(
-                        credentials,
-                        preToken,
-                        anthropicApiKey,
-                        openaiApiKey,
-                        imageRef,
-                        bridge,
+
+                // SSH-tunnel transport (core #451): hold the returned
+                // [SshTunnel] for the session's lifetime so the bearer token
+                // rides the SSH-encrypted channel and the box needs no public
+                // port. Gated behind a flag so the legacy fire-and-forget path
+                // stays available as a one-release fallback. Token-paired boxes
+                // never reach here — this is the SSH-bootstrap flow only.
+                val useTunnel = sshTunnelTransportEnabled()
+                var tunnel: SshTunnel? = null
+                val result = if (useTunnel) {
+                    Telemetry.breadcrumb("ssh_tunnel", "bootstrap (tunneled) start", mapOf("host" to host))
+                    val bootstrap = withContext(Dispatchers.IO) {
+                        ffiSshBootstrapTunneled(
+                            credentials,
+                            preToken,
+                            anthropicApiKey,
+                            openaiApiKey,
+                            imageRef,
+                            bridge,
+                        )
+                    }
+                    tunnel = bootstrap.tunnel
+                    Telemetry.breadcrumb(
+                        "ssh_tunnel",
+                        "tunnel open",
+                        mapOf("host" to host, "local_port" to bootstrap.tunnel.localPort().toInt().toString()),
                     )
+                    bootstrap.result
+                } else {
+                    withContext(Dispatchers.IO) {
+                        ffiSshBootstrap(
+                            credentials,
+                            preToken,
+                            anthropicApiKey,
+                            openaiApiKey,
+                            imageRef,
+                            bridge,
+                        )
+                    }
                 }
                 val url = "ws://127.0.0.1:${result.localPort.toInt()}"
                 val token = result.token
@@ -1027,8 +1224,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 setEndpoint(url, token)
                 upsertSavedServer(name = name, endpoint = endpoint, makeDefault = true)
                 disconnect()
+                // `disconnect()` stops + releases any prior tunnel; install the
+                // new one (if tunneled) and start watching its liveness before
+                // dialing so a drop during connect is observed.
+                adoptSshTunnel(tunnel)
                 connect()
                 _sshBootstrap.value = SshBootstrapState.Idle
+                Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.PAIRING_SUCCEEDED,
+                    mapOf("transport" to "ssh", "host" to host))
             } catch (e: SshException) {
                 val detail = describeSsh(e)
                 _sshBootstrap.value = SshBootstrapState.Failed(detail)
@@ -1356,6 +1559,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
+                // Funnel: first-ever session creation (no prior sessions on any launch).
+                if (_sessions.value.isEmpty()) {
+                    Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_SESSION_CREATED,
+                        mapOf("assistant" to assistant, "host" to _endpoint.value.displayHost))
+                }
                 // Record the explicit --model override for the title menu's
                 // identity header (inherit stays absent on purpose).
                 pickedModel?.let { picked -> _modelBySession.value = _modelBySession.value + (id to picked) }
@@ -1641,6 +1849,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     fun sendChat(sessionId: String, msg: String) {
+        // Funnel: first ever turn sent — first session, no prior server-side conversation items.
+        val priorItems = _conversationLog.value[sessionId].orEmpty().filter { !it.id.startsWith("local-") }
+        if (_sessions.value.size <= 1 && priorItems.isEmpty()) {
+            Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_TURN_SENT,
+                mapOf("session" to sessionId, "chars" to msg.length.toString()))
+        }
         // The user has answered — clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233). Done before the
         // client guard so the chips drop even mid-reconnect.
@@ -1650,11 +1864,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if (handleSlashCommand(sessionId, msg)) return
-        val c = client ?: return
         // Optimistic local echo — harness doesn't loop user messages back
         // as onChatEvent, so the chat tab would stay empty until the
         // assistant replies. The `local-` id lets refreshConversation
         // preserve this entry until the server's typed log catches up.
+        //
+        // CRITICAL: this echo + enqueue happens BEFORE any `client` guard.
+        // The old `val c = client ?: return` here dropped the message
+        // entirely (no echo, no record) if the user sent during a reconnect
+        // window — the device-reported lost-send bug. Now the message is
+        // always queued and persisted; the flush re-delivers it when the
+        // connection comes back.
         //
         // Timestamp must be ANCHORED to the server clock domain, not the
         // device wall-clock. Every persisted item already in the log is
@@ -1688,11 +1908,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val ts = java.time.Instant.ofEpochMilli(echoMs)
             .atOffset(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        val localId = "local-${java.util.UUID.randomUUID()}"
         val item = ConversationItem(
-            id = "local-${java.util.UUID.randomUUID()}",
+            id = localId,
             role = "user",
             kind = "message",
-            status = "done",
+            // PENDING until a successful WS write acks it (flushPendingChats
+            // flips it to "done"). The user bubble draws a clock while
+            // pending and a retry affordance if it ultimately fails.
+            status = "pending",
             content = msg,
             ts = ts,
             files = emptyList(),
@@ -1715,7 +1939,86 @@ class SessionStore : ViewModel(), ConduitDelegate {
             m[sessionId] = (m[sessionId] ?: emptyList()) +
                 ChatEvent(role = "user", content = msg, ts = ts, files = emptyList())
         }
-        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } } }
+        // Register as pending + persist BEFORE attempting any WS write, so a
+        // backgrounding-mid-send or a null client during reconnect never
+        // drops it. The flush re-delivers it on connect / foreground.
+        updatePendingChats { it.enqueue(sessionId, localId, msg, ts) }
+        Telemetry.breadcrumb("chat", "queued", mapOf("session" to sessionId, "chars" to msg.length.toString()))
+        attemptDeliver(sessionId, localId, msg)
+    }
+
+    /**
+     * Attempt to deliver one queued message over the live WS, reporting the
+     * outcome back to [pendingChats] (ack on success, attempt-bump on
+     * failure) and flipping the transcript echo's status. Safe when [client]
+     * is null — it just leaves the entry queued for a later flush. Shared by
+     * the send path and [flushPendingChats]. Mirror of iOS `attemptDeliver`.
+     */
+    private fun attemptDeliver(sessionId: String, localId: String, msg: String) {
+        val c = client ?: return
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
+            if (result.isSuccess) {
+                // Ack: drop from the queue and flip the echo to "done".
+                updatePendingChats { it.markDelivered(sessionId, localId) }
+                setEchoStatus(sessionId, localId, "done")
+            } else {
+                updatePendingChats { it.markAttemptFailed(sessionId, localId) }
+                if (_pendingChats.value.isFailed(localId, sessionId)) {
+                    setEchoStatus(sessionId, localId, "failed")
+                    Telemetry.capture(
+                        error = result.exceptionOrNull() ?: RuntimeException("chat send failed"),
+                        message = "chat send to agent failed (gave up after retries)",
+                        tags = mapOf("surface" to "android", "phase" to "chat_send"),
+                        extras = mapOf("session" to sessionId),
+                    )
+                } else {
+                    // Transient: stays queued + pending for the next flush.
+                    Telemetry.breadcrumb("chat", "send attempt failed — keeping queued",
+                        mapOf("session" to sessionId))
+                }
+            }
+        }
+    }
+
+    /**
+     * Re-deliver every still-pending message for a session — called when the
+     * connection/agent becomes ready again (connect success, app foreground,
+     * reconnect). Failed entries are skipped until the user retries them.
+     * Pass null to flush every session. Mirror of iOS `flushPendingChats`.
+     */
+    fun flushPendingChats(sessionId: String? = null) {
+        val ids = sessionId?.let { listOf(it) } ?: _pendingChats.value.bySession.keys.toList()
+        for (sid in ids) {
+            val due = _pendingChats.value.flushable(sid)
+            if (due.isEmpty()) continue
+            Telemetry.breadcrumb("chat", "flush pending",
+                mapOf("session" to sid, "count" to due.size.toString()))
+            due.forEach { entry -> attemptDeliver(sid, entry.localId, entry.message) }
+        }
+    }
+
+    /**
+     * User tapped retry on a failed message bubble — re-arm the entry and
+     * attempt delivery again immediately. Mirror of iOS `retryPendingChat`.
+     */
+    fun retryPendingChat(sessionId: String, localId: String) {
+        val entry = _pendingChats.value.entries(sessionId).firstOrNull { it.localId == localId } ?: return
+        updatePendingChats { it.retry(sessionId, localId) }
+        setEchoStatus(sessionId, localId, "pending")
+        attemptDeliver(sessionId, localId, entry.message)
+    }
+
+    /**
+     * Flip the `status` of a `local-…` transcript echo in place (pending ->
+     * done / failed). Drives the user-bubble indicator without touching the
+     * message content or its log position. Mirror of iOS `setEchoStatus`.
+     */
+    private fun setEchoStatus(sessionId: String, localId: String, status: String) {
+        _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+            val list = m[sessionId] ?: return@also
+            m[sessionId] = list.map { if (it.id == localId) it.copy(status = status) else it }
+        }
     }
 
     /**
@@ -1877,6 +2180,40 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
+     * Whether a directory already has an agent harness (CLAUDE.md / AGENTS.md).
+     * Returns null on any failure so callers default to NOT nagging (the chip
+     * only shows on a definite hasHarness=false). Best-effort; never throws.
+     * Mirror of iOS `harnessStatus(path:)`.
+     */
+    suspend fun harnessStatus(path: String?): RemoteHarnessStatus? = withContext(Dispatchers.IO) {
+        if (path.isNullOrBlank()) return@withContext null
+        val base = _endpoint.value.httpBaseUrl ?: return@withContext null
+        try {
+            val url = URL("$base/api/fs/harness-status?path=${java.net.URLEncoder.encode(path, "UTF-8")}")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", "Bearer ${_endpoint.value.token}")
+                connectTimeout = 7_000
+                readTimeout = 7_000
+            }
+            if (conn.responseCode !in 200..299) {
+                conn.disconnect()
+                return@withContext null
+            }
+            conn.inputStream.bufferedReader().use { reader ->
+                val obj = JSONObject(reader.readText())
+                RemoteHarnessStatus(
+                    hasClaudeMd = obj.optBoolean("has_claude_md", false),
+                    hasAgentsMd = obj.optBoolean("has_agents_md", false),
+                    hasHarness = obj.optBoolean("has_harness", false),
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * Host health snapshot from `GET /api/host/metrics` (broker v0.0.111+,
      * `broker/internal/hostmetrics`). Percentages are 0–100. Mirror of iOS
      * `SessionStore.HostMetrics`.
@@ -1910,6 +2247,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val isDefault: Boolean = false,
         val defaultEffort: String = "",
         val efforts: List<String> = emptyList(),
+        /** True when the claude CLI advertises supportsFastMode for this model. */
+        val supportsFastMode: Boolean = false,
     )
 
     /**
@@ -1962,6 +2301,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
             )
         } else {
             _modelCatalog.value = parsed
+            Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.CAPABILITIES_FETCHED,
+                mapOf("host" to ep.displayHost,
+                      "agents" to parsed.keys.sorted().joinToString(",")))
             Telemetry.breadcrumb(
                 "model_catalog", "refreshed",
                 mapOf("counts" to parsed.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value.size}" }),
@@ -2208,6 +2550,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // Session is gone server-side — drop its cached scrollback so a
         // recycled id can't resurrect a stale terminal on next launch.
         discardPersistedTerminal(sessionId)
+        // Drop any unsent queued messages for the deleted session.
+        updatePendingChats { it.clear(sessionId) }
     }
 
     fun resize(sessionId: String, rows: UShort, cols: UShort) {
@@ -2416,6 +2760,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     override fun onChatEvent(sessionId: String, event: ChatEvent) {
+        // Funnel: first assistant reply on the very first session.
+        if (event.role == "assistant") {
+            val priorAssistant = _chatLog.value[sessionId].orEmpty().filter { it.role == "assistant" }
+            if (_sessions.value.size <= 1 && priorAssistant.isEmpty()) {
+                Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_REPLY_RECEIVED,
+                    mapOf("session" to sessionId, "chars" to event.content.length.toString()))
+            }
+        }
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
         }
@@ -2649,9 +3001,27 @@ class SessionStore : ViewModel(), ConduitDelegate {
         private const val KEY_BROKER_TITLES = "conduit.session_broker_titles"
         private const val KEY_DELETED_IDS = "conduit.deleted_session_ids"
         private const val KEY_SAVED_SESSIONS = "conduit.saved_sessions"
+        private const val KEY_PENDING_CHATS = "conduit.pending_chats"
+
+        /** SSH-tunnel transport toggle (connection-critical). Default ON;
+         *  flip off to fall back to the legacy public path for one release. */
+        private const val KEY_SSH_TUNNEL = "conduit.transport.ssh_tunnel"
 
         /** Upper bound on retained delete tombstones. */
         private const val TOMBSTONE_CAP = 500
+
+        /**
+         * The curated bootstrap prompt seeded when the user taps "Set up agent
+         * harness" (Part B). Audits the repo and writes a CLAUDE.md + AGENTS.md
+         * with VERIFIED gate commands, asking before committing. Mirror of iOS
+         * `SessionStore.harnessBootstrapPrompt`.
+         */
+        const val HARNESS_BOOTSTRAP_PROMPT =
+            "Audit this repository and set up its agent harness. Identify the real " +
+                "build, test, and lint commands by inspecting the project (do not guess) " +
+                "and verify each one actually runs. Then write a concise CLAUDE.md and " +
+                "AGENTS.md documenting those verified gate commands and the project " +
+                "layout, and propose sensible CI gates. Ask me before committing anything."
 
         /**
          * Classify a broker `SessionStatus.phase` as live/running vs

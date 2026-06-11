@@ -108,6 +108,22 @@ extension ConduitUI {
                             .conduitGlassRoundedRect(cornerRadius: 14)
                         }
                         .neonAccentTint()
+                        if ForkOptions.supportsFastMode(model, catalog: catalog) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bolt.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text("Fast mode available")
+                                    .font(.system(size: 10, weight: .semibold))
+                            }
+                            .foregroundStyle(Color.yellow)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule()
+                                    .fill(Color.yellow.opacity(0.12))
+                                    .overlay(Capsule().strokeBorder(Color.yellow.opacity(0.4), lineWidth: 1))
+                            )
+                        }
                         Text(ForkOptions.modelDetail(model, catalog: catalog)
                             ?? "Default keeps the current model. Pick an alias to fork onto a different one.")
                             .font(.caption2)
@@ -190,6 +206,9 @@ extension ConduitUI {
         var isDefault: Bool
         var defaultEffort: String
         var efforts: [String]
+        /// True when the claude CLI advertises supportsFastMode for this
+        /// model. Only set for claude; always false for codex.
+        var supportsFastMode: Bool
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -198,6 +217,7 @@ extension ConduitUI {
             case isDefault = "is_default"
             case defaultEffort = "default_effort"
             case efforts
+            case supportsFastMode = "supports_fast_mode"
         }
 
         init(
@@ -206,7 +226,8 @@ extension ConduitUI {
             description: String = "",
             isDefault: Bool = false,
             defaultEffort: String = "",
-            efforts: [String] = []
+            efforts: [String] = [],
+            supportsFastMode: Bool = false
         ) {
             self.id = id
             self.displayName = displayName
@@ -214,6 +235,7 @@ extension ConduitUI {
             self.isDefault = isDefault
             self.defaultEffort = defaultEffort
             self.efforts = efforts
+            self.supportsFastMode = supportsFastMode
         }
 
         init(from decoder: Decoder) throws {
@@ -224,6 +246,7 @@ extension ConduitUI {
             isDefault = try c.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
             defaultEffort = try c.decodeIfPresent(String.self, forKey: .defaultEffort) ?? ""
             efforts = try c.decodeIfPresent([String].self, forKey: .efforts) ?? []
+            supportsFastMode = try c.decodeIfPresent(Bool.self, forKey: .supportsFastMode) ?? false
         }
     }
 
@@ -309,34 +332,60 @@ extension ConduitUI {
         /// first), or the static list when no catalog is available.
         static func models(forAssistant assistant: String, catalog: [AgentModel]?) -> [String] {
             guard let catalog, !catalog.isEmpty else { return models(forAssistant: assistant) }
-            var ids = catalog.map(\.id)
-            if !ids.contains(inheritModel) { ids.insert(inheritModel, at: 0) }
-            return ids
+            let ids = catalog.map(\.id)
+            // When the catalog has an explicit non-empty isDefault entry (e.g. codex's
+            // "gpt-5.5"), that entry IS the recommended row — do NOT prepend the ""
+            // inherit sentinel, which would create a duplicate recommended row.
+            // When no explicit non-empty isDefault exists (e.g. claude whose catalog
+            // already has a "" entry, or a catalog with no isDefault), fall through to
+            // prepend "" if absent so the user can always select "no override".
+            let hasExplicitDefault = catalog.contains { $0.isDefault && !$0.id.isEmpty }
+            if hasExplicitDefault {
+                return ids
+            }
+            var mutable = ids
+            if !mutable.contains(inheritModel) { mutable.insert(inheritModel, at: 0) }
+            return mutable
         }
 
         /// Display label for a model option, preferring the agent's own
-        /// display name. For the default/inherit entry (id "" or displayName
-        /// starting with "Default") the raw "Default (recommended)" label
-        /// hides the actual model — so we surface the resolved model name
-        /// instead: "<Model Name> (recommended)" e.g. "Opus 4.8 (recommended)".
-        /// This keeps the default entry identifiable as Opus (or whatever the
-        /// broker's default is) after the user has selected another model and
-        /// wants to come back to it. Resolution reuses `defaultModelTitle` so
-        /// the same "first ·-chunk, strip ' with ...'" logic is shared and
-        /// no model name is hardcoded here.
+        /// display name. For the default/inherit row the raw sentinel label
+        /// ("Default (inherit)" or "Default (recommended)") hides the actual
+        /// model — so we surface the resolved model name instead:
+        /// "<Model Name> (recommended)" e.g. "Opus 4.8 (recommended)".
+        /// Two cases:
+        ///   Claude — catalog has a literal "" entry with displayName
+        ///   "Default (recommended)". The entry is found directly and its
+        ///   displayName triggers the resolved-name path.
+        ///   Codex — catalog has NO "" entry (isDefault entry is "gpt-5.5").
+        ///   No exact match for "", so we fall through to the inherit-sentinel
+        ///   path: resolve via catalogEntry(for:"",in:) which returns the
+        ///   isDefault entry, and show "<that displayName> (recommended)".
+        /// This means every agent's inherit row shows the real model it will
+        /// use, with no hardcoded names.
         static func modelLabel(_ option: String, catalog: [AgentModel]?) -> String {
             guard let catalog, !catalog.isEmpty else { return modelLabel(option) }
-            guard let entry = catalog.first(where: { $0.id == option }) else {
-                return modelLabel(option)
-            }
-            // Default/inherit entry: show the resolved model name so it's
-            // discoverable even after another model was selected.
-            if entry.displayName.lowercased().hasPrefix("default") || entry.id == inheritModel {
-                if let resolved = defaultModelTitle(forCatalog: catalog) {
-                    return "\(resolved) (recommended)"
+            if let entry = catalog.first(where: { $0.id == option }) {
+                // Show "(recommended)" on the default entry, whether its id is "" (claude)
+                // or a real model id (codex). Also catches claude's "Default (recommended)"
+                // displayName prefix path.
+                let isRecommendedRow = entry.isDefault ||
+                    entry.displayName.lowercased().hasPrefix("default") ||
+                    entry.id == inheritModel
+                if isRecommendedRow {
+                    if let resolved = defaultModelTitle(forCatalog: catalog) {
+                        return "\(resolved) (recommended)"
+                    }
                 }
+                return entry.displayName.isEmpty ? modelLabel(option) : entry.displayName
             }
-            return entry.displayName.isEmpty ? modelLabel(option) : entry.displayName
+            // No exact match. For the inherit sentinel (static-fallback path or catalogs
+            // with no "" entry that are queried with ""), resolve via isDefault entry.
+            if option == inheritModel,
+               let resolved = defaultModelTitle(forCatalog: catalog) {
+                return "\(resolved) (recommended)"
+            }
+            return modelLabel(option)
         }
 
         /// One-line detail for a model option (the agent's own description,
@@ -397,11 +446,18 @@ extension ConduitUI {
             }
         }
 
+        /// True when the resolved catalog entry for `option` advertises fast
+        /// mode. Always false without a catalog or for the inherit sentinel
+        /// when the resolved default entry does not carry the flag.
+        static func supportsFastMode(_ option: String, catalog: [AgentModel]?) -> Bool {
+            catalogEntry(for: option, in: catalog)?.supportsFastMode ?? false
+        }
+
         /// The model name to show on the agent card: the discovered default
         /// model's display name ("GPT-5.5"); for claude's "Default
         /// (recommended)" alias entry, the resolved model is the first
-        /// "·"-chunk of its description ("Opus 4.8 with 1M context" →
-        /// "Opus 4.8"). nil without a catalog — caller keeps its static
+        /// "·"-chunk of its description ("Opus 4.8 with 1M context" ->
+        /// "Opus 4.8"). nil without a catalog -- caller keeps its static
         /// label.
         static func defaultModelTitle(forCatalog catalog: [AgentModel]?) -> String? {
             guard let entry = catalog?.first(where: { $0.isDefault }) ?? catalog?.first else { return nil }

@@ -43,7 +43,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             let store = sessionStore
             let endpoint = store?.endpoint ?? .empty
-            PushNotificationManager.shared.didRegisterDeviceToken(deviceToken, endpoint: endpoint)
+            let allEndpoints = store?.savedServers.map { $0.endpoint } ?? []
+            PushNotificationManager.shared.didRegisterDeviceToken(
+                deviceToken,
+                endpoint: endpoint,
+                allEndpoints: allEndpoints
+            )
         }
     }
 

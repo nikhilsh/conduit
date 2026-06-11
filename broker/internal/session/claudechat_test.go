@@ -48,8 +48,11 @@ func TestClaudeStreamCommand(t *testing.T) {
 		// AskUserQuestion waits for the phone's answer via the stdio
 		// control protocol (askcontrol.go) instead of headless auto-deny.
 		"--permission-prompt-tool", "stdio",
-		// Nudge to prefer the AskUserQuestion tool over prose questions.
-		"--append-system-prompt", askUserQuestionNudge,
+		// Nudge to prefer the AskUserQuestion tool over prose questions,
+		// merged with the conduit-awareness addendum (Part A) when the
+		// kill-switch is ON (default). claudeAppendSystemPrompt is the single
+		// source of truth for this value.
+		"--append-system-prompt", claudeAppendSystemPrompt(),
 	}
 	if len(argv) != len(want) {
 		t.Fatalf("argv = %v, want %v", argv, want)

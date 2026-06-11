@@ -250,6 +250,46 @@ Verbatim key frames:
   line for the user-facing notice. (Observed: a *model-not-found* error WAS
   followed by `idle`, but error classes that fail mid-stream are not — endTurn
   is idempotent, so handling both is safe.)
+- **Silent stall — the REAL v0.0.134 no-reply hang (fixed).** The `session.error`
+  terminus above (#459) only covers turns that *fail*. A turn can also go `busy`
+  and then **stall with NO terminus at all** — no `message.part.*`, no
+  `session.idle`, no `session.error` — when the hosted **OpenCode Zen** provider
+  (the no-auth default `opencode/big-pickle`) is rate-limited / slow / down and
+  opencode's upstream request just hangs. Reproduced live on the box: a turn that
+  errors or succeeds always ends, but a provider stall leaves the per-session
+  stream silent indefinitely. The backstop is a **2-minute** silence watchdog
+  (`opencodeTurnSilenceTimeout = 2 * time.Minute`) that ends the turn and posts
+  "no response from the agent." **The bug (#469):** opencode emits a server-wide
+  **`server.heartbeat`** frame — `{"type":"server.heartbeat","properties":{}}`, NO
+  `sessionID` — every **~10 s**, and the backend was resetting the watchdog's
+  `lastActivity` on *every* decoded frame *before* the own-session filter. So the
+  heartbeats perpetually rearmed the watchdog and it could NEVER fire → typing
+  indicator spun forever, no reply, no error (matching the device report; not the
+  #459 case). **Fix:** reset `lastActivity` only for frames that belong to OUR
+  `sessionID`, *after* the filter — heartbeats and other-session frames no longer
+  starve the watchdog (`handleEvent`, `backend_opencode.go`).
+  
+  **Timeout rationale (2 min vs. prior 10 min):** opencode streams
+  `message.part.delta` tokens as the provider generates — the per-session
+  activity timer is reset on *every* real delta, so a long but *producing* turn
+  is never killed. Silence therefore means the provider has not produced anything
+  at all. Two minutes is long enough to absorb the slowest observed cold first-token
+  from Zen (empirically < 60s even on a busy box) while still surfacing a truly
+  dead provider quickly instead of making the user wait 10 minutes. The codex
+  backend keeps its own separate 10-minute value because codex streams reasoning
+  lines for which short inter-line gaps are normal; opencode's SSE model makes
+  any gap unambiguous.  `message.part.delta` tokens continue to reset the watchdog
+  during active generation, so live turns are unaffected.
+- **Stale resume → `prompt_async` 404 (fixed).** opencode's conversation store is
+  a single global SQLite DB (`~/.local/share/opencode/opencode.db`). If it is
+  wiped/rotated under the broker (fresh agent-home after a redeploy, a GC of
+  `data_dir`, a DB reset) while `meta.json` still carries the old `ses_…`, then
+  resuming that id makes `POST /session/{id}/prompt_async` return **HTTP 404**
+  (`NotFoundError`) with **zero SSE frames** — no `busy`, no terminus. Verified
+  live. The backend now treats a 404 on send as "session lost": it `POST`s a
+  fresh `/session`, re-persists the new `ses_…` (so the next resume targets a
+  live id), and retries the prompt once. The old transcript stays in the app's
+  own log.
 - **Token usage** rides the `step-finish` part and the final assistant
   `message.updated` (`tokens{total,input,output,reasoning,cache{read,write}}`,
   plus `cost`). On the free zen models `cost` is `0`. This is the Usage source
@@ -538,10 +578,14 @@ The driver curls + the captured SSE/JSON live in the job tmp dir
 ## Unverified / untested (honest list)
 
 - **Real provider turns.** Every capture used the no-auth `opencode` zen free
-  models. With `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` present the turn lifecycle
+  models. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `OPENCODE_API_KEY` are now
+  forwarded to the `opencode serve` child via `env_passthrough` in
+  `agents/opencode.toml` — on a broker box that has one of these keys set,
+  opencode will pick up the matching provider automatically. The turn lifecycle
   should be identical (same engine, same events), but **tool-call frames,
   reasoning blocks on bigger models, and provider-specific errors are
-  unverified.** No real key was on the box (`env | grep -c ANTHROPIC` = 0).
+  unverified.** No real key was on the box when these captures were taken
+  (`env | grep -c ANTHROPIC` = 0); verify with a real key when available.
 - **Tool / shell / file-edit parts.** A code-touching prompt ("create a file…")
   was later driven live: the turn is multi-step (`step-start` → `reasoning` →
   `tool` parts with `{tool,callID,state}` → `step-finish`, then a second step
