@@ -83,8 +83,7 @@ import sh.nikhil.conduit.push.PushStore
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
 
-// TODO(nikhil): Replace with your real Buy Me a Coffee / donation URL before shipping.
-private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/nikhilsh"
+private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/conduitapp"
 
 /**
  * Settings — Conduit redesign IA (handoff Part A), mirror of iOS
