@@ -64,6 +64,21 @@ GitHub Release (`.github/workflows/release.yml`).
   #469. (v0.0.135)
 - **Buy-me-a-coffee link** — Settings row opening external donation URL (not
   IAP; placeholder URL in-source). PR #462. (v0.0.135)
+- **Message-send + picker polish + multi-box push + opencode/codex hardening**
+  — optimistic-send with pending/failed bubbles persisted across kill (#479);
+  codex model-row dedupe + recents capped at 3 (#476); multi-box push
+  registration (#472); codex extra approval/elicitation server requests handled
+  (were silently acked; #473); opencode 2-min silence timeout (#471);
+  broker-version ldflag (#474); model-catalog richness in picker — usage hints
+  + fast-mode availability (#475); connection-health banner + post-pair
+  readiness checklist (#466); codex `turn/steer` server-side auto-steer +
+  turn/start fallback (#480); choice-card awareness-prompt nudge (#478).
+  (v0.0.136)
+- **Codex steer UI** — litter-style "Queued Next" composer panel: codex injects
+  a mid-turn message into the running turn via real steer ("↳ Steer");
+  claude/others queue it and auto-send on turn completion; gated on a new
+  per-agent `supports.steer` capability (#481 broker, #482 iOS, #483 Android).
+  (v0.0.137)
 
 Earlier foundational work (bare-box broker, tmux-backed PTYs, structured chat
 channel, xterm.js + native-Ghostty terminal, OAuth v2, SSH-bootstrap pairing,
@@ -76,36 +91,34 @@ documented in the frozen contracts above and the archived plans.
 
 ### Now
 
-- **Codex additional approval/elicitation card types** — only
-  `item/commandExecution/requestApproval` renders a card today; the app-server
-  also sends `item/fileChange/requestApproval`, `item/tool/requestUserInput`, and
-  `mcpServer/elicitation/request` (captured EXPERIMENTAL in
-  `CODEX-APPSERVER-PROTOCOL.md`).
-- **opencode reliability** — shorten the silence timeout (10 min is a long wait
-  before the user sees "no response"); let opencode use the user's real provider
-  (anthropic/openai key or configured opencode provider) instead of only the
-  flaky free Zen default (opencode reads per-provider env keys).
+- **Codex extra approval/elicitation CARDS (app-side)** — the broker now handles
+  `fileChange/requestApproval`, `tool/requestUserInput`, `mcpServer/elicitation/request`,
+  and `elicitation` server requests (were silently acked before; #473). Needs
+  investigation: confirm whether the broker maps these onto the generic
+  approval-card channel the apps already render, or whether app card UI is still
+  missing for these types.
+- **opencode reliability** — real-provider support is IN PROGRESS (PR #485):
+  opencode now uses a host `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` or a
+  host-configured opencode provider; OAuth-only users still fall back to Zen
+  because opencode needs a raw API key, not an OAuth token.
 
 ### Next
 
 - **ACP (Agent Client Protocol) backend** — the AgentBackend registry is
-  protocol-keyed; ACP (gemini-cli, Zed family) is the next protocol family →
-  cheap new agents; plus onboard `pi` as a candidate.
-- **Multi-box push registration** — WS-P.3 (#441) registers the device token
-  with the active box only; register with all paired boxes so pushes arrive
-  regardless of which box is foreground.
+  protocol-keyed; ACP is the next protocol family → cheap new agents. The pilot
+  is **gemini-cli** (native `--acp`, locally verifiable); implementation is in
+  progress on branch `acp-backend-gemini`. `pi` does NOT speak ACP natively
+  (only via a fragile third-party adapter) and is better added later as a native
+  `pi --mode rpc` backend.
 - **Push-driven Live Activity updates** — the relay already supports the APNs
   `.push-type.liveactivity` topic; drive lock-screen turn-progress LAs via push.
-- **Surface claude catalog richness in the picker** — the live catalog carries
-  `supportsFastMode`, usage-rate hints, context-window size; expose a fast-mode
-  toggle and rate hints in the model picker.
+- **Surface claude catalog richness in the picker** — availability label and
+  usage hints shipped (#475); what remains is an actionable fast-mode **toggle**
+  (iOS today has a read-only "Fast mode available" label; Android has nothing).
 - **UnifiedPush distributor auto-setup** — `remote-bootstrap.sh --with-ntfy`
   drops a ntfy server next to the broker and the app auto-configures UnifiedPush
   (the Android vendor-free push path; WS-P.4 in the archived push plan). Builds
   on the now-shipped #464 bootstrap hardening.
-- **Broker version ldflags in the manual redeploy runbook** — box-built brokers
-  report `broker_version:"dev"` in readiness (only CI release builds inject
-  `-ldflags -X main.version`); matters for the WS-H.2 self-update banner.
 - **Per-identity readiness/push (multi-tenant)** — readiness `signed_in` is
   box-global (host HOME), not per-bearer; left as a documented extension point
   in WS-H.1. Needed for shared boxes.
