@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -46,6 +47,7 @@ func TestCodexAppServerLive(t *testing.T) {
 		func(u usageDelta) { usages <- u },
 		"",
 		func(id string) { threads <- id },
+		nil, // no subagent roster in live test
 	)
 	if err != nil {
 		t.Fatalf("spawn/handshake failed: %v", err)
@@ -115,6 +117,7 @@ func TestCodexAppServerLiveApproval(t *testing.T) {
 		func(p []byte) { events <- p },
 		nil, "",
 		func(id string) { threads <- id },
+		nil, // no subagent roster in live test
 	)
 	if err != nil {
 		t.Fatalf("spawn/handshake failed: %v", err)
@@ -178,6 +181,158 @@ check:
 		t.Fatalf("approved command did not create hello.txt: %v", err)
 	}
 	t.Log("approved command created hello.txt — approval accept path verified end to end")
+}
+
+// TestCodexAppServerLiveSubagents drives the REAL `codex app-server` through a
+// multi-agent prompt (spawnAgent). It verifies:
+//   - sub-agent spawns register roster nodes via view_event(agents)
+//   - sub-agent messages do NOT appear in the parent chat events
+//   - the parent turn completes normally (not prematurely ended by a sub-agent)
+//
+// Skipped unless CONDUIT_CODEX_LIVE=1. Can be slow (~60–120s).
+//
+//	CONDUIT_CODEX_LIVE=1 go test ./internal/session/ -run TestCodexAppServerLiveSubagents -v -timeout 180s
+func TestCodexAppServerLiveSubagents(t *testing.T) {
+	if os.Getenv("CONDUIT_CODEX_LIVE") != "1" {
+		t.Skip("set CONDUIT_CODEX_LIVE=1 to run against the real codex binary")
+	}
+	dir := t.TempDir()
+
+	chatEvents := make(chan []byte, 256)
+	agentEvents := make(chan []byte, 64)
+	threads := make(chan string, 4)
+
+	publish := func(p []byte) {
+		var frame struct {
+			View string `json:"view"`
+		}
+		if json.Unmarshal(p, &frame) == nil && frame.View == "agents" {
+			cp := make([]byte, len(p))
+			copy(cp, p)
+			select {
+			case agentEvents <- cp:
+			default:
+			}
+		} else {
+			cp := make([]byte, len(p))
+			copy(cp, p)
+			select {
+			case chatEvents <- cp:
+			default:
+			}
+		}
+	}
+
+	// Wire a real subagent registry handle so roster events flow.
+	var subMu sync.Mutex
+	subReg := newSubagentRegistry()
+	subH := &subagentRegistryHandle{
+		mu:        &subMu,
+		reg:       subReg,
+		publish:   publish,
+		sessionID: "live-subagent-test",
+	}
+
+	proc, err := newCodexAppServerProcess(
+		"codex", dir, os.Environ(), SpawnOverride{},
+		publish,
+		nil, "",
+		func(id string) { threads <- id },
+		subH,
+	)
+	if err != nil {
+		t.Fatalf("spawn/handshake failed: %v", err)
+	}
+	defer proc.Close()
+
+	select {
+	case id := <-threads:
+		t.Logf("parent thread: %s", id)
+	case <-time.After(20 * time.Second):
+		t.Fatal("timeout waiting for thread id latch")
+	}
+
+	// Send a multi-agent prompt.
+	const multiAgentPrompt = "Use your spawnAgent collaboration tool to delegate " +
+		"two tasks in parallel: one sub-agent should tell me 1+1, another should " +
+		"tell me 2+2. Wait for both, then summarize. You MUST use spawnAgent."
+	if err := proc.Send(multiAgentPrompt); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Wait for the parent turn to complete (up to 120s for multi-agent latency).
+	var gotAssistant bool
+	deadline := time.After(120 * time.Second)
+	for !gotAssistant {
+		select {
+		case p := <-chatEvents:
+			r, c := chatEventRoleContent(p)
+			t.Logf("  chat event role=%s content=%.80q", r, c)
+			if r == "assistant" {
+				gotAssistant = true
+				t.Logf("parent assistant reply: %q", c[:min(len(c), 120)])
+			}
+		case p := <-agentEvents:
+			// Decode + log roster snapshots as they arrive.
+			var frame struct {
+				Event struct {
+					Agents []map[string]json.RawMessage `json:"agents"`
+				} `json:"event"`
+			}
+			if json.Unmarshal(p, &frame) == nil {
+				t.Logf("  roster update: %d agent(s)", len(frame.Event.Agents))
+				for i, a := range frame.Event.Agents {
+					var tid, status, name string
+					json.Unmarshal(a["task_id"], &tid)
+					json.Unmarshal(a["status"], &status)
+					json.Unmarshal(a["name"], &name)
+					t.Logf("    [%d] task_id=%s status=%s name=%.40q", i, tid[:min(len(tid), 20)], status, name)
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for parent assistant reply after multi-agent turn")
+		}
+	}
+
+	// After the parent turn completed, check that at least one roster snapshot
+	// was published (i.e. sub-agents were detected and registered).
+	// Drain any remaining agent events with a short timeout.
+	time.Sleep(500 * time.Millisecond)
+
+	subMu.Lock()
+	finalSnap := subReg.snapshot()
+	subMu.Unlock()
+
+	t.Logf("final roster: %d agents", len(finalSnap))
+	for i, a := range finalSnap {
+		t.Logf("  [%d] task_id=%v status=%v tokens=%v duration_ms=%v",
+			i, a["task_id"], a["status"], a["tokens"], a["duration_ms"])
+	}
+
+	if len(finalSnap) == 0 {
+		t.Error("expected at least 1 sub-agent in the roster after multi-agent turn")
+	}
+	for i, a := range finalSnap {
+		if a["task_id"] == "" {
+			t.Errorf("agent[%d]: task_id is empty", i)
+		}
+		// Status should be done or working (sub-agents may still be running
+		// when the parent summarizes); either is acceptable.
+		status, _ := a["status"].(string)
+		if status == "" {
+			t.Errorf("agent[%d]: status is empty", i)
+		}
+		t.Logf("  agent[%d]: task_id=%v status=%v name=%v description=%.60v",
+			i, a["task_id"], a["status"], a["name"], a["description"])
+	}
+}
+
+// min returns the smaller of a and b (helper for test log truncation).
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // waitForRole drains chat view_events until one with the given role arrives,

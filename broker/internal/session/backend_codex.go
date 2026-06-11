@@ -108,7 +108,7 @@ func (codexAppServerBackend) Spawn(s *Session, adapter agents.Adapter, req spawn
 	// id via s.latchCodexThreadID (which takes s.mu) — doing it under the lock
 	// would deadlock.
 	var backend chatBackend
-	if proc, cerr := newCodexAppServerProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override, s.PublishText, s.accumulateUsage, req.resumeCodexThreadID, s.latchCodexThreadID); cerr == nil {
+	if proc, cerr := newCodexAppServerProcess(adapter.Command[0], s.workspaceDir, s.commandEnv(nil), s.override, s.PublishText, s.accumulateUsage, req.resumeCodexThreadID, s.latchCodexThreadID, s.subagentHandle()); cerr == nil {
 		backend = proc
 	} else {
 		fmt.Fprintf(os.Stderr, "session %s: codex app-server spawn failed: %v (falling back to codex-exec)\n", s.ID, cerr)

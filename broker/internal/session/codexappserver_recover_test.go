@@ -179,6 +179,7 @@ func newCodexFake(t *testing.T, turnStartBody string) (*codexAppServerProcess, c
 		fake, dir, nil, SpawnOverride{},
 		func(p []byte) { events <- p },
 		nil, "", func(id string) { threads <- id },
+		nil, // no subagent roster in unit tests
 	)
 	if err != nil {
 		t.Fatalf("newCodexAppServerProcess: %v", err)
