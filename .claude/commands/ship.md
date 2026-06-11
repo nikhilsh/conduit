@@ -35,7 +35,8 @@ ORCHESTRATOR: plan in detail, delegate execution, gate, merge, clean up.
 5. DEFINITION OF DONE (self-apply; do not report "done" until all hold):
    [ ] local gates green (broker/core); iOS/Android flagged needs-device-verify
    [ ] CI watched to GREEN via the correct pattern; no red merges
-   [ ] docs/ROADMAP.md updated if scope shifted
+   [ ] pipeline docs updated: ROADMAP (backlog) / IN-PROGRESS / VERIFY-CHECKLIST
+       / DONE — per the verification pipeline rule in CLAUDE.md
    [ ] memory updated (new footgun/decision -> a memory note + index entry)
    [ ] SHARED checkout clean: no leaked untracked files, finished worktrees
        removed (`git worktree list`)

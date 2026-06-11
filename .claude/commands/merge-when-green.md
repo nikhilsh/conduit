@@ -37,6 +37,8 @@ else
 fi
 ```
 
-After merge, run the Definition of Done: roadmap/memory updated, shared checkout
-clean (no leaked files / stale worktrees), broker redeployed IF broker/ changed
-(/broker-redeploy — tagging does NOT deploy the broker).
+After merge, run the Definition of Done: pipeline docs updated (move
+IN-PROGRESS.md entry → VERIFY-CHECKLIST.md under the release version),
+memory updated, shared checkout clean (no leaked files / stale worktrees),
+broker redeployed IF broker/ changed (/broker-redeploy — tagging does NOT
+deploy the broker).

@@ -30,5 +30,6 @@ and /broker-redeploy skill now also inject the ldflag via
 `-ldflags "-X main.version=$(git -C $TMP describe --tags --always)"` so
 /api/capabilities reports the real tag (or short SHA) instead of "dev".
 
-After: update docs/ROADMAP.md + memory; confirm the About screen shows the
+After: update pipeline docs (VERIFY-CHECKLIST.md gets a new version section for
+items in this release; memory updated); confirm the About screen shows the
 expected git SHA (catches a stale ship).

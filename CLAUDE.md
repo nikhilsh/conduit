@@ -40,7 +40,8 @@ conformance_test.go i/o-timeout. See `/merge-when-green`.
 **Definition of Done** (every task self-applies before claiming done):
 - [ ] local gates green (broker/core); iOS/Android flagged needs-device-verify
 - [ ] CI watched to GREEN via the `gh pr checks || true` pending-count pattern
-- [ ] `docs/ROADMAP.md` updated if scope shifted
+- [ ] pipeline docs updated (ROADMAP/IN-PROGRESS/VERIFY-CHECKLIST/DONE) per the
+      roadmap verification pipeline rule below
 - [ ] memory updated (new footgun/decision → note + index entry)
 - [ ] SHARED checkout clean: no leaked untracked files; finished worktrees
       removed (`git worktree list`)
@@ -111,6 +112,21 @@ cycle; the About screen shows the git SHA to catch this.
 - `broker/internal/ws/conformance_test.go` occasionally i/o-timeouts.
 
 Re-run the job before touching either.
+
+**Roadmap verification pipeline** — four docs, four states:
+
+1. **ROADMAP.md** — backlog only. When starting work: cut from backlog, add an
+   entry to **IN-PROGRESS.md** with branch + PR#.
+2. **IN-PROGRESS.md** — actively building. On merge: move the entry to
+   **VERIFY-CHECKLIST.md** under its release version.
+3. **VERIFY-CHECKLIST.md** — merged + released, awaiting owner on-device
+   verification. When the owner verifies: move to **DONE.md**.
+4. **DONE.md** — verified complete. Nothing moves backwards.
+
+Do the doc move as part of the work (ship playbook, merge-when-green, or
+cut-release step). Never call a feature "done" until it is in DONE.md.
+CI green means it compiles — it does NOT mean device-verified (mobile is
+CI-compile-only).
 
 **Commit style:** a single tight subject line. No body, no `Co-Authored-By`
 trailer.
