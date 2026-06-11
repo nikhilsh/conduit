@@ -289,11 +289,11 @@ Companion plans where they exist: `docs/PLAN-AGENT-PLATFORM.md`, `docs/PLAN-PUSH
     In progress on branch `codex-steer-and-choice-cards`.
 
 20. **Choice-cards over prose** — agents often offer options as a plain numbered list
-    (renders as text, not tappable cards). Shipping fix: nudge in the awareness prompt
-    to use `AskUserQuestion`/structured-ask (branch `codex-steer-and-choice-cards`).
-    Follow-up (assessed, not yet shipping): a heuristic to cardify trailing numbered
-    lists in prose (high false-positive risk — only pursue if the nudge proves
-    insufficient).
+    (renders as text, not tappable cards). Fix: nudge in the awareness prompt to use
+    `AskUserQuestion`/structured-ask so the agent emits a real ask-tool call (branch
+    `codex-steer-and-choice-cards`). **Decided (Nikhil, 2026-06-11): nudge only.** A
+    heuristic to guess when prose numbered-lists should render as cards is explicitly
+    declined — too fragile / false-positive-prone. Fix the source, don't parse the prose.
 
 21. **Message-send robustness** — backgrounding mid-send silently drops the message on
     both agents; no pending/queued state. In progress on branch `optimistic-send-pending`
