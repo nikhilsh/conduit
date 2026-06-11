@@ -53,6 +53,7 @@ pub async fn ssh_bootstrap(
     anthropic_api_key: String,
     openai_api_key: String,
     image_ref: Option<String>,
+    app_version: Option<String>,
     host_key_cb: HostKeyCallback,
 ) -> Result<SshBootstrapResult, SshError> {
     let bootstrap = ssh_bootstrap_tunneled(
@@ -61,6 +62,7 @@ pub async fn ssh_bootstrap(
         anthropic_api_key,
         openai_api_key,
         image_ref,
+        app_version,
         host_key_cb,
     )
     .await?;
@@ -85,6 +87,7 @@ pub async fn ssh_bootstrap_tunneled(
     anthropic_api_key: String,
     openai_api_key: String,
     image_ref: Option<String>,
+    app_version: Option<String>,
     host_key_cb: HostKeyCallback,
 ) -> Result<SshTunnelBootstrap, SshError> {
     if pre_allocated_token.len() < 16 {
@@ -100,6 +103,7 @@ pub async fn ssh_bootstrap_tunneled(
         &anthropic_api_key,
         &openai_api_key,
         image_ref.as_deref(),
+        app_version.as_deref(),
     )
     .await?;
 
@@ -132,6 +136,7 @@ async fn run_remote_bootstrap(
     anthropic: &str,
     openai: &str,
     image_ref: Option<&str>,
+    app_version: Option<&str>,
 ) -> Result<bootstrap::ParsedBootstrap, SshError> {
     let args = [
         shell_quote(token),
@@ -139,7 +144,20 @@ async fn run_remote_bootstrap(
         shell_quote(openai),
         shell_quote(image_ref.unwrap_or("")),
     ];
-    let command = format!("sh -s -- {}", args.join(" "));
+    // Prepend CONDUIT_VERSION when the app supplies its version so the
+    // bootstrap script can download the matching broker release via a
+    // versioned URL.  All conduit GitHub releases are prereleases; the
+    // /releases/latest/download/ path resolves only stable releases and
+    // 404s on every prerelease build.  Strip any leading 'v' so the
+    // script gets a bare semver string (e.g. "0.0.141").
+    let version_prefix = match app_version {
+        Some(v) if !v.is_empty() => {
+            let bare = v.trim_start_matches('v');
+            format!("CONDUIT_VERSION={} ", shell_quote(bare))
+        }
+        _ => String::new(),
+    };
+    let command = format!("{}sh -s -- {}", version_prefix, args.join(" "));
     let handle = client.handle.lock().await;
     let mut channel = handle
         .channel_open_session()

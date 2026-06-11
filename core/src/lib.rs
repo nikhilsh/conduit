@@ -105,6 +105,7 @@ pub async fn ssh_bootstrap(
     anthropic_api_key: String,
     openai_api_key: String,
     image_ref: Option<String>,
+    app_version: Option<String>,
     host_key_delegate: Box<dyn SshHostKeyDelegate>,
 ) -> Result<SshBootstrapResult, SshError> {
     let delegate: Arc<dyn SshHostKeyDelegate> = Arc::from(host_key_delegate);
@@ -118,6 +119,7 @@ pub async fn ssh_bootstrap(
         anthropic_api_key,
         openai_api_key,
         image_ref,
+        app_version,
         cb,
     ))
     .await
@@ -134,6 +136,7 @@ pub async fn ssh_bootstrap_tunneled(
     anthropic_api_key: String,
     openai_api_key: String,
     image_ref: Option<String>,
+    app_version: Option<String>,
     host_key_delegate: Box<dyn SshHostKeyDelegate>,
 ) -> Result<SshTunnelBootstrap, SshError> {
     let delegate: Arc<dyn SshHostKeyDelegate> = Arc::from(host_key_delegate);
@@ -147,6 +150,7 @@ pub async fn ssh_bootstrap_tunneled(
         anthropic_api_key,
         openai_api_key,
         image_ref,
+        app_version,
         cb,
     ))
     .await
