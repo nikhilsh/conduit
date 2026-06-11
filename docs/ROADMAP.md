@@ -25,13 +25,6 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 
 ## Backlog
 
-### Now
-
-- **Surface claude catalog richness — fast-mode toggle** — usage hints and
-  `supportsFastMode` availability label shipped (#475); fast-mode toggle is
-  **in progress** (branch `fast-mode-toggle`): iOS shows a read-only label;
-  Android has nothing yet.
-
 ### Later
 
 - **Google Play distribution** — AAB build, data-safety form, Play-signing SHA
