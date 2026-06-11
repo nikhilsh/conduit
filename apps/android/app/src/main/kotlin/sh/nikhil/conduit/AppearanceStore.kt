@@ -214,6 +214,15 @@ class AppearanceStore : ViewModel() {
     private val _newSessionLastEffort = MutableStateFlow("")
     val newSessionLastEffort: StateFlow<String> = _newSessionLastEffort.asStateFlow()
 
+    /**
+     * Debug: show the subagent-roster "Agents" panel in the session
+     * Information screen. Default OFF (FeatureFlags.showSubagentPanel).
+     * Surfaced in Settings Labs so QA/staff can enable it without a build
+     * change. Mirror of iOS `AppearanceStore.showSubagentPanel`.
+     */
+    private val _showSubagentPanel = MutableStateFlow(FeatureFlags.showSubagentPanel)
+    val showSubagentPanel: StateFlow<Boolean> = _showSubagentPanel.asStateFlow()
+
     /** Onboarding state (§5). seenWelcome only governs the Welcome screen. */
     private val _onboardingSeenWelcome = MutableStateFlow(false)
     val onboardingSeenWelcome: StateFlow<Boolean> = _onboardingSeenWelcome.asStateFlow()
@@ -255,6 +264,7 @@ class AppearanceStore : ViewModel() {
         _onboardingSeenWelcome.value = p.getBoolean(KEY_ONB_SEEN_WELCOME, false)
         _onboardingFurthestStep.value = p.getInt(KEY_ONB_FURTHEST_STEP, 0)
         _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
+        _showSubagentPanel.value = p.getBoolean(KEY_SHOW_SUBAGENT_PANEL, FeatureFlags.showSubagentPanel)
 
         // Stable DEVICE id (no accounts): persist a generated id once so the
         // bucket never moves. Then assign the bucket once and persist it —
@@ -321,6 +331,11 @@ class AppearanceStore : ViewModel() {
     fun setOnboardingGuide(value: Boolean) {
         _onboardingGuide.value = value
         prefs?.edit()?.putBoolean(KEY_ONB_GUIDE, value)?.apply()
+    }
+
+    fun setShowSubagentPanel(value: Boolean) {
+        _showSubagentPanel.value = value
+        prefs?.edit()?.putBoolean(KEY_SHOW_SUBAGENT_PANEL, value)?.apply()
     }
 
     fun setFontFamily(value: FontFamily) {
@@ -426,6 +441,7 @@ class AppearanceStore : ViewModel() {
         private const val KEY_ONB_SEEN_WELCOME = "onboarding.seenWelcome"
         private const val KEY_ONB_FURTHEST_STEP = "onboarding.furthestStep"
         private const val KEY_ONB_GUIDE = "onboarding.guide"
+        private const val KEY_SHOW_SUBAGENT_PANEL = "debug.showSubagentPanel"
     }
 }
 

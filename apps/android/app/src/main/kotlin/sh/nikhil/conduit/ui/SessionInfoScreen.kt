@@ -62,8 +62,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.SubagentEntry
 import sh.nikhil.conduit.descriptorFor
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.ProjectSession
@@ -98,6 +100,11 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     val name = displayNames[session.id] ?: session.name
     val context = LocalContext.current
     val neon = LocalNeonTheme.current
+
+    val appearance = LocalAppearanceStore.current
+    val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
+    val subagentRosterMap by store.subagentRoster.collectAsState()
+    val subagents = subagentRosterMap[session.id].orEmpty()
 
     var showRename by remember { mutableStateOf(false) }
     var showFork by remember { mutableStateOf(false) }
@@ -391,6 +398,11 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 }
             }
 
+            // 4b · Agents (debug-gated subagent roster — only when flag ON)
+            if (showSubagentPanel) {
+                AgentsSection(subagents = subagents, neon = neon)
+            }
+
             // 5 · Details
             Column {
                 Eyebrow("DETAILS", neon)
@@ -631,6 +643,126 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
             dismissButton = {
                 TextButton(onClick = { showEndConfirm = false }) { Text("Cancel") }
             },
+        )
+    }
+}
+
+/**
+ * Agents section — full-session roster of subagents the claude agent spawned.
+ * Each row shows name, status pill, description (or last tool), and token count.
+ * Hidden when the roster is empty (hides the section header too).
+ * DEBUG-gated via [AppearanceStore.showSubagentPanel]; only rendered when ON.
+ * Needs on-device verification.
+ */
+@Composable
+private fun AgentsSection(subagents: List<SubagentEntry>, neon: NeonTheme) {
+    Column {
+        Eyebrow("AGENTS", neon)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .neonCardSurface(neon = neon, shape = RoundedCornerShape(14.dp), fill = neon.surface),
+        ) {
+            if (subagents.isEmpty()) {
+                Text(
+                    "No subagents this session",
+                    modifier = Modifier.padding(14.dp),
+                    fontFamily = neon.mono,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = neon.textFaint,
+                )
+            } else {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    subagents.forEachIndexed { idx, agent ->
+                        SubagentRow(agent = agent, neon = neon)
+                        if (idx < subagents.lastIndex) {
+                            Spacer(Modifier.height(1.dp))
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .padding(horizontal = 14.dp)
+                                    .background(neon.border),
+                            )
+                            Spacer(Modifier.height(1.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubagentRow(agent: SubagentEntry, neon: NeonTheme) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    agent.name.ifBlank { "subagent" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
+                    maxLines = 1,
+                )
+                SubagentStatusPill(status = agent.status, neon = neon)
+            }
+            val detail = agent.description.ifBlank { agent.lastTool }.ifBlank { null }
+            if (detail != null) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
+                    maxLines = 2,
+                )
+            }
+        }
+        if (agent.tokens > 0L) {
+            Text(
+                fmtK(agent.tokens),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubagentStatusPill(status: String, neon: NeonTheme) {
+    // working = accent (accentBright), done = textFaint/muted, failed = yellow (warning)
+    val (label, color) = when (status.lowercase()) {
+        "working" -> "Working" to neon.accentBright
+        "done" -> "Done" to neon.textFaint
+        "failed" -> "Failed" to neon.yellow
+        else -> status.replaceFirstChar { it.uppercase() } to neon.textFaint
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(50))
+            .border(1.dp, color.copy(alpha = 0.30f), RoundedCornerShape(50))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    ) {
+        Box(Modifier.size(5.dp).background(color, CircleShape))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.SemiBold,
+            color = color,
         )
     }
 }
