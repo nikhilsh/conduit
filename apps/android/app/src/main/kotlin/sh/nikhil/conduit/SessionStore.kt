@@ -3174,15 +3174,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
         } else {
             HarnessState.Failed("Disconnected: $reason")
         }
-        Telemetry.capture(
-            error = IllegalStateException(reason),
-            message = "Android disconnected from harness",
-            tags = mapOf(
-                "surface" to "android",
-                "phase" to "disconnect",
+        // Routine disconnects (code 0 / clean close, network loss, server
+        // restart) are expected lifecycle — downgraded to breadcrumb so the
+        // reason is still attached to the next real error without burning a
+        // Sentry quota event each time.
+        // Auth failures are NOT downgraded: those land in onConnectionHealth
+        // above as genuine ERROR-level events (auth_expired).
+        Telemetry.breadcrumb(
+            category = "connect",
+            message = "disconnected from harness",
+            data = mapOf(
                 "reason_code" to connectionReasonCode(reason),
-            ),
-            extras = mapOf(
                 "endpoint" to _endpoint.value.displayHost,
                 "detail" to reason,
             ),

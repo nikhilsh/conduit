@@ -88,7 +88,9 @@ final class AgentLoginCoordinator {
     func start(_ provider: AgentLoginProvider) async throws {
         self.provider = provider
         state = .waitingForBrokerURL
-        Telemetry.debug("agent_login", "start", data: ["provider": provider.wireName])
+        // Breadcrumb, not debug event: fires on every login attempt and
+        // belongs to the trail leading to a success or failure capture.
+        Telemetry.breadcrumb("agent_login", "start", data: ["provider": provider.wireName])
         try await transport.sendStartAgentLogin(provider: provider.wireName)
         // The transport's reply lands via `handleViewEvent(_:)` —
         // typically routed from SessionStore's WS dispatcher. We
@@ -104,9 +106,10 @@ final class AgentLoginCoordinator {
         // code-paste flow: the CLI advertised a remote redirect
         // (platform.claude.com), not a localhost loopback, so there is
         // nothing for this loopback server to ever receive and the flow
-        // will stall until the 600s timeout. Surfaced to Sentry so the
-        // mismatch is visible without a device in hand.
-        Telemetry.debug("agent_login", "url received", data: [
+        // will stall until the 600s timeout.
+        // Breadcrumb (not debug event): captures the loopback_port for
+        // post-failure diagnosis without burning a Sentry quota event.
+        Telemetry.breadcrumb("agent_login", "url received", data: [
             "provider": provider?.wireName ?? "unknown",
             "loopback_port": String(loopbackPort),
         ])
