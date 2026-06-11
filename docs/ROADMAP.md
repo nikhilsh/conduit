@@ -283,10 +283,14 @@ Companion plans where they exist: `docs/PLAN-AGENT-PLATFORM.md`, `docs/PLAN-PUSH
     "OpenCode Zen" default; the broker could pass provider env keys or configure the
     provider in the session `$HOME`.
 
-19. **Codex `turn/steer`** — the codex app-server supports steering a running turn
-    mid-generation (redirect without interrupting); claude has no equivalent. Investigate
-    live, surface in the app (send-while-turn-active → steer for codex; claude queues).
-    In progress on branch `codex-steer-and-choice-cards`.
+19. **Codex `turn/steer`** — the codex app-server exposes steering a running turn
+    mid-generation (redirect without interrupting); claude has no equivalent. **Investigated
+    live (codex 0.132.0): protocol-present but functionally inert** — `turn/steer` (param
+    `expectedTurnId`, not `turnId`) is ACKed and the turn continues under the same id, but
+    the model ignores the steered text and finishes the original task (verified ×3; nothing
+    on the wire or in the rollout file). Plumbing deferred — a `Steer(text)` guarded like
+    `Interrupt()` is scoped in `docs/CODEX-APPSERVER-PROTOCOL.md`, to wire once a newer
+    codex demonstrably steers. No app "Steer" button until then (would silently no-op).
 
 20. **Choice-cards over prose** — agents often offer options as a plain numbered list
     (renders as text, not tappable cards). Fix: nudge in the awareness prompt to use
