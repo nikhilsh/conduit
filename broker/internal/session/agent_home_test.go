@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/nikhilsh/conduit/broker/internal/agents"
 )
 
 // TestMirrorHostCredentials_AnthropicCopiesBothFiles validates the
@@ -350,5 +353,199 @@ func TestCommandEnvSetsSandbox(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("commandEnv missing IS_SANDBOX=1; env=%v", env)
+	}
+}
+
+// TestMirrorHostCredentials_OpencodeCopiesFiles validates that the "opencode"
+// provider mirrors both the auth.json credential and the opencode.jsonc config
+// into the ephemeral HOME, so a spawned `opencode serve` uses whatever provider
+// the operator configured on the host instead of always falling back to Zen.
+func TestMirrorHostCredentials_OpencodeCopiesFiles(t *testing.T) {
+	hostHome := t.TempDir()
+	t.Setenv("CONDUIT_HOST_HOME", hostHome)
+
+	authDir := filepath.Join(hostHome, ".local", "share", "opencode")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatalf("mkdir auth dir: %v", err)
+	}
+	configDir := filepath.Join(hostHome, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	authBlob := []byte(`{"providers":{"anthropic":{"accessToken":"tok"}}}`)
+	cfgBlob := []byte(`{"$schema":"https://opencode.ai/config.json","model":"anthropic/claude-sonnet-4-5"}`)
+	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), authBlob, 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "opencode.jsonc"), cfgBlob, 0o644); err != nil {
+		t.Fatalf("write opencode.jsonc: %v", err)
+	}
+
+	ephemeral := t.TempDir()
+	if err := mirrorHostCredentials("opencode", ephemeral); err != nil {
+		t.Fatalf("mirrorHostCredentials(opencode): %v", err)
+	}
+
+	gotAuth, err := os.ReadFile(filepath.Join(ephemeral, ".local", "share", "opencode", "auth.json"))
+	if err != nil {
+		t.Fatalf("read mirrored auth.json: %v", err)
+	}
+	if string(gotAuth) != string(authBlob) {
+		t.Fatalf("auth.json mismatch: got %q want %q", gotAuth, authBlob)
+	}
+
+	gotCfg, err := os.ReadFile(filepath.Join(ephemeral, ".config", "opencode", "opencode.jsonc"))
+	if err != nil {
+		t.Fatalf("read mirrored opencode.jsonc: %v", err)
+	}
+	if string(gotCfg) != string(cfgBlob) {
+		t.Fatalf("opencode.jsonc mismatch: got %q want %q", gotCfg, cfgBlob)
+	}
+
+	// auth.json must be mode 0600 (credential file).
+	st, err := os.Stat(filepath.Join(ephemeral, ".local", "share", "opencode", "auth.json"))
+	if err != nil {
+		t.Fatalf("stat auth.json: %v", err)
+	}
+	if mode := st.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("auth.json mode = %#o, want 0600", mode)
+	}
+}
+
+// TestMirrorHostCredentials_OpencodeNoFiles confirms that mirrorHostCredentials
+// for the "opencode" provider returns an error (not a panic) when the host has
+// no opencode cred or config files — the caller logs and continues so the agent
+// falls back to Zen gracefully.
+func TestMirrorHostCredentials_OpencodeNoFiles(t *testing.T) {
+	hostHome := t.TempDir()
+	t.Setenv("CONDUIT_HOST_HOME", hostHome)
+	ephemeral := t.TempDir()
+
+	err := mirrorHostCredentials("opencode", ephemeral)
+	if err == nil {
+		t.Fatalf("expected error for empty host opencode creds, got nil")
+	}
+}
+
+// TestMirrorHostCredentials_OpencodeConfigOnly verifies that having only the
+// opencode.jsonc config (but no auth.json) is still treated as "something
+// mirrored" — the config can specify a provider, and the auth may arrive via
+// an API key env var rather than the auth.json store.
+func TestMirrorHostCredentials_OpencodeConfigOnly(t *testing.T) {
+	hostHome := t.TempDir()
+	t.Setenv("CONDUIT_HOST_HOME", hostHome)
+
+	configDir := filepath.Join(hostHome, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfgBlob := []byte(`{"$schema":"https://opencode.ai/config.json"}`)
+	if err := os.WriteFile(filepath.Join(configDir, "opencode.jsonc"), cfgBlob, 0o644); err != nil {
+		t.Fatalf("write opencode.jsonc: %v", err)
+	}
+
+	ephemeral := t.TempDir()
+	if err := mirrorHostCredentials("opencode", ephemeral); err != nil {
+		t.Fatalf("mirrorHostCredentials(opencode, config-only): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ephemeral, ".config", "opencode", "opencode.jsonc")); err != nil {
+		t.Fatalf("mirrored opencode.jsonc not found: %v", err)
+	}
+}
+
+// TestOpencodeProviderPath is a table test for opencodeProviderPath: the function
+// that determines (and logs) which provider path opencode will use at session
+// startup. The priority is: env API key → mirrored auth → mirrored config → Zen.
+func TestOpencodeProviderPath(t *testing.T) {
+	makeAdapter := func(passthrough ...string) agents.Adapter {
+		return agents.Adapter{
+			Name:           "opencode",
+			Command:        []string{"opencode"},
+			Workdir:        "/workspace",
+			EnvPassthrough: passthrough,
+		}
+	}
+
+	tests := []struct {
+		name       string
+		adapter    agents.Adapter
+		envKey     string
+		envVal     string
+		setupHome  func(t *testing.T, home string)
+		wantPrefix string
+	}{
+		{
+			name:       "ANTHROPIC_API_KEY present → env:ANTHROPIC_API_KEY",
+			adapter:    makeAdapter("ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
+			envKey:     "ANTHROPIC_API_KEY",
+			envVal:     "sk-ant-test",
+			wantPrefix: "env:ANTHROPIC_API_KEY",
+		},
+		{
+			name:       "OPENAI_API_KEY present → env:OPENAI_API_KEY",
+			adapter:    makeAdapter("ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
+			envKey:     "OPENAI_API_KEY",
+			envVal:     "sk-openai-test",
+			wantPrefix: "env:OPENAI_API_KEY",
+		},
+		{
+			name:    "mirrored auth.json → mirrored-auth",
+			adapter: makeAdapter("ANTHROPIC_API_KEY"),
+			setupHome: func(t *testing.T, home string) {
+				d := filepath.Join(home, ".local", "share", "opencode")
+				if err := os.MkdirAll(d, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(d, "auth.json"), []byte(`{"providers":{}}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantPrefix: "mirrored-auth",
+		},
+		{
+			name:    "mirrored config only (no auth.json, no env key) → mirrored-config",
+			adapter: makeAdapter("ANTHROPIC_API_KEY"),
+			setupHome: func(t *testing.T, home string) {
+				d := filepath.Join(home, ".config", "opencode")
+				if err := os.MkdirAll(d, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				// Non-trivial config (>2 bytes) signals a real provider is configured.
+				if err := os.WriteFile(filepath.Join(d, "opencode.jsonc"), []byte(`{"model":"anthropic/claude-opus-4-5"}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantPrefix: "mirrored-config",
+		},
+		{
+			name:       "no key, no files → zen-fallback",
+			adapter:    makeAdapter("ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
+			wantPrefix: "zen-fallback",
+		},
+		{
+			name:       "empty env key does not count → zen-fallback",
+			adapter:    makeAdapter("ANTHROPIC_API_KEY"),
+			envKey:     "ANTHROPIC_API_KEY",
+			envVal:     "",
+			wantPrefix: "zen-fallback",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envKey != "" {
+				t.Setenv(tc.envKey, tc.envVal)
+			}
+			agentHome := ""
+			if tc.setupHome != nil {
+				agentHome = t.TempDir()
+				tc.setupHome(t, agentHome)
+			}
+			got := opencodeProviderPath(tc.adapter, agentHome)
+			if !strings.HasPrefix(got, tc.wantPrefix) {
+				t.Errorf("opencodeProviderPath = %q, want prefix %q", got, tc.wantPrefix)
+			}
+		})
 	}
 }

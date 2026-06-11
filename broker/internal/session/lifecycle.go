@@ -170,7 +170,7 @@ func providerForAssistant(assistant string) string {
 // (if any) the session's own agent is. Keep in sync with
 // providerForAssistant / mirrorHostCredentials.
 func allCredentialProviders() []string {
-	return []string{"anthropic", "openai"}
+	return []string{"anthropic", "openai", "opencode"}
 }
 
 // credentialProvidersFromRegistry derives the set of distinct non-empty
@@ -253,6 +253,19 @@ func mirrorHostCredentials(provider, ephemeralHome string) error {
 		sources = []hostCredSource{
 			{src: filepath.Join(host, ".codex", "auth.json"), dst: filepath.Join(ephemeralHome, ".codex", "auth.json"), mode: 0o600},
 			{src: filepath.Join(host, ".codex", "config.toml"), dst: filepath.Join(ephemeralHome, ".codex", "config.toml"), mode: 0o644},
+		}
+	case "opencode":
+		// opencode stores auth credentials at ~/.local/share/opencode/auth.json
+		// (its XDG data dir, resolved relative to HOME) and its per-user config
+		// at ~/.config/opencode/opencode.jsonc (XDG config dir). Both must be
+		// mirrored into the ephemeral HOME so the spawned `opencode serve`
+		// process picks up any provider credentials the operator configured via
+		// `opencode providers login`. Without the mirror, the session HOME is
+		// empty and opencode falls back to the built-in "OpenCode Zen" free
+		// provider regardless of what is configured on the host.
+		sources = []hostCredSource{
+			{src: filepath.Join(host, ".local", "share", "opencode", "auth.json"), dst: filepath.Join(ephemeralHome, ".local", "share", "opencode", "auth.json"), mode: 0o600},
+			{src: filepath.Join(host, ".config", "opencode", "opencode.jsonc"), dst: filepath.Join(ephemeralHome, ".config", "opencode", "opencode.jsonc"), mode: 0o644},
 		}
 	default:
 		return fmt.Errorf("unknown provider %q", provider)

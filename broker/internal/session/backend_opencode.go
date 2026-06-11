@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,6 +84,12 @@ func (opencodeBackend) Spawn(s *Session, adapter agents.Adapter, req spawnReques
 	s.codexThreadID = req.resumeCodexThreadID
 	s.chatRespawn = nil
 	s.mu.Unlock()
+
+	// Log which provider path opencode will use so the choice is diagnosable
+	// in the broker log. Priority: env API key (ANTHROPIC_API_KEY / OPENAI_API_KEY
+	// forwarded by commandEnv) → host-mirrored opencode auth (auth.json or
+	// opencode.jsonc, copied into the session's ephemeral HOME) → Zen fallback.
+	fmt.Fprintf(os.Stderr, "session %s: opencode provider path: %s\n", s.ID, opencodeProviderPath(adapter, s.agentHomeDir))
 
 	proc, err := newOpencodeServerProcess(
 		adapter.Command[0],
@@ -909,3 +916,40 @@ func opencodePromptBody(text string) map[string]any {
 
 // opencodeNow is the clock for ts/watchdog — a var so tests can pin it.
 var opencodeNow = time.Now
+
+// opencodeProviderPath describes which provider path opencode will take when
+// spawned. It is used only for logging at session startup.
+//
+// Priority order (mirrors what opencode itself does at startup):
+//  1. ANTHROPIC_API_KEY in env → Anthropic provider (real model, API-key auth).
+//  2. OPENAI_API_KEY in env    → OpenAI provider (real model, API-key auth).
+//  3. Other keys from adapter.EnvPassthrough that are set in env (e.g.
+//     OPENCODE_API_KEY for any opencode-configured gateway key).
+//  4. Host-mirrored auth in the session's ephemeral HOME (auth.json or
+//     opencode.jsonc copied from the host by mirrorHostCredentials) — a real
+//     provider configured via `opencode providers login` on the broker host.
+//  5. Zen fallback — no key or cred file; uses the free "OpenCode Zen" tier.
+//
+// Only the first matching path is reported. agentHome is the session's
+// ephemeral HOME directory (empty string → no mirrored creds to check).
+func opencodeProviderPath(adapter agents.Adapter, agentHome string) string {
+	// 1 & 2 & 3: check env_passthrough keys
+	for _, key := range adapter.EnvPassthrough {
+		if v := os.Getenv(key); v != "" {
+			return "env:" + key
+		}
+	}
+	// 4: check for mirrored opencode cred files in the session's ephemeral HOME
+	if agentHome != "" {
+		authJSON := filepath.Join(agentHome, ".local", "share", "opencode", "auth.json")
+		if _, err := os.Stat(authJSON); err == nil {
+			return "mirrored-auth"
+		}
+		opencodeJSONC := filepath.Join(agentHome, ".config", "opencode", "opencode.jsonc")
+		if data, err := os.ReadFile(opencodeJSONC); err == nil && len(data) > 2 {
+			return "mirrored-config"
+		}
+	}
+	// 5: fall back to Zen
+	return "zen-fallback"
+}
