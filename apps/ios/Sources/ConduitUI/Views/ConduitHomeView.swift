@@ -38,6 +38,8 @@ extension ConduitUI {
         @State private var showApprovals = false
         /// Box selected from the Boxes list → Box health detail sheet.
         @State private var selectedBox: SavedServer?
+        /// WS-H.2: SSH re-bootstrap sheet triggered from the broker-update banner.
+        @State private var showSshReBoot = false
         /// Voice dictation (bottom mic). On a transcript we stash it here
         /// and open the agent picker seeded with it as the first prompt.
         @State private var showVoiceDictation = false
@@ -163,6 +165,11 @@ extension ConduitUI {
                         onReconnect: { store.selectSavedServer(server.id, autoConnect: true) }
                     )
                     .environment(store)
+                }
+                // WS-H.2: SSH re-bootstrap sheet, triggered from the broker-update banner.
+                .sheet(isPresented: $showSshReBoot) {
+                    SSHLoginSheet()
+                        .environment(store)
                 }
                 .alert(
                     "Archive session?",
@@ -644,6 +651,24 @@ extension ConduitUI {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 14))
+                        }
+                        // WS-H.2: broker-update banner — non-blocking, shown only
+                        // when the broker reports an outdated version. "dev" /
+                        // unparseable broker versions never show the banner.
+                        if let bv = store.brokerReadiness?.brokerVersion,
+                           case .updateAvailable = brokerVersionStatus(
+                               brokerVersion: bv,
+                               minimumVersion: SessionStore.minimumBrokerVersion
+                           ) {
+                            let sshPaired = store.endpoint.url.contains("127.0.0.1")
+                            ConduitUI.BrokerUpdateBanner(
+                                brokerVersion: bv,
+                                isSshPaired: sshPaired,
+                                onRebootstrap: { showSshReBoot = true }
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                         }
                     } header: {
                         sectionHeader("Boxes", actionIcon: "wifi", actionLabel: "Pair box", actionTint: neon.textDim) {

@@ -347,6 +347,173 @@ struct AgentDescriptor: Decodable, Equatable {
     }
 }
 
+// MARK: - BrokerReadiness (WS-H.1 consumer)
+//
+// Parsed from the `readiness` block in `GET /api/capabilities` (broker #450).
+// All fields are optional so an older broker that omits the block produces
+// a nil readiness value — every consumer treats nil as "unknown, no nag".
+
+/// Per-agent readiness state reported by the broker.
+struct AgentReadiness: Decodable, Equatable {
+    /// The CLI binary is present on the box.
+    var cliPresent: Bool
+    /// The agent is signed in (credential file exists or env-key set).
+    var signedIn: Bool
+    /// Seconds until the credential expires; nil = permanent (API key) or unknown.
+    var authExpiresInS: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case cliPresent     = "cli_present"
+        case signedIn       = "signed_in"
+        case authExpiresInS = "auth_expires_in_s"
+    }
+
+    init(cliPresent: Bool = false, signedIn: Bool = false, authExpiresInS: Int? = nil) {
+        self.cliPresent     = cliPresent
+        self.signedIn       = signedIn
+        self.authExpiresInS = authExpiresInS
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cliPresent     = try c.decodeIfPresent(Bool.self, forKey: .cliPresent)     ?? false
+        signedIn       = try c.decodeIfPresent(Bool.self, forKey: .signedIn)       ?? false
+        authExpiresInS = try c.decodeIfPresent(Int.self,  forKey: .authExpiresInS)
+    }
+}
+
+/// Top-level readiness block from `/api/capabilities`.
+struct BrokerReadiness: Decodable, Equatable {
+    /// Broker build tag ("v0.0.120") or "dev" for hand-built boxes.
+    var brokerVersion: String
+    /// Node.js found at broker startup.
+    var nodePresent: Bool
+    /// tmux found on the broker host.
+    var tmuxPresent: Bool
+    /// Per-agent readiness, keyed by the agent name ("claude", "codex", …).
+    var agents: [String: AgentReadiness]
+
+    enum CodingKeys: String, CodingKey {
+        case brokerVersion = "broker_version"
+        case nodePresent   = "node_present"
+        case tmuxPresent   = "tmux_present"
+        case agents
+    }
+
+    init(
+        brokerVersion: String = "dev",
+        nodePresent: Bool = true,
+        tmuxPresent: Bool = true,
+        agents: [String: AgentReadiness] = [:]
+    ) {
+        self.brokerVersion = brokerVersion
+        self.nodePresent   = nodePresent
+        self.tmuxPresent   = tmuxPresent
+        self.agents        = agents
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        brokerVersion = try c.decodeIfPresent(String.self,                     forKey: .brokerVersion) ?? "dev"
+        nodePresent   = try c.decodeIfPresent(Bool.self,                       forKey: .nodePresent)   ?? true
+        tmuxPresent   = try c.decodeIfPresent(Bool.self,                       forKey: .tmuxPresent)   ?? true
+        agents        = try c.decodeIfPresent([String: AgentReadiness].self,   forKey: .agents)        ?? [:]
+    }
+}
+
+// MARK: - Broker-version comparison (WS-H.2)
+//
+// The broker stamps its build with the release tag ("v0.0.120"). The app
+// carries a compile-time minimum it expects. "dev" / unparseable versions
+// are treated as Unknown so hand-built boxes are never nagged.
+
+/// Result of comparing the broker's reported version to the app minimum.
+enum BrokerVersionStatus: Equatable {
+    /// Version string is "dev" or otherwise unparseable — no nag.
+    case unknown
+    /// Broker is at or above the minimum expected version.
+    case current
+    /// Broker is older than the minimum expected version.
+    case updateAvailable(brokerVersion: String)
+}
+
+/// Compare `brokerVersion` against `minimumVersion`.
+/// Both are expected in "vMAJOR.MINOR.PATCH" form; anything else → `.unknown`.
+/// "dev" or empty → `.unknown`. Visible for testing.
+func brokerVersionStatus(brokerVersion: String, minimumVersion: String) -> BrokerVersionStatus {
+    func parse(_ v: String) -> (Int, Int, Int)? {
+        let s = v.hasPrefix("v") ? String(v.dropFirst()) : v
+        let parts = s.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return (parts[0], parts[1], parts[2])
+    }
+    guard
+        !brokerVersion.isEmpty,
+        brokerVersion != "dev",
+        let bv = parse(brokerVersion),
+        let mv = parse(minimumVersion)
+    else { return .unknown }
+    if bv < mv { return .updateAvailable(brokerVersion: brokerVersion) }
+    return .current
+}
+
+// MARK: - Readiness checklist item (WS-H.3)
+
+/// One row in the post-pair readiness checklist.
+struct ReadinessCheckItem: Equatable, Identifiable {
+    enum Status: Equatable {
+        case ok
+        case notSignedIn
+        case notInstalled
+        case absent   // node / tmux missing
+    }
+    let id: String          // agent key or "node" / "tmux"
+    let label: String       // "Claude", "Codex", "node", "tmux"
+    let status: Status
+    /// OAuth provider for sign-in deep-link (nil for non-agent rows).
+    let loginProvider: String?
+}
+
+/// Derive the ordered checklist from a `BrokerReadiness` block plus the live
+/// agent descriptor map so display names are broker-accurate.
+/// Agent rows come first (sorted by key), then infra rows (node, tmux) only
+/// when absent. Visible for testing.
+func readinessCheckItems(
+    readiness: BrokerReadiness,
+    descriptors: [String: AgentDescriptor]
+) -> [ReadinessCheckItem] {
+    var items: [ReadinessCheckItem] = []
+    for key in readiness.agents.keys.sorted() {
+        let ar = readiness.agents[key]!
+        let displayName = descriptors[key]?.displayName.isEmpty == false
+            ? descriptors[key]!.displayName
+            : key.prefix(1).uppercased() + key.dropFirst()
+        let provider = descriptors[key]?.loginProvider
+        let status: ReadinessCheckItem.Status
+        if !ar.cliPresent {
+            status = .notInstalled
+        } else if !ar.signedIn {
+            status = .notSignedIn
+        } else {
+            status = .ok
+        }
+        items.append(ReadinessCheckItem(
+            id: key,
+            label: displayName,
+            status: status,
+            loginProvider: provider?.isEmpty == false ? provider : nil
+        ))
+    }
+    // Infra rows — only flag when absent (they are subtle secondary rows).
+    if !readiness.nodePresent {
+        items.append(ReadinessCheckItem(id: "node", label: "node", status: .absent, loginProvider: nil))
+    }
+    if !readiness.tmuxPresent {
+        items.append(ReadinessCheckItem(id: "tmux", label: "tmux", status: .absent, loginProvider: nil))
+    }
+    return items
+}
+
 /// UI-level status for the SSH-bootstrap flow. Independent of `HarnessState`
 /// because bootstrap runs *before* we have an endpoint to connect to: the
 /// progress line ("Starting harness…") lives in the SSH login sheet, not
@@ -959,6 +1126,16 @@ final class SessionStore {
     /// Shape mirrors `broker/internal/session.AgentDescriptor`.
     private(set) var agentDescriptors: [String: AgentDescriptor] = [:]
 
+    /// Broker readiness block from `GET /api/capabilities` (WS-H.1, broker
+    /// #450). Nil until the first successful fetch or on older brokers that
+    /// omit the block — every WS-H.2/H.3 consumer treats nil as "unknown".
+    private(set) var brokerReadiness: BrokerReadiness?
+
+    /// The app's compile-time minimum broker version. Bumped when new broker
+    /// features the app depends on require a newer server. "dev" / hand-built
+    /// brokers are never nagged (see `brokerVersionStatus`).
+    static let minimumBrokerVersion = "v0.0.120"
+
     /// Refresh both `modelCatalog` and `agentDescriptors` from the active
     /// endpoint's capabilities. ONE request; old brokers (no `agents` key)
     /// are a silent no-op for the descriptor path only.
@@ -966,6 +1143,7 @@ final class SessionStore {
         struct Envelope: Decodable {
             let models: [String: [ConduitUI.AgentModel]]?
             let agents: [String: AgentDescriptor]?
+            let readiness: BrokerReadiness?
         }
         Telemetry.breadcrumb(
             "model_catalog", "refresh start",
@@ -1002,6 +1180,22 @@ final class SessionStore {
         } else {
             Telemetry.breadcrumb(
                 "agent_descriptors", "no agents in capabilities (old broker)",
+                data: ["host": endpoint.displayHost])
+        }
+        // WS-H.1: parse the readiness block; nil on old brokers → consumers treat as unknown.
+        if let r = caps.readiness {
+            brokerReadiness = r
+            Telemetry.breadcrumb(
+                "broker_readiness", "refreshed",
+                data: [
+                    "version": r.brokerVersion,
+                    "node": r.nodePresent ? "1" : "0",
+                    "tmux": r.tmuxPresent ? "1" : "0",
+                    "agents": r.agents.keys.sorted().joined(separator: ","),
+                ])
+        } else {
+            Telemetry.breadcrumb(
+                "broker_readiness", "no readiness block (old broker)",
                 data: ["host": endpoint.displayHost])
         }
     }

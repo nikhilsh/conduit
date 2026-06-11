@@ -2271,6 +2271,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val agentDescriptors: StateFlow<Map<String, AgentDescriptor>> = _agentDescriptors.asStateFlow()
 
     /**
+     * Broker readiness block from `/api/capabilities` (WS-H.1, broker #450).
+     * Null until the first successful fetch or on older brokers that omit the
+     * block — every WS-H.2/H.3 consumer treats null as "unknown".
+     * Mirror of iOS `SessionStore.brokerReadiness`.
+     */
+    private val _brokerReadiness = MutableStateFlow<BrokerReadiness?>(null)
+    val brokerReadiness: StateFlow<BrokerReadiness?> = _brokerReadiness.asStateFlow()
+
+    /**
      * Refresh [modelCatalog] and [agentDescriptors] from the active
      * endpoint's capabilities in one request. Old brokers (missing keys)
      * and failures are no-ops for the affected flow.
@@ -2312,6 +2321,25 @@ class SessionStore : ViewModel(), ConduitDelegate {
             Telemetry.breadcrumb(
                 "agent_descriptors", "refreshed",
                 mapOf("agents" to descriptors.keys.sorted().joinToString(",")),
+            )
+        }
+        // WS-H.1: parse the readiness block; null on old brokers → consumers treat as unknown.
+        val readiness = runCatching { parseReadiness(raw) }.getOrNull()
+        if (readiness != null) {
+            _brokerReadiness.value = readiness
+            Telemetry.breadcrumb(
+                "broker_readiness", "refreshed",
+                mapOf(
+                    "version" to readiness.brokerVersion,
+                    "node" to if (readiness.nodePresent) "1" else "0",
+                    "tmux" to if (readiness.tmuxPresent) "1" else "0",
+                    "agents" to readiness.agents.keys.sorted().joinToString(","),
+                ),
+            )
+        } else {
+            Telemetry.breadcrumb(
+                "broker_readiness", "no readiness block (old broker)",
+                mapOf("host" to ep.displayHost),
             )
         }
     }
