@@ -83,6 +83,13 @@ type Server struct {
 	// (relay sender is wired for APNs + FCM). Reported in capabilities
 	// so the app can show the honest path (relay vs. direct).
 	PushRelayConfigured bool
+	// NtfyURL is the base URL of a self-hosted ntfy server co-located
+	// with this broker (populated from CONDUIT_NTFY_URL, set by
+	// scripts/remote-bootstrap.sh --with-ntfy). When non-empty it is
+	// surfaced in /api/capabilities so the Android app can auto-configure
+	// UnifiedPush without a third-party distributor. Empty means ntfy is
+	// not available on this host.
+	NtfyURL string
 }
 
 func New(a *auth.Store, m *session.Manager) *Server {
@@ -135,6 +142,17 @@ func (s *Server) WithDispatcher(d *push.Dispatcher) *Server {
 // Reported in /api/capabilities so the app shows the honest push path.
 func (s *Server) WithPushRelayConfigured(v bool) *Server {
 	s.PushRelayConfigured = v
+	return s
+}
+
+// WithNtfyURL records the base URL of a self-hosted ntfy instance
+// co-located with this broker. When non-empty, /api/capabilities
+// surfaces features.ntfy_url so the Android app can auto-configure
+// UnifiedPush against it (vendor-free Android push). Call with the
+// value of CONDUIT_NTFY_URL; empty string means ntfy is not configured
+// and the field is omitted from the response.
+func (s *Server) WithNtfyURL(u string) *Server {
+	s.NtfyURL = u
 	return s
 }
 
