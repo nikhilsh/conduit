@@ -27,6 +27,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
@@ -602,12 +604,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (forkModelSupportsFastMode(forkModel, catalog)) {
-                        Text(
-                            "⚡ Fast mode available",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFFD4A017),
-                        )
+                        FastModeBadge()
                     }
                 }
             },
@@ -1325,5 +1322,39 @@ object SessionDetails {
         if (m < 60L) return "${m}m ${s % 60L}s"
         val h = m / 60L
         return "${h}h ${m % 60L}m"
+    }
+}
+
+/**
+ * Yellow capsule badge with a bolt icon, shown when a model advertises fast
+ * mode. Mirrors the iOS yellow capsule with `bolt` icon in
+ * `ConduitAgentPickerSheet` and `SessionInfoView`. Uses neon theme tokens so
+ * it adapts to light/dark and never hard-codes hex.
+ */
+@Composable
+internal fun FastModeBadge() {
+    val neon = LocalNeonTheme.current
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = neon.yellow.copy(alpha = 0.18f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                Icons.Filled.Bolt,
+                contentDescription = null,
+                tint = neon.yellow,
+                modifier = Modifier.size(12.dp),
+            )
+            Text(
+                "Fast mode available",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.yellow,
+            )
+        }
     }
 }

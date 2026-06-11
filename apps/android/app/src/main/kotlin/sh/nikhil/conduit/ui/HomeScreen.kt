@@ -59,12 +59,15 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sh.nikhil.conduit.BrokerVersionStatus
 import sh.nikhil.conduit.HarnessState
+import sh.nikhil.conduit.MINIMUM_BROKER_VERSION
+import sh.nikhil.conduit.NeedsYouItem
 import sh.nikhil.conduit.SavedServer
-import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionNaming
-import sh.nikhil.conduit.NeedsYouItem
+import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.brokerVersionStatus
 import sh.nikhil.conduit.needsYouBanner
 
 /**
@@ -106,12 +109,18 @@ fun HomeScreen(
     val statuses by store.statusBySession.collectAsState()
     val lifecycle by store.sessionLifecycle.collectAsState()
     val selectedId by store.selectedId.collectAsState()
+    // Broker-update banner (parity with ProjectListScreen + iOS HomeView):
+    // shown on both phone and tablet so the update prompt is never lost on
+    // the tablet path where the phone drawer (ProjectListScreen) is absent.
+    val brokerReadiness by store.brokerReadiness.collectAsState()
 
     // Pending exit target for the session-row long-press confirmation.
     // Mirror of iOS PR #128's `pendingDelete` on ConduitHomeView — we
     // keep the title alongside the id so the prompt can name the
     // session being ended without re-resolving displayNames.
     var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
+    // SSH re-bootstrap sheet (same pattern as ProjectListScreen).
+    var showSshReBoot by remember { mutableStateOf(false) }
 
     // Round-2 fix 5: once the user is signed in to an agent, their own
     // device is a box too and is pinned first under BOXES. One credential-
@@ -214,6 +223,24 @@ fun HomeScreen(
                 // sessions) rather than jumping into the first session.
                 onReview = onOpenApprovals,
             )
+        }
+
+        // Broker-update banner (parity: iOS HomeView shows it for all form
+        // factors; on Android the phone drawer has it in ProjectListScreen
+        // but the tablet never showed it — this surfaces it on HomeScreen so
+        // the tablet path is covered too). Same guard logic as ProjectListScreen.
+        brokerReadiness?.brokerVersion?.let { bv ->
+            val vStatus = brokerVersionStatus(bv, MINIMUM_BROKER_VERSION)
+            if (vStatus is BrokerVersionStatus.UpdateAvailable) {
+                val sshPaired = endpoint.url.contains("127.0.0.1")
+                Spacer(Modifier.height(8.dp))
+                BrokerUpdateBanner(
+                    brokerVersion = bv,
+                    isSshPaired = sshPaired,
+                    onRebootstrap = { showSshReBoot = true },
+                    modifier = Modifier.padding(horizontal = 14.dp),
+                )
+            }
         }
 
         Spacer(Modifier.height(14.dp))
@@ -599,6 +626,10 @@ fun HomeScreen(
                 TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
             },
         )
+    }
+
+    if (showSshReBoot) {
+        SSHLoginSheet(store = store, onDismiss = { showSshReBoot = false })
     }
 }
 

@@ -20,13 +20,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.Build
@@ -44,6 +45,10 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -643,12 +648,19 @@ fun ChatPage(
         // panes pass null, which disables "Open in terminal".
         LocalOpenInTerminal provides (if (readOnly) null else onOpenTerminal),
     ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // Mirror iOS chatContentMaxWidth (760pt cap on regular/tablet size
+        // class). On phone (< 840dp) use full width; on tablet constrain and
+        // center so the thread doesn't span the full wide display.
+        val isTablet = maxWidth >= 840.dp
+        val chatContentMaxWidth = if (isTablet) 760.dp else maxWidth
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
+                modifier = (if (isTablet)
+                    Modifier.fillMaxHeight().widthIn(max = chatContentMaxWidth).align(Alignment.TopCenter)
+                    else Modifier.fillMaxSize())
                     .nestedScroll(dismissKeyboardOnScroll)
                     .padding(horizontal = 12.dp, vertical = 10.dp)
                     // Finger-down is the user taking manual control — latch
@@ -768,13 +780,21 @@ fun ChatPage(
                 color = agentAccent.copy(alpha = 0.55f),
             )
             // "Queued Next" panel -- visible when there are queued-turn entries.
+            // On tablet cap width to chatContentMaxWidth (760dp) and center,
+            // matching the LazyColumn treatment above.
             if (queuedEntries.isNotEmpty()) {
-                QueuedNextPanel(
-                    entries = queuedEntries,
-                    supportsSteer = supportsSteer,
-                    onSteer = { localId -> store.retrySteer(session.id, localId) },
-                    onCancel = { localId -> store.cancelQueued(session.id, localId) },
-                )
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    QueuedNextPanel(
+                        entries = queuedEntries,
+                        supportsSteer = supportsSteer,
+                        onSteer = { localId -> store.retrySteer(session.id, localId) },
+                        onCancel = { localId -> store.cancelQueued(session.id, localId) },
+                        modifier = if (isTablet) Modifier.widthIn(max = chatContentMaxWidth) else Modifier,
+                    )
+                }
             }
             ConversationComposer(
                 draft = draft,
@@ -809,6 +829,7 @@ fun ChatPage(
             )
         }
     }
+    } // BoxWithConstraints
     }
 
     if (showAttachSheet) {
@@ -1804,15 +1825,25 @@ private fun SendStatusFooter(ev: ConversationItem) {
         "failed" -> {
             val store = LocalSessionStore.current
             val sessionId = LocalSessionId.current
+            // Warning + retry icon pair mirrors iOS exclamation+refresh.
+            // Semantic Button role for TalkBack accessibility.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.clickable(enabled = store != null && sessionId != null) {
-                    if (store != null && sessionId != null) {
-                        store.retryPendingChat(sessionId, ev.id)
-                    }
-                },
+                modifier = Modifier
+                    .semantics { role = Role.Button }
+                    .clickable(enabled = store != null && sessionId != null) {
+                        if (store != null && sessionId != null) {
+                            store.retryPendingChat(sessionId, ev.id)
+                        }
+                    },
             ) {
+                Icon(
+                    Icons.Outlined.Warning,
+                    contentDescription = null,
+                    tint = neon.red,
+                    modifier = Modifier.size(12.dp),
+                )
                 Icon(
                     Icons.Outlined.Refresh,
                     contentDescription = null,
@@ -2992,9 +3023,10 @@ private fun ConversationComposer(
                             modifier = Modifier.size(36.dp),
                         ) {
                             // Codex with active turn: steer glyph instead of up-arrow.
+                            // Mirrors iOS arrow.turn.down.right affordance.
                             if (sendIsSteer) {
                                 Icon(
-                                    Icons.Outlined.KeyboardArrowRight,
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                     contentDescription = "Queue and steer",
                                 )
                             } else {
@@ -3047,10 +3079,11 @@ private fun QueuedNextPanel(
     supportsSteer: Boolean,
     onSteer: (localId: String) -> Unit,
     onCancel: (localId: String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val neon = LocalNeonTheme.current
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -3101,7 +3134,7 @@ private fun QueuedNextCard(
     // Badge label + tint per spec.
     val (badgeLabel, badgeColor) = when (entry.kind) {
         PendingChatKind.steering -> "Steering" to neon.accentBright
-        PendingChatKind.retrying -> "Retrying" to MaterialTheme.colorScheme.error
+        PendingChatKind.retrying -> "Retrying" to neon.yellow
         else -> "Queued" to neon.accent
     }
     val steerEnabled = supportsSteer && entry.kind != PendingChatKind.steering
@@ -3138,17 +3171,31 @@ private fun QueuedNextCard(
             fontFamily = neon.sans,
         )
         // Steer button (codex only, disabled while in-flight).
+        // Icon + "Steer" label, mirrors iOS arrow.turn.down.right + Text("Steer").
         if (supportsSteer) {
-            androidx.compose.material3.IconButton(
-                onClick = onSteer,
-                enabled = steerEnabled,
-                modifier = Modifier.size(28.dp),
+            val steerColor = if (steerEnabled) neon.accent else neon.textFaint
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .then(
+                        if (steerEnabled) Modifier.clickable(onClick = onSteer)
+                        else Modifier
+                    )
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Icon(
-                    Icons.Outlined.KeyboardArrowRight,
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = "Steer",
-                    tint = if (steerEnabled) neon.accent else neon.textFaint,
-                    modifier = Modifier.size(16.dp),
+                    tint = steerColor,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    "Steer",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = steerColor,
+                    fontFamily = neon.sans,
                 )
             }
         }
