@@ -127,6 +127,52 @@ func TestCapabilitiesPushRelayConfigured(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesNtfyURL verifies that features.ntfy_url is populated
+// from WithNtfyURL and absent (omitempty) when not set. This is the seam
+// the Android UnifiedPush auto-config reads in the follow-up PR.
+func TestCapabilitiesNtfyURL(t *testing.T) {
+	capFeatures := func(t *testing.T, srv *httptest.Server, tok string) map[string]any {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET capabilities: %v", err)
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Features map[string]any `json:"features"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body.Features
+	}
+
+	t.Run("absent when not configured", func(t *testing.T) {
+		srv, tok := newTestServer(t)
+		features := capFeatures(t, srv, tok)
+		if v, present := features["ntfy_url"]; present && v != "" {
+			t.Errorf("ntfy_url should be absent when not configured, got %q", v)
+		}
+	})
+
+	t.Run("populated from WithNtfyURL", func(t *testing.T) {
+		a := auth.NewStore()
+		tok := a.Mint()
+		reg := newTestRegistry(t)
+		m := session.NewManager(reg)
+		wsSrv := New(a, m).WithNtfyURL("http://127.0.0.1:2586")
+		srv := httptest.NewServer(wsSrv.Handler())
+		t.Cleanup(func() { srv.Close(); m.Close() })
+
+		features := capFeatures(t, srv, tok)
+		got, _ := features["ntfy_url"].(string)
+		if got != "http://127.0.0.1:2586" {
+			t.Errorf("ntfy_url = %q, want http://127.0.0.1:2586", got)
+		}
+	})
+}
+
 // --- Register ---
 
 func TestPushRegisterHappyPath(t *testing.T) {

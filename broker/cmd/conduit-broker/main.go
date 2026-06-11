@@ -179,7 +179,17 @@ func runUp(args []string) int {
 	dispatcher := push.NewDispatcher(pushReg, pushSenders)
 	srv.WithDispatcher(dispatcher)
 	srv.WithPushRelayConfigured(relayURL != "")
-	log.Printf("push: registry loaded; relay=%v; unifiedpush=always", relayURL != "")
+	// CONDUIT_NTFY_URL: base URL of a self-hosted ntfy instance
+	// co-located with this broker, populated by
+	// scripts/remote-bootstrap.sh --with-ntfy. Surfaced in
+	// /api/capabilities features.ntfy_url so the Android app can
+	// auto-configure UnifiedPush without a third-party distributor.
+	ntfyURL := strings.TrimSpace(os.Getenv("CONDUIT_NTFY_URL"))
+	if ntfyURL != "" {
+		srv.WithNtfyURL(ntfyURL)
+		log.Printf("push: ntfy distributor configured url=%s", ntfyURL)
+	}
+	log.Printf("push: registry loaded; relay=%v; unifiedpush=always; ntfy=%v", relayURL != "", ntfyURL != "")
 	// Replay HTTP surface lives on the same mux as the WS server.
 	// Secret = bearer token: anyone who can already attach to the WS
 	// can mint a replay URL, but external observers cannot enumerate.

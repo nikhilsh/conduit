@@ -112,6 +112,12 @@ type capabilitiesResponse struct {
 		// APNs (iOS) and FCM (Android fallback) delivery is active. False means
 		// only UnifiedPush (Android self-hosted) is wired.
 		PushRelayConfigured bool `json:"push_relay_configured"`
+		// NtfyURL: the base URL of a self-hosted ntfy server co-located with
+		// this broker (set via CONDUIT_NTFY_URL, populated by
+		// scripts/remote-bootstrap.sh --with-ntfy). When non-empty the Android
+		// app can auto-configure UnifiedPush against it — no Firebase, no
+		// third-party distributor. Absent / empty when ntfy is not configured.
+		NtfyURL string `json:"ntfy_url,omitempty"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -162,6 +168,7 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.ShellSessions = s.Sessions.HasAssistant("shell")
 	resp.Features.Push = true
 	resp.Features.PushRelayConfigured = s.PushRelayConfigured
+	resp.Features.NtfyURL = s.NtfyURL
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	resp.Readiness = buildReadiness(s.Sessions, s.Sessions.Registry())
