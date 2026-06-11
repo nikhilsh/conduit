@@ -809,6 +809,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val c = client ?: return
         val original = _sessions.value.firstOrNull { it.id == sessionId } ?: return
         val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
+        val modeCrumb = pickedMode ?: "auto"
+        Telemetry.breadcrumb("session", "fork override", mapOf(
+            "assistant" to original.assistant,
+            "permission_mode" to modeCrumb,
+            "session_id" to sessionId,
+        ))
         viewModelScope.launch {
             try {
                 val newId = withContext(Dispatchers.IO) {

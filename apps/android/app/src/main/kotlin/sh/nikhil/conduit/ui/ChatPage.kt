@@ -99,6 +99,7 @@ import sh.nikhil.conduit.PinnedContext
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.sortedByConversationTs
+import sh.nikhil.conduit.stripPendingSentinel
 import kotlinx.coroutines.launch
 import uniffi.conduit_core.ChatEvent
 import uniffi.conduit_core.ConversationItem
@@ -914,7 +915,12 @@ internal fun mergedConversation(
         .map { "${it.role.lowercase()}|${it.content}" }
         .toSet()
     val synthetic = chatLog.mapIndexedNotNull { idx, ev ->
-        val key = "${ev.role.lowercase()}|${ev.content}"
+        // Strip the pending-input sentinel before fingerprinting so this
+        // raw chatLog item dedupes against the already-stripped typed card
+        // (same role+content key), and before setting content so the
+        // sentinel never leaks as a bare raw bubble.
+        val strippedContent = stripPendingSentinel(ev.content)
+        val key = "${ev.role.lowercase()}|$strippedContent"
         if (key in typedFingerprints) {
             null
         } else {
@@ -923,7 +929,7 @@ internal fun mergedConversation(
                 role = ev.role,
                 kind = if (ev.role.lowercase() == "tool") "tool" else "message",
                 status = "done",
-                content = ev.content,
+                content = strippedContent,
                 ts = ev.ts,
                 files = ev.files,
                 toolName = null,
