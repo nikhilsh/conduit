@@ -4,6 +4,7 @@ import android.content.Context
 import io.sentry.Breadcrumb
 import io.sentry.Sentry
 import io.sentry.SentryLevel
+import io.sentry.SentryOptions
 import io.sentry.android.core.SentryAndroid
 
 object Telemetry {
@@ -99,22 +100,22 @@ object Telemetry {
             //      (connection churn, routine disconnects). These are expected
             //      lifecycle, not errors.
             // ERROR/FATAL-level events bypass the denylist entirely.
-            options.beforeSend = { event, _ ->
+            options.beforeSend = SentryOptions.BeforeSendCallback { event, _ ->
                 // Never drop real errors.
                 val level = event.level
-                if (level == SentryLevel.ERROR || level == SentryLevel.FATAL) return@beforeSend event
-
-                // Drop high-frequency UI diag categories (INFO-level).
-                val diagCategory = event.tags?.get("diag")
-                if (diagCategory != null && diagCategory in HIGH_FREQUENCY_DIAG_CATEGORIES) {
-                    return@beforeSend null
+                if (level == SentryLevel.ERROR || level == SentryLevel.FATAL) {
+                    event
+                } else {
+                    // Drop high-frequency UI diag categories (INFO-level).
+                    val diagCategory = event.tags?.get("diag")
+                    if (diagCategory != null && diagCategory in HIGH_FREQUENCY_DIAG_CATEGORIES) {
+                        null
+                    } else {
+                        // Drop routine connection-churn messages.
+                        val msg = event.message?.formatted ?: event.message?.message ?: ""
+                        if (isRoutineNoiseMessage(msg)) null else event
+                    }
                 }
-
-                // Drop routine connection-churn messages.
-                val msg = event.message?.formatted ?: event.message?.message ?: ""
-                if (isRoutineNoiseMessage(msg)) return@beforeSend null
-
-                event
             }
         }
     }
