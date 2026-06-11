@@ -194,12 +194,25 @@ fi
 # the app streams stderr as status.
 if [ ! -x "$BIN" ]; then
   mkdir -p "$BIN_DIR" "$STATE_DIR"
+  # Download and pipe install.sh.  IMPORTANT: in POSIX sh a pipe's exit
+  # status is the last command's (sh), NOT curl's.  If curl fails
+  # (network error, 404, etc.) sh receives empty stdin and exits 0 —
+  # the if-check passes but the binary was never written.  We therefore
+  # check that the binary is actually present and executable right after,
+  # regardless of the pipe exit status.
+  _install_failed=0
   if ! curl -fsSL \
        --connect-timeout "$CURL_CONNECT_TIMEOUT" \
        --max-time "$CURL_MAX_TIME" \
        https://github.com/nikhilsh/conduit/releases/latest/download/install.sh \
        | sh -s -- --bin-dir "$BIN_DIR" 1>&2; then
-    echo "ERR 16 could not install conduit-broker binary"
+    _install_failed=1
+  fi
+  # Definitive check: assert the binary landed at the expected path.
+  # This catches both an explicit installer failure AND the silent-curl
+  # case where sh exited 0 on empty input but wrote nothing.
+  if [ "$_install_failed" = "1" ] || [ ! -x "$BIN" ]; then
+    echo "ERR 16 could not install conduit-broker binary (expected: $BIN)"
     exit 16
   fi
 fi
@@ -434,11 +447,13 @@ Environment=\"CONDUIT_NTFY_URL=$_ntfy_url\""
 [Unit]
 Description=conduit broker
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 ExecStart=$BIN up --addr 127.0.0.1:$HOST_PORT
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=10
 $_env_lines
 
 [Install]
