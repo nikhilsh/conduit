@@ -5,7 +5,7 @@ the detailed forward-looking specs live in the active `PLAN-*.md` docs (linked
 below), and the frozen wire/lifecycle contracts live in their own references.
 Completed plans are archived under `docs/archive/` once their work ships.
 
-Last updated: 2026-06-11 (v0.0.139).
+Last updated: 2026-06-11 (v0.0.140).
 
 **Lifecycle:** [ROADMAP.md](ROADMAP.md) (backlog) →
 [IN-PROGRESS.md](IN-PROGRESS.md) (building) →
