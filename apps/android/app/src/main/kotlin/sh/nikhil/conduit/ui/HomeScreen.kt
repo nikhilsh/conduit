@@ -861,8 +861,10 @@ private fun HomeBoxRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // Show the real SSH host:port for SSH-tunnelled boxes;
+            // loopback address is the tunnel, not the actual machine.
             Text(
-                server.endpoint.displayHost,
+                server.ssh?.let { "${it.host}:${it.port}" } ?: server.endpoint.displayHost,
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = neon.mono,
                 color = neon.textFaint,
