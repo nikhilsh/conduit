@@ -9,6 +9,38 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.142
+
+- **Live git state + worktree name per session** — session Info + rail show
+  current branch, ●uncommitted count, ↑/↓ ahead-behind, and the worktree name;
+  broker computes live (2s cache). PR #512. Verify: open a session on a repo
+  with uncommitted changes + an ahead/behind count → Info screen and session
+  rail both show branch, ● count, and ↑/↓ numbers correctly; worktree name
+  appears when the session is in a worktree. [app, on-device, tablet+phone]
+- **Tappable PR/MR outcome chip** — the PR chip opens the live PR/MR web link
+  (GitHub via gh, GitLab via glab/remote); chip is read-only when no PR exists.
+  PR #513. Verify: a session with an open PR shows a tappable chip → tap opens
+  the correct URL in the browser; a session with no PR shows a non-tappable
+  chip. [app, on-device]
+- **Real Buy-Me-a-Coffee link** — Settings donation link now points to
+  buymeacoffee.com/conduitapp. PR #514. Verify: Settings → donate row →
+  opens buymeacoffee.com/conduitapp in the browser. [app, on-device]
+- **Live SSH bootstrap progress + ECONNRESET hardening** — add-box shows
+  per-phase progress (connecting → handshake → auth → download → start →
+  tunnel → ready) via a core SshProgressDelegate; single-flight guard +
+  one-shot ECONNRESET retry; failure now surfaces even if the sheet was
+  dismissed. PR #515. Verify: add a box via SSH → progress phases display in
+  sequence; kill the connection mid-way → error surfaces in the UI (not lost
+  silently). [app, on-device]
+- **SSH add-box broker-download fix (THE add-box fix)** — bootstrap now
+  downloads the broker from the versioned release URL (all releases are
+  prereleases, so /latest/ 404'd → broker never installed → ERR13 crash-loop);
+  verify-before-unit gives a clean ERR16; app passes CONDUIT_VERSION. PR #516.
+  Verify: add a fresh box via SSH with no broker installed → bootstrap
+  completes without ERR13; session connects successfully. [iOS+Android+broker-script, on-device]
+
+---
+
 ## v0.0.141
 
 - **Fast-mode toggle (actionable)** — the read-only "Fast mode available" label
