@@ -2420,8 +2420,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * is null — it just leaves the entry queued for a later flush. Shared by
      * the send path and [flushPendingChats]. Mirror of iOS `attemptDeliver`.
      */
-    private fun attemptDeliver(sessionId: String, localId: String, msg: String) {
-        val c = client ?: return
+
+    private fun attemptDeliver(sessionId: String, localId: String, msg: String, manualRetry: Boolean = false) {
+        val c = client ?: run {
+            // No live client. On a manual retry the user is watching, so don't
+            // leave the spinner spinning forever — surface failed immediately.
+            if (manualRetry) {
+                setEchoStatus(sessionId, localId, "failed")
+                Telemetry.breadcrumb("chat", "retry_result",
+                    mapOf("session" to sessionId, "local_id" to localId, "ok" to "false", "reason" to "not_connected"))
+            }
+            return
+        }
         // Box-identity gate: if the session was stamped to a different box
         // than the one we are currently connected to, sending into this
         // client is wrong — it would reach the wrong broker and produce
@@ -2442,14 +2452,25 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         viewModelScope.launch {
             val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
+
             if (result.isSuccess) {
                 // Ack: drop from the queue and flip the echo to "done".
                 updatePendingChats { it.markDelivered(sessionId, localId) }
                 setEchoStatus(sessionId, localId, "done")
+                if (manualRetry) {
+                    Telemetry.breadcrumb("chat", "retry_result",
+                        mapOf("session" to sessionId, "local_id" to localId, "ok" to "true"))
+                }
             } else {
                 updatePendingChats { it.markAttemptFailed(sessionId, localId) }
-                if (_pendingChats.value.isFailed(localId, sessionId)) {
+                if (_pendingChats.value.isFailed(localId, sessionId) || manualRetry) {
+                    // Hard fail, or a manual retry the user is watching: surface
+                    // failed so the spinner resolves to the retry affordance.
                     setEchoStatus(sessionId, localId, "failed")
+                    if (manualRetry) {
+                        Telemetry.breadcrumb("chat", "retry_result",
+                            mapOf("session" to sessionId, "local_id" to localId, "ok" to "false"))
+                    }
                     Telemetry.capture(
                         error = result.exceptionOrNull() ?: RuntimeException("chat send failed"),
                         message = "chat send to agent failed (gave up after retries)",
@@ -2602,11 +2623,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * User tapped retry on a failed message bubble — re-arm the entry and
      * attempt delivery again immediately. Mirror of iOS `retryPendingChat`.
      */
+
     fun retryPendingChat(sessionId: String, localId: String) {
         val entry = _pendingChats.value.entries(sessionId).firstOrNull { it.localId == localId } ?: return
+        Telemetry.breadcrumb(
+            "chat",
+            "retry_resend",
+            mapOf("session" to sessionId, "local_id" to localId),
+        )
         updatePendingChats { it.retry(sessionId, localId) }
-        setEchoStatus(sessionId, localId, "pending")
-        attemptDeliver(sessionId, localId, entry.message)
+        // "retrying" drives the spinner footer; attemptDeliver flips it to
+        // done/failed on the genuine WS result. manualRetry=true makes even a
+        // single transient failure surface as failed (the user is watching).
+        setEchoStatus(sessionId, localId, "retrying")
+        attemptDeliver(sessionId, localId, entry.message, manualRetry = true)
     }
 
     /**

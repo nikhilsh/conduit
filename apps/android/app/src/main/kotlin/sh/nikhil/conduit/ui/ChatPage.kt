@@ -53,9 +53,16 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
+
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -120,8 +127,15 @@ private const val PENDING_INPUT_SENTINEL = "[[conduit:needs-input]]"
  * threading them through every card signature. Provided by [ChatPage]
  * where both are in scope; null in detached previews / read-only opens.
  */
+
 internal val LocalSessionStore = compositionLocalOf<SessionStore?> { null }
 internal val LocalSessionId = compositionLocalOf<String?> { null }
+
+/**
+ * Host for the chat-local Material snackbar (failed-send RETRY action). Provided
+ * by [ChatPage] over its root content; null in read-only panes (no live send).
+ */
+internal val LocalChatSnackbar = compositionLocalOf<SnackbarHostState?> { null }
 
 /**
  * Lets the command card jump the session to its Terminal tab ("Open in
@@ -426,7 +440,11 @@ fun ChatPage(
     // per chat surface, kept across recompositions (and session swaps,
     // since the content-hash key is session-agnostic and identical text
     // legitimately shares an entry).
+
     val markdownCache = remember { ParsedMarkdownCache() }
+
+    // Fix 8: chat-local snackbar host for the failed-send RETRY action.
+    val chatSnackbar = remember { SnackbarHostState() }
 
     // Task #39: streaming auto-scroll that doesn't fight the user.
     var autoScroll by remember { mutableStateOf(ChatAutoScrollModel()) }
@@ -649,8 +667,10 @@ fun ChatPage(
         LocalParsedMarkdownCache provides markdownCache,
         // Read-only transcripts have no live WS to write into, so don't
         // expose the store there — the command card's Re-run stays disabled.
+
         LocalSessionStore provides (if (readOnly) null else store),
         LocalSessionId provides session.id,
+        LocalChatSnackbar provides (if (readOnly) null else chatSnackbar),
         // Only the live tabbed pager wires a Terminal jump; read-only / tablet
         // panes pass null, which disables "Open in terminal".
         LocalOpenInTerminal provides (if (readOnly) null else onOpenTerminal),
@@ -836,10 +856,18 @@ fun ChatPage(
                 agentWorking = agentWorking,
                 // Codex with an active turn: send button shows steer glyph.
                 sendIsSteer = agentWorking && supportsSteer,
+
                 onStop = { store.stopTurn(session.id) },
             )
         }
     }
+        // Fix 8: failed-send RETRY snackbar, anchored to the chat bottom.
+        if (!readOnly) {
+            SnackbarHost(
+                hostState = chatSnackbar,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
     } // BoxWithConstraints
     }
 
@@ -1849,19 +1877,60 @@ private fun SendStatusFooter(ev: ConversationItem) {
                 )
             }
         }
+
+        "retrying" -> {
+            // Fix 8: transient state while a manual retry's WS write is
+            // in-flight. Flips back to done/failed when attemptDeliver settles.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                CircularProgressIndicator(
+                    strokeWidth = 1.5.dp,
+                    color = neon.textDim,
+                    modifier = Modifier.size(11.dp),
+                )
+                Text(
+                    "retrying…",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
+                )
+            }
+        }
         "failed" -> {
             val store = LocalSessionStore.current
             val sessionId = LocalSessionId.current
+            val snackbar = LocalChatSnackbar.current
+            val scope = rememberCoroutineScope()
+            val doRetry: () -> Unit = retry@{
+                if (store == null || sessionId == null) return@retry
+                Telemetry.breadcrumb(
+                    "chat",
+                    "retry_tap",
+                    mapOf("session" to sessionId, "local_id" to ev.id),
+                )
+                store.retryPendingChat(sessionId, ev.id)
+            }
             // Warning + retry icon pair mirrors iOS exclamation+refresh.
-            // Semantic Button role for TalkBack accessibility.
+            // Semantic Button role for TalkBack accessibility. Tapping the chip
+            // OR the snackbar RETRY action re-submits the same content.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
                     .semantics { role = Role.Button }
                     .clickable(enabled = store != null && sessionId != null) {
-                        if (store != null && sessionId != null) {
-                            store.retryPendingChat(sessionId, ev.id)
+                        doRetry()
+                        if (snackbar != null) {
+                            scope.launch {
+                                val result = snackbar.showSnackbar(
+                                    message = "Couldn't send",
+                                    actionLabel = "RETRY",
+                                    duration = SnackbarDuration.Short,
+                                )
+                                if (result == SnackbarResult.ActionPerformed) doRetry()
+                            }
                         }
                     },
             ) {
