@@ -27,7 +27,13 @@ function validPayload(p: unknown): p is PushPayload {
   if (typeof o.title !== "string" || typeof o.body !== "string") return false;
   if (o.session_id !== undefined && typeof o.session_id !== "string") return false;
   if (o.box !== undefined && typeof o.box !== "string") return false;
-  if (o.category !== undefined && o.category !== "alert" && o.category !== "liveactivity") {
+  if (
+    o.category !== undefined &&
+    o.category !== "alert" &&
+    o.category !== "approval" &&
+    o.category !== "input" &&
+    o.category !== "liveactivity"
+  ) {
     return false;
   }
   // Live Activity optional fields.

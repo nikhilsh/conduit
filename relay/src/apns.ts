@@ -72,13 +72,19 @@ function buildBody(payload: PushPayload): string {
       box: payload.box,
     });
   }
+  // App-level categories ("approval"/"input") ride in aps.category so iOS can
+  // attach registered notification actions (Approve/Deny); plain alerts omit it.
+  const apsCategory =
+    payload.category && payload.category !== "alert" ? payload.category : undefined;
   return JSON.stringify({
     aps: {
       alert: { title: payload.title, body: payload.body },
       sound: "default",
+      ...(apsCategory ? { category: apsCategory } : {}),
     },
     session_id: payload.session_id,
     box: payload.box,
+    ...(apsCategory ? { category: apsCategory } : {}),
   });
 }
 

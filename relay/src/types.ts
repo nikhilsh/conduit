@@ -6,7 +6,10 @@ export interface PushPayload {
   body: string;
   session_id?: string;
   box?: string;
-  category?: "alert" | "liveactivity";
+  // "approval" / "input" are app-level pending-input categories: forwarded to
+  // APNs as aps.category (drives actionable Approve/Deny buttons on iOS) and
+  // already passed through to FCM as a data key. "alert"/absent = plain alert.
+  category?: "alert" | "approval" | "input" | "liveactivity";
   // Live Activity fields (category="liveactivity" only).
   // event is the APNs activity event: "update" or "end".
   event?: "update" | "end";
