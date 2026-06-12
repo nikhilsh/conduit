@@ -9,6 +9,35 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.147
+
+- **Forget + re-add an SSH box now works** — the bootstrap reuse path returns
+  the broker's LIVE token (read from the systemd unit) instead of the app's
+  freshly-minted preToken, fixing `Auth(Code 1)` → Home offline / empty
+  directory / no-session after forget+re-add. PR #535. Verify: forget an SSH
+  box, re-add it → it connects, lists the directory, and starts a session.
+  [broker-script via app/core, on-device]
+- **New-session picker gated to the connected box** — box rows other than the
+  connected box are non-selectable (switch in Settings) so readiness, the
+  directory browser, and the create target are all coherent (no more "picked
+  box A, saw box B"). PR #536. Verify: with multiple boxes, open new-session
+  picker → only the connected box is selectable. [app, on-device, tablet+phone]
+- **SSH auth self-heal** — an Auth error on an SSH box now triggers an
+  automatic re-bootstrap/reconnect (single-flight, bounded) instead of the
+  wrong "Pairing expired — scan a new QR" message; token-paired boxes keep the
+  QR message. PR #536. Verify: provoke an auth error on an SSH box → it
+  self-heals and reconnects (no QR prompt). [app, on-device]
+- **Concurrent multi-box (experimental, first cut)** — behind
+  `FeatureFlags.concurrentMultiBox` (DEFAULT OFF; toggle Settings → Labs →
+  Debug → Transport). When ON: connect multiple boxes at once, sessions
+  aggregated/grouped per box, ops routed to the owning box's connection. Flag
+  OFF = no change (byte-equivalent). SSH/loopback boxes only; per-box
+  OAuth/readiness deferred. PR #537 (iOS). Verify: flag ON → connect two boxes
+  → both boxes' sessions show live and sends go to the right box.
+  [iOS, experimental, on-device]
+
+---
+
 ## v0.0.146
 
 - **On-demand per-agent install** — starting a session with an agent that isn't
