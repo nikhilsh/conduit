@@ -2203,7 +2203,16 @@ final class SessionStore {
                 }
                 self.sessionCreationError = detail
                 if Self.isAuth(error) {
-                    self.harness = .failed("Pairing expired. Scan a new QR code from the server.")
+                    // SSH boxes: token mismatch is recoverable via re-bootstrap.
+                    // Token-paired boxes: the pairing QR is genuinely expired.
+                    if self.savedServers.first(where: { $0.endpoint == self.endpoint })?.ssh != nil {
+                        Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                            data: ["phase": "create_session", "endpoint": self.endpoint.displayHost])
+                        self.harness = .reconnecting(attempt: 1, maxAttempts: 3)
+                        self.attemptSshSelfHeal()
+                    } else {
+                        self.harness = .failed("Pairing expired. Scan a new QR code from the server.")
+                    }
                 }
                 Telemetry.capture(
                     error: error,
@@ -2232,7 +2241,14 @@ final class SessionStore {
                 let detail = Self.describe(error)
                 self.sessionLifecycle[sessionID] = .failed("switch_agent: \(detail)")
                 if Self.isAuth(error) {
-                    self.harness = .failed("Pairing expired. Scan a new QR code from the server.")
+                    if self.savedServers.first(where: { $0.endpoint == self.endpoint })?.ssh != nil {
+                        Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                            data: ["phase": "switch_agent", "endpoint": self.endpoint.displayHost])
+                        self.harness = .reconnecting(attempt: 1, maxAttempts: 3)
+                        self.attemptSshSelfHeal()
+                    } else {
+                        self.harness = .failed("Pairing expired. Scan a new QR code from the server.")
+                    }
                 }
                 Telemetry.capture(
                     error: error,
@@ -3579,8 +3595,21 @@ final class SessionStore {
            existing.lowercased().contains("pairing expired") {
             return
         }
+        // Also preserve a self-heal already in progress so we don't clobber
+        // the reconnecting state with a terminal Failed.
+        if case .reconnecting = harness { return }
         let lower = reason.lowercased()
-        if lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized") {
+        let isAuthReason = lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized")
+        if isAuthReason {
+            // SSH boxes: token mismatch is recoverable via re-bootstrap.
+            // Token-paired boxes: the pairing QR is genuinely expired.
+            if savedServers.first(where: { $0.endpoint == endpoint })?.ssh != nil {
+                Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                    data: ["phase": "ingest_disconnected", "endpoint": endpoint.displayHost])
+                harness = .reconnecting(attempt: 1, maxAttempts: 3)
+                attemptSshSelfHeal()
+                return
+            }
             harness = .failed("Pairing expired. Scan a new QR code from the server.")
         } else {
             harness = .failed("Disconnected: \(reason)")
@@ -3620,7 +3649,18 @@ final class SessionStore {
         case let .disconnected(reason, auth):
             connectionHealthBySession[sessionID] = health
             if auth {
-                harness = .failed("Pairing expired. Scan a new QR code from the server.")
+                // SSH boxes: token mismatch after a tunnel restart is
+                // recoverable — re-bootstrap fetches the broker's live token.
+                // Token-paired boxes: QR pairing is genuinely expired.
+                if savedServers.first(where: { $0.endpoint == endpoint })?.ssh != nil {
+                    Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                        data: ["phase": "connection_health", "endpoint": endpoint.displayHost,
+                               "session_id": sessionID])
+                    harness = .reconnecting(attempt: 1, maxAttempts: 3)
+                    attemptSshSelfHeal()
+                } else {
+                    harness = .failed("Pairing expired. Scan a new QR code from the server.")
+                }
                 Telemetry.capture(
                     error: NSError(domain: "SessionStore", code: 401, userInfo: [NSLocalizedDescriptionKey: reason]),
                     message: "iOS connection health auth failure",
@@ -3628,6 +3668,7 @@ final class SessionStore {
                         "surface": "ios",
                         "phase": "connection_health",
                         "reason_code": "auth_expired",
+                        "is_ssh": "\(savedServers.first(where: { $0.endpoint == endpoint })?.ssh != nil)",
                     ],
                     extras: [
                         "endpoint": endpoint.displayHost,

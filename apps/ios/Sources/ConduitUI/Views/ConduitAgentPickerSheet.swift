@@ -171,30 +171,20 @@ extension ConduitUI {
                             // bootstrap prompt as seedPrompt; otherwise fall
                             // back to the sheet's initialPrompt (voice transcript).
                             let seed = seedPrompt ?? initialPrompt
-                            if let target = resolvedServer, target.endpoint != store.endpoint {
-                                // Session targeted at a different box:
-                                // switch endpoint → connect → create.
-                                store.connectAndStart(
-                                    endpoint: target.endpoint,
-                                    assistant: kind,
-                                    cwd: cwd,
-                                    reasoningEffort: effort,
-                                    model: model,
-                                    permissionMode: permissionMode,
-                                    fastMode: fastMode,
-                                    initialPrompt: seed
-                                )
-                            } else {
-                                store.createSession(
-                                    assistant: kind,
-                                    startupCwd: cwd,
-                                    reasoningEffort: effort,
-                                    model: model,
-                                    permissionMode: permissionMode,
-                                    fastMode: fastMode,
-                                    initialPrompt: seed
-                                )
-                            }
+                            // Always create on the connected box — readiness,
+                            // directory browser, and create all use the
+                            // connected box's client. Non-connected box rows
+                            // are disabled in boxSection, so resolvedServer
+                            // always points to the connected box here.
+                            store.createSession(
+                                assistant: kind,
+                                startupCwd: cwd,
+                                reasoningEffort: effort,
+                                model: model,
+                                permissionMode: permissionMode,
+                                fastMode: fastMode,
+                                initialPrompt: seed
+                            )
                             // Defer the dismiss one runloop tick. createSession
                             // mutates the store → the app tree rebuilds; tearing
                             // down this pushed DirectoryPicker (a representable
@@ -452,47 +442,55 @@ extension ConduitUI {
 
 
         /// One row per paired box; the session is created on the checked
-        /// one. "This device" on the home Boxes list is display-only — a
-        /// phone can't host the broker — so it is deliberately not a
-        /// target here; the single-box footnote says so instead of
-        /// offering a dead option.
+        /// one. Only the currently-connected box is selectable — readiness,
+        /// directory browser, and create all use the connected box's client,
+        /// so allowing a different selection would show the connected box's
+        /// readiness/filesystem but create elsewhere (incoherent). Multi-box
+        /// concurrent sessions are a future feature; for now, non-connected
+        /// boxes show a "Switch in Settings" note and are disabled.
+        /// "This device" on the home Boxes list is display-only — a phone
+        /// can't host the broker — so it is deliberately not a target here.
         private var boxSection: some View {
             VStack(spacing: 6) {
                 ForEach(store.savedServers) { server in
+                    let isConnected = server.endpoint == store.endpoint
                     let isSelected = server.id == resolvedServer?.id
-                    Button {
-                        selectedServerID = server.id
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(isSelected ? neon.accent : neon.textDim)
-                                .frame(width: 30, height: 30)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(server.name)
-                                    .font(neon.sans(13).weight(.semibold))
-                                    .foregroundStyle(neon.text)
+                    HStack(spacing: 12) {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(isSelected ? neon.accent : neon.textDim)
+                            .frame(width: 30, height: 30)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(server.name)
+                                .font(neon.sans(13).weight(.semibold))
+                                .foregroundStyle(neon.text)
+                            if isConnected {
                                 Text(server.endpoint.displayHost)
                                     .font(neon.mono(11))
                                     .foregroundStyle(neon.textDim)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
+                            } else {
+                                Text("Switch to this box in Settings to start a session on it.")
+                                    .font(neon.mono(10.5))
+                                    .foregroundStyle(neon.textFaint)
+                                    .lineLimit(2)
                             }
-                            Spacer()
-                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(isSelected ? neon.accent : neon.textFaint)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .neonCardSurface(
-                            neon,
-                            fill: isSelected ? neon.accent.opacity(neon.dark ? 0.10 : 0.07) : neon.surface,
-                            cornerRadius: 13,
-                            border: isSelected ? neon.accent.opacity(0.5) : neon.border
-                        )
+                        Spacer()
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(isSelected ? neon.accent : neon.textFaint)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .neonCardSurface(
+                        neon,
+                        fill: isSelected ? neon.accent.opacity(neon.dark ? 0.10 : 0.07) : neon.surface,
+                        cornerRadius: 13,
+                        border: isSelected ? neon.accent.opacity(0.5) : neon.border
+                    )
+                    .opacity(isConnected ? 1.0 : 0.55)
                 }
                 if store.savedServers.count == 1 {
                     Text("Sessions run on a paired box — this device can't host them. Pair another box in Settings.")

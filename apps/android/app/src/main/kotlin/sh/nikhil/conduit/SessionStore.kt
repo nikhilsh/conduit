@@ -1928,7 +1928,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 updateLifecycle { it + (pendingId to SessionLifecycle.FailedToStart(reason)) }
                 _sessionCreationError.value = reason
                 if (isAuth(t)) {
-                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                    // SSH boxes: token mismatch is recoverable via re-bootstrap.
+                    // Token-paired boxes: the pairing QR is genuinely expired.
+                    if (_savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null) {
+                        Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                            mapOf("phase" to "create_session", "endpoint" to _endpoint.value.displayHost))
+                        _harness.value = HarnessState.Reconnecting(1u, 3u)
+                        attemptSshSelfHeal()
+                    } else {
+                        _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                    }
                 }
                 Telemetry.capture(
                     error = t,
@@ -1954,7 +1963,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val detail = describe(t)
                 _sessionCreationError.value = "switch_agent: $detail"
                 if (isAuth(t)) {
-                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                    if (_savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null) {
+                        Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                            mapOf("phase" to "switch_agent", "endpoint" to _endpoint.value.displayHost))
+                        _harness.value = HarnessState.Reconnecting(1u, 3u)
+                        attemptSshSelfHeal()
+                    } else {
+                        _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                    }
                 }
                 Telemetry.capture(
                     error = t,
@@ -3458,17 +3474,33 @@ class SessionStore : ViewModel(), ConduitDelegate {
     override fun onDisconnected(reason: String) {
         // Preserve an existing "Pairing expired" diagnosis — the server tearing
         // down the socket right after an auth rejection is part of the same
-        // failure, not a new one.
+        // failure, not a new one. Also preserve a self-heal already in progress
+        // (Reconnecting state) so we don't clobber it with a Failed state.
         val current = _harness.value
         if (current is HarnessState.Failed &&
             current.reason.lowercase().contains("pairing expired")
         ) {
             return
         }
+        if (current is HarnessState.Reconnecting) {
+            // SSH self-heal triggered from onConnectionHealth; don't clobber.
+            return
+        }
         val lower = reason.lowercase()
-        _harness.value = if (
-            lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized")
-        ) {
+        val isAuthReason = lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized")
+        if (isAuthReason) {
+            // SSH boxes: token mismatch is recoverable via re-bootstrap.
+            // Token-paired boxes: the pairing QR is genuinely expired.
+            val isSSH = _savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null
+            if (isSSH) {
+                Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                    mapOf("phase" to "on_disconnected", "endpoint" to _endpoint.value.displayHost))
+                _harness.value = HarnessState.Reconnecting(1u, 3u)
+                attemptSshSelfHeal()
+                return
+            }
+        }
+        _harness.value = if (isAuthReason) {
             HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
         } else {
             HarnessState.Failed("Disconnected: $reason")
@@ -3505,7 +3537,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
             }
             is ConnectionHealth.Disconnected -> {
                 if (health.auth) {
-                    _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                    val isSSH = _savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null
+                    if (isSSH) {
+                        Telemetry.breadcrumb("session", "auth failure on SSH box — triggering self-heal",
+                            mapOf("phase" to "connection_health", "endpoint" to _endpoint.value.displayHost,
+                                  "session_id" to sessionId))
+                        _harness.value = HarnessState.Reconnecting(1u, 3u)
+                        attemptSshSelfHeal()
+                    } else {
+                        _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
+                    }
                     Telemetry.capture(
                         error = IllegalStateException(health.reason),
                         message = "Android connection health auth failure",
@@ -3513,6 +3554,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                             "surface" to "android",
                             "phase" to "connection_health",
                             "reason_code" to "auth_expired",
+                            "is_ssh" to isSSH.toString(),
                         ),
                         extras = mapOf(
                             "endpoint" to _endpoint.value.displayHost,
