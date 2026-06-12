@@ -239,6 +239,33 @@ _UNIT
   fi
 }
 
+# ── Live-token reader ─────────────────────────────────────────────────────
+# On the REUSE path the broker is already running with its ORIGINAL token;
+# the caller's $TOKEN is a freshly-generated UUID that must NOT be echoed
+# back — the broker would reject it with 401.  Read the token the broker is
+# actually serving from the authoritative persisted source and override
+# $TOKEN so the OK line matches what the broker accepts.
+#
+# Authoritative sources (in priority order):
+#   1. systemd unit file  (~/.config/systemd/user/conduit-broker.service)
+#      — the canonical location for every box bootstrapped at v0.0.141+.
+#   2. No fallback for the pidfile/nohup path: those boxes have no
+#      separate token file, but they ARE also covered by the systemd unit
+#      when systemd is available (the unit is written on first install).
+#      If the unit doesn't exist the broker must have been started without
+#      systemd AND with the caller's token, so keeping $TOKEN is correct.
+_read_live_token() {
+  _unit_file_rt="$HOME/.config/systemd/user/conduit-broker.service"
+  if [ -f "$_unit_file_rt" ]; then
+    _live="$(grep 'Environment=.CONDUIT_TOKEN=' "$_unit_file_rt" 2>/dev/null \
+             | head -1 \
+             | sed 's/.*CONDUIT_TOKEN=//; s/^"//; s/"$//')"
+    if [ -n "$_live" ]; then
+      TOKEN="$_live"
+    fi
+  fi
+}
+
 # ── Reuse path ────────────────────────────────────────────────────────────
 # A healthy broker on the port → ensure the unit is correct, then return.
 # Works whether the broker was launched by systemd (no pidfile) or by the
@@ -246,6 +273,7 @@ _UNIT
 echo "STEP reuse_check" >&2
 if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ensure_broker_unit
+  _read_live_token
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
@@ -258,6 +286,7 @@ fi
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null \
    && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ensure_broker_unit
+  _read_live_token
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
