@@ -3085,15 +3085,32 @@ final class SessionStore {
         // guarantee that delete is terminal regardless of broker state.
         let listed = client.listSessions()
             .filter { !SavedSessionsStore.shared.isTombstoned(id: $0.id) }
-        // Bug #1 follow-up: a fresh client returns `[]` until the
-        // first `SessionStatus` delta lands, so blindly assigning
-        // `self.sessions = listed` would briefly hide the existing
-        // rows on every reconnect. Replace only when we have at
-        // least one entry; otherwise keep the prior list visible
-        // and let subsequent status frames refresh it incrementally.
-        if !listed.isEmpty {
-            self.sessions = listed
+        // Per-box merge: stamp each listed session with the currently-connected
+        // box so the home list can group by box and gate sends to the right
+        // broker. Always stamp, even when the list is empty, so the box
+        // identity is established for subsequent calls.
+        let currentBoxID = savedHistoryServerID
+        for s in listed {
+            sessionBox[s.id] = currentBoxID
         }
+        // Box-switch fix: instead of replacing ALL sessions or skipping
+        // entirely (the old "if !listed.isEmpty" guard), merge at the
+        // box granularity:
+        //   - Keep sessions whose sessionBox stamp points to a DIFFERENT box
+        //     (they stay visible as dimmed history rows per #522).
+        //   - Replace this box's session entries with the freshly-listed ones.
+        // This means a box switch (A->B) correctly shows:
+        //   - Box B's sessions once the broker responds (even if box B has zero
+        //     sessions -- the correct empty state for that box).
+        //   - Box A's prior sessions remain (stamped boxA) until B fully loads.
+        // The old guard prevented box B from ever populating when the Rust
+        // client returned [] before status frames landed -- the "stuck showing
+        // previous box" bug.
+        let otherBoxSessions = sessions.filter { s in
+            guard let stamp = sessionBox[s.id] else { return false }
+            return stamp != currentBoxID
+        }
+        sessions = otherBoxSessions + listed
         // Do NOT blanket-default listed sessions to `.live`. `listSessions`
         // can include recovered / exited / not-currently-running rows, and
         // a default of `.live` made every one of them open interactive

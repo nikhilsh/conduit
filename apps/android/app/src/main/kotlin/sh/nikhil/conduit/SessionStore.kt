@@ -3091,24 +3091,30 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // Stamp each listed session with the currently-connected box so we
         // can (a) group by box on the home list and (b) gate sends to avoid
         // routing into the wrong broker (UnknownSession root cause).
+        // Always stamp, even when the list is empty, so the box identity is
+        // established for subsequent calls.
         val currentBoxId = savedHistoryServerId()
-        if (list.isNotEmpty()) {
-            val updates = list.associate { it.id to currentBoxId }
+        val updates = list.associate { it.id to currentBoxId }
+        if (updates.isNotEmpty()) {
             _sessionBox.value = _sessionBox.value + updates
-            Telemetry.breadcrumb("session", "stamped_box",
-                mapOf("count" to list.size.toString(), "box" to currentBoxId))
         }
-        // A fresh client returns [] until the first SessionStatus delta lands,
-        // so blindly assigning `_sessions.value = list` blanks the visible list
-        // on every reconnect — most visibly on the always-on tablet rail, which
-        // goes empty when the app is reopened (onResume calls refreshSessions
-        // while the socket is still reconnecting). The phone hides this behind a
-        // closed drawer. Replace only when we have at least one entry; otherwise
-        // keep the prior list and let status frames refresh it incrementally.
+        Telemetry.breadcrumb("session", "refreshSessions",
+            mapOf("count" to list.size.toString(), "box" to currentBoxId))
+        // Per-box merge: keep sessions whose sessionBox stamp points to a
+        // DIFFERENT box (they stay visible as dimmed history rows per #522),
+        // and replace this box's session entries with the freshly-listed ones.
+        // This fixes the box-switch bug: switching A->B now shows box B's
+        // sessions once the broker responds (even if box B has zero sessions),
+        // while keeping box A's sessions visible (stamped boxA). The old
+        // "if isNotEmpty" guard prevented box B from ever populating because
+        // the Rust client returns [] until status frames land -- which never
+        // happens for sessions we haven't joined yet.
         // Mirror of iOS `SessionStore.refreshSessions`.
-        if (list.isNotEmpty()) {
-            _sessions.value = list
+        val otherBoxSessions = _sessions.value.filter { s ->
+            val stamp = _sessionBox.value[s.id] ?: return@filter false
+            stamp != currentBoxId
         }
+        _sessions.value = otherBoxSessions + list
         for (s in _sessions.value) {
             // Do NOT blanket-default listed sessions to `Live`.
             // `listSessions` can include recovered / exited /
