@@ -345,21 +345,33 @@ extension ConduitUI {
                         )
                 }
 
-                // Actions — Approve · Deny both open the chat (no programmatic
-                // approve endpoint); the trailing bubble opens chat too.
+                // Actions:
+                //   Approve -- sends "y" directly via answerPendingInput so
+                //   the agent unblocks without the user opening chat.
+                //   Deny -- sends "n" the same way.
+                //   Open chat -- always available for complex / multi-choice
+                //   prompts where a single "y"/"n" is insufficient.
                 HStack(spacing: 9) {
                     actionButton(
                         label: "Approve",
                         systemImage: "checkmark",
                         tint: neon.green,
                         filled: true
-                    ) { onOpenSession(item.id) }
+                    ) {
+                        Telemetry.breadcrumb("approvals", "in-app approve tapped",
+                            data: ["session": item.id, "risk": item.risk.label])
+                        store.answerPendingInput(sessionID: item.id, message: "y")
+                    }
                     actionButton(
                         label: "Deny",
                         systemImage: "xmark",
                         tint: neon.textDim,
                         filled: false
-                    ) { onOpenSession(item.id) }
+                    ) {
+                        Telemetry.breadcrumb("approvals", "in-app deny tapped",
+                            data: ["session": item.id, "risk": item.risk.label])
+                        store.answerPendingInput(sessionID: item.id, message: "n")
+                    }
                     Button {
                         onOpenSession(item.id)
                     } label: {
