@@ -1190,6 +1190,11 @@ extension ConduitUI {
         @Environment(\.neonTheme) private var neon
         @State private var showAddServer = false
         @State private var pendingServerDelete: PendingServerDelete?
+        // Rename flow: hold the server being renamed + the editable name.
+        @State private var pendingRename: SavedServer?
+        @State private var renameText: String = ""
+        // Async reachability probe for inactive boxes: nil=unknown, true=up, false=down.
+        @State private var boxReachability: [String: Bool?] = [:]
 
         var body: some View {
             ZStack {
@@ -1199,10 +1204,19 @@ extension ConduitUI {
                         if !store.savedServers.isEmpty {
                             List {
                                 ForEach(store.savedServers) { server in
-                                    savedServerRow(server)
+                                    boxRow(server)
                                         .listRowBackground(Color.clear)
                                         .listRowSeparator(.hidden)
                                         .listRowInsets(EdgeInsets())
+                                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                            Button {
+                                                pendingRename = server
+                                                renameText = server.name
+                                            } label: {
+                                                Label("Rename", systemImage: "pencil")
+                                            }
+                                            .tint(neon.accent)
+                                        }
                                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                             Button(role: .destructive) {
                                                 pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
@@ -1211,6 +1225,12 @@ extension ConduitUI {
                                             }
                                         }
                                         .contextMenu {
+                                            Button {
+                                                pendingRename = server
+                                                renameText = server.name
+                                            } label: {
+                                                Label("Rename", systemImage: "pencil")
+                                            }
                                             Button(role: .destructive) {
                                                 pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
                                             } label: {
@@ -1222,7 +1242,7 @@ extension ConduitUI {
                             .listStyle(.plain)
                             .scrollContentBackground(.hidden)
                             .scrollDisabled(true)
-                            .frame(height: CGFloat(store.savedServers.count) * 60)
+                            .frame(height: CGFloat(store.savedServers.count) * 64)
 
                             Divider().background(neon.border).padding(.leading, 46)
                         }
@@ -1232,7 +1252,7 @@ extension ConduitUI {
                         } label: {
                             ConduitUI.ListRow(
                                 icon: "plus.circle.fill",
-                                title: "Add Server",
+                                title: "Add Box",
                                 subtitle: nil,
                                 iconTint: neon.accent
                             ) {
@@ -1249,7 +1269,7 @@ extension ConduitUI {
                 }
                 .scrollIndicators(.hidden)
             }
-            .navigationTitle("Servers")
+            .navigationTitle("Boxes")
             .navigationBarTitleDisplayMode(.inline)
             .tint(neon.accent)
             .appearanceColorScheme()
@@ -1257,7 +1277,27 @@ extension ConduitUI {
                 ConduitUI.AddServerSheet()
             }
             .alert(
-                "Forget server?",
+                "Rename box",
+                isPresented: Binding(
+                    get: { pendingRename != nil },
+                    set: { if !$0 { pendingRename = nil } }
+                ),
+                presenting: pendingRename
+            ) { target in
+                TextField("Name", text: $renameText)
+                    .autocorrectionDisabled(true)
+                Button("Save") {
+                    store.renameServer(target.id, to: renameText)
+                    pendingRename = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingRename = nil
+                }
+            } message: { target in
+                Text("Enter a new name for \(target.name).")
+            }
+            .alert(
+                "Forget box?",
                 isPresented: Binding(
                     get: { pendingServerDelete != nil },
                     set: { if !$0 { pendingServerDelete = nil } }
@@ -1272,98 +1312,113 @@ extension ConduitUI {
                     pendingServerDelete = nil
                 }
             } message: { target in
-                Text("Drops the saved pairing for \(target.name). Sessions already running on this server keep running until you delete them.")
+                Text("Drops the saved pairing for \(target.name). Sessions already running on this box keep running until you delete them.")
+            }
+            .task {
+                // Probe reachability for inactive boxes once on appear.
+                await probeInactiveBoxes()
             }
         }
 
-        @ViewBuilder
-        private func savedServerRow(_ server: SavedServer) -> some View {
-            // Multi-box first cut: when the flag is ON, tapping a row toggles
-            // THIS box's connection (multiple can be connected at once) instead
-            // of switching the single active box.
-            if store.multiBoxEnabled {
-                multiBoxServerRow(server)
-            } else {
-                singleBoxServerRow(server)
-            }
-        }
+        // MARK: - Row
 
         @ViewBuilder
-        private func singleBoxServerRow(_ server: SavedServer) -> some View {
+        private func boxRow(_ server: SavedServer) -> some View {
             let isActive = server.endpoint == store.endpoint
+            // boxReachability[id] is Bool?? (outer = key presence, inner = probed value)
+            let probed: Bool? = boxReachability[server.id] ?? nil
+            let dotColor: Color = isActive ? neon.green : (probed == true ? neon.green : neon.textFaint)
+            let statusText: String = isActive ? "connected"
+                : (probed == true ? "reachable" : (probed == false ? "offline" : ""))
             Button {
-                store.selectSavedServer(server.id, autoConnect: true)
+                if !isActive {
+                    Telemetry.breadcrumb("boxes", "switch box", data: ["id": server.id, "name": server.name])
+                    store.selectSavedServer(server.id, autoConnect: true)
+                }
             } label: {
-                ConduitUI.ListRow(
-                    icon: "server.rack",
-                    title: server.name,
-                    subtitle: server.endpoint.displayHost,
-                    iconTint: isActive ? neon.green : neon.accent
-                ) {
-                    HStack(spacing: 8) {
-                        if server.isDefault {
-                            Text("Default")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Capsule().fill(neon.accent.opacity(0.22)))
-                                .overlay(Capsule().stroke(neon.accent.opacity(0.5), lineWidth: 1))
+                HStack(spacing: 12) {
+                    // Status dot
+                    Circle()
+                        .fill(isActive ? neon.green : (probed == true ? neon.green.opacity(0.7) : neon.border))
+                        .frame(width: 8, height: 8)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(server.name)
+                                .font(neon.sans(14).weight(.semibold))
+                                .foregroundStyle(neon.text)
+                            if server.isDefault {
+                                Text("PRIMARY")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .tracking(0.5)
+                                    .foregroundStyle(neon.green)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(neon.green.opacity(0.15)))
+                                    .overlay(Capsule().stroke(neon.green.opacity(0.4), lineWidth: 1))
+                            }
                         }
-                        if isActive {
-                            Image(systemName: "checkmark")
-                                .font(.footnote.weight(.bold))
-                                .foregroundStyle(neon.green)
+                        HStack(spacing: 5) {
+                            if !statusText.isEmpty {
+                                Text(statusText)
+                                    .font(neon.mono(10.5).weight(.medium))
+                                    .foregroundStyle(dotColor)
+                            }
+                            if !statusText.isEmpty && !server.endpoint.displayHost.isEmpty {
+                                Text("·").font(neon.mono(10)).foregroundStyle(neon.textFaint)
+                            }
+                            Text(server.endpoint.displayHost)
+                                .font(neon.mono(10.5))
+                                .foregroundStyle(neon.textDim)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                     }
+
+                    Spacer(minLength: 4)
+
+                    if isActive {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(neon.green)
+                    } else {
+                        Text("Connect")
+                            .font(neon.mono(11).weight(.bold))
+                            .foregroundStyle(neon.accent)
+                    }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
+            .disabled(isActive)
         }
 
-        @ViewBuilder
-        private func multiBoxServerRow(_ server: SavedServer) -> some View {
-            let connected = store.isBoxConnected(server.id)
-            let isPrimary = store.primaryBoxID == server.id
-            Button {
-                if connected {
-                    store.disconnectBox(server.id)
-                } else {
-                    store.connectBox(server.id)
+        // MARK: - Reachability probe
+
+        private func probeInactiveBoxes() async {
+            for server in store.savedServers {
+                let isActive = server.endpoint == store.endpoint
+                guard !isActive else {
+                    await MainActor.run { boxReachability[server.id] = .some(true) }
+                    continue
                 }
-            } label: {
-                ConduitUI.ListRow(
-                    icon: "server.rack",
-                    title: server.name,
-                    subtitle: connected
-                        ? (isPrimary ? "Connected · new sessions land here" : "Connected")
-                        : server.endpoint.displayHost,
-                    iconTint: connected ? neon.green : neon.accent
-                ) {
-                    HStack(spacing: 8) {
-                        if isPrimary && connected {
-                            Text("Primary")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Capsule().fill(neon.green.opacity(0.20)))
-                                .overlay(Capsule().stroke(neon.green.opacity(0.5), lineWidth: 1))
-                        }
-                        Text(connected ? "Disconnect" : "Connect")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(connected ? neon.red : neon.accent)
-                    }
+                let serverID = server.id
+                guard let base = server.endpoint.httpBaseURL,
+                      let url = URL(string: "/api/capabilities", relativeTo: base) else {
+                    await MainActor.run { boxReachability[serverID] = .some(false) }
+                    continue
                 }
-            }
-            .buttonStyle(.plain)
-            // Long-press a connected box to make it the primary (where new
-            // sessions land) without disconnecting it.
-            .contextMenu {
-                if connected && !isPrimary {
-                    Button {
-                        store.primaryBoxID = server.id
-                    } label: {
-                        Label("Make primary", systemImage: "star")
-                    }
+                do {
+                    var req = URLRequest(url: url)
+                    req.timeoutInterval = 5
+                    req.httpMethod = "GET"
+                    let (_, resp) = try await URLSession.shared.data(for: req)
+                    let up = (resp as? HTTPURLResponse).map { $0.statusCode < 500 } ?? false
+                    await MainActor.run { boxReachability[serverID] = .some(up) }
+                } catch {
+                    await MainActor.run { boxReachability[serverID] = .some(false) }
                 }
             }
         }

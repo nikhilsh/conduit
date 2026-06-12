@@ -2328,6 +2328,16 @@ final class SessionStore {
     /// bookkeeping but additionally sweeps the display-name override —
     /// without that step a stale rename for a `SavedServer.id` we just
     /// dropped would linger in UserDefaults forever.
+    /// Rename a saved server in-place; persists immediately.
+    func renameServer(_ serverID: String, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let idx = savedServers.firstIndex(where: { $0.id == serverID }) else { return }
+        savedServers[idx].name = trimmed
+        Self.persistSavedServers(savedServers)
+        Telemetry.breadcrumb("boxes", "server renamed", data: ["id": serverID, "name": trimmed])
+    }
+
     func forgetServer(_ id: String) {
         removeSavedServer(id)
         if displayNames[id] != nil {
