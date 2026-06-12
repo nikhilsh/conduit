@@ -36,11 +36,24 @@ struct ConcurrentMultiBoxTests {
         body()
     }
 
+    /// Run `body` with a fresh store and remove any servers added during the
+    /// test when done, so keychain state does not leak into subsequent tests.
+    private func withIsolatedStore(_ on: Bool, _ body: (SessionStore) -> Void) {
+        withFlag(on) {
+            let store = SessionStore()
+            let before = Set(store.savedServers.map(\.id))
+            defer {
+                let added = store.savedServers.filter { !before.contains($0.id) }
+                for s in added { store.removeSavedServer(s.id) }
+            }
+            body(store)
+        }
+    }
+
     // MARK: - Invariant 1: flag OFF is inert / single-box
 
     @Test func flagOffMeansMultiBoxDisabledAndRegistryInert() {
-        withFlag(false) {
-            let store = SessionStore()
+        withIsolatedStore(false) { store in
             #expect(store.multiBoxEnabled == false)
             // Even with a stamp present, flag OFF → the seam ignores it and
             // falls back to the single client (nil here — nothing connected).
@@ -59,8 +72,7 @@ struct ConcurrentMultiBoxTests {
     // MARK: - Invariant 2: flag ON, ownership + independent teardown
 
     @Test func ownershipRoutingAndIndependentTeardown() {
-        withFlag(true) {
-            let store = SessionStore()
+        withIsolatedStore(true) { store in
             #expect(store.multiBoxEnabled == true)
 
             let epA = StoredEndpoint(url: "ws://10.0.0.10:1977", token: "tA-\(UUID().uuidString)")
@@ -108,8 +120,7 @@ struct ConcurrentMultiBoxTests {
         // First-cut scope: SSH/loopback boxes don't join the multi-box
         // registry (their endpoint is bound to a tunnel the single-box path
         // holds). connectBox must skip rather than dial a dead port.
-        withFlag(true) {
-            let store = SessionStore()
+        withIsolatedStore(true) { store in
             let loop = StoredEndpoint(url: "ws://127.0.0.1:54321", token: "loop-\(UUID().uuidString)")
             store.upsertSavedServer(name: "ssh-box", endpoint: loop, makeDefault: false)
             let id = store.savedServers.first(where: { $0.endpoint == loop })!.id

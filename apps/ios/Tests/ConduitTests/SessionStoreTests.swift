@@ -146,16 +146,14 @@ struct SessionStoreTests {
     /// the harness is already reachable). This test pins that contract
     /// without standing up a real client: we plant a `SavedServer`
     /// matching the live endpoint and assert `selectSavedServer` does
-    /// *not* tear down the harness state machine. Because there's no
-    /// real connection, `harness` stays `.disconnected` — the assertion
-    /// that matters is "we don't crash and the saved-servers list still
-    /// holds the row" (which is what the home pill row reads).
+    /// *not* tear down the harness state machine — `harness` must stay
+    /// `.live` rather than bouncing back to `.connecting`.
     @Test func selectingActiveServerSkipsReconnect() {
         let store = SessionStore()
         let endpoint = StoredEndpoint(url: "ws://10.0.0.4:1977", token: "tok-\(UUID().uuidString)")
         store.endpoint = endpoint
         store.upsertSavedServer(name: "lab", endpoint: endpoint, makeDefault: true)
-        let savedID = store.savedServers.first!.id
+        let savedID = store.savedServers.first(where: { $0.endpoint == endpoint })!.id
 
         // Simulate "already linked": the user is on this server and
         // sessions have been listed. Direct set is the only seam — no
