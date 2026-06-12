@@ -135,12 +135,21 @@ func (s *Session) StatusPayload() map[string]any {
 }
 
 // liveGitState returns the cached (or freshly computed) GitState for the
-// session's workspace directory.
+// agent's actual current working directory. When the agent process has
+// changed into a worktree (via git worktree add + cd), /proc/<pid>/cwd
+// reflects that real location; otherwise we fall back to the static
+// WorkspaceDir (existing behaviour).
 func (s *Session) liveGitState() GitState {
 	if gs, ok := s.gitStateCache.get(); ok {
 		return gs
 	}
-	gs := computeGitState(s.WorkspaceDir(), worktreeNameFor(s))
+	dir := s.WorkspaceDir()
+	if pid := s.agentPID(); pid > 0 {
+		if cwd := agentCWD(pid); cwd != "" {
+			dir = cwd
+		}
+	}
+	gs := computeGitState(dir, worktreeNameFor(s))
 	s.gitStateCache.set(gs)
 	return gs
 }

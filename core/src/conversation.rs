@@ -177,7 +177,11 @@ fn classify_kind(role: &str, content: &str, has_diff: bool, tool_name: Option<&s
     if looks_like_handoff(content) {
         return "handoff".to_string();
     }
-    if looks_like_subagent(content) {
+    // Subagent frames are system events (task_started / task_notification),
+    // never assistant or user prose. Guard the heuristic on role so an
+    // orchestrator reply that merely MENTIONS "subagent" is not misclassified
+    // as a SUBAGENT card — it will fall through to "message" below.
+    if role != "assistant" && role != "user" && looks_like_subagent(content) {
         return "subagent".to_string();
     }
     if role == "tool" {
@@ -609,8 +613,41 @@ fn strip_tags(line: &str) -> String {
 }
 
 fn looks_like_subagent(text: &str) -> bool {
+    // Only match structured / anchored system-event phrasing.
+    // This function is now only called for non-assistant non-user roles (system
+    // events), so false positives from orchestrator prose are already prevented
+    // at the classify_kind level. We still tighten here to avoid future
+    // regressions if the call order ever changes.
+    //
+    // Matches:
+    //   "subagent started: …"  / "subagent done: …"  / "subagent failed: …"
+    //   "sub-agent started: …" etc.
+    //   "spawning agent …"  (starts-with; the canonical broker sentinel)
+    // Does NOT match bare "subagent" mid-sentence or "sub-agent" mid-prose.
     let lower = text.to_ascii_lowercase();
-    lower.contains("subagent") || lower.contains("sub-agent") || lower.contains("spawning agent")
+    let trimmed = lower.trim_start();
+    // Anchored starts-with patterns for known structured system events.
+    if trimmed.starts_with("spawning agent") {
+        return true;
+    }
+    // "subagent <verb>:" or "sub-agent <verb>:" structured lifecycle events.
+    for prefix in &[
+        "subagent started",
+        "subagent done",
+        "subagent failed",
+        "subagent running",
+        "subagent complete",
+        "sub-agent started",
+        "sub-agent done",
+        "sub-agent failed",
+        "sub-agent running",
+        "sub-agent complete",
+    ] {
+        if trimmed.starts_with(prefix) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -786,6 +823,43 @@ mod tests {
     fn subagent_classified() {
         let item = item_from_chat_event(
             &ev("system", "Spawning agent for parallel investigation"),
+            0,
+        );
+        assert_eq!(item.kind, "subagent");
+    }
+
+    /// An assistant-role event whose content contains "subagent" must classify
+    /// as "message", NOT "subagent" — the orchestrator's own reply that merely
+    /// mentions it should not render as a SUBAGENT card.
+    #[test]
+    fn assistant_mentioning_subagent_is_message() {
+        let item = item_from_chat_event(
+            &ev(
+                "assistant",
+                "I'll delegate this to a subagent to investigate in parallel.",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "message");
+        assert_eq!(item.role, "assistant");
+    }
+
+    /// An assistant-role event with "sub-agent" in text must still be "message".
+    #[test]
+    fn assistant_mentioning_sub_agent_is_message() {
+        let item =
+            item_from_chat_event(&ev("assistant", "The sub-agent will handle this task."), 0);
+        assert_eq!(item.kind, "message");
+    }
+
+    /// A genuine system subagent lifecycle event still classifies as "subagent".
+    #[test]
+    fn system_subagent_started_classifies_as_subagent() {
+        let item = item_from_chat_event(
+            &ev(
+                "system",
+                "subagent started: investigating the build failure",
+            ),
             0,
         );
         assert_eq!(item.kind, "subagent");

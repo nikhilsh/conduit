@@ -1,11 +1,33 @@
 package session
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
+
+// agentCWD resolves the current working directory of the process with the
+// given PID by reading /proc/<pid>/cwd (Linux only). Returns "" when the pid
+// is 0, the symlink cannot be read, or the resolved path does not exist — in
+// all those cases the caller falls back to the session's static workspaceDir.
+func agentCWD(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	link := fmt.Sprintf("/proc/%d/cwd", pid)
+	resolved, err := os.Readlink(link)
+	if err != nil {
+		return ""
+	}
+	// Verify the resolved path actually exists (handles stale symlinks).
+	if _, err := os.Stat(resolved); err != nil {
+		return ""
+	}
+	return resolved
+}
 
 // GitState holds the live git state for a session's worktree directory.
 // All fields are zero/empty when the directory is not a git repo or any
