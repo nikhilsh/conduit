@@ -1,6 +1,7 @@
 import Foundation
 #if canImport(ActivityKit)
 import ActivityKit
+import UIKit
 #endif
 
 // `TurnActivityAttributes` (the `ActivityAttributes`-conforming type
@@ -215,6 +216,17 @@ public final class TurnLiveActivityController {
             return
         }
 
+        // iOS only allows Activity.request from the foreground. Calling it
+        // from the background throws ActivityAuthorizationError.visibility
+        // (Code 7). Guard here so background turns skip the request
+        // entirely — push-to-start / push-update (#500) handles those paths.
+        guard UIApplication.shared.applicationState == .active else {
+            Telemetry.breadcrumb("live_activity", "start skipped: app not in foreground",
+                data: ["session": sessionID,
+                       "appState": "\(UIApplication.shared.applicationState.rawValue)"])
+            return
+        }
+
         let attrs = TurnActivityAttributes(from: attributes)
         let content = TurnActivityAttributes.ContentState(from: Self.stamped(state))
         // Capture registration endpoint at start time so the push-token
@@ -252,14 +264,24 @@ public final class TurnLiveActivityController {
                 }
             }
         } catch {
-            // `Activity.request` throws on: simulators without a Mac host
-            // recent enough, Live Activities disabled in Settings, or a
-            // mismatch between the host + widget `ActivityAttributes`
-            // shape. The controller stays functional and the next turn's
-            // effect will retry -- but capture it so a release build that
-            // silently shows no Live Activity is diagnosable from Sentry
-            // (e.g. the widget extension isn't embedded in the IPA).
-            Telemetry.capture(error: error, message: "Live Activity request failed", tags: ["flow": "liveactivity"], extras: ["session": sessionID])
+            // ActivityAuthorizationError.visibility (Code 7) means we called
+            // Activity.request from the background. This should be prevented
+            // by the applicationState guard above, but if it slips through
+            // (e.g. app transitioned to background between the guard and the
+            // request), treat it as expected lifecycle noise -- breadcrumb only.
+            //
+            // Genuinely unexpected errors (denied entitlement, widget shape
+            // mismatch, simulator without a Mac host) are captured as events
+            // so a release build that silently shows no Live Activity is
+            // diagnosable from Sentry.
+            if let authErr = error as? ActivityAuthorizationError,
+               authErr == .visibility {
+                Telemetry.breadcrumb("live_activity", "start blocked: .visibility (background)",
+                    data: ["session": sessionID])
+            } else {
+                Telemetry.capture(error: error, message: "Live Activity request failed",
+                    tags: ["flow": "liveactivity"], extras: ["session": sessionID])
+            }
         }
         #endif
     }
