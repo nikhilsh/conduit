@@ -86,6 +86,32 @@ describe("sendApns", () => {
     expect(url).toContain("api.sandbox.push.apple.com");
   });
 
+  it("sets aps.category and top-level category for category=approval", async () => {
+    let body: any = null;
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      body = JSON.parse(init.body);
+      return new Response(null, { status: 200 });
+    });
+    const r = await sendApns(env(), "tok", { ...payload, category: "approval" }, "production");
+    expect(r.ok).toBe(true);
+    expect(body.aps.category).toBe("approval");
+    expect(body.category).toBe("approval");
+    expect(body.aps.alert.title).toBe("Conduit");
+  });
+
+  it("omits aps.category for plain alerts", async () => {
+    let body: any = null;
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      body = JSON.parse(init.body);
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(env(), "tok", payload, "production");
+    expect(body.aps).not.toHaveProperty("category");
+    expect(body).not.toHaveProperty("category");
+  });
+
   it("uses the liveactivity topic suffix + push-type for category=liveactivity", async () => {
     let headers: Headers | null = null;
     mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
