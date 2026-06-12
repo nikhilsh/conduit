@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"testing"
 )
 
@@ -134,5 +135,34 @@ func TestComputeGitStateLiveRepo(t *testing.T) {
 	}
 	if gs2.WorktreeName != "wt-test" {
 		t.Errorf("WorktreeName: got %q, want \"wt-test\"", gs2.WorktreeName)
+	}
+}
+
+// TestAgentCWDFallbacks verifies the /proc/<pid>/cwd helper behaves correctly
+// for the fallback cases: pid=0 and a pid that does not exist both return "".
+func TestAgentCWDFallbacks(t *testing.T) {
+	if got := agentCWD(0); got != "" {
+		t.Errorf("agentCWD(0) = %q, want empty", got)
+	}
+	// PID 1<<30 is highly unlikely to be a real process.
+	if got := agentCWD(1 << 30); got != "" {
+		t.Errorf("agentCWD(nonexistent pid) = %q, want empty", got)
+	}
+}
+
+// TestAgentCWDSelfProcess verifies that agentCWD returns a non-empty valid
+// path when given a real running PID (the test process itself).
+func TestAgentCWDSelfProcess(t *testing.T) {
+	// /proc is Linux-specific; skip on other platforms.
+	if _, err := os.Stat("/proc/self/cwd"); err != nil {
+		t.Skip("no /proc/self/cwd — not Linux")
+	}
+	pid := os.Getpid()
+	cwd := agentCWD(pid)
+	if cwd == "" {
+		t.Fatalf("agentCWD(%d) = empty, want a real path", pid)
+	}
+	if _, err := os.Stat(cwd); err != nil {
+		t.Errorf("agentCWD(%d) = %q, but Stat failed: %v", pid, cwd, err)
 	}
 }
