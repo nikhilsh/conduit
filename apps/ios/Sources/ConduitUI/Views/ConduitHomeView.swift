@@ -391,10 +391,19 @@ extension ConduitUI {
                         .font(neon.sans(13).weight(.semibold))
                         .foregroundStyle(connected ? neon.green : neon.text)
                         .lineLimit(1)
-                    Text(server.endpoint.displayHost)
-                        .font(neon.mono(10.5))
-                        .foregroundStyle(neon.textFaint)
-                        .lineLimit(1)
+                    // Show the real SSH host:port for SSH-tunnelled boxes;
+                    // loopback address is the tunnel, not the actual machine.
+                    if let ssh = server.ssh {
+                        Text("\(ssh.host):\(ssh.port)")
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(neon.textFaint)
+                            .lineLimit(1)
+                    } else {
+                        Text(server.endpoint.displayHost)
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(neon.textFaint)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 6)
                 if isActive {
