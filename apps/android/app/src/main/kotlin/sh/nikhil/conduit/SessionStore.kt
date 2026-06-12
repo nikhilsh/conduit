@@ -1037,10 +1037,41 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val next = _savedServers.value.map { it.copy(isDefault = it.id == serverId) }
         _savedServers.value = next
         persistSavedServers(next)
+        val endpointChanged = server.endpoint != _endpoint.value
         setEndpoint(server.endpoint.url, server.endpoint.token)
         if (autoConnect) {
-            disconnect()
-            connect()
+            if (server.ssh != null) {
+                // SSH box: the persisted endpoint is a loopback ws://127.0.0.1:<port>
+                // that is only valid while THAT box's russh tunnel is running. Switching
+                // to an SSH box (or re-selecting one whose tunnel dropped) must
+                // re-bootstrap the tunnel rather than dialing a dead loopback port.
+                // If the held tunnel is still alive and the endpoint hasn't changed
+                // (same box, still live) we can skip bootstrap and just bounce the WS.
+                val tunnelAlive = sshTunnel?.isAlive() == true
+                if (tunnelAlive && !endpointChanged) {
+                    // Tunnel is up — just bounce the WebSocket layer.
+                    disconnect()
+                    connect()
+                } else {
+                    // No live tunnel for the target box — re-bootstrap.
+                    // attemptSshSelfHeal uses _endpoint.value (already updated above)
+                    // to look up the SSH ref and re-run the full tunnel bootstrap.
+                    Telemetry.breadcrumb(
+                        "ssh_tunnel",
+                        "selectSavedServer triggering re-bootstrap",
+                        mapOf(
+                            "server" to serverId,
+                            "endpointChanged" to endpointChanged.toString(),
+                            "tunnelAlive" to tunnelAlive.toString(),
+                        ),
+                    )
+                    attemptSshSelfHeal()
+                }
+            } else {
+                // Token-paired (conduit://) box — plain disconnect+reconnect.
+                disconnect()
+                connect()
+            }
         }
     }
 

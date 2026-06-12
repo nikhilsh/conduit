@@ -2255,8 +2255,34 @@ final class SessionStore {
         endpoint = server.endpoint
         if autoConnect {
             if endpointChanged || !harness.isReachable {
-                disconnect()
-                connect()
+                if server.ssh != nil {
+                    // SSH box: the persisted endpoint is a loopback ws://127.0.0.1:<port>
+                    // that only works while THAT box's russh tunnel is live. Switching
+                    // to a different SSH box (or the same one whose tunnel dropped) must
+                    // re-bootstrap the tunnel instead of dialing a dead loopback port.
+                    // If the held tunnel is already alive AND the endpoint matches we
+                    // can skip the bootstrap and just re-dial the WS layer.
+                    let tunnelAlive = sshTunnel?.isAlive() == true
+                    if tunnelAlive && !endpointChanged {
+                        // Tunnel is up, just bounce the WebSocket.
+                        disconnect()
+                        connect()
+                    } else {
+                        // No live tunnel for the target box — re-bootstrap.
+                        // attemptSshSelfHeal uses self.endpoint (already updated above)
+                        // to look up the SSH ref and re-run the full tunnel bootstrap.
+                        Telemetry.breadcrumb("ssh_tunnel", "selectSavedServer triggering re-bootstrap", data: [
+                            "server": serverID,
+                            "endpointChanged": "\(endpointChanged)",
+                            "tunnelAlive": "\(tunnelAlive)",
+                        ])
+                        attemptSshSelfHeal()
+                    }
+                } else {
+                    // Token-paired (conduit://) box — plain disconnect+reconnect.
+                    disconnect()
+                    connect()
+                }
             }
         }
     }
