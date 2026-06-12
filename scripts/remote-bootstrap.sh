@@ -157,11 +157,110 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 18
 fi
 
+# ── Idempotent unit-ensure ────────────────────────────────────────────────
+# Called on the reuse path (broker already healthy) to guarantee the systemd
+# unit is up-to-date.  Boxes bootstrapped by an older build may have a unit
+# that lacks the Environment=PATH= line; re-adding the box MUST self-heal
+# without any manual steps.
+#
+# Detection: check whether the unit file contains an Environment=PATH= line.
+# If absent (stale unit) → rewrite with the correct content and restart.
+# If already correct → do NOTHING (don't restart a healthy broker needlessly;
+# restarting reaps in-flight agent sessions).
+#
+# The token used in the rewritten unit is the one the caller passed ($TOKEN),
+# which is the same token already in the unit on a normal re-add.  A caller
+# that intentionally changes the token gets the new token written in — which
+# is the correct re-pair behaviour.
+_ensure_broker_unit() {
+  # Only act when user-systemd is available and linger is enabled.
+  if ! command -v systemctl >/dev/null 2>&1; then return 0; fi
+  if ! systemctl --user status >/dev/null 2>&1; then return 0; fi
+
+  _unit_dir="$HOME/.config/systemd/user"
+  _unit_file="$_unit_dir/conduit-broker.service"
+
+  # If the unit doesn't exist at all there's nothing to fix on the reuse path
+  # (the broker is running via the nohup/pidfile fallback — that path also
+  # exports PATH in the environment, so it self-heals on the next re-add).
+  if [ ! -f "$_unit_file" ]; then return 0; fi
+
+  # If the unit already has the PATH environment line, nothing to do.
+  if grep -q 'Environment=.PATH=' "$_unit_file"; then return 0; fi
+
+  # ---- Stale unit detected: rewrite and restart ----
+  echo "conduit: unit lacks Environment=PATH=; rewriting for self-heal" >&2
+
+  # Build Environment= lines (mirrors the fresh-install path exactly).
+  _eu_env_lines="Environment=\"PATH=$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
+  _eu_env_lines="$_eu_env_lines
+Environment=\"CONDUIT_TOKEN=$TOKEN\""
+  if [ -n "$ANTHROPIC" ]; then
+    _eu_env_lines="$_eu_env_lines
+Environment=\"ANTHROPIC_API_KEY=$ANTHROPIC\""
+  fi
+  if [ -n "$OPENAI" ]; then
+    _eu_env_lines="$_eu_env_lines
+Environment=\"OPENAI_API_KEY=$OPENAI\""
+  fi
+  # Preserve a pre-existing CONDUIT_NTFY_URL in the unit if present, so we
+  # don't drop ntfy on a reuse-path rewrite.
+  _eu_existing_ntfy="$(grep 'Environment=.CONDUIT_NTFY_URL=' "$_unit_file" 2>/dev/null | head -1 | sed 's/^Environment=//;s/^"//;s/"$//')"
+  if [ -n "$_eu_existing_ntfy" ]; then
+    _eu_env_lines="$_eu_env_lines
+Environment=\"$_eu_existing_ntfy\""
+  elif [ -n "${_ntfy_url:-}" ]; then
+    _eu_env_lines="$_eu_env_lines
+Environment=\"CONDUIT_NTFY_URL=$_ntfy_url\""
+  fi
+
+  mkdir -p "$_unit_dir"
+  cat > "$_unit_file" <<_UNIT
+[Unit]
+Description=conduit broker
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+ExecStart=$BIN up --addr 127.0.0.1:$HOST_PORT
+Restart=on-failure
+RestartSec=10
+$_eu_env_lines
+
+[Install]
+WantedBy=default.target
+_UNIT
+
+  systemctl --user daemon-reload >/dev/null 2>&1
+  systemctl --user restart conduit-broker >/dev/null 2>&1 || true
+
+  # Give the broker a moment to come back; the existing health-wait loop in
+  # the caller will re-confirm readiness before emitting OK.
+  _wr=0
+  _wi=1
+  while [ "$_wi" -le 15 ]; do
+    if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
+      _wr=1
+      break
+    fi
+    sleep 1
+    _wi=$((_wi + 1))
+  done
+  if [ "$_wr" = "0" ]; then
+    echo "conduit: broker did not recover after unit rewrite within 15s" >&2
+  else
+    echo "conduit: broker unit rewritten and broker healthy" >&2
+  fi
+}
+
 # ── Reuse path ────────────────────────────────────────────────────────────
-# A healthy broker on the port → return immediately.  Works whether the
-# broker was launched by systemd (no pidfile) or by the old nohup path.
+# A healthy broker on the port → ensure the unit is correct, then return.
+# Works whether the broker was launched by systemd (no pidfile) or by the
+# old nohup path.
 echo "STEP reuse_check" >&2
 if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
+  _ensure_broker_unit
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
@@ -173,6 +272,7 @@ fi
 # Also accept: legacy pidfile present + process alive + health passes.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null \
    && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
+  _ensure_broker_unit
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
