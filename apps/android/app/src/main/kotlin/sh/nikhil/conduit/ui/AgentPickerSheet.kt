@@ -284,7 +284,7 @@ private fun AgentStep(
         // "This device" on the home Boxes list is display-only (a phone can't
         // host the broker), so it is deliberately not a target here.
         // Mirror of iOS boxSection.
-        val currentEndpoint = endpoint
+        val currentEndpoint by store.endpoint.collectAsState()
         if (servers.isNotEmpty()) {
             Text(
                 "BOX",
