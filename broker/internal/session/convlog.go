@@ -40,9 +40,24 @@ func newConvLogger(path string) *convLogger {
 // appendRaw persists an already-encoded chat payload (the `event` object
 // from a `view_event` frame — `{role, content, ts, files}`) verbatim as
 // one JSONL line. No-op on a nil logger / empty path / empty payload.
+//
+// Needs-input/approval cards (content prefixed with pendingInputSentinel)
+// are transient live state — they are re-surfaced on reconnect from the
+// live pendingAsk/pendingApproval, not from the transcript. Persisting
+// them would cause a REOPEN of the session to replay the sentinel line,
+// which the app classifies as a live tappable card for an
+// already-answered question. Skip the durable write for these events
+// only; live fan-out to subscribers is unaffected.
 func (l *convLogger) appendRaw(payload []byte) {
 	if l == nil || l.path == "" || len(payload) == 0 {
 		return
+	}
+	// Skip needs-input/approval cards — transient state, must not replay.
+	{
+		var e ConvEntry
+		if json.Unmarshal(payload, &e) == nil && strings.HasPrefix(e.Content, pendingInputSentinel) {
+			return
+		}
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
