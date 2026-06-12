@@ -2526,6 +2526,13 @@ final class SessionStore {
         sessionLifecycle[sessionID] = nil
         if selectedSessionID == sessionID { selectedSessionID = nil }
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // End any Live Activity for this session immediately. The bridge
+        // only drives `.end` when it sees an "exited..." phase in a future
+        // frame, but archive removes the session from the live list, so the
+        // bridge never observes that transition. Call the controller
+        // directly so the lock-screen card disappears right away.
+        TurnLiveActivityController.shared.sessionExited(sessionID: sessionID)
+        Telemetry.breadcrumb("live_activity", "ended on archive", data: ["session": sessionID])
         // NOTE: deliberately NO `SavedSessionsStore.shared.remove(...)` here.
         // Archiving must leave the history row intact so it stays viewable
         // as a read-only transcript. Permanent removal lives in
@@ -2548,6 +2555,10 @@ final class SessionStore {
         if selectedSessionID == sessionID { selectedSessionID = nil }
         pendingChats.clear(sessionID: sessionID)
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // End any Live Activity for this session immediately — same
+        // reasoning as archive(sessionID:) above.
+        TurnLiveActivityController.shared.sessionExited(sessionID: sessionID)
+        Telemetry.breadcrumb("live_activity", "ended on delete", data: ["session": sessionID])
         // Delete is terminal: sweep the persistent "Resume" index AND record
         // the tombstone so a status/list refresh (the broker's tmux can
         // linger, #199) can never re-add the row to History.
