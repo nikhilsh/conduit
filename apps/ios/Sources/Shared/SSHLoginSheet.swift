@@ -1,15 +1,17 @@
 import SwiftUI
 import UIKit
 
-/// Form-style sheet that drives the SSH-bootstrap flow. The user supplies
+/// Conduit-styled sheet that drives the SSH-bootstrap flow. The user supplies
 /// host/port + username + password OR PEM key (+ optional passphrase); on
 /// Connect we kick off `SessionStore.connectViaSSH`, which handles the
 /// docker-run + tunnel + endpoint swap. Progress + errors render inline so
 /// the user can correct typos without losing context.
+/// Fix 3: mono section labels (RECENT/SERVER/AUTHENTICATION), API keys behind
+/// disclosure, X to close, inline validation hint, glowing Connect CTA.
 struct SSHLoginSheet: View {
     @Environment(SessionStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.neonTheme) private var neon
 
     enum AuthMode: String, CaseIterable, Identifiable {
         case password = "Password"
@@ -27,18 +29,32 @@ struct SSHLoginSheet: View {
     @State private var remember: Bool = true
     @State private var anthropicKey: String = ""
     @State private var openaiKey: String = ""
+    // Fix 3: API keys hidden behind disclosure (collapsed by default).
+    @State private var apiKeysExpanded: Bool = false
 
     var body: some View {
         NavigationStack {
             ZStack {
-                ConduitTheme.backgroundGradient(for: colorScheme)
-                    .ignoresSafeArea()
+                neon.appBg.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 14) {
                         savedCredsCard
                         hostCard
                         authCard
+                        // Fix 3: inline validation hint when no host entered.
+                        if host.trimmingCharacters(in: .whitespaces).isEmpty {
+                            HStack(spacing: 7) {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(neon.textFaint)
+                                Text("Enter a host to continue")
+                                    .font(neon.mono(11.5))
+                                    .foregroundStyle(neon.textFaint)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4)
+                        }
                         apiKeysCard
                         progressCard
                         connectButton
@@ -53,11 +69,17 @@ struct SSHLoginSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .neonAccentTint()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                // Fix 3: X to close instead of "Cancel".
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
                         store.clearSshBootstrap()
                         dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(neon.textDim)
                     }
+                    .accessibilityLabel("Close")
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -87,7 +109,8 @@ struct SSHLoginSheet: View {
     private var savedCredsCard: some View {
         let saved = SshCredentialStore.load()
         if !saved.isEmpty {
-            SSHCard(title: "Recent Servers") {
+            // Fix 3: mono section label "RECENT".
+            SSHCard(title: "RECENT") {
                 ForEach(saved) { cred in
                     Button {
                         applySaved(cred)
@@ -116,7 +139,8 @@ struct SSHLoginSheet: View {
     }
 
     private var hostCard: some View {
-        SSHCard(title: "Server") {
+        // Fix 3: mono section label "SERVER".
+        SSHCard(title: "SERVER") {
             HStack(spacing: 10) {
                 TextField("hostname or IP", text: $host)
                     .textInputAutocapitalization(.never)
@@ -140,7 +164,8 @@ struct SSHLoginSheet: View {
     }
 
     private var authCard: some View {
-        SSHCard(title: "Authentication") {
+        // Fix 3: mono section label "AUTHENTICATION".
+        SSHCard(title: "AUTHENTICATION") {
             Picker("Auth", selection: $mode) {
                 ForEach(AuthMode.allCases) { m in
                     Text(m.rawValue).tag(m)
@@ -206,22 +231,56 @@ struct SSHLoginSheet: View {
         }
     }
 
+    // Fix 3: API keys behind a disclosure group (collapsed by default).
     private var apiKeysCard: some View {
-        SSHCard(title: "Agent API Keys (optional)") {
-            Text("Forwarded into the broker container so first launch can sign in without you SSHing in.")
-                .font(.caption)
-                .foregroundStyle(ConduitTheme.textSecondary)
-            SecureField("ANTHROPIC_API_KEY", text: $anthropicKey)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.plain)
-                .padding(.vertical, 4)
-            Divider().background(ConduitTheme.separator)
-            SecureField("OPENAI_API_KEY", text: $openaiKey)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.plain)
-                .padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { apiKeysExpanded.toggle() }
+            } label: {
+                HStack {
+                    Text("AGENT API KEYS (OPTIONAL)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(0.8)
+                        .foregroundStyle(neon.textFaint)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(neon.textFaint)
+                        .rotationEffect(.degrees(apiKeysExpanded ? 180 : 0))
+                }
+                .padding(.bottom, 6)
+            }
+            .buttonStyle(.plain)
+
+            if apiKeysExpanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Forwarded into the broker so agents can sign in without manual setup.")
+                        .font(.caption)
+                        .foregroundStyle(neon.textFaint)
+                    SecureField("ANTHROPIC_API_KEY", text: $anthropicKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.plain)
+                        .padding(.vertical, 4)
+                    Divider().background(neon.border)
+                    SecureField("OPENAI_API_KEY", text: $openaiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.plain)
+                        .padding(.vertical, 4)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(neon.surface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(neon.border, lineWidth: 1)
+                        )
+                )
+            }
         }
     }
 
@@ -250,14 +309,10 @@ struct SSHLoginSheet: View {
         }
     }
 
+    // Fix 3: glowing "Connect & install broker" CTA.
     private var connectButton: some View {
         VStack(spacing: 6) {
             Button {
-                // Dismiss the keyboard immediately so this tap is NEVER
-                // swallowed by the scroll-dismiss-keyboard gesture. Without
-                // this, when a text field is focused the first tap lands on
-                // the keyboard-dismiss layer and the button action never fires
-                // (the user has to tap twice: once to dismiss, once to connect).
                 UIApplication.shared.sendAction(
                     #selector(UIResponder.resignFirstResponder),
                     to: nil, from: nil, for: nil
@@ -277,23 +332,31 @@ struct SSHLoginSheet: View {
                 }
                 connect()
             } label: {
-                Label("Connect", systemImage: "bolt.horizontal.circle")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(canConnect ? ConduitTheme.textPrimary : ConduitTheme.textMuted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .glassCapsule(
-                        interactive: canConnect,
-                        tint: (canConnect ? ConduitTheme.success : ConduitTheme.separator).opacity(0.55)
-                    )
+                HStack(spacing: 8) {
+                    Image(systemName: "bolt.horizontal.circle")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Connect & install broker")
+                        .font(neon.mono(14.5).weight(.bold))
+                }
+                .foregroundStyle(neon.accentText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(LinearGradient(
+                            colors: [neon.codex, neon.green],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ))
+                        .opacity(canConnect ? 1.0 : 0.4)
+                )
+                .neonGlowBox(canConnect && neon.glow ? neon.glowBox?.tinted(neon.codex) : nil)
             }
             .buttonStyle(.plain)
-            // Surface why the button is disabled so the user does not face a
-            // silent dead button.
             if !disabledReasons.isEmpty {
                 Text(disabledReasons.joined(separator: "  \u{00B7}  "))
-                    .font(.caption)
-                    .foregroundStyle(ConduitTheme.warning)
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.yellow)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 8)
             }
@@ -479,16 +542,19 @@ private struct PlainKeyTextEditor: UIViewRepresentable {
 
 // MARK: - SSHCard
 
+// Fix 3: SSHCard uses mono section labels (matches ConduitAddServerSheet style).
 private struct SSHCard<Content: View>: View {
     let title: String
     @ViewBuilder var content: () -> Content
+    @Environment(\.neonTheme) private var neon
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .tracking(0.8)
-                .foregroundStyle(ConduitTheme.textSecondary)
+            // Mono uppercase label at 11pt bold with letter spacing (~1.4).
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .tracking(1.4)
+                .foregroundStyle(neon.textFaint)
                 .padding(.bottom, 8)
 
             VStack(alignment: .leading, spacing: 10) {
@@ -497,7 +563,14 @@ private struct SSHCard<Content: View>: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassRoundedRect()
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(neon.surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(neon.border, lineWidth: 1)
+                    )
+            )
         }
     }
 }
