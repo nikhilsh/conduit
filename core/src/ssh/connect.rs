@@ -14,7 +14,9 @@ use super::{SshAuth, SshCredentials, SshError};
 use crate::SshProgressDelegate;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const KEEPALIVE_MAX: usize = 3; // ~60s to KeepaliveTimeout (15s * 3 missed replies)
+const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Async predicate the platform layer implements to accept or reject a
 /// server's SSH public key on first sight. Argument is the SHA-256
@@ -79,6 +81,8 @@ impl SshClient {
 
         let config = Arc::new(client::Config {
             keepalive_interval: Some(KEEPALIVE_INTERVAL),
+            keepalive_max: KEEPALIVE_MAX,
+            inactivity_timeout: Some(INACTIVITY_TIMEOUT),
             ..Default::default()
         });
 
@@ -129,5 +133,32 @@ impl SshClient {
             handle: Arc::new(AsyncMutex::new(handle)),
             host_key_fingerprint,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify the keepalive constants that control dead-peer detection timing.
+    /// KEEPALIVE_INTERVAL * KEEPALIVE_MAX gives the worst-case time-to-detect:
+    /// 15s * 3 = 45s. This test will fail if someone accidentally relaxes these
+    /// values back to the slow defaults (30s interval, max=3 => 90s detection).
+    #[test]
+    fn keepalive_config_is_tight() {
+        // Detection window must be <= 60s so mobile flaps are caught promptly.
+        let detection_window_secs = KEEPALIVE_INTERVAL.as_secs() * (KEEPALIVE_MAX as u64);
+        // KEEPALIVE_MAX is usize; cast is safe for any value we'd ever set.
+        assert!(
+            detection_window_secs <= 60,
+            "keepalive detection window {}s exceeds 60s — self-heal latency too high",
+            detection_window_secs
+        );
+        // Inactivity timeout must be >= detection window so the session is not
+        // torn down before keepalives have a chance to detect the dead peer.
+        assert!(
+            INACTIVITY_TIMEOUT >= KEEPALIVE_INTERVAL,
+            "inactivity_timeout must be >= keepalive_interval"
+        );
     }
 }

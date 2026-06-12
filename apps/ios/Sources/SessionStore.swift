@@ -155,11 +155,24 @@ struct PendingAgentPick: Identifiable, Equatable {
     let hostNote: String
 }
 
+/// Non-secret SSH coordinates for a saved server. Stored alongside the
+/// SavedServer so self-heal can look up the credential without asking the user.
+/// The secret itself lives in SshCredentialStore (Keychain-backed).
+struct SshEndpointRef: Codable, Equatable {
+    var host: String
+    var port: UInt16
+    var username: String
+}
+
 struct SavedServer: Codable, Equatable, Identifiable {
     var id: String
     var name: String
     var endpoint: StoredEndpoint
     var isDefault: Bool
+    /// Non-secret SSH coordinates, present when this server was paired via SSH.
+    /// nil for token-paired (conduit://) boxes. Populated by connectViaSSH so
+    /// self-heal can rebuild SshCredentials without user input.
+    var ssh: SshEndpointRef?
 }
 
 struct RemoteDirectoryEntry: Codable, Equatable, Identifiable {
@@ -685,9 +698,13 @@ final class SessionStore {
     var sshTunnelLost: Bool = false
 
     /// Background liveness watcher for the held tunnel. Polls `isAlive()` and,
-    /// on first `false`, flips `sshTunnelLost` and surfaces the re-pair state.
-    /// Cancelled when the tunnel is replaced or stopped.
+    /// on first `false`, triggers self-heal. Cancelled when the tunnel is
+    /// replaced or stopped.
     private var sshTunnelWatcher: Task<Void, Never>?
+
+    /// Single-flight guard for SSH self-heal. Prevents the liveness watcher
+    /// and any concurrent reconnect path from both firing at once.
+    private var isReconnecting: Bool = false
 
     /// Active TOFU prompt. ConduitApp observes this and presents a sheet.
     var pendingHostKey: HostKeyPrompt?
@@ -1064,10 +1081,8 @@ final class SessionStore {
     }
 
     /// Poll the held tunnel's `isAlive()` on a slow cadence. On the first
-    /// `false` (SSH session died) flip `sshTunnelLost` so the UI can surface a
-    /// "connection lost — reconnect" affordance, drop the harness to failed,
-    /// and exit (no busy loop). The user re-runs `connectViaSSH`, which
-    /// re-bootstraps through the TOFU gate (never a silent re-accept).
+    /// `false` (SSH session died) hand off to `attemptSshSelfHeal()` which
+    /// retries with exponential backoff before falling back to `.failed`.
     private func startSshTunnelWatcher() {
         sshTunnelWatcher = Task { [weak self] in
             // ~3s cadence: cheap, non-blocking `is_closed()` check. The WS
@@ -1087,26 +1102,193 @@ final class SessionStore {
                         tags: ["surface": "ios", "phase": "ssh_tunnel"],
                         extras: ["local_port": "\(tunnel.localPort())"]
                     )
-                    self.sshTunnelLost = true
-                    self.harness = .failed("Connection to your server was lost. Reconnect to continue.")
+                    self.attemptSshSelfHeal()
                     return
                 }
             }
         }
     }
 
+    /// Exponential-backoff self-heal for a dropped SSH tunnel. Looks up the
+    /// persisted credential for the current server (stored unconditionally on
+    /// every successful bootstrap), re-runs connectViaSSH, and retries up to
+    /// maxAttempts times before surfacing the terminal .failed state.
+    ///
+    /// Single-flight: isReconnecting prevents the liveness watcher and
+    /// reconnect() from both firing concurrently.
+    private func attemptSshSelfHeal() {
+        guard !isReconnecting else {
+            Telemetry.breadcrumb("ssh_tunnel", "self-heal skipped (already reconnecting)")
+            return
+        }
+
+        // Require a saved SSH ref on the current server — token-paired boxes
+        // have no SSH ref and should never trigger self-heal.
+        let sshRef = savedServers.first(where: { $0.endpoint == endpoint })?.ssh
+        guard let ref = sshRef else {
+            Telemetry.breadcrumb("ssh_tunnel", "self-heal aborted — no ssh ref for current server")
+            sshTunnelLost = true
+            harness = .failed("Connection to your server was lost. Reconnect to continue.")
+            return
+        }
+
+        isReconnecting = true
+        sshBootstrapState = .running(message: "Reconnecting\u{2026}")
+
+        Task { [weak self] in
+            defer { self?.isReconnecting = false }
+
+            let maxAttempts = 6
+            var delaySecs: UInt64 = 2
+
+            for attempt in 1...maxAttempts {
+                guard let self else { return }
+                if Task.isCancelled { return }
+
+                Telemetry.breadcrumb("ssh_tunnel", "self-heal attempt", data: [
+                    "attempt": "\(attempt)",
+                    "host": ref.host,
+                ])
+
+                // Look up the persisted credential — saved unconditionally on
+                // every successful bootstrap so this should always succeed.
+                guard let saved = SshCredentialStore.find(host: ref.host, port: ref.port, username: ref.username) else {
+                    Telemetry.breadcrumb("ssh_tunnel", "self-heal aborted — no saved credential", data: [
+                        "host": ref.host, "attempt": "\(attempt)",
+                    ])
+                    break
+                }
+
+                let auth: SshAuth
+                switch saved.kind {
+                case .password:
+                    auth = .password(password: saved.secret)
+                case .privateKey:
+                    auth = .privateKey(keyPem: saved.secret, passphrase: saved.passphrase)
+                }
+                let credentials = SshCredentials(
+                    host: ref.host,
+                    port: ref.port,
+                    username: ref.username,
+                    auth: auth
+                )
+
+                // connectViaSSH is already the full re-bootstrap path: it
+                // disconnects, re-runs the tunnel, calls adoptSshTunnel, and
+                // connects. We don't call it directly (it has its own
+                // single-flight guard) — instead replicate the core logic
+                // inline so self-heal bypasses the duplicate-guard check.
+                let hostKeyBridge = SshHostKeyBridge(store: self, host: ref.host, port: ref.port)
+                let progressBridge = SshProgressBridge(store: self, host: ref.host)
+
+                do {
+                    let preToken = UUID().uuidString
+                    let useTunnel = FeatureFlags.sshTunnelTransportEnabled()
+                    let result: SshBootstrapResult
+                    var tunnel: SshTunnel?
+
+                    if useTunnel {
+                        Telemetry.breadcrumb("ssh_tunnel", "self-heal bootstrap start", data: ["host": ref.host])
+                        let bootstrap = try await sshBootstrapTunneled(
+                            credentials: credentials,
+                            preAllocatedToken: preToken,
+                            anthropicApiKey: "",
+                            openaiApiKey: "",
+                            imageRef: nil,
+                            appVersion: BuildInfo.marketingVersion,
+                            hostKeyDelegate: hostKeyBridge,
+                            progressDelegate: progressBridge
+                        )
+                        result = bootstrap.result
+                        tunnel = bootstrap.tunnel
+                    } else {
+                        result = try await sshBootstrap(
+                            credentials: credentials,
+                            preAllocatedToken: preToken,
+                            anthropicApiKey: "",
+                            openaiApiKey: "",
+                            imageRef: nil,
+                            appVersion: BuildInfo.marketingVersion,
+                            hostKeyDelegate: hostKeyBridge,
+                            progressDelegate: progressBridge
+                        )
+                    }
+
+                    // Success: swap in the new endpoint/tunnel and reconnect.
+                    let newEndpoint = StoredEndpoint(
+                        url: "ws://127.0.0.1:\(result.localPort)",
+                        token: result.token
+                    )
+                    // Update the saved server entry that owns this SSH ref to
+                    // point to the new loopback port, and mark it default.
+                    var next = self.savedServers
+                    if let idx = next.firstIndex(where: { $0.ssh == ref }) {
+                        next[idx].endpoint = newEndpoint
+                        next[idx].isDefault = true
+                        for i in next.indices where i != idx { next[i].isDefault = false }
+                    } else {
+                        for i in next.indices { next[i].isDefault = false }
+                        next.append(SavedServer(
+                            id: UUID().uuidString,
+                            name: "\(ref.username)@\(ref.host)",
+                            endpoint: newEndpoint,
+                            isDefault: true,
+                            ssh: ref
+                        ))
+                    }
+                    self.savedServers = next
+                    Self.persistSavedServers(next)
+                    self.endpoint = newEndpoint
+                    self.disconnect()
+                    self.adoptSshTunnel(tunnel)
+                    self.connect()
+                    self.sshBootstrapState = .idle
+                    self.sshTunnelLost = false
+                    Telemetry.breadcrumb("ssh_tunnel", "self-heal succeeded", data: [
+                        "attempt": "\(attempt)", "host": ref.host,
+                    ])
+                    return
+                } catch {
+                    Telemetry.breadcrumb("ssh_tunnel", "self-heal attempt failed", data: [
+                        "attempt": "\(attempt)", "host": ref.host, "error": "\(error)",
+                    ])
+                }
+
+                if attempt < maxAttempts {
+                    if Task.isCancelled { return }
+                    try? await Task.sleep(nanoseconds: delaySecs * 1_000_000_000)
+                    delaySecs = min(delaySecs * 2, 30)
+                }
+            }
+
+            // Exhausted all attempts — surface terminal failure.
+            guard let self else { return }
+            Telemetry.capture(
+                error: NSError(domain: "ios.ssh_tunnel", code: 2, userInfo: [NSLocalizedDescriptionKey: "self-heal exhausted"]),
+                message: "iOS SSH self-heal exhausted",
+                tags: ["surface": "ios", "phase": "ssh_self_heal"],
+                extras: ["host": ref.host, "attempts": "\(maxAttempts)"]
+            )
+            self.sshTunnelLost = true
+            self.sshBootstrapState = .idle
+            self.harness = .failed("Connection to your server was lost. Reconnect to continue.")
+        }
+    }
+
     /// Re-establish the link using the currently stored endpoint.
     ///
     /// If an SSH tunnel is held AND still alive, this is a WS-only restart:
-    /// the tunnel is preserved so we re-dial the same live loopback port
-    /// rather than tearing down (and leaking) the russh session the endpoint
-    /// depends on. If there's no tunnel (token-paired box) or the tunnel is
-    /// dead, fall back to a full disconnect — a dead tunnel can only be fixed
-    /// by re-running `connectViaSSH` (TOFU-gated), not a plain reconnect.
+    /// the tunnel is preserved so we re-dial the same live loopback port.
+    /// If the tunnel is nil/dead AND the current server has an SSH ref,
+    /// route through attemptSshSelfHeal (full re-bootstrap with backoff).
+    /// Otherwise (token-paired box) do a plain disconnect+reconnect.
     func reconnect() {
         if let tunnel = sshTunnel, tunnel.isAlive() {
             disconnectClient()
             connect()
+        } else if savedServers.first(where: { $0.endpoint == endpoint })?.ssh != nil {
+            // Dead or nil tunnel on an SSH-paired server — self-heal it.
+            attemptSshSelfHeal()
         } else {
             disconnect()
             connect()
@@ -1673,8 +1855,34 @@ final class SessionStore {
                 let name = serverName?.isEmpty == false
                     ? serverName!
                     : "\(user)@\(host)"
+                let sshRef = SshEndpointRef(host: host, port: port, username: user)
                 self.endpoint = endpoint
-                self.upsertSavedServer(name: name, endpoint: endpoint, makeDefault: true)
+                self.upsertSavedServer(name: name, endpoint: endpoint, sshRef: sshRef, makeDefault: true)
+                // Unconditionally persist credentials so self-heal always has
+                // them — not gated on the "Remember" checkbox in the login sheet.
+                let credToSave: SavedSshCredential = {
+                    switch credentials.auth {
+                    case .password(let p):
+                        return SavedSshCredential(
+                            host: credentials.host,
+                            port: credentials.port,
+                            username: credentials.username,
+                            kind: .password,
+                            secret: p,
+                            passphrase: nil
+                        )
+                    case .privateKey(let k, let pp):
+                        return SavedSshCredential(
+                            host: credentials.host,
+                            port: credentials.port,
+                            username: credentials.username,
+                            kind: .privateKey,
+                            secret: k,
+                            passphrase: pp
+                        )
+                    }
+                }()
+                SshCredentialStore.save(credToSave)
                 self.disconnect()
                 // `disconnect()` stops + releases any prior tunnel; install the
                 // new one (if tunneled) and start watching its liveness BEFORE
@@ -1767,10 +1975,11 @@ final class SessionStore {
         sshBootstrapState = .idle
     }
 
-    func upsertSavedServer(name: String, endpoint: StoredEndpoint, makeDefault: Bool) {
+    func upsertSavedServer(name: String, endpoint: StoredEndpoint, sshRef: SshEndpointRef? = nil, makeDefault: Bool) {
         var next = savedServers
         if let idx = next.firstIndex(where: { $0.endpoint == endpoint }) {
             next[idx].name = name
+            if let ref = sshRef { next[idx].ssh = ref }
             if makeDefault {
                 for i in next.indices { next[i].isDefault = false }
                 next[idx].isDefault = true
@@ -1784,7 +1993,8 @@ final class SessionStore {
                     id: UUID().uuidString,
                     name: name.isEmpty ? endpoint.displayHost : name,
                     endpoint: endpoint,
-                    isDefault: makeDefault || next.isEmpty
+                    isDefault: makeDefault || next.isEmpty,
+                    ssh: sshRef
                 )
             )
         }
