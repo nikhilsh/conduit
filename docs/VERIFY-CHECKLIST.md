@@ -9,6 +9,32 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.146
+
+- **On-demand per-agent install** — starting a session with an agent that isn't
+  on the box now installs ONLY that agent (claude/codex) on the fly, showing
+  `⏳ Installing… → ✅ installed`, then starts; the bootstrap no longer
+  eager-installs anything. PR #531. REQUIRES BROKER REDEPLOY. Verify: on a box
+  without codex, start a codex session → it installs then runs. [broker, on-device]
+- **Box UI — real host + filtered sessions + agent state** — a connected SSH box
+  shows its real host (root@host) instead of 127.0.0.1; Box-health "sessions
+  here" is filtered to that box; agents show "not installed on this box" vs
+  account-signed-in. PR #530. Verify: connect a box → box header shows correct
+  host; sessions list is scoped to that box; agent rows reflect install state vs
+  sign-in state. [app, on-device, tablet+phone]
+- **Box-switch loads the new box's sessions** — switching boxes now loads the
+  switched-to box's sessions (was stuck showing the previous box), while keeping
+  other boxes' sessions grouped/dimmed. PR #533. Verify: connect two boxes,
+  switch between them → each switch immediately shows the target box's sessions.
+  [app, on-device, tablet+phone]
+- **Onboarding guide surfaced** — the onboarding guide is now reachable via a
+  "New here?" card on the no-boxes Home state and a Settings → "How it works"
+  row, with content covering add-box → auto-bootstrap → on-demand agent install.
+  PR #532. Verify: fresh install (no boxes) → "New here?" card visible on Home;
+  Settings → "How it works" opens the guide. [app, on-device, tablet+phone]
+
+---
+
 ## v0.0.145
 
 - **SSH self-healing box setup (PATH + idempotent re-add)** — the SSH-bootstrap
