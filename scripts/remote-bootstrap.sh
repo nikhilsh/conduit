@@ -142,6 +142,109 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 18
 fi
 
+# ── Version-aware broker update on the reuse path ────────────────────────
+# Download and atomic-replace the broker binary when the running broker is
+# older than the app's version.  Best-effort: any failure keeps the old
+# broker running and the reuse path continues normally.
+#
+# Writes/reads: $STATE_DIR/broker.version  (one-line: installed version, no v)
+#
+# Called AFTER _read_live_token so $TOKEN is already the live token.
+_update_broker_if_stale() {
+  # Only act when the caller passed CONDUIT_VERSION.
+  if [ -z "${CONDUIT_VERSION:-}" ]; then return 0; fi
+
+  _marker="$STATE_DIR/broker.version"
+  _installed_ver=""
+  if [ -f "$_marker" ]; then
+    _installed_ver="$(tr -d '[:space:]' < "$_marker" 2>/dev/null)"
+  fi
+
+  # If the marker matches, the broker is already at the right version — done.
+  if [ "$_installed_ver" = "$CONDUIT_VERSION" ]; then
+    echo "conduit: broker version $CONDUIT_VERSION already installed; no update needed" >&2
+    return 0
+  fi
+
+  echo "conduit: broker is stale (installed=${_installed_ver:-unknown}, expected=$CONDUIT_VERSION); updating ..." >&2
+
+  # Download the matching broker binary to a temp dir via install.sh.
+  _upd_tmp_dir="$(mktemp -d)"
+  _upd_bin_dir="$_upd_tmp_dir/bin"
+  mkdir -p "$_upd_bin_dir"
+  _upd_rel_base="https://github.com/nikhilsh/conduit/releases/download/v${CONDUIT_VERSION}"
+
+  _upd_ok=0
+  # shellcheck disable=SC2086
+  if curl -fsSL \
+       --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+       --max-time "$CURL_MAX_TIME" \
+       "${_upd_rel_base}/install.sh" \
+       | sh -s -- --bin-dir "$_upd_bin_dir" --version "v${CONDUIT_VERSION}" 1>&2; then
+    _upd_ok=1
+  fi
+
+  _upd_downloaded="$_upd_bin_dir/conduit-broker"
+
+  # Sanity-check: must be a real executable, not an HTML error page.
+  if [ "$_upd_ok" = "1" ] && [ -x "$_upd_downloaded" ]; then
+    _head4="$(head -c 4 "$_upd_downloaded" 2>/dev/null || true)"
+    if printf '%s' "$_head4" | grep -qi '<htm'; then
+      echo "conduit: broker update: downloaded file looks like HTML; aborting update" >&2
+      _upd_ok=0
+    fi
+  else
+    echo "conduit: broker update: download/install failed; keeping old broker running" >&2
+    _upd_ok=0
+  fi
+
+  if [ "$_upd_ok" = "1" ]; then
+    # Atomic replace — mv over the running binary avoids ETXTBSY; systemd will
+    # exec the new binary on restart.
+    if mv -f "$_upd_downloaded" "$BIN"; then
+      echo "conduit: broker binary replaced with v${CONDUIT_VERSION}" >&2
+      # Restart under systemd so the new binary is exec'd; token is pinned in
+      # the unit and untouched — devices do NOT need to re-pair.
+      if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+        systemctl --user restart conduit-broker >/dev/null 2>&1 || true
+      elif [ -f "$PIDFILE" ]; then
+        # Pidfile fallback: send SIGTERM to old broker and relaunch detached.
+        _old_pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+        if [ -n "$_old_pid" ]; then
+          kill "$_old_pid" 2>/dev/null || true
+        fi
+        export PATH="$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        setsid "$BIN" up --addr "127.0.0.1:$HOST_PORT" >>"$LOGFILE" 2>&1 &
+        echo $! > "$PIDFILE"
+      fi
+
+      # Wait for the broker to come back healthy (up to 20s).
+      _upd_wi=1
+      _upd_wr=0
+      while [ "$_upd_wi" -le 20 ]; do
+        if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
+          _upd_wr=1
+          break
+        fi
+        sleep 1
+        _upd_wi=$((_upd_wi + 1))
+      done
+
+      if [ "$_upd_wr" = "1" ]; then
+        # Persist the new version to the marker.
+        echo "$CONDUIT_VERSION" > "$_marker" 2>/dev/null || true
+        echo "conduit: broker updated to v${CONDUIT_VERSION} and healthy" >&2
+      else
+        echo "conduit: broker did not recover after update within 20s; marker not updated" >&2
+      fi
+    else
+      echo "conduit: broker update: mv failed; keeping old broker running" >&2
+    fi
+  fi
+
+  rm -rf "$_upd_tmp_dir" 2>/dev/null || true
+}
+
 # ── Idempotent unit-ensure ────────────────────────────────────────────────
 # Called on the reuse path (broker already healthy) to guarantee the systemd
 # unit is up-to-date.  Boxes bootstrapped by an older build may have a unit
@@ -267,13 +370,15 @@ _read_live_token() {
 }
 
 # ── Reuse path ────────────────────────────────────────────────────────────
-# A healthy broker on the port → ensure the unit is correct, then return.
+# A healthy broker on the port → ensure the unit is correct, update the
+# binary if the app version is newer, then return.
 # Works whether the broker was launched by systemd (no pidfile) or by the
 # old nohup path.
 echo "STEP reuse_check" >&2
 if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ensure_broker_unit
   _read_live_token
+  _update_broker_if_stale
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
@@ -287,6 +392,7 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null \
    && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ensure_broker_unit
   _read_live_token
+  _update_broker_if_stale
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
@@ -347,6 +453,11 @@ if [ ! -x "$BIN" ]; then
   if [ "$_install_failed" = "1" ] || [ ! -x "$BIN" ]; then
     echo "ERR 16 could not install conduit-broker binary (expected: $BIN)"
     exit 16
+  fi
+
+  # Write the version marker so the reuse path knows what's installed.
+  if [ -n "${CONDUIT_VERSION:-}" ]; then
+    echo "$CONDUIT_VERSION" > "$STATE_DIR/broker.version" 2>/dev/null || true
   fi
 fi
 
