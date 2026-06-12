@@ -255,11 +255,24 @@ data class PendingOAuthCallback(
     val uri: android.net.Uri,
 )
 
+/**
+ * Non-secret SSH coordinates for a saved server. Stored alongside SavedServer
+ * so self-heal can look up the credential without asking the user again.
+ * The secret itself lives in SshCredentialStore (EncryptedSharedPreferences).
+ */
+data class SshEndpointRef(
+    val host: String,
+    val port: UShort,
+    val username: String,
+)
+
 data class SavedServer(
     val id: String,
     val name: String,
     val endpoint: Endpoint,
     val isDefault: Boolean,
+    /** Non-null when this server was paired via SSH; null for token-paired boxes. */
+    val ssh: SshEndpointRef? = null,
 )
 
 data class RemoteDirectoryEntry(
@@ -584,6 +597,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
     /** Liveness watcher for [sshTunnel]; cancelled when the tunnel is replaced. */
     private var sshTunnelWatcher: Job? = null
 
+    /** Single-flight guard for SSH self-heal. Prevents concurrent reconnect attempts. */
+    @Volatile private var isReconnecting: Boolean = false
+
     /**
      * True once the held tunnel reported `isAlive() == false` (the SSH session
      * died: network flap, server reboot, idle kill, app suspend). Drives a
@@ -873,6 +889,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
     @Volatile private var hostKeyResolver: ((Boolean) -> Unit)? = null
 
     private var hostKeyTrustStore: SshHostKeyTrustStore? = null
+    private var sshCredentialStore: SshCredentialStore? = null
 
     private var client: ConduitClient? = null
     private var prefs: android.content.SharedPreferences? = null
@@ -941,6 +958,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             scrollbackDir = java.io.File(ctx.applicationContext.cacheDir, "terminal-scrollback")
             installNetworkAndLifecycleHooks(ctx.applicationContext)
             hostKeyTrustStore = SshHostKeyTrustStore.forContext(ctx.applicationContext)
+            sshCredentialStore = SshCredentialStore.forContext(ctx.applicationContext)
         }
     }
 
@@ -990,18 +1008,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
         refreshRecentDirectories()
     }
 
-    fun upsertSavedServer(name: String, endpoint: Endpoint, makeDefault: Boolean) {
+    fun upsertSavedServer(name: String, endpoint: Endpoint, makeDefault: Boolean, sshRef: SshEndpointRef? = null) {
         val current = _savedServers.value.toMutableList()
         val existing = current.indexOfFirst { it.endpoint == endpoint }
         if (existing >= 0) {
             val defaultFlag = if (makeDefault) true else current[existing].isDefault
-            current[existing] = current[existing].copy(name = name, isDefault = defaultFlag)
+            val updatedSsh = sshRef ?: current[existing].ssh
+            current[existing] = current[existing].copy(name = name, isDefault = defaultFlag, ssh = updatedSsh)
         } else {
             current += SavedServer(
                 id = UUID.randomUUID().toString(),
                 name = if (name.isBlank()) endpoint.displayHost else name,
                 endpoint = endpoint,
                 isDefault = makeDefault || current.isEmpty(),
+                ssh = sshRef,
             )
         }
         if (makeDefault) {
@@ -1170,17 +1190,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * Re-establish the link using the currently stored endpoint.
      *
      * If an SSH tunnel is held AND still alive, this is a WS-only restart: the
-     * tunnel is preserved so we re-dial the same live loopback port rather
-     * than tearing down (and leaking) the russh session the endpoint depends
-     * on. Otherwise (token-paired box, or a dead tunnel) fall back to a full
-     * disconnect — a dead tunnel can only be fixed by re-running
-     * [connectViaSSH] (TOFU-gated), not a plain reconnect.
+     * tunnel is preserved so we re-dial the same live loopback port. If the
+     * tunnel is nil/dead AND the current server has an SSH ref, route through
+     * [attemptSshSelfHeal] (full re-bootstrap with backoff). Otherwise
+     * (token-paired box) do a plain disconnect+reconnect.
      */
     fun reconnect() {
         val tunnel = sshTunnel
         if (tunnel != null && tunnel.isAlive()) {
             disconnectClient()
             connect()
+        } else if (_savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null) {
+            // Dead or null tunnel on an SSH-paired server — self-heal.
+            attemptSshSelfHeal()
         } else {
             disconnect()
             connect()
@@ -1221,10 +1243,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     /**
      * Poll the held tunnel's `isAlive()` on a slow cadence. On the first
-     * `false` (SSH session died) flip [sshTunnelLost] so the UI can surface a
-     * "connection lost — reconnect" affordance, drop the harness to Failed,
-     * and exit (no busy loop). The user re-runs [connectViaSSH], which
-     * re-bootstraps through the TOFU gate (never a silent re-accept).
+     * `false` (SSH session died) hand off to [attemptSshSelfHeal] which retries
+     * with exponential backoff before falling back to the terminal Failed state.
      */
     private fun startSshTunnelWatcher() {
         sshTunnelWatcher = viewModelScope.launch {
@@ -1243,10 +1263,155 @@ class SessionStore : ViewModel(), ConduitDelegate {
                         tags = mapOf("surface" to "android", "phase" to "ssh_tunnel"),
                         extras = mapOf("local_port" to portStr),
                     )
-                    _sshTunnelLost.value = true
-                    _harness.value = HarnessState.Failed("Connection to your server was lost. Reconnect to continue.")
+                    attemptSshSelfHeal()
                     return@launch
                 }
+            }
+        }
+    }
+
+    /**
+     * Exponential-backoff self-heal for a dropped SSH tunnel. Looks up the
+     * persisted credential for the current server (stored unconditionally on
+     * every successful bootstrap), re-runs the bootstrap, and retries up to
+     * [maxAttempts] times before surfacing the terminal Failed state.
+     *
+     * Single-flight: [isReconnecting] prevents the liveness watcher and
+     * [reconnect] from both firing concurrently.
+     */
+    private fun attemptSshSelfHeal() {
+        if (isReconnecting) {
+            Telemetry.breadcrumb("ssh_tunnel", "self-heal skipped (already reconnecting)")
+            return
+        }
+
+        // Require a saved SSH ref on the current server — token-paired boxes
+        // have no SSH ref and must never trigger self-heal.
+        val ref = _savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh
+        if (ref == null) {
+            Telemetry.breadcrumb("ssh_tunnel", "self-heal aborted — no ssh ref for current server")
+            _sshTunnelLost.value = true
+            _harness.value = HarnessState.Failed("Connection to your server was lost. Reconnect to continue.")
+            return
+        }
+
+        isReconnecting = true
+        _sshBootstrap.value = SshBootstrapState.Running("Reconnecting…")
+
+        viewModelScope.launch {
+            try {
+                val maxAttempts = 6
+                var delaySecs = 2_000L
+                val credStore = sshCredentialStore
+
+                for (attempt in 1..maxAttempts) {
+                    if (!isActive) break
+
+                    Telemetry.breadcrumb("ssh_tunnel", "self-heal attempt",
+                        mapOf("attempt" to attempt.toString(), "host" to ref.host))
+
+                    val saved = credStore?.load()?.firstOrNull {
+                        it.host == ref.host && it.port == ref.port && it.username == ref.username
+                    }
+                    if (saved == null) {
+                        Telemetry.breadcrumb("ssh_tunnel", "self-heal aborted — no saved credential",
+                            mapOf("host" to ref.host, "attempt" to attempt.toString()))
+                        break
+                    }
+
+                    val auth = when (saved.kind) {
+                        SavedSshCredential.Kind.Password ->
+                            uniffi.conduit_core.SshAuth.Password(saved.secret)
+                        SavedSshCredential.Kind.PrivateKey ->
+                            uniffi.conduit_core.SshAuth.PrivateKey(saved.secret, saved.passphrase)
+                    }
+                    val credentials = SshCredentials(
+                        host = ref.host,
+                        port = ref.port,
+                        username = ref.username,
+                        auth = auth,
+                    )
+
+                    val hostKeyBridge = SshHostKeyBridge(this@SessionStore, ref.host, ref.port)
+                    val progressBridge = SshProgressBridge(this@SessionStore, ref.host)
+                    val preToken = java.util.UUID.randomUUID().toString()
+                    val useTunnel = sshTunnelTransportEnabled()
+
+                    try {
+                        val (result, tunnel) = if (useTunnel) {
+                            Telemetry.breadcrumb("ssh_tunnel", "self-heal bootstrap start",
+                                mapOf("host" to ref.host))
+                            val bootstrap = withContext(Dispatchers.IO) {
+                                ffiSshBootstrapTunneled(
+                                    credentials, preToken, "", "", null,
+                                    BuildConfig.VERSION_NAME, hostKeyBridge, progressBridge,
+                                )
+                            }
+                            Pair(bootstrap.result, bootstrap.tunnel)
+                        } else {
+                            val r = withContext(Dispatchers.IO) {
+                                ffiSshBootstrap(
+                                    credentials, preToken, "", "", null,
+                                    BuildConfig.VERSION_NAME, hostKeyBridge, progressBridge,
+                                )
+                            }
+                            Pair(r, null)
+                        }
+
+                        // Success: update the saved server entry for this SSH ref to
+                        // point at the new loopback port, then swap in + reconnect.
+                        val newUrl = "ws://127.0.0.1:${result.localPort.toInt()}"
+                        val newEndpoint = Endpoint(newUrl, result.token)
+                        val current = _savedServers.value.toMutableList()
+                        val idx = current.indexOfFirst { it.ssh == ref }
+                        if (idx >= 0) {
+                            for (i in current.indices) current[i] = current[i].copy(isDefault = i == idx)
+                            current[idx] = current[idx].copy(endpoint = newEndpoint, isDefault = true)
+                        } else {
+                            for (i in current.indices) current[i] = current[i].copy(isDefault = false)
+                            current += SavedServer(
+                                id = java.util.UUID.randomUUID().toString(),
+                                name = "${ref.username}@${ref.host}",
+                                endpoint = newEndpoint,
+                                isDefault = true,
+                                ssh = ref,
+                            )
+                        }
+                        _savedServers.value = current
+                        persistSavedServers(current)
+                        setEndpoint(newUrl, result.token)
+                        disconnect()
+                        adoptSshTunnel(tunnel)
+                        connect()
+                        _sshBootstrap.value = SshBootstrapState.Idle
+                        _sshTunnelLost.value = false
+                        Telemetry.breadcrumb("ssh_tunnel", "self-heal succeeded",
+                            mapOf("attempt" to attempt.toString(), "host" to ref.host))
+                        return@launch
+                    } catch (e: Exception) {
+                        Telemetry.breadcrumb("ssh_tunnel", "self-heal attempt failed",
+                            mapOf("attempt" to attempt.toString(), "host" to ref.host,
+                                  "error" to (e.message ?: e.toString())))
+                    }
+
+                    if (attempt < maxAttempts) {
+                        delay(delaySecs)
+                        delaySecs = minOf(delaySecs * 2, 30_000L)
+                    }
+                }
+
+                // Exhausted — terminal failure.
+                Telemetry.capture(
+                    error = IllegalStateException("ssh self-heal exhausted"),
+                    message = "Android SSH self-heal exhausted",
+                    tags = mapOf("surface" to "android", "phase" to "ssh_self_heal"),
+                    extras = mapOf("host" to ref.host, "attempts" to "6"),
+                )
+                _sshTunnelLost.value = true
+                _sshBootstrap.value = SshBootstrapState.Idle
+                _harness.value = HarnessState.Failed("Connection to your server was lost. Reconnect to continue.")
+            } finally {
+                isReconnecting = false
             }
         }
     }
@@ -1362,8 +1527,33 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val token = result.token
                 val endpoint = Endpoint(url, token)
                 val name = serverName?.takeIf { it.isNotBlank() } ?: "$user@$host"
+                val sshRef = SshEndpointRef(host = host, port = port, username = user)
                 setEndpoint(url, token)
-                upsertSavedServer(name = name, endpoint = endpoint, makeDefault = true)
+                upsertSavedServer(name = name, endpoint = endpoint, makeDefault = true, sshRef = sshRef)
+                // Unconditionally persist the credential so self-heal always has it —
+                // not gated on the "Remember" checkbox in the login sheet.
+                val credKind = when (credentials.auth) {
+                    is uniffi.conduit_core.SshAuth.Password -> SavedSshCredential.Kind.Password
+                    is uniffi.conduit_core.SshAuth.PrivateKey -> SavedSshCredential.Kind.PrivateKey
+                    else -> SavedSshCredential.Kind.Password
+                }
+                val credSecret = when (val a = credentials.auth) {
+                    is uniffi.conduit_core.SshAuth.Password -> a.password
+                    is uniffi.conduit_core.SshAuth.PrivateKey -> a.keyPem
+                    else -> ""
+                }
+                val credPassphrase = when (val a = credentials.auth) {
+                    is uniffi.conduit_core.SshAuth.PrivateKey -> a.passphrase
+                    else -> null
+                }
+                sshCredentialStore?.save(SavedSshCredential(
+                    host = host,
+                    port = port,
+                    username = user,
+                    kind = credKind,
+                    secret = credSecret,
+                    passphrase = credPassphrase,
+                ))
                 disconnect()
                 // `disconnect()` stops + releases any prior tunnel; install the
                 // new one (if tunneled) and start watching its liveness before
@@ -3469,6 +3659,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
             o.put("url", s.endpoint.url)
             o.put("token", s.endpoint.token)
             o.put("default", s.isDefault)
+            s.ssh?.let { ref ->
+                val ssh = JSONObject()
+                ssh.put("host", ref.host)
+                ssh.put("port", ref.port.toInt())
+                ssh.put("username", ref.username)
+                o.put("ssh", ssh)
+            }
             arr.put(o)
         }
         p.edit().putString(KEY_SAVED_SERVERS, arr.toString()).apply()
@@ -3481,6 +3678,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
             buildList {
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
+                    val sshObj = o.optJSONObject("ssh")
+                    val sshRef = if (sshObj != null) {
+                        SshEndpointRef(
+                            host = sshObj.optString("host", ""),
+                            port = sshObj.optInt("port", 22).coerceIn(1, 65535).toUShort(),
+                            username = sshObj.optString("username", ""),
+                        )
+                    } else null
                     add(
                         SavedServer(
                             id = o.optString("id", UUID.randomUUID().toString()),
@@ -3490,6 +3695,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                                 o.optString("token", ""),
                             ),
                             isDefault = o.optBoolean("default", false),
+                            ssh = sshRef,
                         )
                     )
                 }
