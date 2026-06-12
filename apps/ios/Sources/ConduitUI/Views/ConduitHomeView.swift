@@ -49,9 +49,6 @@ extension ConduitUI {
         /// `.alert(item:)` needs an Identifiable, so we wrap the target
         /// session id (`Identifiable` via the inner struct).
         @State private var pendingDelete: PendingSessionDelete?
-        /// Round-2 fix 5: whether the signed-in local device row is listed
-        /// under Boxes. Read from the Keychain once per appearance.
-        @State private var localDeviceListed = false
         /// Shows the onboarding guide (re-opened from the no-boxes CTA or
         /// Settings "How it works" row).
         @State private var showOnboarding = false
@@ -209,9 +206,6 @@ extension ConduitUI {
                     } else if store.harness == .disconnected {
                         store.connect()
                     }
-                    // Round-2 fix 5: the signed-in local device is a box.
-                    // One Keychain read per appearance (not per render).
-                    localDeviceListed = AgentAccountStatus.current().contains(where: \.signedIn)
                 }
                 .tint(neon.accent)
             }
@@ -310,47 +304,6 @@ extension ConduitUI {
             .textCase(nil)
             .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 6, trailing: 14))
             .listRowBackground(Color.clear)
-        }
-
-        /// Pinned "This device" row: identity only. A phone can't host the
-        /// broker, so agents NEVER run here — every session runs on a paired
-        /// box. The subtitle/status say so plainly (the earlier `localhost:1977
-        /// · on-device` + `● ready` read as a runnable target and had users
-        /// trying to start a local session). Not tappable — there's no
-        /// connection to manage for the phone itself.
-        private var localDeviceRow: some View {
-            HStack(spacing: 11) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(neon.accent.opacity(0.12))
-                    .frame(width: 30, height: 30)
-                    .overlay(ConduitUI.ConduitMark(size: 18, color: neon.accent, glow: neon.glow))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("This device")
-                        .font(neon.sans(13).weight(.semibold))
-                        .foregroundStyle(neon.text)
-                        .lineLimit(1)
-                    Text("signed in · agents run on a box")
-                        .font(neon.mono(10.5))
-                        .foregroundStyle(neon.textFaint)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 6)
-                Text("LOCAL")
-                    .font(neon.mono(9).weight(.bold))
-                    .tracking(0.8)
-                    .foregroundStyle(neon.accent)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(neon.accent.opacity(0.14)))
-                // No status dot: "● ready" implied this device was a runnable
-                // session target. It isn't — it's a client.
-                Text("client")
-                    .font(neon.mono(11))
-                    .foregroundStyle(neon.textFaint)
-            }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12)
         }
 
         /// A paired-machine ("box") row: tinted server glyph, name, endpoint sub,
@@ -651,9 +604,9 @@ extension ConduitUI {
                     }
                 }
 
-                // No-boxes CTA (no paired server and no local device): surface
-                // the onboarding guide for first-run users who land here.
-                if store.savedServers.isEmpty && !localDeviceListed {
+                // No-boxes CTA: surface the onboarding guide for first-run
+                // users who land here without any paired boxes.
+                if store.savedServers.isEmpty {
                     Section {
                         noBoxesCTA
                             .listRowBackground(Color.clear)
@@ -666,20 +619,12 @@ extension ConduitUI {
                     }
                 }
 
-                if !store.savedServers.isEmpty || localDeviceListed {
-                    // One machine = one row. "This device" is pinned first
-                    // (Round-2 fix 5: the signed-in local device is itself a
-                    // box), then the connected remote box styled active
+                if !store.savedServers.isEmpty {
+                    // One machine = one row. Connected box styled active
                     // (ACTIVE badge + `connected`), then other saved boxes.
                     let boxes = store.savedServers.filter { $0.endpoint == store.endpoint }
                         + store.savedServers.filter { $0.endpoint != store.endpoint }
                     Section {
-                        if localDeviceListed {
-                            localDeviceRow
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
-                        }
                         ForEach(boxes) { server in
                             boxRow(server)
                                 .listRowBackground(Color.clear)
@@ -687,14 +632,6 @@ extension ConduitUI {
                                 .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
                                 .contentShape(Rectangle())
                                 .onTapGesture { selectedBox = server }
-                        }
-                        if localDeviceListed {
-                            Text("your local box is auto-listed once you're signed in.")
-                                .font(neon.mono(10))
-                                .foregroundStyle(neon.textFaint)
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 14))
                         }
                         // WS-H.2: broker-update banner — non-blocking, shown only
                         // when the broker reports an outdated version. "dev" /
