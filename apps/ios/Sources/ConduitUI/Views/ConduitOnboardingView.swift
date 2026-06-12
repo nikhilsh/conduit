@@ -362,6 +362,7 @@ extension ConduitUI {
         @State private var showScanner = false
         @State private var showManual = false
         @State private var showDiscover = false
+        @State private var showSshLogin = false
 
         private var pairStep: some View {
             ScrollView {
@@ -379,6 +380,11 @@ extension ConduitUI {
                                subtitle: "Camera-scan the QR from the broker terminal.") {
                         Telemetry.breadcrumb("onboarding", OnboardingStep.pairQRStarted)
                         showScanner = true
+                    }
+                    pairOption(icon: "terminal", title: "Add via SSH",
+                               subtitle: "Set it up over SSH — conduit installs and runs everything on the box for you (nothing to set up there first).") {
+                        Telemetry.breadcrumb("onboarding", OnboardingStep.pairSSHStarted)
+                        showSshLogin = true
                     }
                     pairOption(icon: "wifi.circle", title: "Discover on LAN",
                                subtitle: "Find a broker advertising on the same Wi-Fi.") {
@@ -401,6 +407,11 @@ extension ConduitUI {
                     }
                     showScanner = false
                 }
+            }
+            // SSH bootstrap: SSHLoginSheet pairs the device when the bootstrap
+            // succeeds; the .onChange on savedServers.count advances us to Done.
+            .sheet(isPresented: $showSshLogin) {
+                SSHLoginSheet().environment(store)
             }
             // (DiscoveryView / ConduitManualPairSheet set the endpoint +
             // saved server themselves; the .onChange on savedServers.count

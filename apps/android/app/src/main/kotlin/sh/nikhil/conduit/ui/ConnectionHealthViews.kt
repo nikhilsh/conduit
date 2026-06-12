@@ -167,17 +167,19 @@ private fun ReadinessRow(
     onSignIn: (provider: String) -> Unit,
 ) {
     val neon = LocalNeonTheme.current
-    val fillColor = when (item.status) {
-        ReadinessStatus.Ok          -> neon.surface
-        ReadinessStatus.NotSignedIn -> neon.accent.copy(alpha = 0.07f)
-        ReadinessStatus.NotInstalled -> neon.red.copy(alpha = 0.07f)
-        ReadinessStatus.Absent      -> neon.accent.copy(alpha = 0.07f)
+    val fillColor = when {
+        item.status == ReadinessStatus.Ok           -> neon.surface
+        item.status == ReadinessStatus.NotSignedIn  -> neon.accent.copy(alpha = 0.07f)
+        item.status == ReadinessStatus.NotInstalled && item.autoInstalls -> neon.surface
+        item.status == ReadinessStatus.NotInstalled -> neon.red.copy(alpha = 0.07f)
+        else /* Absent */                           -> neon.accent.copy(alpha = 0.07f)
     }
-    val borderColor = when (item.status) {
-        ReadinessStatus.Ok          -> neon.border
-        ReadinessStatus.NotSignedIn -> neon.accent.copy(alpha = 0.3f)
-        ReadinessStatus.NotInstalled -> neon.red.copy(alpha = 0.3f)
-        ReadinessStatus.Absent      -> neon.accent.copy(alpha = 0.3f)
+    val borderColor = when {
+        item.status == ReadinessStatus.Ok           -> neon.border
+        item.status == ReadinessStatus.NotSignedIn  -> neon.accent.copy(alpha = 0.3f)
+        item.status == ReadinessStatus.NotInstalled && item.autoInstalls -> neon.border
+        item.status == ReadinessStatus.NotInstalled -> neon.red.copy(alpha = 0.3f)
+        else /* Absent */                           -> neon.accent.copy(alpha = 0.3f)
     }
     Box(
         modifier = Modifier
@@ -195,12 +197,15 @@ private fun ReadinessRow(
                 .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Status icon.
-            val (icon, tint) = when (item.status) {
-                ReadinessStatus.Ok           -> Icons.Filled.CheckCircle   to neon.green
-                ReadinessStatus.NotSignedIn  -> Icons.Outlined.Warning     to neon.accent
-                ReadinessStatus.NotInstalled -> Icons.Filled.Cancel        to neon.red
-                ReadinessStatus.Absent       -> Icons.Outlined.Warning     to neon.accent
+            // Status icon: auto-install agent CLIs use a neutral download
+            // icon (informational), non-auto-installed tools use warning/error.
+            val (icon, tint) = when {
+                item.status == ReadinessStatus.Ok          -> Icons.Filled.CheckCircle to neon.green
+                item.status == ReadinessStatus.NotSignedIn -> Icons.Outlined.Warning   to neon.accent
+                item.status == ReadinessStatus.NotInstalled && item.autoInstalls ->
+                    Icons.Outlined.Warning to neon.textDim
+                item.status == ReadinessStatus.NotInstalled -> Icons.Filled.Cancel     to neon.red
+                else /* Absent */                          -> Icons.Outlined.Warning   to neon.accent
             }
             Icon(
                 icon,
@@ -253,7 +258,12 @@ private fun ReadinessRow(
                     }
                 }
                 ReadinessStatus.NotInstalled ->
-                    Text("not installed", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
+                    Text(
+                        if (item.autoInstalls) "installs on first use" else "not installed",
+                        fontFamily = neon.mono,
+                        fontSize = 10.5.sp,
+                        color = neon.textFaint,
+                    )
                 ReadinessStatus.Absent ->
                     Text("missing", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
             }

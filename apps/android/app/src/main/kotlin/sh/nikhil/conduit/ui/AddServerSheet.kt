@@ -114,8 +114,8 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
             EntryCard(
                 icon = { Icon(Icons.Filled.Terminal, null, tint = neon.accentText) },
                 tint = neon.claude,
-                title = "SSH bootstrap",
-                subtitle = "Cold-start a broker on a remote box you can SSH to.",
+                title = "Add via SSH",
+                subtitle = "Set it up over SSH — conduit installs and runs everything on the box for you (nothing to set up there first).",
             ) {
                 Telemetry.breadcrumb("onboarding", OnboardingStep.PAIR_SSH_STARTED)
                 showSsh = true

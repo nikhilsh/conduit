@@ -474,16 +474,31 @@ extension ConduitUI {
         /// nothing but the user's prompts (or is empty), so the card simply
         /// drops the line. Condensing lives in the pure view-model so it's
         /// unit-testable.
+        ///
+        /// When the typed conversation log is empty but the raw chatLog
+        /// carries a system install-progress message (the broker emits
+        /// "Installing <agent>..." before the session is interactive), that
+        /// message is surfaced so the row shows real progress instead of
+        /// sitting blank while the user waits.
         private func latestActivityPreview(for sessionID: String) -> String? {
-            guard let log = store.conversationLog[sessionID], !log.isEmpty else { return nil }
-            guard let latest = log.last(where: { $0.role.lowercased() != "user" }) else { return nil }
-            return ConduitUI.HomeViewModel.activityPreview(
-                role: latest.role,
-                kind: latest.kind,
-                toolName: latest.toolName,
-                command: latest.command,
-                content: latest.content
-            )
+            if let log = store.conversationLog[sessionID], !log.isEmpty,
+               let latest = log.last(where: { $0.role.lowercased() != "user" }) {
+                return ConduitUI.HomeViewModel.activityPreview(
+                    role: latest.role,
+                    kind: latest.kind,
+                    toolName: latest.toolName,
+                    command: latest.command,
+                    content: latest.content
+                )
+            }
+            // Fallback: surface an on-demand install progress message from the
+            // raw chatLog so the row is never blank during a slow install.
+            if let chatEvents = store.chatLog[sessionID],
+               let sysEvent = chatEvents.last(where: { $0.role.lowercased() == "system" }),
+               !sysEvent.content.isEmpty {
+                return sysEvent.content
+            }
+            return nil
         }
 
         /// The broker-stamped `ts` of the most recent item in this session's

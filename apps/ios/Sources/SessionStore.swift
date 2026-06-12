@@ -493,13 +493,17 @@ struct ReadinessCheckItem: Equatable, Identifiable {
         case ok
         case notSignedIn
         case notInstalled
-        case absent   // node / tmux missing
+        case absent   // node / tmux / git missing — NOT auto-installed
     }
-    let id: String          // agent key or "node" / "tmux"
-    let label: String       // "Claude", "Codex", "node", "tmux"
+    let id: String          // agent key or "node" / "tmux" / "git"
+    let label: String       // "Claude", "Codex", "node", "tmux", "git"
     let status: Status
     /// OAuth provider for sign-in deep-link (nil for non-agent rows).
     let loginProvider: String?
+    /// True when the conduit broker will install this automatically on first
+    /// session start (i.e. agent CLIs). False for infra tools (git, node,
+    /// tmux) that the user must install themselves.
+    var autoInstalls: Bool = false
 }
 
 /// Derive the ordered checklist from a `BrokerReadiness` block plus the live
@@ -529,7 +533,8 @@ func readinessCheckItems(
             id: key,
             label: displayName,
             status: status,
-            loginProvider: provider?.isEmpty == false ? provider : nil
+            loginProvider: provider?.isEmpty == false ? provider : nil,
+            autoInstalls: true
         ))
     }
     // Infra rows — only flag when absent (they are subtle secondary rows).

@@ -117,6 +117,12 @@ data class ReadinessCheckItem(
     val status: ReadinessStatus,
     /** OAuth provider for sign-in deep-link (null for non-agent rows). */
     val loginProvider: String?,
+    /**
+     * True when the conduit broker will install this automatically on first
+     * session start (i.e. agent CLIs). False for infra tools (git, node,
+     * tmux) that the user must install themselves.
+     */
+    val autoInstalls: Boolean = false,
 )
 
 /**
@@ -143,7 +149,7 @@ fun readinessCheckItems(
             !ar.signedIn   -> ReadinessStatus.NotSignedIn
             else           -> ReadinessStatus.Ok
         }
-        items.add(ReadinessCheckItem(id = key, label = displayName, status = status, loginProvider = provider))
+        items.add(ReadinessCheckItem(id = key, label = displayName, status = status, loginProvider = provider, autoInstalls = true))
     }
     // Infra rows — only when absent.
     if (!readiness.nodePresent) {
