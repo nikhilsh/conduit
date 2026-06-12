@@ -233,7 +233,7 @@ private fun OnbWelcome(neon: NeonTheme, onPair: () -> Unit, onCode: () -> Unit) 
         Text("Your agents, in your pocket.", fontFamily = neon.sans, fontSize = 20.sp, color = neon.textDim)
         Spacer(Modifier.height(24.dp))
         Text(
-            "Pair a machine, start a session, and drive Claude or Codex from anywhere.",
+            "Drive Claude or Codex on your boxes from your phone. Pair a machine, pick a folder, start coding.",
             fontFamily = neon.sans, fontSize = 16.sp, color = neon.textDim,
         )
         Spacer(Modifier.height(28.dp))
@@ -262,11 +262,29 @@ private fun OnbInstall(neon: NeonTheme, guide: Boolean, onNext: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         OnbEyebrow(neon, "STEP 2 · THE BROKER", neon.codex)
-        Text("Run the broker on your machine", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, color = neon.text)
+        Text("Get the broker running", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, color = neon.text)
         if (guide) {
-            OnbHelper(neon, neon.codex, "The broker is a tiny program that runs on the computer your code lives on — your Mac, a dev box, or a cloud VPS. Conduit talks to it so your agents run on your hardware.")
+            OnbHelper(neon, neon.codex, "The broker is a tiny server-side program that runs on the computer your code lives on. Conduit talks to it so your agents run on your hardware, not a cloud you don't control.")
         }
-        Text("WHERE WILL IT RUN?", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
+        // SSH auto-bootstrap callout (the fast path)
+        Text("FASTEST: ADD VIA SSH", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
+        Row(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                .background(neon.green.copy(alpha = 0.06f))
+                .border(1.dp, neon.green.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("->", fontFamily = neon.mono, fontSize = 13.sp, color = neon.green)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Tap \"Add via SSH\" on the next screen.", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = neon.text)
+                Text(
+                    "Conduit SSH-es in and bootstraps the broker automatically - no terminal on your part needed.",
+                    fontFamily = neon.sans, fontSize = 13.sp, color = neon.textDim,
+                )
+            }
+        }
+        Text("OR RUN IT YOURSELF", fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             platforms.forEachIndexed { i, p ->
                 val on = i == platform
@@ -297,10 +315,11 @@ private fun OnbInstall(neon: NeonTheme, guide: Boolean, onNext: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) { Text("Copy command", fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 12.5.sp, color = neon.codex) }
         }
+        // On-demand agent install note
         if (guide) {
-            Text("No machine yet?  Spin up a \$5 VPS →", fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
+            OnbHelper(neon, neon.accent, "Agents (Claude, Codex) install on demand. The first time you start a session with an agent, you'll see an \"Installing...\" step - then sign it in from the app.")
         }
-        OnbPrimary(neon, "I ran it — find my broker", onNext)
+        OnbPrimary(neon, "I ran it - find my broker", onNext)
         Spacer(Modifier.height(8.dp))
     }
 }

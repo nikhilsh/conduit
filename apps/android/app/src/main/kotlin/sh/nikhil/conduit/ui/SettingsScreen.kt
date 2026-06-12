@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FormatSize
@@ -121,6 +122,9 @@ fun SettingsScreen(
     // When true, render inline as a tablet section pane (no bottom-sheet
     // shell) — mirrors iOS ConduitUI.SettingsView(embedded:).
     embedded: Boolean = false,
+    // Called when the user taps "How it works" to re-open the onboarding
+    // guide. Caller dismisses settings and presents the guide.
+    onOpenOnboarding: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val appearance = LocalAppearanceStore.current
@@ -459,10 +463,23 @@ fun SettingsScreen(
                 )
             }
 
-            // About — static identity card + a tap-through to the
+            // About — static identity card, onboarding guide re-entry, and
             // third-party licenses + trademark attribution screen.
             SettingsSection("About") {
                 KeyValueRow(label = "Conduit", value = versionLabel)
+                // "How it works" row — re-opens the onboarding guide.
+                if (onOpenOnboarding != null) {
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = Icons.Default.AutoAwesome,
+                        title = "How it works",
+                        subtitle = "Add a box, run agents, work from anywhere",
+                        onClick = {
+                            Telemetry.breadcrumb("settings", "how_it_works_tapped")
+                            onOpenOnboarding()
+                        },
+                    )
+                }
                 SettingsDivider()
                 SettingsRow(
                     icon = Icons.Filled.Article,

@@ -46,6 +46,10 @@ extension ConduitUI {
         /// nothing to dismiss.
         var embedded: Bool = false
 
+        /// Called when the user taps "How it works" to re-open the onboarding
+        /// guide. The caller dismisses the settings sheet then presents the guide.
+        var onOpenOnboarding: (() -> Void)? = nil
+
         @State private var showAddServer = false
         @State private var showAgentLogin = false
         /// Per-agent signed-in + plan snapshot for the Connection group.
@@ -897,6 +901,28 @@ extension ConduitUI {
                     Divider()
                         .background(neon.border)
                         .padding(.leading, 46)
+                    // "How it works" row — re-opens the onboarding guide.
+                    if let openOnboarding = onOpenOnboarding {
+                        Button {
+                            Telemetry.breadcrumb("settings", "how_it_works_tapped")
+                            openOnboarding()
+                        } label: {
+                            ConduitUI.ListRow(
+                                icon: "sparkles",
+                                title: "How it works",
+                                subtitle: "Add a box, run agents, work from anywhere",
+                                iconTint: neon.accent
+                            ) {
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(neon.textFaint)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                            .background(neon.border)
+                            .padding(.leading, 46)
+                    }
                     NavigationLink {
                         ConduitUI.LicensesView()
                     } label: {

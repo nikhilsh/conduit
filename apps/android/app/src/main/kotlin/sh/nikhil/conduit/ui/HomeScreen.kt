@@ -99,6 +99,9 @@ fun HomeScreen(
     // the tablet home — device feedback 2026-06-02). Phone keeps it: the
     // rail isn't present there, so this is the only Settings affordance.
     showSettingsButton: Boolean = true,
+    // Opens the onboarding guide from the no-boxes CTA. Default no-op so
+    // existing call sites compile without change.
+    onOpenOnboarding: () -> Unit = {},
 ) {
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
@@ -573,6 +576,97 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+
+        // No-boxes CTA (no paired server and no local device): surface the
+        // onboarding guide for first-run users who land here without boxes.
+        if (savedServers.isEmpty() && !localDeviceListed) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "BOXES",
+                        fontFamily = neon.mono,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        letterSpacing = 2.sp,
+                        color = neon.accent,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier.clickable { onAddServer() },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(Icons.Default.Wifi, null, modifier = Modifier.size(14.dp), tint = neon.textDim)
+                        Text(
+                            "Pair box",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = neon.sans,
+                            fontWeight = FontWeight.SemiBold,
+                            color = neon.textDim,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                // No-boxes CTA card.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .neonCardSurface(
+                            neon = neon,
+                            shape = RoundedCornerShape(12.dp),
+                            fill = neon.accent.copy(alpha = 0.07f),
+                            borderColor = neon.accent.copy(alpha = 0.27f),
+                            glowTint = neon.accent,
+                        )
+                        .clickable {
+                            Telemetry.breadcrumb("home", "no_boxes_cta_tapped")
+                            onOpenOnboarding()
+                        }
+                        .padding(horizontal = 13.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(11.dp),
+                ) {
+                    Box(
+                        modifier = Modifier.size(34.dp).background(neon.accent.copy(alpha = 0.14f), RoundedCornerShape(9.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(18.dp), tint = neon.accent)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "New here? See how it works",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontFamily = neon.sans,
+                            fontWeight = FontWeight.SemiBold,
+                            color = neon.text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "Add a box to start running agents on your machines",
+                            fontFamily = neon.mono,
+                            fontSize = 10.5.sp,
+                            color = neon.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        "Open guide",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        color = neon.accentText,
+                        modifier = Modifier
+                            .background(neon.accent, RoundedCornerShape(50))
+                            .padding(horizontal = 11.dp, vertical = 6.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
         }
 
         // BOXES — one row per saved machine, connected pinned first + ACTIVE

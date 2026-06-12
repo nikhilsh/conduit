@@ -213,7 +213,7 @@ extension ConduitUI {
                             .foregroundStyle(neon.textDim)
                     }
                 }
-                Text("Pair a machine, start a session, and drive Claude or Codex from anywhere.")
+                Text("Drive Claude or Codex on your boxes from your phone. Pair a machine, pick a folder, start coding.")
                     .font(neon.sans(16))
                     .foregroundStyle(neon.textDim)
                     .multilineTextAlignment(.center)
@@ -243,16 +243,44 @@ extension ConduitUI {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     eyebrow("STEP 2 · THE BROKER", tint: neon.codex)
-                    Text("Run the broker on your machine")
+                    Text("Get the broker running")
                         .font(neon.sans(26).weight(.semibold))
                         .foregroundStyle(neon.text)
                     if flags.onboardingGuide {
                         helper(tint: neon.codex) {
                             Text("The ") + Text("broker").bold().foregroundColor(neon.text)
-                            + Text(" is a tiny program that runs on the computer your code lives on — your Mac, a dev box, or a cloud VPS. Conduit talks to it so your agents run on your hardware.")
+                            + Text(" is a tiny server-side program that runs on the computer your code lives on. Conduit talks to it so your agents run on your hardware, not a cloud you don't control.")
                         }
                     }
-                    sectionMini("WHERE WILL IT RUN?")
+
+                    // SSH auto-bootstrap callout (the fast path)
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionMini("FASTEST: ADD VIA SSH")
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "terminal.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(neon.green)
+                                .padding(.top, 2)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Tap \"Add via SSH\" on the next screen.")
+                                    .font(neon.sans(14).weight(.semibold))
+                                    .foregroundStyle(neon.text)
+                                Text("Conduit SSH-es in and bootstraps the broker automatically — no terminal on your part needed.")
+                                    .font(neon.sans(13))
+                                    .foregroundStyle(neon.textDim)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(neon.green.opacity(0.06))
+                                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(neon.green.opacity(0.22), lineWidth: 1))
+                        )
+                    }
+
+                    sectionMini("OR RUN IT YOURSELF")
                     HStack(spacing: 8) {
                         ForEach(InstallPlatform.allCases) { p in
                             let on = p == platform
@@ -313,11 +341,14 @@ extension ConduitUI {
                             .fill(neon.codeBg)
                             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(neon.border, lineWidth: 1))
                     )
+
+                    // On-demand agent install note
                     if flags.onboardingGuide {
-                        Text("No machine yet?  Spin up a $5 VPS →")
-                            .font(neon.mono(12.5))
-                            .foregroundStyle(neon.textFaint)
+                        helper(tint: neon.accent) {
+                            Text("Agents (Claude, Codex) install on demand. The first time you start a session with an agent, you'll see an \"Installing...\" step — then sign it in from the app.")
+                        }
                     }
+
                     primaryCTA("I ran it — find my broker", icon: "chevron.right") { go(to: .pair) }
                         .padding(.top, 4)
                 }
@@ -417,10 +448,12 @@ extension ConduitUI {
                     Text("You're in.")
                         .font(neon.sans(28).weight(.semibold))
                         .foregroundStyle(neon.text)
-                    Text("Claude and Codex are ready when you are.")
-                        .font(neon.sans(16))
+                    Text("Tap + to start a session. Pick a folder, pick an agent — if it's not installed yet, Conduit installs it and asks you to sign in.")
+                        .font(neon.sans(15))
                         .foregroundStyle(neon.textDim)
                         .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .padding(.horizontal, 8)
                 }
                 HStack(spacing: 8) {
                     agentChip("claude", tint: neon.claude)

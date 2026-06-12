@@ -52,6 +52,9 @@ extension ConduitUI {
         /// Round-2 fix 5: whether the signed-in local device row is listed
         /// under Boxes. Read from the Keychain once per appearance.
         @State private var localDeviceListed = false
+        /// Shows the onboarding guide (re-opened from the no-boxes CTA or
+        /// Settings "How it works" row).
+        @State private var showOnboarding = false
 
         var body: some View {
             @Bindable var store = store
@@ -83,7 +86,10 @@ extension ConduitUI {
                     }
                 }
                 .sheet(isPresented: $showSettings) {
-                    ConduitUI.SettingsView()
+                    ConduitUI.SettingsView(onOpenOnboarding: {
+                        showSettings = false
+                        showOnboarding = true
+                    })
                 }
                 .sheet(isPresented: $showAddServer) {
                     ConduitUI.AddServerSheet()
@@ -169,6 +175,11 @@ extension ConduitUI {
                 // WS-H.2: SSH re-bootstrap sheet, triggered from the broker-update banner.
                 .sheet(isPresented: $showSshReBoot) {
                     SSHLoginSheet()
+                        .environment(store)
+                }
+                // Onboarding guide — re-opened from the no-boxes CTA or Settings.
+                .fullScreenCover(isPresented: $showOnboarding) {
+                    ConduitUI.OnboardingView(onFinish: { showOnboarding = false })
                         .environment(store)
                 }
                 .alert(
@@ -640,6 +651,21 @@ extension ConduitUI {
                     }
                 }
 
+                // No-boxes CTA (no paired server and no local device): surface
+                // the onboarding guide for first-run users who land here.
+                if store.savedServers.isEmpty && !localDeviceListed {
+                    Section {
+                        noBoxesCTA
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 8, trailing: 14))
+                    } header: {
+                        sectionHeader("Boxes", actionIcon: "wifi", actionLabel: "Pair box", actionTint: neon.textDim) {
+                            showAddServer = true
+                        }
+                    }
+                }
+
                 if !store.savedServers.isEmpty || localDeviceListed {
                     // One machine = one row. "This device" is pinned first
                     // (Round-2 fix 5: the signed-in local device is itself a
@@ -697,6 +723,54 @@ extension ConduitUI {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+        }
+
+        /// No-boxes CTA card: shown under BOXES when the user has no paired
+        /// machine yet. A prominent prompt to open the onboarding guide.
+        private var noBoxesCTA: some View {
+            Button {
+                Telemetry.breadcrumb("home", "no_boxes_cta_tapped")
+                showOnboarding = true
+            } label: {
+                HStack(spacing: 11) {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(neon.accent.opacity(0.12))
+                        .frame(width: 34, height: 34)
+                        .overlay(
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(neon.accent)
+                        )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("New here? See how it works")
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(1)
+                        Text("Add a box to start running agents on your machines")
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(neon.textDim)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 6)
+                    Text("Open guide")
+                        .font(neon.sans(12).weight(.semibold))
+                        .foregroundStyle(neon.accentText)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(neon.accent))
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .neonCardSurface(
+                    neon,
+                    fill: neon.accent.opacity(neon.dark ? 0.07 : 0.05),
+                    cornerRadius: 12,
+                    border: neon.accent.opacity(0.27),
+                    glowTint: neon.glow ? neon.accent : nil
+                )
+            }
+            .buttonStyle(.plain)
         }
 
         @ViewBuilder
