@@ -1684,21 +1684,13 @@ final class SessionStore {
                 self.sshBootstrapState = .idle
                 Telemetry.breadcrumb("onboarding", OnboardingStep.pairingSucceeded,
                     data: ["transport": "ssh", "host": host])
-                Telemetry.capture(
-                    error: NSError(domain: "ios.ssh_bootstrap", code: 0, userInfo: [NSLocalizedDescriptionKey: "ok"]),
-                    message: "iOS SSH bootstrap success",
-                    tags: [
-                        "surface": "ios",
-                        "phase": "ssh_bootstrap",
-                        "reused": result.reused ? "1" : "0",
-                        "tunneled": useTunnel ? "1" : "0",
-                    ],
-                    extras: [
-                        "host": host,
-                        "remote_port": "\(result.remotePort)",
-                        "local_port": "\(result.localPort)",
-                    ]
-                )
+                Telemetry.breadcrumb("ssh_bootstrap", "iOS SSH bootstrap success", data: [
+                    "host": host,
+                    "remote_port": "\(result.remotePort)",
+                    "local_port": "\(result.localPort)",
+                    "reused": result.reused ? "1" : "0",
+                    "tunneled": useTunnel ? "1" : "0",
+                ])
             } catch let err as SshError {
                 let detail = Self.describeSsh(err)
                 self.sshBootstrapState = .failed(reason: detail)

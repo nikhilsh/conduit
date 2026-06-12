@@ -355,14 +355,11 @@ fun SSHLoginSheet(
                             "disabled_reason" to reasons.joinToString("; "),
                         ),
                     )
-                    // Fire a real Sentry event so the breadcrumb trail is
-                    // uploaded even when the tap is blocked. Without a captured
-                    // event the ring-buffered breadcrumbs are never flushed.
                     if (reasons.isNotEmpty()) {
-                        Telemetry.diagnostic(
+                        Telemetry.breadcrumb(
+                            "ssh_addbox",
                             "ssh connect blocked",
-                            tags = mapOf("surface" to "android", "phase" to "ssh_connect_blocked"),
-                            extras = mapOf(
+                            mapOf(
                                 "disabled_reasons" to reasons.joinToString("; "),
                                 "mode" to mode.name,
                                 "host_nonempty" to host.isNotBlank().toString(),
@@ -408,13 +405,10 @@ fun SSHLoginSheet(
                         mapOf("host" to host.trim(), "port" to port, "mode" to mode.name),
                     )
 
-                    // Captured event so the breadcrumb trail is guaranteed to be
-                    // uploaded even if connectViaSSH returns early before its own
-                    // captures fire.
-                    Telemetry.diagnostic(
+                    Telemetry.breadcrumb(
+                        "ssh_addbox",
                         "ssh connect attempt",
-                        tags = mapOf("surface" to "android", "phase" to "ssh_connect_attempt"),
-                        extras = mapOf(
+                        mapOf(
                             "mode" to mode.name,
                             "host_nonempty" to host.isNotBlank().toString(),
                             "key_length" to if (mode == AuthMode.PrivateKey) trimmedKey.length.toString() else "0",

@@ -268,20 +268,11 @@ struct SSHLoginSheet: View {
                     "disabled_reason": reasons.joined(separator: "; "),
                 ])
                 guard reasons.isEmpty else {
-                    // Fire a real Sentry event so the breadcrumb trail is
-                    // uploaded even when the tap is blocked. Without a captured
-                    // event the ring-buffered breadcrumbs are never flushed.
-                    Telemetry.capture(
-                        error: NSError(domain: "ios.ssh_addbox", code: 1,
-                                       userInfo: [NSLocalizedDescriptionKey: "connect blocked"]),
-                        message: "ssh connect blocked",
-                        tags: ["surface": "ios", "phase": "ssh_connect_blocked"],
-                        extras: [
-                            "disabled_reasons": reasons.joined(separator: "; "),
-                            "mode": mode.rawValue,
-                            "host_nonempty": host.trimmingCharacters(in: .whitespaces).isEmpty ? "false" : "true",
-                        ]
-                    )
+                    Telemetry.breadcrumb("ssh_addbox", "ssh connect blocked", data: [
+                        "disabled_reasons": reasons.joined(separator: "; "),
+                        "mode": mode.rawValue,
+                        "host_nonempty": host.trimmingCharacters(in: .whitespaces).isEmpty ? "false" : "true",
+                    ])
                     return
                 }
                 connect()
@@ -374,22 +365,14 @@ struct SSHLoginSheet: View {
             hasPassphrase = false
         }
 
-        // Captured event so the breadcrumb trail is guaranteed to be uploaded
-        // even if connectViaSSH returns early (before its own captures fire).
-        Telemetry.capture(
-            error: NSError(domain: "ios.ssh_addbox", code: 0,
-                           userInfo: [NSLocalizedDescriptionKey: "connect attempt"]),
-            message: "ssh connect attempt",
-            tags: ["surface": "ios", "phase": "ssh_connect_attempt"],
-            extras: [
-                "mode": mode.rawValue,
-                "host_nonempty": host.trimmingCharacters(in: .whitespaces).isEmpty ? "false" : "true",
-                "key_length": mode == .privateKey ? "\(trimmedKey.count)" : "0",
-                "looks_pem": looksLikePem ? "true" : "false",
-                "looks_encrypted": looksEncrypted ? "true" : "false",
-                "has_passphrase": hasPassphrase ? "true" : "false",
-            ]
-        )
+        Telemetry.breadcrumb("ssh_addbox", "ssh connect attempt", data: [
+            "mode": mode.rawValue,
+            "host_nonempty": host.trimmingCharacters(in: .whitespaces).isEmpty ? "false" : "true",
+            "key_length": mode == .privateKey ? "\(trimmedKey.count)" : "0",
+            "looks_pem": looksLikePem ? "true" : "false",
+            "looks_encrypted": looksEncrypted ? "true" : "false",
+            "has_passphrase": hasPassphrase ? "true" : "false",
+        ])
 
         let auth: SshAuth
         switch mode {
