@@ -356,9 +356,13 @@ extension ConduitUI {
                 .sorted()
         }
 
-        /// All agent kinds to show in the picker: hardcoded first, then extras.
+        /// All agent kinds to show in the picker: hardcoded first, then extras,
+        /// filtered by `flags.enabledAgents` (default: ["claude","codex"]).
         private var allAgentKinds: [String] {
-            ["claude", "codex"] + extraAgentKinds
+            let enabled = Set(flags.enabledAgents.map { $0.lowercased() })
+            let base: [String] = ["claude", "codex"].filter { enabled.contains($0) }
+            let extras = extraAgentKinds.filter { enabled.contains($0.lowercased()) }
+            return base + extras
         }
 
         /// Side-by-side agent card (§3, `02-ns`). Carries the agent's brand
