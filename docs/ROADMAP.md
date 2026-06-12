@@ -5,7 +5,7 @@ the detailed forward-looking specs live in the active `PLAN-*.md` docs (linked
 below), and the frozen wire/lifecycle contracts live in their own references.
 Completed plans are archived under `docs/archive/` once their work ships.
 
-Last updated: 2026-06-12 (v0.0.148).
+Last updated: 2026-06-13 (v0.0.149).
 
 **Lifecycle:** [ROADMAP.md](ROADMAP.md) (backlog) →
 [IN-PROGRESS.md](IN-PROGRESS.md) (building) →
@@ -26,6 +26,13 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 ## Backlog
 
 ### Next
+
+- **True multi-box connect (N concurrent live links)** — deferred from R3 fix 4
+  (the handoff asserted `connectBox(id)`/`primaryBoxID` already existed; they
+  did not). SessionStore on both platforms holds ONE live endpoint; v0.0.149
+  ships live state-at-rest + seamless per-row switching instead. Real
+  concurrent links = architect-scale refactor (per-box session/harness/usage
+  state, merged session lists, reconnect fan-out).
 
 - **Cross-box agent OAuth sync** — sign an agent in (e.g. claude OAuth) on one
   box and have that credential propagate to every paired box, with refresh

@@ -9,6 +9,63 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.149
+
+Round-3 design handoff: ten UI/IA + behavior fixes (iOS PR #550, Android PR
+#552), actionable-approval backend (broker PR #549, relay PR #551).
+
+> **DEPLOYS HELD — do these first (in this order), approvals are inert
+> until both are done:**
+> 1. Relay: `cd relay && export CLOUDFLARE_API_TOKEN=<your token> && npx
+>    wrangler deploy` (no CF token lives on the box; the deployed relay 400s
+>    the broker's new approval/input push categories until updated).
+> 2. Broker: `/broker-redeploy` (held back deliberately — redeploying before
+>    the relay would break pending-input pushes outright).
+
+- **1 · Onboarding entry intents** — Settings now has "Replay walkthrough"
+  (starts at Welcome) and "Add a machine" (starts at Install); neither can land
+  on the "You're in" Done screen. Verify both entries + normal first-run gate
+  unchanged. [iOS+Android, on-device]
+- **2 · Agent accounts sheet** — X to close (was Cancel), one row per provider
+  with signed-in status dot and Manage/Sign-in trailing, Done CTA. Verify
+  Claude paste-code + Codex loopback flows still work end-to-end. [iOS+Android,
+  on-device]
+- **3 · Add via SSH restyle** — Conduit cards + mono section labels, API keys
+  behind a disclosure (collapsed), X to close, inline host validation hint.
+  Verify a real SSH add still bootstraps. [iOS+Android, on-device]
+- **4 · Boxes list** — live state at rest on every row (active: green +
+  latency; others: async reachability probe), ACTIVE badge, per-row Connect
+  always tappable (switches without manual disconnect), long-press/swipe
+  rename, box name rendered app-wide (Home, Runs-on, chat header), title
+  "Boxes". NOTE: true simultaneous N-box connections was design fiction in the
+  handoff — deferred to backlog (architect-scale SessionStore refactor).
+  [iOS+Android, on-device]
+- **5 · Usage strip animation** — expand/collapse eases (~0.28s), detail
+  fades+slides, chevron rotates 180°; percentages unchanged. [iOS+Android,
+  on-device]
+- **6 · New-session declutter** — single "Runs on" line (named box + state +
+  Change › that actually switches) replaces the dead box list; only enabled
+  agents shown (default claude+codex; Settings → Agents toggles, last one
+  can't be disabled). [iOS+Android, on-device]
+- **7 · Model picker** — Conduit-styled sheet (name + context/price caption,
+  RECOMMENDED badge, checkmark; Android RadioButton bottom sheet) replaces the
+  system menu; Fast-mode toggle only when supported. [iOS+Android, on-device]
+- **8 · Chat retry** — failed sends show a real state machine (tap → retrying
+  spinner → delivered/failed; Android adds Snackbar+RETRY). iOS mechanism
+  pre-existed (device feedback predated it) — verify it works on-device this
+  time. [iOS+Android, on-device]
+- **9 · Actionable approvals** — pending approvals push with category
+  "approval" + summary body; Approve/Deny notification actions resolve via
+  POST /api/session/approval WITHOUT opening the app; in-app Approve/Deny +
+  per-session auto-approve (in-memory, audited). NEEDS the relay + broker
+  deploys above. Verify: lock-screen Approve unblocks codex; Deny declines;
+  404 fallback opens the app. [iOS+Android+broker+relay, on-device]
+- **10 · Arm-B tool grouping** — chat arm B (Signature) coalesces 2+
+  consecutive tool calls into one collapsible cluster ("3 commands · all exit
+  0"); single calls inline; arm A untouched. [iOS+Android, on-device]
+
+---
+
 ## v0.0.148
 
 Reliability + new-box onboarding batch. All the SSH-bootstrap / box / chat /
