@@ -136,7 +136,10 @@ struct ReadinessCheckItemsTests {
             readiness: makeReadiness(nodePresent: true, tmuxPresent: true, gitPresent: true),
             descriptors: [:]
         )
-        #expect(!items.contains(where: { $0.id == "node" || $0.id == "tmux" || $0.id == "git" }))
+        let ids: [String] = items.map(\.id)
+        #expect(!ids.contains("node"))
+        #expect(!ids.contains("tmux"))
+        #expect(!ids.contains("git"))
     }
 
     // MARK: Agent rows
