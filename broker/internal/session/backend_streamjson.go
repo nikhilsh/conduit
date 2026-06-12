@@ -103,6 +103,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	)
 	if cerr != nil {
 		fmt.Fprintf(os.Stderr, "session %s: startChatProcess: %v (chat disabled)\n", s.ID, cerr)
+		publishChatSystem(s.PublishText, "⚠️ claude: failed to start: "+cerr.Error())
 		return spawnResult{}, cerr
 	}
 
