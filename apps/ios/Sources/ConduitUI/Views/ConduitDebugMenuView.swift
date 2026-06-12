@@ -118,12 +118,21 @@ extension ConduitUI {
 
         private func transportSection(flags: Bindable<FeatureFlags>) -> some View {
             sectionCard(title: "Transport") {
-                ConduitUI.toggleRow(
-                    icon: "lock.shield",
-                    title: "SSH tunnel",
-                    subtitle: "Route SSH-paired boxes through the held tunnel (token stays in the SSH channel). Off = legacy public path.",
-                    isOn: flags.sshTunnelTransport
-                )
+                VStack(spacing: 0) {
+                    ConduitUI.toggleRow(
+                        icon: "lock.shield",
+                        title: "SSH tunnel",
+                        subtitle: "Route SSH-paired boxes through the held tunnel (token stays in the SSH channel). Off = legacy public path.",
+                        isOn: flags.sshTunnelTransport
+                    )
+                    divider
+                    ConduitUI.toggleRow(
+                        icon: "square.stack.3d.up",
+                        title: "Concurrent multi-box",
+                        subtitle: "Connect to several boxes at once; all their sessions live together (first cut, token boxes). Off = today's single-box path.",
+                        isOn: flags.concurrentMultiBox
+                    )
+                }
             }
         }
 

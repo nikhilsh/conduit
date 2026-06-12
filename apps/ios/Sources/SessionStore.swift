@@ -662,6 +662,60 @@ struct SubagentEntry: Equatable, Identifiable {
     }
 }
 
+/// One live connection to a single box, owned by `SessionStore` when the
+/// `concurrentMultiBox` flag is ON.
+///
+/// Each connected box gets its OWN `BoxConnection`: an independent
+/// `ConduitClient` (per-instance in Rust — its own endpoint/token/handle map
+/// and delegate, verified no global/singleton client state in
+/// `core/src/lib.rs`), and its own `StoreDelegate` (stamped with `boxID` so
+/// the box-scoped `onDisconnected` lands on THIS holder, not the global
+/// harness). For SSH-paired boxes it also holds the `SshTunnel`, but those are
+/// deferred in this first cut (see `connectBox`). Tearing one down never
+/// touches another.
+///
+/// Sessions reconcile into the shared `SessionStore` maps keyed by session id
+/// (so the existing ingest/render paths are unchanged); the existing
+/// `SessionStore.sessionBox[sessionID] = server.id` stamp is what lets
+/// op-routing find the owning connection again.
+///
+/// This type only exists on the multi-box path. The single-box path keeps
+/// using `SessionStore.client` / `.endpoint` / `.sshTunnel` untouched.
+@MainActor
+final class BoxConnection {
+    let server: SavedServer
+    var client: ConduitClient
+    var delegate: StoreDelegate
+    /// Held SSH tunnel for an SSH-bootstrapped box (core #451), or nil for a
+    /// token-paired box. Owned here so disconnecting one box releases only
+    /// its own russh session / loopback listener. (SSH boxes are deferred this
+    /// cut, so this is always nil for now — kept as the documented seam.)
+    var tunnel: SshTunnel?
+    /// This box's own harness state (the global `SessionStore.harness`
+    /// continues to mirror the PRIMARY box so today's single-box banner is
+    /// unchanged).
+    var harness: HarnessState = .connecting
+
+    var endpoint: StoredEndpoint { server.endpoint }
+
+    init(server: SavedServer, client: ConduitClient, delegate: StoreDelegate, tunnel: SshTunnel? = nil) {
+        self.server = server
+        self.client = client
+        self.delegate = delegate
+        self.tunnel = tunnel
+    }
+
+    /// Stop the WS client and release any held tunnel. Idempotent.
+    func teardown() {
+        client.disconnect()
+        if let tunnel {
+            Telemetry.breadcrumb("ssh_tunnel", "multibox tunnel stop", data: ["local_port": "\(tunnel.localPort())"])
+            tunnel.stop()
+        }
+        tunnel = nil
+    }
+}
+
 @Observable
 @MainActor
 final class SessionStore {
@@ -851,6 +905,19 @@ final class SessionStore {
 
     private var client: ConduitClient?
     private var delegate: StoreDelegate?
+
+    // MARK: - Concurrent multi-box registry (flag `concurrentMultiBox`, OFF)
+
+    /// Live per-box connections, keyed by `SavedServer.id`. Empty on the
+    /// single-box path; populated only when the flag is ON and the user
+    /// connects boxes. Each holder owns its own client + delegate.
+    var boxConnections: [String: BoxConnection] = [:]
+
+    /// The box new sessions default to / the "primary" box (Settings
+    /// CONNECTION becomes "which box new sessions land on"). nil falls back to
+    /// the first connected box. Only consulted on the multi-box path.
+    var primaryBoxID: String?
+
     private var foregroundObserver: NSObjectProtocol?
     private var networkReachableObserver: NSObjectProtocol?
     private var networkInterfaceObserver: NSObjectProtocol?
@@ -912,6 +979,8 @@ final class SessionStore {
     /// surface the failure.
     private func nudgeNetworkChange() {
         client?.notifyNetworkChange()
+        // Multi-box: nudge every connected box's reconnect worker too.
+        for conn in boxConnections.values { conn.client.notifyNetworkChange() }
     }
 
     private func installNetworkAndLifecycleHooks() {
@@ -1054,6 +1123,171 @@ final class SessionStore {
         client = nil
         delegate = nil
         harness = .disconnected
+    }
+
+    // MARK: - Concurrent multi-box (flag `concurrentMultiBox`)
+
+    /// True only when the flag is ON. Single point of truth.
+    var multiBoxEnabled: Bool { FeatureFlags.concurrentMultiBoxEnabled() }
+
+    /// THE op-routing seam. Returns the `ConduitClient` a session-scoped
+    /// operation must use:
+    ///   - flag ON + the session is stamped (via the existing `sessionBox`) to
+    ///     a CONNECTED box → that box's client (so the op reaches the broker
+    ///     that OWNS the session, never a different one — the load-bearing
+    ///     correctness invariant);
+    ///   - otherwise → the single global `client` (the flag-OFF path and the
+    ///     safe fallback for an unstamped / not-yet-connected session).
+    ///
+    /// On the flag-OFF path `boxConnections` is always empty, so this is
+    /// unconditionally `self.client` — byte-equivalent to the prior code.
+    func clientForSession(_ sessionID: String) -> ConduitClient? {
+        if multiBoxEnabled,
+           let boxID = sessionBox[sessionID],
+           let conn = boxConnections[boxID] {
+            return conn.client
+        }
+        return client
+    }
+
+    /// The box new sessions / box-targeted ops default to on the multi-box
+    /// path: the explicit `primaryBoxID` if it's connected, else the first
+    /// connected box, else nil.
+    var primaryBoxConnection: BoxConnection? {
+        guard multiBoxEnabled else { return nil }
+        if let id = primaryBoxID, let conn = boxConnections[id] { return conn }
+        return boxConnections.values.first
+    }
+
+    /// Whether a given saved box currently has a live multi-box connection.
+    func isBoxConnected(_ serverID: String) -> Bool {
+        boxConnections[serverID] != nil
+    }
+
+    /// True for an SSH-tunnel loopback endpoint (`ws://127.0.0.1:…` /
+    /// `ws://localhost:…`). Such a box can only be reached through its held
+    /// tunnel, so the multi-box registry (which dials directly) defers it.
+    static func isLoopbackEndpoint(_ endpoint: StoredEndpoint) -> Bool {
+        let host = endpoint.url.lowercased()
+        return host.contains("127.0.0.1") || host.contains("://localhost")
+    }
+
+    /// Connect ONE saved box WITHOUT tearing down any other connected box.
+    /// Token-paired boxes dial directly; SSH-paired (loopback) boxes are
+    /// deferred this cut (skipped below). Idempotent — a second call for an
+    /// already-connected box just promotes it to primary. Multi-box only.
+    func connectBox(_ serverID: String) {
+        guard multiBoxEnabled else { return }
+        guard let server = savedServers.first(where: { $0.id == serverID }) else { return }
+        if boxConnections[serverID] != nil {
+            primaryBoxID = serverID
+            return
+        }
+        guard server.endpoint.isComplete else {
+            Telemetry.breadcrumb("multibox", "connect skipped (incomplete endpoint)", data: ["box": server.name])
+            return
+        }
+        // First-cut scope: only token-paired (directly-dialable) boxes join the
+        // multi-box registry. An SSH-paired box's endpoint is a
+        // `ws://127.0.0.1:<port>` loopback bound to a tunnel the single-box
+        // path holds — an independent per-box tunnel is deferred. Skip rather
+        // than dial a dead loopback port. (See PR notes.)
+        if Self.isLoopbackEndpoint(server.endpoint) {
+            Telemetry.breadcrumb("multibox", "connect skipped (ssh/loopback box deferred)", data: ["box": server.name])
+            return
+        }
+        let newClient = ConduitClient(endpoint: server.endpoint.url, bearerToken: server.endpoint.token)
+        let newDelegate = StoreDelegate(store: self, boxID: serverID)
+        let conn = BoxConnection(server: server, client: newClient, delegate: newDelegate)
+        boxConnections[serverID] = conn
+        if primaryBoxID == nil { primaryBoxID = serverID }
+        Telemetry.breadcrumb("multibox", "connect box", data: [
+            "box": server.name,
+            "host": server.endpoint.displayHost,
+            "total_connected": "\(boxConnections.count)",
+        ])
+        Task {
+            do {
+                try await newClient.connect(delegate: newDelegate)
+                conn.harness = .linked
+                self.refreshSessions()
+                // Reattach this box's genuinely-running sessions so they stream
+                // live (the broker only replays over the WS on join).
+                await self.reattachBoxLiveSessions(conn)
+                self.flushPendingChats()
+            } catch {
+                let detail = Self.describe(error)
+                conn.harness = .failed(detail)
+                Telemetry.capture(
+                    error: error,
+                    message: "iOS multibox connect failed",
+                    tags: ["surface": "ios", "phase": "multibox_connect"],
+                    extras: ["box": server.name, "host": server.endpoint.displayHost, "detail": detail]
+                )
+            }
+        }
+    }
+
+    /// Disconnect ONE box, leaving every other connected box untouched. Drops
+    /// the holder (releasing its client), and re-aggregates the visible list.
+    /// The `sessionBox` stamps are LEFT intact (they persist across box
+    /// switches by design — the rows just become dimmed history for that box).
+    func disconnectBox(_ serverID: String) {
+        guard let conn = boxConnections[serverID] else { return }
+        Telemetry.breadcrumb("multibox", "disconnect box", data: ["box": conn.server.name])
+        conn.teardown()
+        boxConnections[serverID] = nil
+        if primaryBoxID == serverID {
+            primaryBoxID = boxConnections.keys.first
+        }
+        refreshSessions()
+    }
+
+    /// Tear down EVERY multi-box connection (hard reset / flag flipped OFF).
+    /// Single-box `client`/`endpoint` are left intact.
+    func disconnectAllBoxes() {
+        for (_, conn) in boxConnections { conn.teardown() }
+        boxConnections.removeAll()
+        primaryBoxID = nil
+    }
+
+    /// Reattach a box's genuinely-running sessions over its own client so they
+    /// stream live (the broker replays the snapshot only on `joinSession`).
+    /// Per-box analogue of the single-box `reconcileLiveSessions` reattach,
+    /// scoped to this box's endpoint + client; best-effort.
+    private func reattachBoxLiveSessions(_ conn: BoxConnection) async {
+        guard let data = await getJSON(endpoint: conn.endpoint, path: "/api/sessions"),
+              let decoded = try? JSONDecoder().decode(LiveSessionsResponse.self, from: data)
+        else { return }
+        let running = decoded.sessions.filter { $0.running }
+        for info in running where !SavedSessionsStore.shared.isTombstoned(id: info.id) {
+            sessionBox[info.id] = conn.server.id
+            if sessionLifecycle[info.id] == nil {
+                sessionLifecycle[info.id] = .creating
+            }
+            hydrateTerminalBuffer(info.id)
+            try? await conn.client.joinSession(sessionId: info.id, assistant: info.assistant)
+            let sid = info.id
+            Task { @MainActor in await self.hydrateChatConversation(sid) }
+        }
+        refreshSessions()
+    }
+
+    /// A box's WS dropped — update only THAT box's harness, never the global
+    /// banner. Mirrors the auth/disconnect classification of the single-box
+    /// `ingestDisconnected`, scoped to the holder.
+    func ingestBoxDisconnected(boxID: String, reason: String) {
+        guard let conn = boxConnections[boxID] else { return }
+        let lower = reason.lowercased()
+        if lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized") {
+            conn.harness = .failed("Pairing expired for \(conn.server.name).")
+        } else {
+            conn.harness = .failed("Disconnected: \(reason)")
+        }
+        Telemetry.breadcrumb("multibox", "box disconnected", data: [
+            "box": conn.server.name,
+            "reason": Self.connectionReasonCode(from: reason),
+        ])
     }
 
     // MARK: - SSH tunnel lifecycle (core #451)
@@ -2072,7 +2306,12 @@ final class SessionStore {
         fastMode: Bool? = nil,
         initialPrompt: String? = nil
     ) {
-        guard let client else { return }
+        // Multi-box: new sessions land on the selected/primary box's
+        // connection (and get stamped to it below); single-box uses the one
+        // global client unchanged.
+        let targetBox = primaryBoxConnection
+        guard let client = targetBox?.client ?? client else { return }
+        let targetBoxID = targetBox?.server.id
         sessionCreationError = nil
         let pendingID = "pending-\(UUID().uuidString)"
         sessionLifecycle[pendingID] = .creating
@@ -2104,6 +2343,10 @@ final class SessionStore {
                 let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
                 let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode, fastMode: fastMode)
+                // Multi-box: stamp the new session to its owning box so every
+                // later op routes back to the same connection. (Single-box: the
+                // existing refreshSessions stamps to the current box.)
+                if let targetBoxID { self.sessionBox[id] = targetBoxID }
                 Telemetry.breadcrumb("session", "created", data: ["assistant": assistant, "id": id])
                 // Funnel: first-ever session creation (no prior sessions on any launch).
                 if self.sessions.isEmpty {
@@ -2234,7 +2477,7 @@ final class SessionStore {
     }
 
     func switchAgent(sessionID: String, to assistant: String) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         Task {
             do { try await client.switchAgent(sessionId: sessionID, assistant: assistant) }
             catch {
@@ -2323,7 +2566,7 @@ final class SessionStore {
             // a session is attached. Best-effort: an exited session has no
             // live handle, and the HTTP DELETE below is the authoritative
             // teardown either way.
-            if let client { try? await client.exitSession(sessionId: sessionID) }
+            if let client = self.clientForSession(sessionID) { try? await client.exitSession(sessionId: sessionID) }
             // Authoritative broker-side delete: kills the agent process +
             // tmux, removes the session from the broker's active set, and
             // archives its dir. Without this the broker kept recovering the
@@ -2345,7 +2588,7 @@ final class SessionStore {
     // MARK: - Terminal / chat I/O
 
     func sendInput(sessionID: String, bytes: Data) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         Task { try? await client.sendInput(sessionId: sessionID, data: bytes) }
     }
 
@@ -2354,7 +2597,7 @@ final class SessionStore {
     /// next `on_status` callback and land on the session via `apply_status`.
     /// Backs the refresh button in the Session Info account-usage card.
     func refreshAccountUsage(sessionID: String) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         Task { try? await client.refreshAccountUsage(sessionId: sessionID) }
     }
 
@@ -2364,7 +2607,7 @@ final class SessionStore {
     /// and the turn winding down arrives on the normal chat/status stream, which
     /// clears the typing indicator. A no-op broker-side when nothing is running.
     func stopTurn(sessionID: String) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         Telemetry.breadcrumb("chat", "stop turn requested", data: ["session": sessionID])
         Task { try? await client.stopTurn(sessionId: sessionID) }
     }
@@ -2467,7 +2710,7 @@ final class SessionStore {
     /// the caller can surface "upload failed" instead of sending a
     /// message that references a file the broker never received.
     func sendFile(sessionID: String, filename: String, mime: String, bytes: Data) async throws {
-        guard let client else { throw ConduitError.NotConnected(message: "no session transport") }
+        guard let client = clientForSession(sessionID) else { throw ConduitError.NotConnected(message: "no session transport") }
         try await client.sendFile(
             sessionId: sessionID,
             filename: filename,
@@ -2628,7 +2871,7 @@ final class SessionStore {
     /// turn and routes via `turn/steer`. On WS-write success the card clears;
     /// on failure the kind flips to `.retrying` so the Steer button re-appears.
     func steerQueuedEntry(sessionID: String, localID: String, message: String) {
-        guard let client else {
+        guard let client = clientForSession(sessionID) else {
             pendingChats.markRetrying(sessionID: sessionID, localID: localID)
             return
         }
@@ -2691,12 +2934,45 @@ final class SessionStore {
     /// to call when `client` is nil — it just leaves the entry queued for a
     /// later flush. Shared by the send path and `flushPendingChats`.
     private func attemptDeliver(sessionID: String, localID: String, message: String) {
+        // Multi-box: route to the connection that OWNS this session (via the
+        // `sessionBox` stamp). If that box is connected we send there — no
+        // cross-box block needed because every connected box is reachable at
+        // once. If it ISN'T connected, fall through to the single-box gate so
+        // the message stays queued with a clear "connect that box" prompt.
+        if multiBoxEnabled, let stamped = sessionBox[sessionID], let conn = boxConnections[stamped] {
+            let boxClient = conn.client
+            Task {
+                do {
+                    try await boxClient.sendChat(sessionId: sessionID, msg: message)
+                    self.pendingChats.markDelivered(sessionID: sessionID, localID: localID)
+                    self.setEchoStatus(sessionID: sessionID, localID: localID, status: "done")
+                } catch {
+                    let gaveUp = self.pendingChats.markAttemptFailed(sessionID: sessionID, localID: localID)
+                    if gaveUp {
+                        self.setEchoStatus(sessionID: sessionID, localID: localID, status: "failed")
+                        Telemetry.capture(
+                            error: error,
+                            message: "chat send to agent failed (gave up after retries)",
+                            tags: ["surface": "ios", "phase": "chat_send", "multibox": "1"],
+                            extras: ["session": sessionID, "box": stamped]
+                        )
+                    } else {
+                        Telemetry.breadcrumb("chat", "send attempt failed — keeping queued",
+                            data: ["session": sessionID, "box": stamped])
+                    }
+                }
+            }
+            return
+        }
         guard let client else { return }
         // Box-identity gate: if the session was stamped to a different box
         // than the one we're currently connected to, sending into this
         // client is wrong — it would reach the wrong broker and produce
         // ConduitError: UnknownSession. Surface the mismatch and leave the
         // message queued; the user must switch boxes to deliver it.
+        //
+        // On the multi-box path, a stamped-but-not-connected box also lands
+        // here: the prompt then reads "connect that box" rather than "switch".
         let currentBoxID = savedHistoryServerID
         if let stamped = sessionBox[sessionID], stamped != currentBoxID {
             let boxName = savedServers.first(where: { $0.id == stamped })?.name
@@ -2708,7 +2984,8 @@ final class SessionStore {
             // retried into the wrong broker on every flush.
             setEchoStatus(sessionID: sessionID, localID: localID, status: "failed")
             pendingChats.markDelivered(sessionID: sessionID, localID: localID)
-            sessionCreationError = "Session is on '\(boxName)'. Switch to that box to send."
+            let action = multiBoxEnabled ? "Connect" : "Switch to"
+            sessionCreationError = "Session is on '\(boxName)'. \(action) that box to send."
             return
         }
         Task {
@@ -2866,7 +3143,7 @@ final class SessionStore {
     }
 
     func resize(sessionID: String, rows: UInt16, cols: UInt16) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         Task { try? await client.resize(sessionId: sessionID, rows: rows, cols: cols) }
     }
 
@@ -3053,7 +3330,7 @@ final class SessionStore {
     /// view_event when it's done — that's what surfaces back as a
     /// chat-tab notification, no inline message needed.
     func sendFile(sessionID: String, filename: String, mime: String, payload: Data) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         Task {
             try? await client.sendFile(
                 sessionId: sessionID,
@@ -3092,6 +3369,39 @@ final class SessionStore {
     // MARK: - Internal
 
     fileprivate func refreshSessions() {
+        // Multi-box path: the "live" set is the UNION of every connected box's
+        // sessions, each stamped to its own box. Build that union, then keep
+        // every OTHER session as a dimmed history row (unchanged grouping).
+        // The single global `client` may be nil here (boxes own their own
+        // clients), so this branch must not depend on it.
+        if multiBoxEnabled, !boxConnections.isEmpty {
+            var liveStampedIDs = Set<String>()
+            var live: [ProjectSession] = []
+            var seen = Set<String>()
+            for (boxID, conn) in boxConnections {
+                let boxListed = conn.client.listSessions()
+                    .filter { !SavedSessionsStore.shared.isTombstoned(id: $0.id) }
+                for s in boxListed {
+                    sessionBox[s.id] = boxID          // stamp ownership (routing key)
+                    liveStampedIDs.insert(s.id)
+                    if seen.insert(s.id).inserted { live.append(s) }
+                }
+            }
+            // Other-box rows (not currently live on any connected box) stay as
+            // dimmed history, exactly as the single-box path keeps them.
+            let historyRows = sessions.filter { !liveStampedIDs.contains($0.id) }
+            sessions = historyRows + live
+            for s in self.sessions where sessionLifecycle[s.id] == nil {
+                if let phase = statusBySession[s.id]?.phase,
+                   phase.lowercased().hasPrefix("exited") {
+                    sessionLifecycle[s.id] = .exited(Self.exitCode(fromPhase: phase) ?? 0)
+                }
+            }
+            for s in self.sessions {
+                refreshConversationOffMain(sessionID: s.id)
+            }
+            return
+        }
         guard let client else { return }
         // Drop any session the user has explicitly deleted. The deployed
         // broker keeps tmux-backed PTYs alive (#199), so `listSessions`
@@ -3231,7 +3541,7 @@ final class SessionStore {
     /// the freshly-merged log). Single-session and low-frequency (once per
     /// turn), so the blocking FFI here isn't the hang source.
     fileprivate func refreshConversation(sessionID: String) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         guard let items = try? client.listConversationItems(sessionId: sessionID) else { return }
         applyRefreshedConversation(sessionID: sessionID, items: items)
     }
@@ -3246,7 +3556,7 @@ final class SessionStore {
     /// but isn't `Sendable`, hence the explicit unsafe capture; the result rides
     /// back across the actor hop inside a `@unchecked Sendable` box.
     private func refreshConversationOffMain(sessionID: String) {
-        guard let client else { return }
+        guard let client = clientForSession(sessionID) else { return }
         nonisolated(unsafe) let capturedClient = client
         Task.detached(priority: .utility) { [weak self] in
             guard let items = try? capturedClient.listConversationItems(sessionId: sessionID) else { return }
@@ -4209,10 +4519,16 @@ final class SessionStore {
         // socket. The broker's authoritative snapshot REPLACES this once
         // `joinSession` lands (`ingestSnapshot`).
         hydrateTerminalBuffer(sessionID)
+        // Multi-box: join on the connection that OWNS this session (via the
+        // existing `sessionBox` stamp). Single-box: nil → global client.
+        let ownerBox: BoxConnection? = {
+            guard multiBoxEnabled, let boxID = sessionBox[sessionID] else { return nil }
+            return boxConnections[boxID]
+        }()
         Task { @MainActor in
             do {
-                try await waitUntilCommandReady()
-                guard let client else { return }
+                try await waitUntilCommandReady(box: ownerBox)
+                guard let client = clientForSession(sessionID) else { return }
                 // Mark creating so the home list shows the row as
                 // attaching rather than vanishing during the round-trip.
                 if sessionLifecycle[sessionID] == nil {
@@ -4300,7 +4616,11 @@ final class SessionStore {
     /// session), not a live switch.
     func forkSession(sessionID: String, reasoningEffort: String? = nil, model: String? = nil, permissionMode: String? = nil, fastMode: Bool? = nil) {
         guard let original = sessions.first(where: { $0.id == sessionID }) else { return }
-        guard let client else { return }
+        // A fork must live on the SAME box as the original — route the create
+        // through the original session's owning connection and stamp the new
+        // id to that box too.
+        guard let client = clientForSession(sessionID) else { return }
+        let forkBoxID = sessionBox[sessionID]
         let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
         let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
         let modeCrumb = pickedMode ?? "auto"
@@ -4320,6 +4640,7 @@ final class SessionStore {
                     permissionMode: pickedMode,
                     fastMode: fastMode
                 )
+                if let forkBoxID { self.sessionBox[newID] = forkBoxID }
                 let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."
                 try? await client.sendChat(sessionId: newID, msg: seed)
                 // Same model record as createSession: an explicit fork-onto
@@ -4379,12 +4700,15 @@ final class SessionStore {
         UserDefaults.standard.set(data, forKey: recentDirectoriesByServerKey)
     }
 
-    private func waitUntilCommandReady(timeoutMs: UInt64 = 6000) async throws {
+    private func waitUntilCommandReady(timeoutMs: UInt64 = 6000, box: BoxConnection? = nil) async throws {
         let pollNs: UInt64 = 100_000_000
         var elapsedNs: UInt64 = 0
         let timeoutNs = timeoutMs * 1_000_000
         while elapsedNs < timeoutNs {
-            switch harness {
+            // On the multi-box path the global `harness` mirrors the primary
+            // box; when an op targets a SPECIFIC box, gate on THAT box's
+            // harness instead so a different primary's state can't block it.
+            switch (box?.harness ?? harness) {
             case .linked, .live, .reconnecting:
                 return
             case .failed(let reason):
@@ -4746,9 +5070,17 @@ final class SessionStoreAgentLoginTransport: AgentLoginTransport, @unchecked Sen
 }
 
 /// Bridges Rust-side callbacks (arbitrary thread) onto the MainActor store.
-private final class StoreDelegate: ConduitDelegate {
+final class StoreDelegate: ConduitDelegate {
     private weak var store: SessionStore?
-    init(store: SessionStore) { self.store = store }
+    /// nil on the single-box path (callbacks update global state directly).
+    /// On the multi-box path this is the owning `SavedServer.id`, so the
+    /// box-scoped `onDisconnected` updates only that box's
+    /// `BoxConnection.harness` instead of clobbering the global harness.
+    private let boxID: String?
+    init(store: SessionStore, boxID: String? = nil) {
+        self.store = store
+        self.boxID = boxID
+    }
 
     func onPtyData(sessionId: String, data: Data) {
         Task { @MainActor in self.store?.ingestPtyData(sessionId, data) }
@@ -4769,7 +5101,13 @@ private final class StoreDelegate: ConduitDelegate {
         Task { @MainActor in self.store?.ingestExit(sessionId, code) }
     }
     func onDisconnected(reason: String) {
-        Task { @MainActor in self.store?.ingestDisconnected(reason) }
+        Task { @MainActor in
+            if let boxID = self.boxID {
+                self.store?.ingestBoxDisconnected(boxID: boxID, reason: reason)
+            } else {
+                self.store?.ingestDisconnected(reason)
+            }
+        }
     }
     func onConnectionHealth(sessionId: String, health: ConnectionHealth) {
         Task { @MainActor in self.store?.ingestConnectionHealth(sessionId, health) }

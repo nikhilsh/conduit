@@ -1229,6 +1229,18 @@ extension ConduitUI {
 
         @ViewBuilder
         private func savedServerRow(_ server: SavedServer) -> some View {
+            // Multi-box first cut: when the flag is ON, tapping a row toggles
+            // THIS box's connection (multiple can be connected at once) instead
+            // of switching the single active box.
+            if store.multiBoxEnabled {
+                multiBoxServerRow(server)
+            } else {
+                singleBoxServerRow(server)
+            }
+        }
+
+        @ViewBuilder
+        private func singleBoxServerRow(_ server: SavedServer) -> some View {
             let isActive = server.endpoint == store.endpoint
             Button {
                 store.selectSavedServer(server.id, autoConnect: true)
@@ -1257,6 +1269,54 @@ extension ConduitUI {
                 }
             }
             .buttonStyle(.plain)
+        }
+
+        @ViewBuilder
+        private func multiBoxServerRow(_ server: SavedServer) -> some View {
+            let connected = store.isBoxConnected(server.id)
+            let isPrimary = store.primaryBoxID == server.id
+            Button {
+                if connected {
+                    store.disconnectBox(server.id)
+                } else {
+                    store.connectBox(server.id)
+                }
+            } label: {
+                ConduitUI.ListRow(
+                    icon: "server.rack",
+                    title: server.name,
+                    subtitle: connected
+                        ? (isPrimary ? "Connected · new sessions land here" : "Connected")
+                        : server.endpoint.displayHost,
+                    iconTint: connected ? neon.green : neon.accent
+                ) {
+                    HStack(spacing: 8) {
+                        if isPrimary && connected {
+                            Text("Primary")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(neon.green.opacity(0.20)))
+                                .overlay(Capsule().stroke(neon.green.opacity(0.5), lineWidth: 1))
+                        }
+                        Text(connected ? "Disconnect" : "Connect")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(connected ? neon.red : neon.accent)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            // Long-press a connected box to make it the primary (where new
+            // sessions land) without disconnecting it.
+            .contextMenu {
+                if connected && !isPrimary {
+                    Button {
+                        store.primaryBoxID = server.id
+                    } label: {
+                        Label("Make primary", systemImage: "star")
+                    }
+                }
+            }
         }
     }
 
