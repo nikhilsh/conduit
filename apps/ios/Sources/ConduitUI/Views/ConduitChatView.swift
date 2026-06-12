@@ -231,12 +231,15 @@ extension ConduitUI {
         private static func transcriptFingerprint(
             conversation: [ConversationItem],
             chatLog: [ChatEvent],
-            readOnly: Bool
+            readOnly: Bool,
+            chatArm: String = "a"
         ) -> Int {
             var hasher = Hasher()
             hasher.combine(readOnly)
             hasher.combine(conversation.count)
             hasher.combine(chatLog.count)
+            // Include the arm so switching A<->B in Labs re-groups rows.
+            hasher.combine(chatArm)
             for item in conversation {
                 hasher.combine(item.id)
                 hasher.combine(item.status)
@@ -255,7 +258,8 @@ extension ConduitUI {
             let conversation = readOnlyItems ?? store.conversationLog[session.id] ?? []
             let chatLog = readOnlyItems == nil ? (store.chatLog[session.id] ?? []) : []
             let key = Self.transcriptFingerprint(
-                conversation: conversation, chatLog: chatLog, readOnly: readOnlyItems != nil
+                conversation: conversation, chatLog: chatLog, readOnly: readOnlyItems != nil,
+                chatArm: flags.resolvedChatArm.rawValue
             )
             if transcriptMemo.fingerprint == key {
                 return (transcriptMemo.events, transcriptMemo.rows)
@@ -274,14 +278,21 @@ extension ConduitUI {
             let events = readOnlyItems
                 ?? ConduitUI.ChatViewModel.mergedEvents(conversation: conversation, chatLog: chatLog)
             // Fold into rows, collapsing contiguous runs of tool cards
-            // (commands included — round-3 §1) into one quiet bundle. A
+            // (commands included -- round-3 §1) into one quiet bundle. A
             // run is "adjacent tool calls with no assistant prose between
             // them": any non-tool event closes the current bundle.
-            let rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
-                ev.role.lowercased() == "tool"
-                    && ev.status.lowercased() != "swapping"
-                    && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
-            }
+            //
+            // Tool grouping is arm B (Signature) only: arm A (Breathe)
+            // keeps every tool card as a standalone .single row so the
+            // de-cramped layout isn't obscured by a collapsed bundle.
+            let isGroupingArm = flags.resolvedChatArm == .b
+            let rows = isGroupingArm
+                ? ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
+                    ev.role.lowercased() == "tool"
+                        && ev.status.lowercased() != "swapping"
+                        && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
+                  }
+                : events.map { ConduitUI.ChatRow.single($0) }
             transcriptMemo.fingerprint = key
             transcriptMemo.events = events
             transcriptMemo.rows = rows
