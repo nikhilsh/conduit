@@ -9,6 +9,70 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.148
+
+Reliability + new-box onboarding batch. All the SSH-bootstrap / box / chat /
+onboarding fixes from this round, shipped in one build.
+
+- **Broker auto-updates on reconnect** — the bootstrap reuse path now compares a
+  version marker and re-installs the broker binary when the box is running a
+  stale version, so future broker fixes reach existing boxes on reconnect with
+  no manual redeploy. PR #539. REQUIRES nothing on the box. Verify: reconnect an
+  older SSH box → broker silently updates to the app's version. [broker-script
+  via app/core, on-device]
+- **Home row shows the real host** — a connected SSH box's Home row subtitle
+  shows its real host instead of `127.0.0.1`/forwarded port. PR #540. Verify:
+  add an SSH box → Home row subtitle shows root@host, not 127.0.0.1. [app,
+  on-device]
+- **Box switch re-bootstraps SSH boxes** — switching to a saved SSH box routes
+  through the re-bootstrap/connect path (was failing to connect to a second box
+  after the first). PR #541. Verify: with two SSH boxes, Settings → switch
+  between them → each connects and loads its sessions. [app, on-device]
+- **Live Activity ends on archive/delete** — archiving or deleting a session now
+  ends its Live Activity instead of leaving it stuck on the lock screen. PR #542.
+  Verify: start a session (LA appears) → archive it → LA disappears. [iOS,
+  on-device]
+- **Subagent vs. main-agent classification + worktree branch** — assistant/user
+  prose is no longer mislabeled as SUBAGENT (heuristic moved below the role
+  check and tightened to anchored phrasing); live git state reads the agent
+  process's real cwd via /proc so an agent working in a worktree shows the
+  correct branch instead of `main`. PR #543. Verify: a main-agent turn shows as
+  the main agent (not subagent); a session whose agent cd'd into a worktree
+  shows that worktree's branch. [broker+core, on-device]
+- **Elicitation deadlock fixed (duplicate input / stuck queue)** — answering an
+  AskUserQuestion / approval prompt mid-turn no longer routes to the turn queue
+  (which stayed blocked waiting on the answer) → no more duplicate input box and
+  no stuck queue. PR #544. Verify: trigger an AskUserQuestion → answer it → the
+  turn proceeds, single input, queue not stuck. [broker, on-device]
+- **Codex pending card no longer re-arms on reopen** — the pending-input card is
+  no longer persisted to the transcript, so reopening a codex session doesn't
+  re-show / re-fire a stale prompt. PR #545. Verify: answer a codex prompt →
+  leave and reopen the session → no duplicate/stale prompt. [broker, on-device]
+- **Removed the useless "This device" / local row** — agents never run on the
+  phone in conduit's model; the non-actionable local placeholder is gone (Boxes
+  list = only real boxes). PR #546. Verify: Home shows only real boxes, no "This
+  device" row. [app, on-device]
+- **New-box preflight + clear failure surfacing** — the SSH bootstrap now probes
+  OS/arch/curl-or-wget/writable-HOME and verifies the installed broker actually
+  executes (arch mismatch / noexec / security policy), surfacing a specific
+  error (UnsupportedPlatform / CurlMissing / BrokerExecFailed / HomeUnwritable /
+  BrokerInstallFailed) instead of a cryptic health-timeout; readiness gained a
+  git-present probe. PR #547. Verify: add a normal Linux box → still works; the
+  failure messages are exercised only on odd hosts. [core+broker-script+app,
+  on-device]
+- **Onboarding new-box UX polish** — (1) the onboarding Install step's "Add via
+  SSH" now actually opens the SSH login sheet (was a dead-end); (2) the SSH
+  add-box card is de-jargoned ("Add via SSH" / plain subtitle, was "SSH
+  bootstrap / cold-start a broker"); (3) the session row shows the live
+  "⏳ Installing <agent>…" message while a box installs the chosen agent on first
+  use; (4) readiness rows distinguish auto-installing agents ("installs on first
+  use", neutral) from genuinely-missing infra (red "not installed"). PR #548.
+  Verify: onboarding → Add via SSH opens the sheet; first session on a fresh box
+  shows the install hint; readiness shows agents as "installs on first use".
+  [iOS+Android, on-device, tablet+phone]
+
+---
+
 ## v0.0.147
 
 - **Forget + re-add an SSH box now works** — the bootstrap reuse path returns
