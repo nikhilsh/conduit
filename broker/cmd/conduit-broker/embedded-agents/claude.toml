@@ -20,6 +20,9 @@ effort_args         = ["--effort", "{effort}"]
 # {fast} expands to "true"/"false". claude-only — no other adapter sets this.
 fast_mode_args      = ['--settings', '{"fastMode":{fast}}']
 login_provider      = "anthropic"
+# On-demand install: if the claude CLI is absent at session start, the broker
+# runs this command (via sh -c) to install it, then retries the spawn.
+install_cmd         = "curl -fsSL https://claude.ai/install.sh | bash"
 
 [permission_modes.plan]
 drop_args = ["--dangerously-skip-permissions"]

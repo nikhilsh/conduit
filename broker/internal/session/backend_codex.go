@@ -102,6 +102,14 @@ func (codexAppServerBackend) Usage(ctx context.Context, do httpDoFunc, homeDir s
 // synchronously now). On a hard spawn failure it falls back to the codex-exec
 // backend so chat still works — the original behavior, moved verbatim.
 func (codexAppServerBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequest) (spawnResult, error) {
+	// On-demand install: if codex is missing and the adapter has an
+	// install_cmd, install it now before attempting any spawn.
+	if installErr := maybeInstallAgent(adapter.Name, adapter.Command[0], adapter.InstallCmd, s.PublishText); installErr != nil {
+		fmt.Fprintf(os.Stderr, "session %s: agent install: %v (chat disabled)\n", s.ID, installErr)
+		publishChatSystem(s.PublishText, "⚠️ codex: failed to start: "+installErr.Error())
+		return spawnResult{}, installErr
+	}
+
 	codexSeedThread(s, req.resumeCodexThreadID)
 	// Build the backend OUTSIDE s.mu: the app-server constructor runs the
 	// initialize/thread-start handshake synchronously and latches the thread
@@ -148,6 +156,14 @@ func (codexExecBackend) Usage(ctx context.Context, do httpDoFunc, homeDir string
 }
 
 func (codexExecBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequest) (spawnResult, error) {
+	// On-demand install: if codex is missing and the adapter has an
+	// install_cmd, install it now before attempting any spawn.
+	if installErr := maybeInstallAgent(adapter.Name, adapter.Command[0], adapter.InstallCmd, s.PublishText); installErr != nil {
+		fmt.Fprintf(os.Stderr, "session %s: agent install: %v (chat disabled)\n", s.ID, installErr)
+		publishChatSystem(s.PublishText, "⚠️ codex: failed to start: "+installErr.Error())
+		return spawnResult{}, installErr
+	}
+
 	codexSeedThread(s, req.resumeCodexThreadID)
 	backend := newCodexExecBackend(s, adapter, req.resumeCodexThreadID)
 	wireCodexTurnHook(s, req.aiGen, backend)

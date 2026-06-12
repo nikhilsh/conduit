@@ -242,6 +242,105 @@ cred_files = ["path/to/creds.json"]
 	}
 }
 
+// TestInstallCmdParsedFromTOML verifies that install_cmd is read from the TOML
+// and exposed on the Adapter struct (the field the broker's on-demand install
+// path reads when an agent CLI is missing at session spawn time).
+func TestInstallCmdParsedFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	writeAdapter(t, dir, "claude.toml", `
+name = "claude"
+command = ["claude"]
+workdir = "/workspace"
+chat_mode = "stream-json"
+install_cmd = "curl -fsSL https://claude.ai/install.sh | bash"
+`)
+	reg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	a, err := reg.Get("claude")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	want := "curl -fsSL https://claude.ai/install.sh | bash"
+	if a.InstallCmd != want {
+		t.Errorf("InstallCmd = %q, want %q", a.InstallCmd, want)
+	}
+}
+
+// TestInstallCmdAbsentMeansEmpty verifies that adapters without install_cmd
+// get an empty string (not a panic or stale default) — callers treat "" as
+// "no on-demand install available".
+func TestInstallCmdAbsentMeansEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeAdapter(t, dir, "gemini.toml", `
+name = "gemini"
+command = ["gemini"]
+workdir = "/workspace"
+`)
+	reg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	a, err := reg.Get("gemini")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if a.InstallCmd != "" {
+		t.Errorf("InstallCmd = %q, want empty (absent field)", a.InstallCmd)
+	}
+}
+
+// TestEmbeddedClaudeInstallCmd verifies that the real embedded claude.toml
+// carries the expected install_cmd value.
+func TestEmbeddedClaudeInstallCmd(t *testing.T) {
+	const tomlPath = "../../cmd/conduit-broker/embedded-agents/claude.toml"
+	dir := t.TempDir()
+	raw, err := os.ReadFile(tomlPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", tomlPath, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "claude.toml"), raw, 0o644); err != nil {
+		t.Fatalf("write temp toml: %v", err)
+	}
+	reg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	a, err := reg.Get("claude")
+	if err != nil {
+		t.Fatalf("Get(claude): %v", err)
+	}
+	if !strings.Contains(a.InstallCmd, "claude.ai/install.sh") {
+		t.Errorf("claude install_cmd = %q; expected to contain 'claude.ai/install.sh'", a.InstallCmd)
+	}
+}
+
+// TestEmbeddedCodexInstallCmd verifies that the real embedded codex.toml
+// carries the expected install_cmd value.
+func TestEmbeddedCodexInstallCmd(t *testing.T) {
+	const tomlPath = "../../cmd/conduit-broker/embedded-agents/codex.toml"
+	dir := t.TempDir()
+	raw, err := os.ReadFile(tomlPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", tomlPath, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codex.toml"), raw, 0o644); err != nil {
+		t.Fatalf("write temp toml: %v", err)
+	}
+	reg, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	a, err := reg.Get("codex")
+	if err != nil {
+		t.Fatalf("Get(codex): %v", err)
+	}
+	if !strings.Contains(a.InstallCmd, "chatgpt.com/codex/install.sh") {
+		t.Errorf("codex install_cmd = %q; expected to contain 'chatgpt.com/codex/install.sh'", a.InstallCmd)
+	}
+}
+
 // TestOpencodeManifestEnvPassthrough loads the real embedded opencode.toml and
 // pins the env_passthrough keys that allow a real AI provider to be used when
 // the broker host has a key set. The three keys are the primary way opencode

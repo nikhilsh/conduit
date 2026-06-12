@@ -51,22 +51,12 @@
 # The reuse check (healthy broker already running) works for both paths.
 #
 # ── Agent-CLI auto-install ──────────────────────────────────────────────────
-# Agent CLI (claude / codex) is NOT a prerequisite for the broker or for the
-# app to connect.  After the broker is healthy and the OK line is printed,
-# the script performs a best-effort, time-bounded, non-fatal install attempt
-# when CONDUIT_AUTOINSTALL_AGENT=1 (default) and no agent is on PATH.
-# Progress goes to stderr so the stdout OK/ERR contract stays clean.
-# A failed or timed-out install is NOT fatal; the broker stays up.
-#   Install order:
-#     1. claude — official native installer (https://claude.ai/install.sh),
-#        installs to ~/.local/bin/claude; auto-updates in the background.
-#     2. codex  — official install script (https://chatgpt.com/codex/install.sh),
-#        installs to ~/.local/bin/codex.
-#     3. codex via npm (fallback for hosts that have npm but no direct DL).
-# Each step is bounded by AGENT_INSTALL_TIMEOUT_S (default 180s).
-# If all attempts fail → a stderr note pointing to docs/SELF-HOST.md.
-#
-# To opt out:  CONDUIT_AUTOINSTALL_AGENT=0 remote-bootstrap.sh ...
+# Agent CLIs (claude / codex) are NOT installed eagerly at bootstrap time.
+# They are installed on-demand by the broker when a session starts with an
+# agent whose CLI is missing — the broker runs the adapter's install_cmd,
+# shows a progress message in the Chat tab, then retries the spawn.
+# This avoids installing binaries the user may never use and keeps bootstrap
+# fast. See broker/internal/session/agentinstall.go.
 #
 # ── ntfy (UnifiedPush distributor) ──────────────────────────────────────────
 # When --with-ntfy is passed (or CONDUIT_WITH_NTFY=1 is set), the script
@@ -104,8 +94,6 @@ CURL_MAX_TIME=180              # seconds: total curl transfer (broker install)
 CURL_HEALTH_MAX_TIME=5         # seconds: health-check curls (fast local calls)
 CURL_API_MAX_TIME=10           # seconds: GitHub API / version lookups
 CURL_NTFY_DL_MAX_TIME=120      # seconds: ntfy binary download
-AGENT_INSTALL_TIMEOUT_S=180    # seconds: per agent installer attempt
-
 # ── Argument parsing ──────────────────────────────────────────────────────
 # Accept optional --with-ntfy flag before the positional args so callers
 # can pass  remote-bootstrap.sh --with-ntfy <TOKEN> ...
@@ -143,9 +131,6 @@ NTFY_CONFIG="$NTFY_CONFIG_DIR/server.yml"
 NTFY_LOGFILE="$STATE_DIR/ntfy.log"
 NTFY_PIDFILE="$STATE_DIR/ntfy.pid"
 NTFY_HEALTH="http://127.0.0.1:$NTFY_PORT/v1/health"
-
-# Agent-CLI auto-install: enabled by default; set to 0 to skip.
-CONDUIT_AUTOINSTALL_AGENT="${CONDUIT_AUTOINSTALL_AGENT:-1}"
 
 if [ -z "$TOKEN" ] || [ "${#TOKEN}" -lt 16 ]; then
   echo "ERR 15 token argument required (>=16 chars)"
@@ -629,74 +614,9 @@ while [ "$i" -le 15 ]; do
       _ntfy_suffix=" ntfy=$_ntfy_url"
     fi
     # OK reflects "broker is up and connectable" — agent CLI is not required.
+    # Agent CLIs are installed on-demand by the broker when a session starts
+    # (see broker/internal/session/agentinstall.go).
     echo "OK port=$HOST_PORT token=$TOKEN reused=false${_ntfy_suffix}"
-    # ── Best-effort agent CLI install (non-fatal, after OK is emitted) ─────
-    # The broker is already healthy; the app has its connection.  Now we
-    # attempt to install an agent CLI if none is present.  Any failure is
-    # logged to stderr and silently ignored — it MUST NOT affect the exit
-    # code or the OK line already printed.
-    _try_agent_install() {
-      if command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1; then
-        return 0
-      fi
-      if [ "$CONDUIT_AUTOINSTALL_AGENT" = "0" ]; then
-        echo "conduit: CONDUIT_AUTOINSTALL_AGENT=0; skipping agent CLI install (install manually — see docs/SELF-HOST.md)" >&2
-        return 0
-      fi
-
-      echo "STEP install_agent" >&2
-      echo "conduit: no agent CLI found; attempting user-space install (set CONDUIT_AUTOINSTALL_AGENT=0 to skip)" >&2
-
-      # Ensure ~/.local/bin is on PATH so a freshly installed binary is visible.
-      LOCAL_BIN="$HOME/.local/bin"
-      mkdir -p "$LOCAL_BIN"
-      case ":$PATH:" in
-        *":$LOCAL_BIN:"*) ;;
-        *) PATH="$LOCAL_BIN:$PATH" ;;
-      esac
-
-      _installed_agent=0
-
-      # Attempt 1: claude — official native installer.
-      echo "conduit: trying claude native installer ..." >&2
-      if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
-           'curl -fsSL --connect-timeout 15 --max-time 60 https://claude.ai/install.sh | bash' \
-           >/dev/null 2>&1; then
-        if command -v claude >/dev/null 2>&1; then
-          echo "conduit: claude installed successfully" >&2
-          _installed_agent=1
-        fi
-      fi
-
-      # Attempt 2: codex — official install script.
-      if [ "$_installed_agent" = "0" ]; then
-        echo "conduit: claude install failed or timed out; trying codex install script ..." >&2
-        if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
-             'curl -fsSL --connect-timeout 15 --max-time 60 https://chatgpt.com/codex/install.sh | sh' \
-             >/dev/null 2>&1; then
-          if command -v codex >/dev/null 2>&1; then
-            echo "conduit: codex installed successfully" >&2
-            _installed_agent=1
-          fi
-        fi
-      fi
-
-      # Attempt 3: codex via npm (fallback for hosts with npm but no direct DL).
-      if [ "$_installed_agent" = "0" ] && command -v npm >/dev/null 2>&1; then
-        echo "conduit: codex script failed or timed out; trying npm install -g @openai/codex ..." >&2
-        if timeout "$AGENT_INSTALL_TIMEOUT_S" npm install -g @openai/codex >/dev/null 2>&1; then
-          if command -v codex >/dev/null 2>&1; then
-            echo "conduit: codex installed via npm" >&2
-            _installed_agent=1
-          fi
-        fi
-      fi
-
-      if [ "$_installed_agent" = "0" ]; then
-        echo "conduit: no agent CLI (claude/codex) on PATH; auto-install failed or timed out; install/sign in from the app — see docs/SELF-HOST.md" >&2
-      fi
-    }
-    _try_agent_install >&2 || true
     exit 0
   fi
   sleep 1
