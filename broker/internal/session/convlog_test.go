@@ -79,3 +79,42 @@ func TestReadConvLogMissingFile(t *testing.T) {
 		t.Fatal("want error for missing file")
 	}
 }
+
+// TestConvLoggerSkipsPendingInputCards verifies that needs-input/approval
+// cards (content prefixed with pendingInputSentinel) are NOT written to the
+// durable transcript — they are transient live state that must not replay on
+// session reopen. Normal chat events and resolution events must still persist.
+func TestConvLoggerSkipsPendingInputCards(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.jsonl")
+	l := newConvLogger(path)
+
+	// A normal assistant message — should persist.
+	normal, _ := json.Marshal(ConvEntry{Role: "assistant", Content: "all good", Ts: "2026-06-12T00:00:00Z"})
+	l.appendRaw(normal)
+
+	// A needs-input card — should be skipped.
+	card, _ := json.Marshal(ConvEntry{
+		Role:    "assistant",
+		Content: pendingInputSentinel + "\nShip it?\n1. Yes\n2. No",
+		Ts:      "2026-06-12T00:01:00Z",
+	})
+	l.appendRaw(card)
+
+	// A resolution/system message after the answer — should persist.
+	resolution, _ := json.Marshal(ConvEntry{Role: "system", Content: "User answered: Yes", Ts: "2026-06-12T00:02:00Z"})
+	l.appendRaw(resolution)
+
+	got, err := readConvLog(path)
+	if err != nil {
+		t.Fatalf("readConvLog: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries (card skipped), got %d: %+v", len(got), got)
+	}
+	if got[0].Content != "all good" {
+		t.Errorf("entry0: want normal message, got content=%q", got[0].Content)
+	}
+	if got[1].Content != "User answered: Yes" {
+		t.Errorf("entry1: want resolution message, got content=%q", got[1].Content)
+	}
+}
