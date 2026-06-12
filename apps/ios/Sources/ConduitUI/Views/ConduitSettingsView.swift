@@ -192,12 +192,23 @@ extension ConduitUI {
                 }
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
             }
-            .onAppear { agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors) }
+            .onAppear {
+                agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
+                // Fix 3 breadcrumb: log inferred installed state from brokerReadiness.
+                // Source: readiness.agents[key].cliPresent from /api/capabilities.
+                // nil = old broker or fetch not yet completed (no nag shown).
+                if let r = store.brokerReadiness {
+                    let summary = r.agents.map { "\($0.key)=\($0.value.cliPresent ? "installed" : "MISSING")" }
+                        .sorted().joined(separator: ",")
+                    Telemetry.breadcrumb("settings", "agent installed state (from readiness)",
+                        data: ["agents": summary])
+                }
+            }
         }
 
-        /// Active server row — `103.107.51.48:1977` · `Live · default
-        /// server`, trailing `Switch` + chevron. Tapping pushes the server
-        /// switcher (saved servers, switch / forget).
+        /// Active server row — shows the real box identity (SavedServer.name
+        /// or ssh username@host) as the primary line, NOT the raw endpoint
+        /// which can be a loopback 127.0.0.1 for SSH-tunneled boxes.
         private var activeServerRow: some View {
             NavigationLink {
                 ServerSwitcherView()
@@ -208,7 +219,7 @@ extension ConduitUI {
                         .frame(width: 20)
                         .foregroundStyle(neon.accent)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(store.endpoint.isComplete ? store.endpoint.displayHost : "Not paired")
+                        Text(activeServerPrimaryLabel)
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(neon.text)
                             .lineLimit(1)
@@ -231,6 +242,18 @@ extension ConduitUI {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+        }
+
+        /// The real box identity for the primary Connection row. For SSH-tunneled
+        /// boxes, returns SavedServer.name (e.g. "root@185.201.8.184") — NOT the
+        /// loopback tunnel address. For token-paired boxes, falls back to the
+        /// endpoint host (already the real address).
+        private var activeServerPrimaryLabel: String {
+            guard store.endpoint.isComplete else { return "Not paired" }
+            if let matched = store.savedServers.first(where: { $0.endpoint == store.endpoint }) {
+                return matched.name
+            }
+            return store.endpoint.displayHost
         }
 
         /// "Live · default server" / "<state> · server" — honest about
@@ -266,10 +289,22 @@ extension ConduitUI {
         /// One agent's row: tinted daemon avatar, name + plan badge, status
         /// dot, and the Manage / Sign in affordance (the latter tinted to
         /// pull attention when the credential needs the user).
+        /// Fix 3: uses brokerReadiness.agents[agent].cliPresent to distinguish
+        /// "not installed on this box" from "signed out". A breadcrumb notes
+        /// the inference source.
         private func agentAccountRow(_ account: AgentAccountStatus) -> some View {
             let tint = neon.agentTint(forAgent: account.agent)
+            // Derive per-agent installed state from the broker readiness block.
+            // nil readiness = old broker or not yet fetched; treat as unknown (don't nag).
+            let agentReadiness = store.brokerReadiness?.agents[account.agent]
+            let installed: Bool? = agentReadiness.map { $0.cliPresent }
+            // If the broker says the agent is not installed, override the status label
+            // regardless of the local credential state.
+            let notInstalled = installed == false
             return Button {
-                if account.usable {
+                if notInstalled {
+                    // Nothing to manage for an uninstalled agent.
+                } else if account.usable {
                     manageTarget = account
                 } else {
                     showAgentLogin = true
@@ -289,7 +324,7 @@ extension ConduitUI {
                             Text(account.displayName)
                                 .font(neon.sans(15).weight(.bold))
                                 .foregroundStyle(neon.text)
-                            if let plan = account.planLabel {
+                            if let plan = account.planLabel, !notInstalled {
                                 Text(plan)
                                     .font(neon.mono(9).weight(.bold))
                                     .tracking(0.6)
@@ -301,10 +336,19 @@ extension ConduitUI {
                             }
                         }
                         HStack(spacing: 5) {
-                            let (statusText, statusColor): (String, Color) =
-                                account.usable ? ("signed in", neon.green)
-                                : account.expired ? ("sign-in expired", neon.yellow)
-                                : ("signed out", neon.textFaint)
+                            let (statusText, statusColor): (String, Color) = {
+                                if notInstalled {
+                                    return ("not installed on this box", neon.yellow)
+                                } else if account.usable && agentReadiness?.signedIn == true {
+                                    return ("ready", neon.green)
+                                } else if account.usable {
+                                    return ("signed in", neon.green)
+                                } else if account.expired {
+                                    return ("sign-in expired", neon.yellow)
+                                } else {
+                                    return ("signed out", neon.textFaint)
+                                }
+                            }()
                             Circle()
                                 .fill(statusColor)
                                 .frame(width: 5, height: 5)
@@ -314,13 +358,15 @@ extension ConduitUI {
                         }
                     }
                     Spacer(minLength: 8)
-                    HStack(spacing: 4) {
-                        Text(account.usable ? "Manage" : "Sign in")
-                            .font(neon.sans(13).weight(.semibold))
-                            .foregroundStyle(account.usable ? neon.textDim : neon.green)
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(neon.textFaint)
+                    if !notInstalled {
+                        HStack(spacing: 4) {
+                            Text(account.usable ? "Manage" : "Sign in")
+                                .font(neon.sans(13).weight(.semibold))
+                                .foregroundStyle(account.usable ? neon.textDim : neon.green)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(neon.textFaint)
+                        }
                     }
                 }
                 .padding(.horizontal, 14)
