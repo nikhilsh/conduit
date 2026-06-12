@@ -70,7 +70,13 @@ pub struct SshTunnelBootstrap {
 }
 
 /// Structured errors the mobile layer can present meaningfully. Codes
-/// 11–15 mirror `scripts/remote-bootstrap.sh`'s exit code contract.
+/// mirror `scripts/remote-bootstrap.sh`'s exit code contract.
+///
+/// Legacy Docker codes 11/12 (DockerMissing/DockerPermission) are kept as
+/// dead variants for ABI compatibility; the bare-binary bootstrap no longer
+/// emits them. New codes: 16 BrokerInstallFailed, 18 CurlMissing,
+/// 19 UnsupportedPlatform, 20 BrokerExecFailed, 21 HomeUnwritable,
+/// 22 BootstrapAborted.
 #[derive(Debug, Error)]
 pub enum SshError {
     #[error("tcp dial failed: {0}")]
@@ -81,14 +87,32 @@ pub enum SshError {
     HostKeyRejected { fingerprint: String },
     #[error("authentication failed (check username + key/password)")]
     AuthFailed,
+    /// Dead — kept for ABI compat; bare-binary bootstrap never emits exit 11.
     #[error("docker is not installed on the remote host")]
     DockerMissing,
+    /// Dead — kept for ABI compat; bare-binary bootstrap never emits exit 12.
     #[error("remote user cannot run docker without sudo")]
     DockerPermission,
     #[error("remote port {0} is already in use by a non-conduit process")]
     PortConflict(u16),
-    #[error("harness container failed to become healthy within 30s")]
+    #[error("broker failed to become healthy within 15s")]
     HarnessStartTimeout,
+    /// Exit 16: broker binary download or install failed.
+    #[error("broker install failed: {detail}")]
+    BrokerInstallFailed { detail: String },
+    /// Exit 18: neither curl nor wget is available on the remote host.
+    #[error("curl and wget are not installed on this box")]
+    CurlMissing,
+    /// Exit 19: OS or CPU architecture is not supported.
+    #[error("unsupported platform: {detail}")]
+    UnsupportedPlatform { detail: String },
+    /// Exit 20: broker binary is present but won't execute (arch mismatch,
+    /// noexec mount, SELinux, etc.).
+    #[error("broker binary will not execute on this box: {detail}")]
+    BrokerExecFailed { detail: String },
+    /// Exit 21: cannot write to HOME directory (read-only / out of disk).
+    #[error("cannot write to home directory on this box")]
+    HomeUnwritable,
     #[error("remote bootstrap exited with code {code}: {stderr}")]
     BootstrapExitCode { code: i32, stderr: String },
     #[error("remote bootstrap output not understood: {0}")]
@@ -108,6 +132,11 @@ impl SshError {
             12 => SshError::DockerPermission,
             13 => SshError::HarnessStartTimeout,
             14 => SshError::PortConflict(parse_port_from_msg(&stderr).unwrap_or(1977)),
+            16 => SshError::BrokerInstallFailed { detail: stderr },
+            18 => SshError::CurlMissing,
+            19 => SshError::UnsupportedPlatform { detail: stderr },
+            20 => SshError::BrokerExecFailed { detail: stderr },
+            21 => SshError::HomeUnwritable,
             _ => SshError::BootstrapExitCode { code, stderr },
         }
     }
@@ -157,6 +186,45 @@ mod tests {
     }
 
     #[test]
+    fn from_bootstrap_exit_maps_new_preflight_codes() {
+        // 16: broker install failed — detail preserved
+        match SshError::from_bootstrap_exit(16, "could not install binary".into()) {
+            SshError::BrokerInstallFailed { detail } => {
+                assert_eq!(detail, "could not install binary")
+            }
+            other => panic!("expected BrokerInstallFailed, got {other:?}"),
+        }
+
+        // 18: curl/wget missing
+        assert!(matches!(
+            SshError::from_bootstrap_exit(18, "curl and wget not found".into()),
+            SshError::CurlMissing
+        ));
+
+        // 19: unsupported platform — detail preserved
+        match SshError::from_bootstrap_exit(19, "unsupported arch mips".into()) {
+            SshError::UnsupportedPlatform { detail } => {
+                assert_eq!(detail, "unsupported arch mips")
+            }
+            other => panic!("expected UnsupportedPlatform, got {other:?}"),
+        }
+
+        // 20: broker binary won't execute — detail preserved
+        match SshError::from_bootstrap_exit(20, "arch mismatch".into()) {
+            SshError::BrokerExecFailed { detail } => {
+                assert_eq!(detail, "arch mismatch")
+            }
+            other => panic!("expected BrokerExecFailed, got {other:?}"),
+        }
+
+        // 21: HOME unwritable
+        assert!(matches!(
+            SshError::from_bootstrap_exit(21, "cannot write".into()),
+            SshError::HomeUnwritable
+        ));
+    }
+
+    #[test]
     fn from_bootstrap_exit_keeps_unknown_as_typed_exit() {
         match SshError::from_bootstrap_exit(99, "weird".into()) {
             SshError::BootstrapExitCode { code, stderr } => {
@@ -164,6 +232,11 @@ mod tests {
                 assert_eq!(stderr, "weird");
             }
             other => panic!("expected BootstrapExitCode, got {other:?}"),
+        }
+        // 22 (bootstrap aborted) also falls through to BootstrapExitCode.
+        match SshError::from_bootstrap_exit(22, "bootstrap aborted".into()) {
+            SshError::BootstrapExitCode { code, .. } => assert_eq!(code, 22),
+            other => panic!("expected BootstrapExitCode for 22, got {other:?}"),
         }
     }
 }

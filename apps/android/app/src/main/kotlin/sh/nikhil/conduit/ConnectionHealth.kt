@@ -36,6 +36,8 @@ data class BrokerReadiness(
     val nodePresent: Boolean,
     /** tmux found on the broker host. */
     val tmuxPresent: Boolean,
+    /** git found on the broker host (agents need git to clone/commit). */
+    val gitPresent: Boolean,
     /** Per-agent readiness, keyed by the agent name ("claude", "codex", …). */
     val agents: Map<String, AgentReadiness>,
 )
@@ -150,6 +152,9 @@ fun readinessCheckItems(
     if (!readiness.tmuxPresent) {
         items.add(ReadinessCheckItem(id = "tmux", label = "tmux", status = ReadinessStatus.Absent, loginProvider = null))
     }
+    if (!readiness.gitPresent) {
+        items.add(ReadinessCheckItem(id = "git", label = "git", status = ReadinessStatus.Absent, loginProvider = null))
+    }
     return items
 }
 
@@ -180,6 +185,7 @@ fun parseReadiness(raw: String): BrokerReadiness? {
             brokerVersion = obj.optString("broker_version", "dev"),
             nodePresent   = obj.optBoolean("node_present", true),
             tmuxPresent   = obj.optBoolean("tmux_present", true),
+            gitPresent    = obj.optBoolean("git_present", true),
             agents        = agents,
         )
     }.getOrNull()

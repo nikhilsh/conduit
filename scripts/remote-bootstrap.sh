@@ -22,7 +22,11 @@
 #   14  port collision with a non-conduit process
 #   15  bad usage (missing / short token)
 #   16  could not download/install the broker binary
-#   18  curl not available on the host
+#   18  neither curl nor wget available on the host
+#   19  unsupported OS or CPU architecture
+#   20  broker binary will not execute (arch mismatch / noexec / security policy)
+#   21  cannot write to HOME (read-only or out of disk)
+#   22  bootstrap aborted unexpectedly (set -e trap; inspect stderr for details)
 #
 # NOTE: exit 17 (no agent CLI) has been removed.  An agent CLI is NOT
 # required for the broker to start or for the app to connect.  "No agent
@@ -86,6 +90,25 @@
 
 set -eu
 
+# ── Abort trap — emit ERR 22 if we exit without printing any OK/ERR line ────
+# This prevents the app from getting an empty-stdout "no OK/ERR line" parse
+# error when set -e fires on an unexpected command failure.
+_conduit_emitted_result=0
+_conduit_trap_exit() {
+  if [ "$_conduit_emitted_result" = "0" ]; then
+    # Capture the last line of stderr we've seen (stored in _last_stderr).
+    _trap_msg="${_last_stderr:-unknown error}"
+    printf 'ERR 22 bootstrap aborted: %s\n' "$_trap_msg"
+  fi
+}
+trap '_conduit_trap_exit' EXIT
+
+# Helper: print a result line and set the emitted flag so the trap stays quiet.
+_emit() {
+  _conduit_emitted_result=1
+  echo "$@"
+}
+
 # ── Network / install timeout caps ───────────────────────────────────────────
 # All curl calls and installer pipelines are bounded so nothing can cause an
 # indefinite hang that leaves the app stuck on "Starting server…".
@@ -105,7 +128,7 @@ while [ $# -gt 0 ]; do
     --with-ntfy)  _with_ntfy=1; shift ;;
     --no-ntfy)    _with_ntfy=0; shift ;;
     --)           shift; break ;;
-    -*)           echo "ERR 15 unknown flag: $1" >&2; exit 15 ;;
+    -*)           _emit "ERR 15 unknown flag: $1"; exit 15 ;;
     *)            break ;;
   esac
 done
@@ -114,6 +137,9 @@ TOKEN="${1:-}"
 ANTHROPIC="${2:-}"
 OPENAI="${3:-}"
 # arg 4 (legacy image ref) intentionally ignored — no Docker.
+
+# Track last stderr line for the abort trap.
+_last_stderr=""
 
 HOST_PORT="${CONDUIT_HOST_PORT:-1977}"
 BIN_DIR="${CONDUIT_BIN_DIR:-$HOME/.conduit/bin}"
@@ -133,13 +159,59 @@ NTFY_PIDFILE="$STATE_DIR/ntfy.pid"
 NTFY_HEALTH="http://127.0.0.1:$NTFY_PORT/v1/health"
 
 if [ -z "$TOKEN" ] || [ "${#TOKEN}" -lt 16 ]; then
-  echo "ERR 15 token argument required (>=16 chars)"
+  _emit "ERR 15 token argument required (>=16 chars)"
   exit 15
 fi
 
+# ── Preflight checks — surface unsupported boxes BEFORE any download ─────────
+# These run first so the app sees a clear ERR with a reason rather than a
+# cryptic timeout or generic install failure.
+
+# 1. OS check — only Linux and Darwin are supported.
+_pf_os="$(uname -s 2>/dev/null || true)"
+case "$_pf_os" in
+  Linux|Darwin) ;;
+  *)
+    _emit "ERR 19 unsupported OS $_pf_os"
+    exit 19
+    ;;
+esac
+
+# 2. Architecture check — only x86_64/amd64 and aarch64/arm64 are supported.
+_pf_arch="$(uname -m 2>/dev/null || true)"
+case "$_pf_arch" in
+  x86_64|amd64|aarch64|arm64) ;;
+  *)
+    _emit "ERR 19 unsupported arch $_pf_arch"
+    exit 19
+    ;;
+esac
+
+# 3. curl or wget required — if curl is absent but wget is present, set a flag
+#    so the broker download uses wget instead. If neither is available, fail.
+_use_wget=0
 if ! command -v curl >/dev/null 2>&1; then
-  echo "ERR 18 curl not found on host; install curl and reconnect"
-  exit 18
+  if command -v wget >/dev/null 2>&1; then
+    _use_wget=1
+    echo "conduit: curl not found; will use wget for downloads" >&2
+  else
+    _emit "ERR 18 curl and wget not found on host; install curl or wget and reconnect"
+    exit 18
+  fi
+fi
+
+# 4. HOME must be set and writable (BIN_DIR and STATE_DIR must be creatable).
+if [ -z "${HOME:-}" ]; then
+  _emit "ERR 21 cannot write to HOME: \$HOME is not set"
+  exit 21
+fi
+if ! mkdir -p "$BIN_DIR" "$STATE_DIR" 2>/dev/null; then
+  _emit "ERR 21 cannot write to HOME: mkdir $BIN_DIR or $STATE_DIR failed"
+  exit 21
+fi
+if ! [ -w "$BIN_DIR" ] || ! [ -w "$STATE_DIR" ]; then
+  _emit "ERR 21 cannot write to HOME: $BIN_DIR or $STATE_DIR is not writable"
+  exit 21
 fi
 
 # ── Version-aware broker update on the reuse path ────────────────────────
@@ -383,7 +455,7 @@ if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
   fi
-  echo "OK port=$HOST_PORT token=$TOKEN reused=true${_ntfy_suffix}"
+  _emit "OK port=$HOST_PORT token=$TOKEN reused=true${_ntfy_suffix}"
   exit 0
 fi
 
@@ -397,7 +469,7 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null \
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
   fi
-  echo "OK port=$HOST_PORT token=$TOKEN reused=true${_ntfy_suffix}"
+  _emit "OK port=$HOST_PORT token=$TOKEN reused=true${_ntfy_suffix}"
   exit 0
 fi
 
@@ -405,7 +477,7 @@ fi
 # Refuse to bind on top of an unrelated service holding the port.
 if command -v ss >/dev/null 2>&1; then
   if ss -ltn "( sport = :$HOST_PORT )" 2>/dev/null | grep -q ":$HOST_PORT"; then
-    echo "ERR 14 host port $HOST_PORT already in use by another process"
+    _emit "ERR 14 host port $HOST_PORT already in use by another process"
     exit 14
   fi
 fi
@@ -433,26 +505,46 @@ if [ ! -x "$BIN" ]; then
   fi
 
   # Download and pipe install.sh.  IMPORTANT: in POSIX sh a pipe's exit
-  # status is the last command's (sh), NOT curl's.  If curl fails
+  # status is the last command's (sh), NOT curl's.  If curl/wget fails
   # (network error, 404, etc.) sh receives empty stdin and exits 0 —
   # the if-check passes but the binary was never written.  We therefore
   # check that the binary is actually present and executable right after,
   # regardless of the pipe exit status.
   _install_failed=0
-  # shellcheck disable=SC2086
-  if ! curl -fsSL \
-       --connect-timeout "$CURL_CONNECT_TIMEOUT" \
-       --max-time "$CURL_MAX_TIME" \
-       "${_rel_base}/install.sh" \
-       | sh -s -- --bin-dir "$BIN_DIR" ${_version_arg} 1>&2; then
-    _install_failed=1
+  if [ "$_use_wget" = "1" ]; then
+    # wget path: download install.sh to a temp file then pipe to sh.
+    _install_sh_tmp="$(mktemp)"
+    # shellcheck disable=SC2086
+    if wget -q -O "$_install_sh_tmp" "${_rel_base}/install.sh" 2>&1 >&2; then
+      sh "$_install_sh_tmp" -- --bin-dir "$BIN_DIR" ${_version_arg} 1>&2 || _install_failed=1
+    else
+      _install_failed=1
+    fi
+    rm -f "$_install_sh_tmp"
+  else
+    # shellcheck disable=SC2086
+    if ! curl -fsSL \
+         --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+         --max-time "$CURL_MAX_TIME" \
+         "${_rel_base}/install.sh" \
+         | sh -s -- --bin-dir "$BIN_DIR" ${_version_arg} 1>&2; then
+      _install_failed=1
+    fi
   fi
   # Definitive check: assert the binary landed at the expected path.
-  # This catches both an explicit installer failure AND the silent-curl
+  # This catches both an explicit installer failure AND the silent-curl/wget
   # case where sh exited 0 on empty input but wrote nothing.
   if [ "$_install_failed" = "1" ] || [ ! -x "$BIN" ]; then
-    echo "ERR 16 could not install conduit-broker binary (expected: $BIN)"
+    _emit "ERR 16 could not install conduit-broker binary (expected: $BIN)"
     exit 16
+  fi
+
+  # Post-install exec check: verify the binary actually runs on this host.
+  # This catches arch-mismatch, noexec mount, SELinux denial, and similar
+  # issues that the [ -x ] check above cannot detect.
+  if ! "$BIN" --version >/dev/null 2>&1 && ! "$BIN" --help >/dev/null 2>&1; then
+    _emit "ERR 20 broker binary will not execute here (arch mismatch, noexec mount, or security policy)"
+    exit 20
   fi
 
   # Write the version marker so the reuse path knows what's installed.
@@ -756,12 +848,12 @@ while [ "$i" -le 15 ]; do
     # OK reflects "broker is up and connectable" — agent CLI is not required.
     # Agent CLIs are installed on-demand by the broker when a session starts
     # (see broker/internal/session/agentinstall.go).
-    echo "OK port=$HOST_PORT token=$TOKEN reused=false${_ntfy_suffix}"
+    _emit "OK port=$HOST_PORT token=$TOKEN reused=false${_ntfy_suffix}"
     exit 0
   fi
   sleep 1
   i=$((i + 1))
 done
 
-echo "ERR 13 broker did not become healthy within 15s; see $LOGFILE on the host"
+_emit "ERR 13 broker did not become healthy within 15s; see $LOGFILE on the host"
 exit 13

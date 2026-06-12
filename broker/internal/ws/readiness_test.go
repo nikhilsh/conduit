@@ -271,6 +271,7 @@ func TestCapabilitiesReadinessBlock(t *testing.T) {
 			BrokerVersion string          `json:"broker_version"`
 			NodePresent   bool            `json:"node_present"`
 			TmuxPresent   bool            `json:"tmux_present"`
+			GitPresent    bool            `json:"git_present"`
 			Agents        json.RawMessage `json:"agents"`
 		} `json:"readiness"`
 	}
@@ -284,6 +285,10 @@ func TestCapabilitiesReadinessBlock(t *testing.T) {
 	if r.BrokerVersion == "" {
 		t.Errorf("broker_version must be non-empty")
 	}
+
+	// git_present is always serialized (true/false; actual value depends on
+	// whether git is on PATH in the test environment — either value is fine).
+	t.Logf("readiness.git_present=%v", r.GitPresent)
 
 	// agents map must be present (the test registry has claude + codex).
 	var agentMap map[string]struct {

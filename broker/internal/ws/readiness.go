@@ -58,13 +58,14 @@ func SetBrokerVersion(v string) {
 	}
 }
 
-// readinessCache caches the box-global bits (version/node/tmux/cli-present)
+// readinessCache caches the box-global bits (version/node/tmux/git/cli-present)
 // with a ~30s TTL so repeated /api/capabilities calls don't re-stat PATH.
 var readinessCache struct {
 	sync.Mutex
 	built     time.Time
 	nodeOK    bool
 	tmuxOK    bool
+	gitOK     bool
 	cliByName map[string]bool // keyed by adapter.Name
 }
 
@@ -75,6 +76,7 @@ type ReadinessBlock struct {
 	BrokerVersion string                    `json:"broker_version"`
 	NodePresent   bool                      `json:"node_present"`
 	TmuxPresent   bool                      `json:"tmux_present"`
+	GitPresent    bool                      `json:"git_present"`
 	Agents        map[string]AgentReadiness `json:"agents"`
 }
 
@@ -98,6 +100,8 @@ func buildReadiness(mgr *session.Manager, reg registryLister) ReadinessBlock {
 		readinessCache.nodeOK = h.SidecarExpected
 		_, tmuxErr := exec.LookPath("tmux")
 		readinessCache.tmuxOK = tmuxErr == nil
+		_, gitErr := exec.LookPath("git")
+		readinessCache.gitOK = gitErr == nil
 		// cli presence per non-hidden adapter
 		cli := make(map[string]bool)
 		for _, name := range reg.Names() {
@@ -116,6 +120,7 @@ func buildReadiness(mgr *session.Manager, reg registryLister) ReadinessBlock {
 	}
 	nodeOK := readinessCache.nodeOK
 	tmuxOK := readinessCache.tmuxOK
+	gitOK := readinessCache.gitOK
 	cliSnap := readinessCache.cliByName
 	readinessCache.Unlock()
 
@@ -134,6 +139,7 @@ func buildReadiness(mgr *session.Manager, reg registryLister) ReadinessBlock {
 		BrokerVersion: brokerVersion,
 		NodePresent:   nodeOK,
 		TmuxPresent:   tmuxOK,
+		GitPresent:    gitOK,
 		Agents:        agentMap,
 	}
 }

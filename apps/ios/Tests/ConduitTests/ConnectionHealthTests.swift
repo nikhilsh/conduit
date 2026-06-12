@@ -80,12 +80,14 @@ struct ReadinessCheckItemsTests {
         brokerVersion: String = "v0.0.120",
         nodePresent: Bool = true,
         tmuxPresent: Bool = true,
+        gitPresent: Bool = true,
         agents: [String: AgentReadiness] = [:]
     ) -> BrokerReadiness {
         BrokerReadiness(
             brokerVersion: brokerVersion,
             nodePresent: nodePresent,
             tmuxPresent: tmuxPresent,
+            gitPresent: gitPresent,
             agents: agents
         )
     }
@@ -122,12 +124,22 @@ struct ReadinessCheckItemsTests {
         #expect(ids.contains("tmux"))
     }
 
+    @Test func missingGitAppendsAbsentRow() {
+        let items = readinessCheckItems(readiness: makeReadiness(gitPresent: false), descriptors: [:])
+        #expect(items.count == 1)
+        #expect(items[0].id == "git")
+        #expect(items[0].status == .absent)
+    }
+
     @Test func presentInfraProducesNoInfraRows() {
         let items = readinessCheckItems(
-            readiness: makeReadiness(nodePresent: true, tmuxPresent: true),
+            readiness: makeReadiness(nodePresent: true, tmuxPresent: true, gitPresent: true),
             descriptors: [:]
         )
-        #expect(!items.contains(where: { $0.id == "node" || $0.id == "tmux" }))
+        let ids: [String] = items.map(\.id)
+        #expect(!ids.contains("node"))
+        #expect(!ids.contains("tmux"))
+        #expect(!ids.contains("git"))
     }
 
     // MARK: Agent rows

@@ -412,6 +412,8 @@ struct BrokerReadiness: Decodable, Equatable {
     var nodePresent: Bool
     /// tmux found on the broker host.
     var tmuxPresent: Bool
+    /// git found on the broker host (agents need git to clone/commit).
+    var gitPresent: Bool
     /// Per-agent readiness, keyed by the agent name ("claude", "codex", …).
     var agents: [String: AgentReadiness]
 
@@ -419,6 +421,7 @@ struct BrokerReadiness: Decodable, Equatable {
         case brokerVersion = "broker_version"
         case nodePresent   = "node_present"
         case tmuxPresent   = "tmux_present"
+        case gitPresent    = "git_present"
         case agents
     }
 
@@ -426,11 +429,13 @@ struct BrokerReadiness: Decodable, Equatable {
         brokerVersion: String = "dev",
         nodePresent: Bool = true,
         tmuxPresent: Bool = true,
+        gitPresent: Bool = true,
         agents: [String: AgentReadiness] = [:]
     ) {
         self.brokerVersion = brokerVersion
         self.nodePresent   = nodePresent
         self.tmuxPresent   = tmuxPresent
+        self.gitPresent    = gitPresent
         self.agents        = agents
     }
 
@@ -439,6 +444,7 @@ struct BrokerReadiness: Decodable, Equatable {
         brokerVersion = try c.decodeIfPresent(String.self,                     forKey: .brokerVersion) ?? "dev"
         nodePresent   = try c.decodeIfPresent(Bool.self,                       forKey: .nodePresent)   ?? true
         tmuxPresent   = try c.decodeIfPresent(Bool.self,                       forKey: .tmuxPresent)   ?? true
+        gitPresent    = try c.decodeIfPresent(Bool.self,                       forKey: .gitPresent)    ?? true
         agents        = try c.decodeIfPresent([String: AgentReadiness].self,   forKey: .agents)        ?? [:]
     }
 }
@@ -532,6 +538,9 @@ func readinessCheckItems(
     }
     if !readiness.tmuxPresent {
         items.append(ReadinessCheckItem(id: "tmux", label: "tmux", status: .absent, loginProvider: nil))
+    }
+    if !readiness.gitPresent {
+        items.append(ReadinessCheckItem(id: "git", label: "git", status: .absent, loginProvider: nil))
     }
     return items
 }
@@ -1683,6 +1692,7 @@ final class SessionStore {
                     "version": r.brokerVersion,
                     "node": r.nodePresent ? "1" : "0",
                     "tmux": r.tmuxPresent ? "1" : "0",
+                    "git": r.gitPresent ? "1" : "0",
                     "agents": r.agents.keys.sorted().joined(separator: ","),
                 ])
         } else {
@@ -4966,18 +4976,42 @@ private extension SessionStore {
 
     static func describeSsh(_ err: SshError) -> String {
         switch err {
-        case .Dial(let m):                  return "Couldn't reach the host: \(m)"
-        case .Handshake(let m):             return "SSH handshake failed: \(m)"
-        case .HostKeyRejected(let m):       return "Host key rejected: \(m)"
-        case .AuthFailed(let m):            return "Authentication failed: \(m)"
-        case .DockerMissing(let m):         return "Docker is not installed on the server: \(m)"
-        case .DockerPermission(let m):      return "User can't reach Docker: \(m)"
-        case .PortConflict(let m):          return "Server port is already in use: \(m)"
-        case .HarnessStartTimeout(let m):   return "Server took too long to come up: \(m)"
-        case .BootstrapExitCode(let m):     return "Bootstrap script failed: \(m)"
-        case .BootstrapParse(let m):        return "Couldn't parse bootstrap output: \(m)"
-        case .PortForward(let m):           return "Port forward failed: \(m)"
-        case .Io(let m):                    return "I/O error: \(m)"
+        case .Dial(let m):
+            return "Couldn't reach the host: \(m)"
+        case .Handshake(let m):
+            return "SSH handshake failed: \(m)"
+        case .HostKeyRejected(let m):
+            return "Host key rejected: \(m)"
+        case .AuthFailed(let m):
+            return "Authentication failed: \(m)"
+        case .DockerMissing(_):
+            // Dead variant — bare-binary bootstrap never emits this.
+            return "This box isn't supported: Docker-based setup is no longer used."
+        case .DockerPermission(_):
+            // Dead variant — bare-binary bootstrap never emits this.
+            return "This box isn't supported: Docker-based setup is no longer used."
+        case .PortConflict(let m):
+            return "Server port is already in use: \(m)"
+        case .HarnessStartTimeout(let m):
+            return "Server took too long to come up: \(m)"
+        case .BrokerInstallFailed(let m):
+            return "Couldn't download the conduit broker — this box can't reach the release host (firewall/proxy?), or the download failed. Check egress and reconnect. (\(m))"
+        case .CurlMissing(_):
+            return "This box has no curl or wget — install one and reconnect."
+        case .UnsupportedPlatform(let m):
+            return "conduit doesn't support this box (\(m)). Supported: Linux x86_64 / arm64."
+        case .BrokerExecFailed(let m):
+            return "The conduit broker won't run on this box (architecture mismatch, noexec home, or a security policy). This box isn't supported. (\(m))"
+        case .HomeUnwritable(_):
+            return "Can't write to the home directory on this box (read-only or out of disk)."
+        case .BootstrapExitCode(let m):
+            return "Bootstrap script failed: \(m)"
+        case .BootstrapParse(let m):
+            return "Couldn't parse bootstrap output: \(m)"
+        case .PortForward(let m):
+            return "Port forward failed: \(m)"
+        case .Io(let m):
+            return "I/O error: \(m)"
         }
     }
 
@@ -4991,6 +5025,11 @@ private extension SessionStore {
         case .DockerPermission:      return "docker_permission"
         case .PortConflict:          return "port_conflict"
         case .HarnessStartTimeout:   return "harness_start_timeout"
+        case .BrokerInstallFailed:   return "broker_install_failed"
+        case .CurlMissing:           return "curl_missing"
+        case .UnsupportedPlatform:   return "unsupported_platform"
+        case .BrokerExecFailed:      return "broker_exec_failed"
+        case .HomeUnwritable:        return "home_unwritable"
         case .BootstrapExitCode:     return "bootstrap_exit"
         case .BootstrapParse:        return "bootstrap_parse"
         case .PortForward:           return "port_forward"
