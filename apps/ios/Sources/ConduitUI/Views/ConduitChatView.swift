@@ -137,6 +137,12 @@ extension ConduitUI {
         /// feedback, round 4: "I tap a reply, it doesn't seem to send, I
         /// tap another and it sends again").
         @State private var answeredPendingIDs: Set<String> = []
+        /// Content fingerprints of answered pending-input cards: prompt +
+        /// sorted options joined with "|". Supplements `answeredPendingIDs`
+        /// so a broker re-emitting the SAME pending card with a fresh `id`
+        /// (after an app reconnect) still renders locked / "Sent" rather
+        /// than presenting a duplicate interactive card.
+        @State private var answeredPendingFingerprints: Set<String> = []
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
@@ -504,7 +510,8 @@ extension ConduitUI {
                                         event: event,
                                         isContinuation: continuation(in: rows, at: idx, role: event.role),
                                         sessionID: session.id,
-                                        pendingAnswered: answeredPendingIDs.contains(event.id),
+                                        pendingAnswered: answeredPendingIDs.contains(event.id)
+                                            || answeredPendingFingerprints.contains(pendingFingerprint(event)),
                                         streamRevision: streamRevision(for: event.id),
                                         appearanceRevision: appearanceRevision,
                                         onQuickReply: { reply in
@@ -512,6 +519,7 @@ extension ConduitUI {
                                         },
                                         onPendingAnswered: {
                                             answeredPendingIDs.insert(event.id)
+                                            answeredPendingFingerprints.insert(pendingFingerprint(event))
                                         }
                                     )
                                     // Perf (litter-parity): skip re-rendering a
@@ -955,6 +963,18 @@ extension ConduitUI {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Scroll to latest message")
+        }
+
+        // MARK: Pending-input helpers
+
+        /// Content fingerprint for a pending-input event: prompt + sorted
+        /// options, joined with "|". Used as a dedupe key that survives broker
+        /// re-emission of the same pending card under a fresh `id`. Pure so the
+        /// two `answeredPendingFingerprints` call sites can both use it.
+        private func pendingFingerprint(_ event: ConversationItem) -> String {
+            let opts = event.pendingOptions.sorted().joined(separator: ",")
+            let prompt = event.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "\(prompt)|\(opts)"
         }
 
         // MARK: Suggested quick-replies

@@ -2770,12 +2770,96 @@ final class SessionStore {
         return agentDescriptors[assistant.lowercased()]?.supports.steer ?? false
     }
 
+    /// True when the session is blocked on a pending AskUserQuestion: the last
+    /// non-user item in the typed conversation log is an unanswered
+    /// `pending_input` kind. Used to bypass the turn-queue gate so the answer
+    /// reaches the broker immediately instead of deadlocking in the queue.
+    func hasPendingAsk(sessionID: String) -> Bool {
+        let items = conversationLog[sessionID] ?? []
+        guard let last = items.last(where: { $0.role.lowercased() != "user" }) else { return false }
+        return last.kind.lowercased() == "pending_input"
+    }
+
+    /// Deliver an elicitation answer DIRECTLY, bypassing the `isTurnActive`
+    /// queue gate. The broker's `sendChat` handler already routes a message
+    /// that arrives while a `pending_ask` is active to `takePendingAsk` /
+    /// `encodeAskAnswer`, which resumes the blocked turn. Trapping the answer
+    /// in `sendChatQueued` instead causes a deadlock: the turn never ends
+    /// (result never arrives), so `flushQueuedOnTurnComplete` never fires.
+    ///
+    /// This path intentionally skips slash-command routing, optimistic echo
+    /// (the pending-input card is already the visual placeholder), and the
+    /// normal `pendingChats` queue -- it just registers a pending entry and
+    /// immediately attempts WS delivery, the same as the bottom half of
+    /// `sendChat` when the turn is idle.
+    func answerPendingInput(sessionID: String, message: String) {
+        Telemetry.breadcrumb("chat", "answer-pending-input",
+            data: ["session": sessionID, "chars": "\(message.count)"])
+        // Anchor the echo into the broker clock domain (same approach as
+        // `sendChat`) so it sorts ahead of the agent's reply regardless of
+        // device-vs-broker clock drift.
+        let lastKnownEpoch = ((conversationLog[sessionID] ?? []).map { $0.ts }
+            + (chatLog[sessionID] ?? []).map { $0.ts })
+            .map { conduitConversationTsEpoch($0) }
+            .filter { $0 < .greatestFiniteMagnitude }
+            .max()
+        let startedEpoch = (statusBySession[sessionID]?.startedAt)
+            .map { conduitConversationTsEpoch($0) }
+            .flatMap { $0 < .greatestFiniteMagnitude ? $0 : nil }
+        let echoEpoch = lastKnownEpoch.map { $0 + 0.001 }
+            ?? startedEpoch.map { $0 + 0.001 }
+            ?? Date().timeIntervalSince1970
+        let now = conduitConversationTsString(epoch: echoEpoch)
+        let localID = "local-\(UUID().uuidString)"
+        // Optimistic echo so the user sees their answer immediately.
+        let item = ConversationItem(
+            id: localID,
+            role: "user",
+            kind: "message",
+            status: "pending",
+            content: message,
+            ts: now,
+            files: [],
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: [],
+            sourceAgent: nil,
+            targetAgent: nil,
+            taskText: nil,
+            resultSummary: nil,
+            planSteps: []
+        )
+        conversationLog[sessionID, default: []].append(item)
+        let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
+        chatLog[sessionID, default: []].append(localEvent)
+        quickReplies[sessionID] = nil
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
+        }
+        pendingChats.enqueue(sessionID: sessionID, localID: localID, message: message, ts: now)
+        attemptDeliver(sessionID: sessionID, localID: localID, message: message)
+    }
+
     func sendChat(sessionID: String, message: String) {
         // Slash-command routing: intercept recognised `/`-commands before
         // they reach the agent. Pass-through commands (Claude only) fall
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if handleSlashCommand(sessionID: sessionID, message: message) { return }
+
+        // ELICITATION BYPASS: if the session is blocked on a pending
+        // AskUserQuestion, the answer MUST bypass the turn-queue gate and
+        // reach the broker immediately. Routing through `sendChatQueued`
+        // here deadlocks: the answer is held until the turn ends, but the
+        // turn can only end once the answer is delivered.
+        if hasPendingAsk(sessionID: sessionID) {
+            answerPendingInput(sessionID: sessionID, message: message)
+            return
+        }
 
         // QUEUED-NEXT GATE: if a turn is active, queue the message in the
         // "Queued Next" panel instead of delivering immediately. For codex
