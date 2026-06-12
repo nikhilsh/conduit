@@ -104,6 +104,7 @@ import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.PendingChatKind
 import sh.nikhil.conduit.PinnedContext
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.sortedByConversationTs
 import sh.nikhil.conduit.stripPendingSentinel

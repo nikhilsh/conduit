@@ -437,7 +437,7 @@ fun SettingsScreen(
                     fontFamily = neon.mono,
                     fontSize = 10.5.sp,
                     color = neon.textFaint,
-                    modifier = Modifier.padding(horizontal = 16.dp, top = 10.dp),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
                 )
                 FeatureFlags.optionalAgents.forEachIndexed { idx, agent ->
                     if (idx > 0) SettingsDivider()

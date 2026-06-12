@@ -870,6 +870,7 @@ fun HomeScreen(
  * boxes (null = not yet probed). Active box reads harness state; others read
  * the probe result.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomeBoxRow(
     neon: NeonTheme,
