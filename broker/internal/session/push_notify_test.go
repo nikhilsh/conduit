@@ -180,6 +180,87 @@ func TestPushNotifyPendingInput_NoClient(t *testing.T) {
 	if p.SessionID != "sess-3" {
 		t.Errorf("session id = %q, want %q", p.SessionID, "sess-3")
 	}
+	if p.Category != "input" {
+		t.Errorf("category = %q, want \"input\" for generic pending input", p.Category)
+	}
+}
+
+// fakeApprovalBackend is a minimal chatBackend + approvalAnswerer +
+// approvalSummarizer for testing the approval push path.
+type fakeApprovalBackend struct {
+	summary  string
+	answered string // set when AnswerApproval is called
+}
+
+func (f *fakeApprovalBackend) Send(_ string) error { return nil }
+func (f *fakeApprovalBackend) Interrupt() error    { return nil }
+func (f *fakeApprovalBackend) Close() error        { return nil }
+func (f *fakeApprovalBackend) TurnActive() bool    { return true }
+func (f *fakeApprovalBackend) PendingApprovalSummary() (string, bool) {
+	if f.summary == "" {
+		return "", false
+	}
+	return f.summary, true
+}
+func (f *fakeApprovalBackend) AnswerApproval(msg string) bool {
+	if f.summary == "" {
+		return false
+	}
+	f.answered = msg
+	f.summary = "" // consume
+	return true
+}
+
+// TestPushNotifyPendingInput_ApprovalCategory verifies that when a codex
+// approval is pending, the push carries Category="approval" and the summary
+// as the body (not the generic "Needs your input").
+func TestPushNotifyPendingInput_ApprovalCategory(t *testing.T) {
+	n := &recordingNotifier{}
+	s := bareSession("sess-approval-cat")
+	s.SetPushNotifier(n, "broker")
+
+	// Wire a fake backend that reports an approval summary.
+	backend := &fakeApprovalBackend{summary: "git commit -am 'wip'"}
+	s.mu.Lock()
+	s.chat = backend
+	s.mu.Unlock()
+
+	s.maybeNotifyPendingInput()
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification, got %d", n.count())
+	}
+	p := n.last()
+	if p.Category != "approval" {
+		t.Errorf("category = %q, want \"approval\"", p.Category)
+	}
+	if p.Body != "git commit -am 'wip'" {
+		t.Errorf("body = %q, want the approval summary", p.Body)
+	}
+	if p.SessionID != "sess-approval-cat" {
+		t.Errorf("session id = %q, want sess-approval-cat", p.SessionID)
+	}
+}
+
+// TestTruncatePushBody verifies the rune-safe truncation helper.
+func TestTruncatePushBody(t *testing.T) {
+	cases := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"hello", 10, "hello"},
+		{"hello world", 5, "hello…"},
+		{"αβγδε", 3, "αβγ…"},
+		{"", 10, ""},
+		{"exact", 5, "exact"},
+	}
+	for _, tc := range cases {
+		got := truncatePushBody(tc.in, tc.max)
+		if got != tc.want {
+			t.Errorf("truncatePushBody(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
+		}
+	}
 }
 
 // TestPushNotifyPendingInput_WithClient verifies that no push fires when a

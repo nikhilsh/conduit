@@ -552,6 +552,60 @@ func (s *Server) servePushTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// approvalResolveRequest is the body for POST /api/session/approval.
+type approvalResolveRequest struct {
+	SessionID string `json:"session_id"`
+	Decision  string `json:"decision"` // "approve" or "deny"
+}
+
+// serveSessionApproval handles POST /api/session/approval — resolves a pending
+// approval from a push notification action without requiring the app to open.
+//
+// Wire contract:
+//
+//	POST /api/session/approval
+//	Authorization: Bearer <token>   (or ?token=<token>)
+//	{"session_id":"<id>","decision":"approve"|"deny"}
+//
+//	200 {"ok":true}           — approval found and resolved
+//	400 {"error":…}           — bad JSON body or invalid decision
+//	401 {"error":…}           — missing/bad token
+//	404 {"error":"no_pending_approval","message":"…"} — session unknown or nothing pending
+func (s *Server) serveSessionApproval(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req approvalResolveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	if req.SessionID == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "session_id is required")
+		return
+	}
+	req.Decision = strings.TrimSpace(req.Decision)
+	if req.Decision != "approve" && req.Decision != "deny" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_decision", "decision must be \"approve\" or \"deny\"")
+		return
+	}
+	sess, ok := s.Sessions.Get(req.SessionID)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "no_pending_approval", "session not found or no pending approval")
+		return
+	}
+	if !sess.ResolveApproval(req.Decision) {
+		writeAPIError(w, http.StatusNotFound, "no_pending_approval", "no pending approval for this session")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func newSessionID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

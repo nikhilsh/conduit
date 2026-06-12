@@ -1038,6 +1038,63 @@ func (s *Session) InterruptTurn() bool {
 	return true
 }
 
+// ResolveApproval resolves a pending approval from outside the chat (e.g.
+// from the POST /api/session/approval endpoint hit via a push notification
+// action, without the app being open). decision must be "approve" or "deny".
+//
+// For codex app-server approvals it routes to AnswerApproval using the
+// standard label mapping (approve→"Approve", deny→"Deny") so the same
+// codexApprovalDecisionFor logic determines the JSON-RPC decision string.
+// For claude AskUserQuestion pending asks it delivers the answer through the
+// same encodeAskAnswer path as SendChat.
+//
+// Returns true when a pending approval was found and resolved; false when
+// nothing is pending (the approval was already answered, timed out, or the
+// session has no structured backend). A false return means the endpoint
+// should return 404 "no pending approval" — idempotent by construction.
+func (s *Session) ResolveApproval(decision string) bool {
+	// Determine the label to pass through the standard answer path.
+	var label string
+	switch decision {
+	case "approve":
+		label = codexApprovalApproveLabel
+	default:
+		label = codexApprovalDenyLabel
+	}
+
+	// Codex app-server path: try AnswerApproval first. It returns true only
+	// when a pending approval was found and consumed.
+	s.mu.Lock()
+	chat := s.chat
+	ask := s.pendingAsk
+	s.mu.Unlock()
+
+	if ar, ok := chat.(approvalAnswerer); ok {
+		if ar.AnswerApproval(label) {
+			return true
+		}
+	}
+
+	// Claude AskUserQuestion path: deliver the answer through the same
+	// encodeAskAnswer path that SendChat uses.
+	if ask != nil {
+		s.mu.Lock()
+		cur := s.pendingAsk
+		s.pendingAsk = nil
+		s.mu.Unlock()
+		if cur != nil {
+			if cur.timer != nil {
+				cur.timer.Stop()
+			}
+			if line, encErr := encodeAskAnswer(cur.requestID, cur.input, label); encErr == nil {
+				_ = cur.cp.SendRaw(line)
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
 		// Flag the teardown FIRST: killing the PTY below wakes drain()

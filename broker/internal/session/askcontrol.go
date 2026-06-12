@@ -231,6 +231,30 @@ type approvalCardResurfacer interface {
 	PendingApprovalCard() (string, bool)
 }
 
+// approvalSummarizer is the OPTIONAL backend capability that exposes the
+// human-readable summary of an outstanding approval request (codex app-server
+// only — command line or file-change description). Used by the push-notify
+// path to populate the "approval" category notification body.
+type approvalSummarizer interface {
+	PendingApprovalSummary() (string, bool)
+}
+
+// PendingApprovalSummaryForPush returns the human-readable summary and
+// isApproval=true when the session is blocked on a codex approval-type
+// server request (command/file-change), so the push notification can carry
+// an informative body and the "approval" category. Returns ("", false) when
+// nothing is pending, or when the pending kind is AskUserQuestion-style (not
+// a codex approval), so callers fall back to the generic "input" category.
+func (s *Session) PendingApprovalSummaryForPush() (summary string, isApproval bool) {
+	s.mu.Lock()
+	chat := s.chat
+	s.mu.Unlock()
+	if as, ok := chat.(approvalSummarizer); ok {
+		return as.PendingApprovalSummary()
+	}
+	return "", false
+}
+
 // takePendingAsk atomically consumes the stashed request, if any.
 func (s *Session) takePendingAsk() *pendingAsk {
 	s.mu.Lock()
