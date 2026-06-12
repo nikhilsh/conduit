@@ -5,7 +5,7 @@ the detailed forward-looking specs live in the active `PLAN-*.md` docs (linked
 below), and the frozen wire/lifecycle contracts live in their own references.
 Completed plans are archived under `docs/archive/` once their work ships.
 
-Last updated: 2026-06-11 (v0.0.140).
+Last updated: 2026-06-12 (v0.0.148).
 
 **Lifecycle:** [ROADMAP.md](ROADMAP.md) (backlog) →
 [IN-PROGRESS.md](IN-PROGRESS.md) (building) →
@@ -24,6 +24,16 @@ For wire-level / lifecycle / adapter detail, read the frozen contracts:
 ---
 
 ## Backlog
+
+### Next
+
+- **Cross-box agent OAuth sync** — sign an agent in (e.g. claude OAuth) on one
+  box and have that credential propagate to every paired box, with refresh
+  rebroadcast, so you don't re-authenticate per box. Shape: fan the agent OAuth
+  blob to all boxes on sign-in + rebroadcast on token refresh. Queued as the
+  next feature after the v0.0.148 reliability/onboarding batch. (Distinct from
+  the Deferred per-identity readiness/push refactor below — this is
+  credential propagation across a single owner's boxes, not multi-tenant.)
 
 ### Later
 
