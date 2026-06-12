@@ -27,6 +27,7 @@ extension ConduitUI {
         @State private var showBoxes = false
         @State private var showSearch = false
         @State private var showAgentPicker = false
+        @State private var showOnboarding = false
 
         var body: some View {
             @Bindable var store = store
@@ -43,7 +44,14 @@ extension ConduitUI {
                 .padding(.top, 8)
             }
             .sheet(isPresented: $showSettings) {
-                ConduitUI.SettingsView()
+                ConduitUI.SettingsView(onOpenOnboarding: {
+                    showSettings = false
+                    showOnboarding = true
+                })
+            }
+            .fullScreenCover(isPresented: $showOnboarding) {
+                ConduitUI.OnboardingView(onFinish: { showOnboarding = false })
+                    .environment(store)
             }
             .sheet(isPresented: $showAddServer) {
                 ConduitUI.AddServerSheet()
