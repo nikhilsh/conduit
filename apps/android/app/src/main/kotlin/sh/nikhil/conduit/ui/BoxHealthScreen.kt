@@ -116,7 +116,10 @@ fun BoxHealthScreen(
 
     val isActive = endpoint == server.endpoint
     val connected = isActive && harness.canIssueCommands
-    val sessionsOnBox = if (isActive) sessions else emptyList()
+    val sessionBox by store.sessionBox.collectAsState()
+    // Fix 2: filter to sessions stamped with this box's id so sessions from
+    // other previously-connected boxes don't bleed into this view.
+    val sessionsOnBox = if (isActive) sessions.filter { sessionBox[it.id] == server.id } else emptyList()
 
     // Probe results for THIS box (fetched on open). null = probe not
     // finished or box doesn't answer — dependent UI stays hidden.
@@ -171,7 +174,9 @@ fun BoxHealthScreen(
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(server.name, fontFamily = neon.sans, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = neon.text, maxLines = 1)
-                Text(server.endpoint.displayHost, fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint, maxLines = 1)
+                // Fix 1: for SSH-tunneled boxes the endpoint is a loopback; show real ssh host:port.
+                val subtitleHost = server.ssh?.let { "${it.host}:${it.port}" } ?: server.endpoint.displayHost
+                Text(subtitleHost, fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint, maxLines = 1)
             }
             Row(
                 modifier = Modifier

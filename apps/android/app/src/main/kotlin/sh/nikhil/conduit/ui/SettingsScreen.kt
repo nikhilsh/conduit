@@ -50,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,7 +71,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
 import android.content.Intent
 import android.net.Uri
+import sh.nikhil.conduit.AgentReadiness
 import sh.nikhil.conduit.AppearanceStore
+import sh.nikhil.conduit.BrokerReadiness
 import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
@@ -127,6 +130,7 @@ fun SettingsScreen(
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
+    val brokerReadiness by store.brokerReadiness.collectAsState()
     val sessions by store.sessions.collectAsState()
     val statuses by store.statusBySession.collectAsState()
     val fontFamily by appearance.fontFamily.collectAsState()
@@ -140,6 +144,17 @@ fun SettingsScreen(
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val neonGlow by appearance.neonGlow.collectAsState()
     val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
+
+    // Fix 3 breadcrumb: log inferred installed state from brokerReadiness whenever
+    // it arrives. Source: readiness.agents[key].cliPresent from /api/capabilities.
+    // null brokerReadiness = old broker or fetch not yet completed.
+    LaunchedEffect(brokerReadiness) {
+        val r = brokerReadiness ?: return@LaunchedEffect
+        val summary = r.agents.entries.sortedBy { it.key }
+            .joinToString(",") { "${it.key}=${if (it.value.cliPresent) "installed" else "MISSING"}" }
+        Telemetry.breadcrumb("settings", "agent installed state (from readiness)",
+            mapOf("agents" to summary))
+    }
 
     var showAddServer by remember { mutableStateOf(false) }
     var showServerSwitcher by remember { mutableStateOf(false) }
@@ -182,6 +197,7 @@ fun SettingsScreen(
                 harness = harness,
                 savedServers = savedServers,
                 accounts = agentAccounts,
+                brokerReadiness = brokerReadiness,
                 onSwitchServer = { showServerSwitcher = true },
                 onManage = { manageTarget = it },
                 onSignIn = { showAgentLogin = true },
@@ -585,6 +601,7 @@ private fun ConnectionSection(
     harness: HarnessState,
     savedServers: List<SavedServer>,
     accounts: List<sh.nikhil.conduit.auth.AgentAccountStatus>,
+    brokerReadiness: BrokerReadiness?,
     onSwitchServer: () -> Unit,
     onManage: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
     onSignIn: () -> Unit,
@@ -595,6 +612,13 @@ private fun ConnectionSection(
     val isDefault = savedServers.firstOrNull { it.isDefault }?.endpoint == endpoint
     val subtitle = "${if (harness.isReachable) "Live" else harness.badgeLabel} · " +
         if (isDefault) "default server" else "server"
+    // Fix 1: show the real box identity (SavedServer.name, e.g. "root@185.201.8.184")
+    // as the primary label instead of the raw endpoint (which can be a loopback tunnel).
+    val primaryLabel = if (endpoint.isComplete) {
+        savedServers.firstOrNull { it.endpoint == endpoint }?.name ?: endpoint.displayHost
+    } else {
+        "Not paired"
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionEyebrow("Connection")
         Column(
@@ -608,7 +632,7 @@ private fun ConnectionSection(
                 leadingContent = { Icon(Icons.Filled.Apps, contentDescription = null, tint = neon.accent) },
                 headlineContent = {
                     Text(
-                        if (endpoint.isComplete) endpoint.displayHost else "Not paired",
+                        primaryLabel,
                         color = neon.text,
                         fontFamily = neon.sans,
                         fontWeight = FontWeight.SemiBold,
@@ -645,7 +669,13 @@ private fun ConnectionSection(
             accounts.forEach { account ->
                 AgentAccountRow(
                     account = account,
-                    onClick = { if (account.signedIn) onManage(account) else onSignIn() },
+                    agentReadiness = brokerReadiness?.agents?.get(account.agent),
+                    onClick = {
+                        val notInstalled = brokerReadiness?.agents?.get(account.agent)?.cliPresent == false
+                        if (!notInstalled) {
+                            if (account.signedIn) onManage(account) else onSignIn()
+                        }
+                    },
                 )
                 HorizontalDivider(modifier = Modifier.padding(start = 60.dp), color = neon.border)
             }
@@ -962,14 +992,30 @@ private fun SectionEyebrow(title: String) {
     )
 }
 
-/** One agent's account row inside [ConnectionSection]. */
+/**
+ * One agent's account row inside [ConnectionSection].
+ * Fix 3: uses [agentReadiness].cliPresent to distinguish "not installed on
+ * this box" from "signed out". Inferred from readiness.agents[key] in
+ * /api/capabilities. A null agentReadiness means the broker is old or the
+ * fetch has not completed — no warning shown.
+ */
 @Composable
 private fun AgentAccountRow(
     account: sh.nikhil.conduit.auth.AgentAccountStatus,
+    agentReadiness: sh.nikhil.conduit.AgentReadiness?,
     onClick: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     val tint = neonAgentColor(account.agent, neon)
+    // Derive installed/ready state from broker readiness. null = unknown (old broker).
+    val notInstalled = agentReadiness?.cliPresent == false
+    val ready = !notInstalled && account.signedIn && agentReadiness?.signedIn == true
+    val (statusText, statusColor) = when {
+        notInstalled -> "not installed on this box" to neon.yellow
+        ready -> "ready" to neon.green
+        account.signedIn -> "signed in" to neon.green
+        else -> "signed out" to neon.textFaint
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -996,45 +1042,49 @@ private fun AgentAccountRow(
                     fontSize = 15.sp,
                     color = neon.text,
                 )
-                account.planLabel?.let { plan ->
-                    Text(
-                        plan,
-                        fontFamily = neon.mono,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 9.sp,
-                        letterSpacing = 0.6.sp,
-                        color = tint,
-                        modifier = Modifier
-                            .background(tint.copy(alpha = 0.14f), RoundedCornerShape(50))
-                            .border(1.dp, tint.copy(alpha = 0.4f), RoundedCornerShape(50))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
+                // Hide plan badge when the agent is not installed (meaningless).
+                if (!notInstalled) {
+                    account.planLabel?.let { plan ->
+                        Text(
+                            plan,
+                            fontFamily = neon.mono,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.sp,
+                            letterSpacing = 0.6.sp,
+                            color = tint,
+                            modifier = Modifier
+                                .background(tint.copy(alpha = 0.14f), RoundedCornerShape(50))
+                                .border(1.dp, tint.copy(alpha = 0.4f), RoundedCornerShape(50))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                val statusColor = if (account.signedIn) neon.green else neon.textFaint
                 Box(Modifier.size(5.dp).background(statusColor, CircleShape))
                 Text(
-                    if (account.signedIn) "signed in" else "signed out",
+                    statusText,
                     fontFamily = neon.mono,
                     fontSize = 10.5.sp,
                     color = statusColor,
                 )
             }
         }
-        Text(
-            if (account.signedIn) "Manage" else "Sign in",
-            fontFamily = neon.sans,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = if (account.signedIn) neon.textDim else neon.accent,
-        )
-        Icon(
-            Icons.Filled.ChevronRight,
-            contentDescription = null,
-            tint = neon.textFaint,
-            modifier = Modifier.size(16.dp),
-        )
+        if (!notInstalled) {
+            Text(
+                if (account.signedIn) "Manage" else "Sign in",
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                color = if (account.signedIn) neon.textDim else neon.accent,
+            )
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = neon.textFaint,
+                modifier = Modifier.size(16.dp),
+            )
+        }
     }
 }
 

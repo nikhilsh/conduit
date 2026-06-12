@@ -82,10 +82,13 @@ extension ConduitUI {
         private var isActive: Bool { store.endpoint == server.endpoint }
         private var connected: Bool { isActive && store.harness.canIssueCommands }
 
-        // Sessions belong to the connected endpoint; only the active box can
-        // enumerate them.
+        // Sessions belong to this specific box, stamped by their sessionBox map
+        // entry (SavedServer.id). Only the active box can have live sessions;
+        // filter by stamp to exclude sessions from other boxes that were connected
+        // before (Fix 2 — cross-box sessions appeared under wrong box header).
         private var sessionsOnBox: [ProjectSession] {
-            isActive ? store.sessions : []
+            guard isActive else { return [] }
+            return store.sessions.filter { store.sessionBox[$0.id] == server.id }
         }
 
         private var statusText: (String, Color) {
@@ -166,11 +169,21 @@ extension ConduitUI {
                         .foregroundStyle(neon.text)
                         .neonTextGlow(neon.textGlow)
                         .lineLimit(1)
-                    Text(server.endpoint.displayHost)
-                        .font(neon.mono(11))
-                        .foregroundStyle(neon.textFaint)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    // Fix 1: for SSH-tunneled boxes the endpoint is a loopback
+                    // address; show the real ssh host:port instead.
+                    if let ssh = server.ssh {
+                        Text("\(ssh.host):\(ssh.port)")
+                            .font(neon.mono(11))
+                            .foregroundStyle(neon.textFaint)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text(server.endpoint.displayHost)
+                            .font(neon.mono(11))
+                            .foregroundStyle(neon.textFaint)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 5) {
