@@ -28,8 +28,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
+
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -43,6 +45,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+import sh.nikhil.conduit.ApprovalResolvePhase
 import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.firstUserMessageOf
@@ -84,10 +88,13 @@ fun ApprovalsScreen(
     onOpenSession: (String) -> Unit = {},
     onDismiss: () -> Unit = {},
 ) {
+
     val neon = LocalNeonTheme.current
     val sessions by store.sessions.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
     val displayNames by store.displayNames.collectAsState()
+    val resolvePhases by store.approvalResolve.collectAsState()
+    val autoApprove by store.autoApproveSessions.collectAsState()
 
     // Build the queue from the live store the same way the Home banner is:
     // each session's last transcript item gates inclusion via the shared
@@ -178,8 +185,18 @@ fun ApprovalsScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
+
                     items(queue, key = { it.id }) { item ->
-                        ApprovalCard(item, neon, onOpenSession)
+                        ApprovalCard(
+                            item = item,
+                            neon = neon,
+                            phase = resolvePhases[item.id] ?: ApprovalResolvePhase.Idle,
+                            autoApprove = item.id in autoApprove,
+                            onApprove = { store.resolveApprovalInApp(item.id, "approve") },
+                            onDeny = { store.resolveApprovalInApp(item.id, "deny") },
+                            onToggleAuto = { enabled -> store.setAutoApprove(item.id, enabled) },
+                            onOpenSession = onOpenSession,
+                        )
                     }
                 }
             }
@@ -215,9 +232,20 @@ private fun EmptyApprovals(neon: NeonTheme) {
     }
 }
 
+
 @Composable
-private fun ApprovalCard(item: ApprovalItem, neon: NeonTheme, onOpenSession: (String) -> Unit) {
+private fun ApprovalCard(
+    item: ApprovalItem,
+    neon: NeonTheme,
+    phase: ApprovalResolvePhase,
+    autoApprove: Boolean,
+    onApprove: () -> Unit,
+    onDeny: () -> Unit,
+    onToggleAuto: (Boolean) -> Unit,
+    onOpenSession: (String) -> Unit,
+) {
     val tint = neonAgentColor(item.agent, neon)
+    val resolving = phase == ApprovalResolvePhase.Resolving
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -299,14 +327,15 @@ private fun ApprovalCard(item: ApprovalItem, neon: NeonTheme, onOpenSession: (St
             }
         }
 
-        // Actions — Approve · Deny both open the chat (no programmatic
-        // approve endpoint); the trailing bubble opens chat too.
+
+        // Actions — Approve / Deny resolve over HTTP (POST /api/session/approval);
+        // the trailing bubble opens chat. Disabled while a resolve is in flight.
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxWidth()) {
-            ApprovalActionButton("Approve", Icons.Default.Check, neon.green, filled = true, neon = neon, modifier = Modifier.weight(1f)) {
-                onOpenSession(item.id)
+            ApprovalActionButton("Approve", Icons.Default.Check, neon.green, filled = true, neon = neon, enabled = !resolving, modifier = Modifier.weight(1f)) {
+                onApprove()
             }
-            ApprovalActionButton("Deny", Icons.Default.Close, neon.textDim, filled = false, neon = neon, modifier = Modifier.weight(1f)) {
-                onOpenSession(item.id)
+            ApprovalActionButton("Deny", Icons.Default.Close, neon.textDim, filled = false, neon = neon, enabled = !resolving, modifier = Modifier.weight(1f)) {
+                onDeny()
             }
             Box(
                 modifier = Modifier
@@ -318,25 +347,84 @@ private fun ApprovalCard(item: ApprovalItem, neon: NeonTheme, onOpenSession: (St
                 Icon(Icons.AutoMirrored.Filled.Chat, "Open chat", tint = neon.accent, modifier = Modifier.size(16.dp))
             }
         }
+
+        // Honest resolve state — never a fabricated outcome. Stale = broker had
+        // nothing pending (open the chat); Failed = couldn't reach the box.
+        when (phase) {
+            ApprovalResolvePhase.Resolving ->
+                ResolveStatusLine("Resolving…", neon.textDim, neon)
+            ApprovalResolvePhase.Resolved ->
+                ResolveStatusLine("Resolved — agent continuing", neon.green, neon)
+            ApprovalResolvePhase.Stale ->
+                ResolveStatusLine("Nothing pending — open the chat", neon.textDim, neon)
+            ApprovalResolvePhase.Failed ->
+                ResolveStatusLine("Couldn't reach the box — try again or open the chat", neon.red, neon)
+            ApprovalResolvePhase.Idle -> Unit
+        }
+
+        // Per-session "auto-approve in this session" toggle (local, in-memory).
+        // While on AND connected, incoming approvals auto-resolve with a quiet
+        // audited transcript line.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Auto-approve in this session",
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.5.sp,
+                    color = neon.text,
+                )
+                Text(
+                    "Resolves future approvals here automatically while connected.",
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = neon.textDim,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = autoApprove,
+                onCheckedChange = onToggleAuto,
+            )
+        }
     }
 }
 
 @Composable
+private fun ResolveStatusLine(text: String, color: Color, neon: NeonTheme) {
+    Text(
+        text,
+        fontFamily = neon.mono,
+        fontSize = 11.sp,
+        color = color,
+    )
+}
+
+@Composable
+
 private fun ApprovalActionButton(
     label: String,
     icon: ImageVector,
     tint: Color,
     filled: Boolean,
     neon: NeonTheme,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val alpha = if (enabled) 1f else 0.5f
     Box(
         modifier = modifier
             .height(40.dp)
-            .background(if (filled) tint else tint.copy(alpha = 0.12f), RoundedCornerShape(11.dp))
-            .border(1.dp, if (filled) Color.Transparent else tint.copy(alpha = 0.3f), RoundedCornerShape(11.dp))
-            .clickable(onClick = onClick),
+            .background(
+                (if (filled) tint else tint.copy(alpha = 0.12f)).copy(alpha = if (filled) alpha else 0.12f * alpha),
+                RoundedCornerShape(11.dp),
+            )
+            .border(1.dp, if (filled) Color.Transparent else tint.copy(alpha = 0.3f * alpha), RoundedCornerShape(11.dp))
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Row(

@@ -53,7 +53,10 @@ class ConduitFcmService : FirebaseMessagingService() {
         val data = message.data
         val notification = message.notification
 
+
         val sessionId = data["session_id"]?.takeIf { it.isNotBlank() }
+        val category = data["category"]?.takeIf { it.isNotBlank() }
+        val isApproval = category.equals("approval", ignoreCase = true)
 
         val title = notification?.title
             ?.takeIf { it.isNotBlank() }
@@ -64,16 +67,22 @@ class ConduitFcmService : FirebaseMessagingService() {
             ?: data["body"]?.takeIf { it.isNotBlank() }
             ?: "A session needs your attention"
 
+
         Telemetry.breadcrumb(
             "push", "FCM onMessageReceived",
             mapOf(
                 "hasSessionId" to (sessionId != null).toString(),
                 "hasNotification" to (notification != null).toString(),
+                "category" to (category ?: "none"),
             ),
         )
 
         ensureNotificationChannel()
-        showNotification(title, body, sessionId)
+        if (isApproval && sessionId != null) {
+            showApprovalNotification(title, body, sessionId)
+        } else {
+            showNotification(title, body, sessionId)
+        }
     }
 
     /**
@@ -140,9 +149,76 @@ class ConduitFcmService : FirebaseMessagingService() {
                 "push", "FCM notification shown",
                 mapOf("sessionId" to (sessionId ?: "none")),
             )
+
         } catch (e: SecurityException) {
             // POST_NOTIFICATIONS permission not yet granted.
             Telemetry.breadcrumb("push", "FCM notification blocked: missing POST_NOTIFICATIONS permission")
         }
+    }
+
+    /**
+     * An actionable approval push (Fix 9): an agent is blocked on an approval
+     * and [body] is the summary. Adds Approve / Deny action buttons backed by
+     * PendingIntents to [ApprovalActionReceiver], which resolves over HTTP and
+     * rewrites this same notification with the outcome. The default tap still
+     * deep-links into the session.
+     */
+    private fun showApprovalNotification(title: String, body: String, sessionId: String) {
+        val notificationId = sessionId.hashCode()
+
+        val tapIntent = Intent(this, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            putExtra(ConduitUnifiedPushReceiver.EXTRA_SESSION_ID, sessionId)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val activityFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        val tapPending = PendingIntent.getActivity(this, notificationId, tapIntent, activityFlags)
+
+        val approvePending = approvalActionIntent(
+            sessionId, ApprovalActionReceiver.DECISION_APPROVE, notificationId, requestCode = notificationId * 31 + 1,
+        )
+        val denyPending = approvalActionIntent(
+            sessionId, ApprovalActionReceiver.DECISION_DENY, notificationId, requestCode = notificationId * 31 + 2,
+        )
+
+        val notification = NotificationCompat.Builder(this, ConduitUnifiedPushReceiver.CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(tapPending)
+            .addAction(0, "Approve", approvePending)
+            .addAction(0, "Deny", denyPending)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(this).notify(notificationId, notification)
+            Telemetry.breadcrumb(
+                "push", "FCM approval notification shown",
+                mapOf("session" to sessionId),
+            )
+        } catch (e: SecurityException) {
+            Telemetry.breadcrumb("push", "FCM approval notification blocked: missing POST_NOTIFICATIONS")
+        }
+    }
+
+    private fun approvalActionIntent(
+        sessionId: String,
+        decision: String,
+        notificationId: Int,
+        requestCode: Int,
+    ): PendingIntent {
+        val intent = Intent(this, ApprovalActionReceiver::class.java).apply {
+            action = ApprovalActionReceiver.ACTION_RESOLVE
+            putExtra(ApprovalActionReceiver.EXTRA_SESSION_ID, sessionId)
+            putExtra(ApprovalActionReceiver.EXTRA_DECISION, decision)
+            putExtra(ApprovalActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        return PendingIntent.getBroadcast(this, requestCode, intent, flags)
     }
 }
