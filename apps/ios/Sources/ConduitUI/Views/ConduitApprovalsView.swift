@@ -555,7 +555,8 @@ extension ConduitUI {
                         default:
                             let msg = "HTTP \(http.statusCode)"
                             Telemetry.capture(
-                                error: nil,
+                                error: NSError(domain: "ios.approvals", code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: "approval resolve HTTP error"]),
                                 message: "in-app approval resolve failed",
                                 tags: ["surface": "ios", "phase": "approvals"],
                                 extras: ["session": sessionID, "decision": decision,

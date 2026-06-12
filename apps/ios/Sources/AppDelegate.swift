@@ -258,7 +258,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                             data: ["session": sessionID])
                     default:
                         Telemetry.capture(
-                            error: nil,
+                            error: NSError(domain: "ios.push_approval", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "approval resolve HTTP error"]),
                             message: "push approval resolve failed",
                             tags: ["surface": "ios", "phase": "push_approval"],
                             extras: ["session": sessionID, "decision": decision,
