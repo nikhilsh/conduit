@@ -57,6 +57,9 @@ extension ConduitUI {
         @State private var agentAccounts: [AgentAccountStatus] = []
         /// Account whose Manage dialog (re-auth / sign out) is open.
         @State private var manageTarget: AgentAccountStatus?
+        // Fix 1: onboarding entry intents from Settings.
+        @State private var onboardingEntry: OnboardingEntry = .firstRun
+        @State private var showOnboarding = false
 
         // WS-P.3: push notification settings state — observed from the
         // shared PushNotificationManager so the row updates live when the
@@ -98,6 +101,11 @@ extension ConduitUI {
                             Button("Done") { dismiss() }
                         }
                     }
+                }
+                .fullScreenCover(isPresented: $showOnboarding) {
+                    ConduitUI.OnboardingView(onFinish: { showOnboarding = false }, entry: onboardingEntry)
+                        .environment(store)
+                        .environment(flags)
                 }
                 .sheet(isPresented: $showAddServer) {
                     ConduitUI.AddServerSheet()
@@ -185,6 +193,47 @@ extension ConduitUI {
                             icon: "externaldrive.connected.to.line.below",
                             title: "Add server",
                             subtitle: nil,
+                            iconTint: neon.accent
+                        ) {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    Divider().background(neon.border)
+
+                    // Fix 1: replay / add-machine onboarding intents.
+                    Button {
+                        Telemetry.breadcrumb("onboarding", "settings: replay walkthrough tapped")
+                        onboardingEntry = .replay
+                        showOnboarding = true
+                    } label: {
+                        ConduitUI.ListRow(
+                            icon: "arrow.counterclockwise",
+                            title: "Replay walkthrough",
+                            subtitle: "Run the setup flow again from Welcome",
+                            iconTint: neon.accent
+                        ) {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    Divider().background(neon.border)
+
+                    Button {
+                        Telemetry.breadcrumb("onboarding", "settings: add a machine tapped")
+                        onboardingEntry = .addMachine
+                        showOnboarding = true
+                    } label: {
+                        ConduitUI.ListRow(
+                            icon: "plus.rectangle.on.rectangle",
+                            title: "Add a machine",
+                            subtitle: "Pair another box starting from Install",
                             iconTint: neon.accent
                         ) {
                             Image(systemName: "chevron.right")

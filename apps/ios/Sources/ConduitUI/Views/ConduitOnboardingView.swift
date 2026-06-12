@@ -33,6 +33,18 @@ enum OnboardingStep {
 // mDNS discovery) — the same paths `AddServerSheet` drives — and advances to
 // Done the moment a server is saved.
 
+// MARK: - OnboardingEntry
+//
+// Declares the INTENT with which onboarding is opened.
+//   firstRun   -- automatic gate in RootView; may resolve to Done when already paired.
+//   replay     -- Settings "Replay walkthrough"; always starts at Welcome.
+//   addMachine -- Settings "Add a machine"; always starts at Install.
+enum OnboardingEntry {
+    case firstRun
+    case replay
+    case addMachine
+}
+
 extension ConduitUI {
     struct OnboardingView: View {
         @Environment(SessionStore.self) private var store
@@ -41,6 +53,10 @@ extension ConduitUI {
 
         /// Called when the user finishes (or "Start your first session").
         var onFinish: () -> Void
+
+        /// Entry intent -- controls which step is shown first.
+        /// Defaults to .firstRun to preserve existing auto-gate call sites.
+        var entry: OnboardingEntry = .firstRun
 
         @State private var step: Int = FeatureFlags.OnboardingStep.welcome.rawValue
         @State private var didResolveInitialStep = false
@@ -91,6 +107,24 @@ extension ConduitUI {
         private func resolveInitialStep() {
             guard !didResolveInitialStep else { return }
             didResolveInitialStep = true
+            // Branch on entry intent BEFORE the FeatureFlags auto-route.
+            // .replay and .addMachine always bypass the Done short-circuit
+            // so Settings-launched onboarding never lands directly on Done.
+            switch entry {
+            case .replay:
+                step = Step.welcome.rawValue
+                flags.onboardingSeenWelcome = true
+                Telemetry.breadcrumb("onboarding", OnboardingStep.screenShown,
+                    data: ["step": "\(step)", "route": "replay"])
+                return
+            case .addMachine:
+                step = Step.install.rawValue
+                Telemetry.breadcrumb("onboarding", OnboardingStep.screenShown,
+                    data: ["step": "\(step)", "route": "addMachine"])
+                return
+            case .firstRun:
+                break
+            }
             let route = FeatureFlags.onboardingRoute(
                 pairedBrokers: store.savedServers.count,
                 brokerReachable: store.harness.canIssueCommands
