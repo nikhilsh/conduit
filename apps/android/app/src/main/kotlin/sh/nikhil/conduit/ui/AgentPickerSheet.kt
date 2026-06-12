@@ -40,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -139,14 +140,10 @@ fun AgentPickerSheet(
                 assistant = agent,
                 agentTint = neonAgentColor(agent, neon),
                 onCreate = { cwd, model, effort, permissionMode, fastMode, seedPrompt ->
-                    val target = savedServers.firstOrNull { it.id == resolvedServerId }
-                    if (target != null && target.endpoint != endpoint) {
-                        // Session targeted at a different box: switch
-                        // endpoint → connect → create.
-                        store.connectAndStart(target.id, assistant = agent, cwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = seedPrompt)
-                    } else {
-                        store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = seedPrompt)
-                    }
+                    // Always create on the connected box — readiness, directory
+                    // browser, and create all use the connected box's client.
+                    // Non-connected box rows are disabled in the box section.
+                    store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = seedPrompt)
                     onDismiss()
                 },
             )
@@ -281,9 +278,13 @@ private fun AgentStep(
         // Box choice — always shown so the user can see where the session
         // will run (device feedback round 4: gated on >1 servers, a
         // single-box user "can't choose the box" and can't tell local vs
-        // server). "This device" on the home Boxes list is display-only (a
-        // phone can't host the broker), so it is deliberately not a target
-        // here; the single-box footnote says so. Mirror of iOS boxSection.
+        // server). Only the currently-connected box is selectable — readiness,
+        // directory browser, and create all use the connected box's client.
+        // Non-connected boxes are shown dimmed with a "Switch in Settings" note.
+        // "This device" on the home Boxes list is display-only (a phone can't
+        // host the broker), so it is deliberately not a target here.
+        // Mirror of iOS boxSection.
+        val currentEndpoint by store.endpoint.collectAsState()
         if (servers.isNotEmpty()) {
             Text(
                 "BOX",
@@ -293,11 +294,14 @@ private fun AgentStep(
                 color = neon.textFaint,
             )
             servers.forEach { server ->
+                val isConnected = server.endpoint == currentEndpoint
                 BoxRow(
                     name = server.name,
                     host = server.endpoint.displayHost,
                     selected = server.id == selectedServerId,
-                    onTap = { onSelectServer(server.id) },
+                    enabled = isConnected,
+                    disabledNote = if (!isConnected) "Switch to this box in Settings to start a session on it." else null,
+                    onTap = { if (isConnected) onSelectServer(server.id) },
                 )
             }
             if (servers.size == 1) {
@@ -1016,6 +1020,8 @@ private fun displayName(path: String): String {
 
 /**
  * One paired box the session can be created on; the checked row wins.
+ * Non-connected boxes ([enabled] = false) are shown dimmed with a
+ * [disabledNote] subtitle so the user understands why they can't select them.
  * Mirror of iOS `ConduitAgentPickerSheet.boxSection`.
  */
 @Composable
@@ -1023,6 +1029,8 @@ private fun BoxRow(
     name: String,
     host: String,
     selected: Boolean,
+    enabled: Boolean = true,
+    disabledNote: String? = null,
     onTap: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
@@ -1036,7 +1044,8 @@ private fun BoxRow(
                 fill = if (selected) neon.accent.copy(alpha = 0.10f) else neon.surface,
                 borderColor = if (selected) neon.accent.copy(alpha = 0.5f) else neon.border,
             )
-            .clickable(onClick = onTap),
+            .clickable(enabled = enabled, onClick = onTap)
+            .then(if (!enabled) Modifier.alpha(0.55f) else Modifier),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
@@ -1050,14 +1059,25 @@ private fun BoxRow(
                     fontWeight = FontWeight.SemiBold,
                     color = neon.text,
                 )
-                Text(
-                    host,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.mono,
-                    color = neon.textDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (!enabled && disabledNote != null) {
+                    Text(
+                        disabledNote,
+                        fontFamily = neon.mono,
+                        fontSize = 10.5.sp,
+                        color = neon.textFaint,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text(
+                        host,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             Icon(
                 Icons.Filled.CheckCircle,
