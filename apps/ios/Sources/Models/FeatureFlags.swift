@@ -64,6 +64,32 @@ final class FeatureFlags {
         static let replyHaptics = "conduit.flags.chat.replyHaptics"
         static let sshTunnelTransport = "conduit.flags.transport.sshTunnel"
         static let showSubagentPanel = "conduit.flags.debug.showSubagentPanel"
+        static let concurrentMultiBox = "conduit.flags.transport.concurrentMultiBox"
+    }
+
+    // MARK: - Concurrent multi-box (connection-critical) — default OFF
+
+    /// Be connected to MULTIPLE boxes at once, with every connected box's
+    /// sessions live in the aggregated Active list simultaneously (first cut,
+    /// iOS-only). When ON, `SessionStore` keeps a per-box `BoxConnection`
+    /// (its own `ConduitClient` + delegate) and routes every session-scoped
+    /// operation to the connection that OWNS that session (looked up via the
+    /// existing `sessionBox[sessionID]` stamp); new sessions default to the
+    /// selected/primary box.
+    ///
+    /// When OFF (the default), `SessionStore` runs EXACTLY today's
+    /// single-connection path — one `client`, one `endpoint`; the per-box
+    /// registry stays empty so every route resolves to that single client.
+    /// Flipping this OFF is an instant, byte-equivalent rollback.
+    var concurrentMultiBox: Bool {
+        didSet { defaults.set(concurrentMultiBox, forKey: Keys.concurrentMultiBox) }
+    }
+
+    /// Static read for non-`@Observable` call sites (`SessionStore`, which
+    /// isn't handed the `FeatureFlags` object). Mirrors the instance default
+    /// (OFF) so the two never diverge.
+    static func concurrentMultiBoxEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: Keys.concurrentMultiBox) as? Bool ?? false
     }
 
     // MARK: - SSH tunnel transport (connection-critical) — default ON
@@ -197,6 +223,7 @@ final class FeatureFlags {
         self.replyHaptics = defaults.object(forKey: Keys.replyHaptics) as? Bool ?? true
         self.sshTunnelTransport = defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
         self.showSubagentPanel = defaults.object(forKey: Keys.showSubagentPanel) as? Bool ?? false
+        self.concurrentMultiBox = defaults.object(forKey: Keys.concurrentMultiBox) as? Bool ?? false
 
         self.chatStylePreference = (defaults.string(forKey: Keys.chatStylePreference)
             .flatMap(ChatStylePreference.init(rawValue:))) ?? .auto
