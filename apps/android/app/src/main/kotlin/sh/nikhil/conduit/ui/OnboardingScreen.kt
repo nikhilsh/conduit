@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.AppearanceStore
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.LocalAppearanceStore
+import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 
@@ -72,20 +73,34 @@ object OnboardingStep {
  * device holds no pairing key). Pairing reuses [AddServerSheet]; the moment a
  * broker is paired the route flips to None and this overlay disappears into
  * Home. `seenWelcome` + furthest-step persist for resume.
+ *
+ * [entry] declares the intent (Fix 1):
+ *  - [FeatureFlags.OnboardingEntry.firstRun]   automatic gate; may resolve to Done.
+ *  - [FeatureFlags.OnboardingEntry.replay]      Settings replay; always Welcome first.
+ *  - [FeatureFlags.OnboardingEntry.addMachine]  Settings add machine; always Install first.
  */
 @Composable
-fun OnboardingScreen(store: SessionStore, onFinish: () -> Unit) {
+fun OnboardingScreen(
+    store: SessionStore,
+    onFinish: () -> Unit,
+    entry: FeatureFlags.OnboardingEntry = FeatureFlags.OnboardingEntry.firstRun,
+) {
     val neon = LocalNeonTheme.current
     val appearance = LocalAppearanceStore.current
 
     val seenWelcome by appearance.onboardingSeenWelcome.collectAsState()
     val furthest by appearance.onboardingFurthestStep.collectAsState()
     val guide by appearance.onboardingGuide.collectAsState()
+    val savedServers by store.savedServers.collectAsState()
+    val harness by store.harness.collectAsState()
 
     var step by remember {
         mutableStateOf(
-            FeatureFlags.onboardingInitialStep(
-                route = FeatureFlags.OnboardingRoute.Full,
+            FeatureFlags.resolveInitialStep(
+                entry = entry,
+                pairedBrokers = savedServers.size,
+                brokerReachable = harness is sh.nikhil.conduit.HarnessState.Live ||
+                    harness is sh.nikhil.conduit.HarnessState.Linked,
                 seenWelcome = seenWelcome,
                 furthestStep = furthest,
             ).also { if (it == FeatureFlags.Step.WELCOME) appearance.setOnboardingSeenWelcome(true) },
@@ -96,7 +111,7 @@ fun OnboardingScreen(store: SessionStore, onFinish: () -> Unit) {
     // Funnel: screen shown on first composition.
     LaunchedEffect(Unit) {
         Telemetry.breadcrumb("onboarding", OnboardingStep.SCREEN_SHOWN,
-            mapOf("step" to step.toString(), "route" to "full"))
+            mapOf("step" to step.toString(), "entry" to entry.name))
     }
 
     fun go(target: Int) {

@@ -40,6 +40,14 @@ sealed class PushRegistrationState {
     data class Error(val message: String) : PushRegistrationState()
 }
 
+
+/**
+ * Outcome of an approval resolve POST (Fix 9). [Stale] is the broker's 404
+ * "nothing pending" — the caller should just open the app to the session
+ * rather than claim an outcome.
+ */
+enum class ApprovalResolveResult { Resolved, Stale, Failed }
+
 /**
  * Manages push-notification registration for the active broker box.
  *
@@ -457,6 +465,48 @@ class PushStore : ViewModel() {
                 _registrationState.value = prevState
             }
         }
+    }
+
+
+    /**
+     * Resolve an agent approval over HTTP (Fix 9). POSTs to
+     * /api/session/approval authed exactly like /api/push/register (Bearer
+     * token, JSON body). Distinguishes the contract outcomes the broker/relay
+     * promise: 200 {"ok":true} -> Resolved; 404 (nothing pending) -> Stale,
+     * caller just opens the app; anything else -> Failed. Blocking; call on
+     * Dispatchers.IO.
+     */
+    fun resolveApproval(endpoint: Endpoint, sessionId: String, decision: String): ApprovalResolveResult {
+        val base = endpoint.httpBaseUrl ?: return ApprovalResolveResult.Failed
+        val body = JSONObject().apply {
+            put("session_id", sessionId)
+            put("decision", decision)
+        }.toString()
+        return runCatching {
+            val conn = (URL("$base/api/session/approval").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 7_000
+                readTimeout = 10_000
+            }
+            try {
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                when {
+                    code == 404 -> ApprovalResolveResult.Stale
+                    code in 200..299 -> {
+                        val resp = conn.inputStream.bufferedReader().use { it.readText() }
+                        val ok = runCatching { JSONObject(resp).optBoolean("ok", false) }.getOrDefault(false)
+                        if (ok) ApprovalResolveResult.Resolved else ApprovalResolveResult.Failed
+                    }
+                    else -> ApprovalResolveResult.Failed
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrDefault(ApprovalResolveResult.Failed)
     }
 
     /**

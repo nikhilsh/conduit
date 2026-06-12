@@ -223,6 +223,15 @@ class AppearanceStore : ViewModel() {
     private val _showSubagentPanel = MutableStateFlow(FeatureFlags.showSubagentPanel)
     val showSubagentPanel: StateFlow<Boolean> = _showSubagentPanel.asStateFlow()
 
+    /**
+     * Agents enabled in the new-session picker (§ declutter). claude + codex
+     * ship on; gemini / opencode are opt-in. Persisted as a string set; the
+     * picker filters its candidate list to this set via
+     * [FeatureFlags.visibleAgents].
+     */
+    private val _enabledAgents = MutableStateFlow(FeatureFlags.defaultEnabledAgents.toSet())
+    val enabledAgents: StateFlow<Set<String>> = _enabledAgents.asStateFlow()
+
     /** Onboarding state (§5). seenWelcome only governs the Welcome screen. */
     private val _onboardingSeenWelcome = MutableStateFlow(false)
     val onboardingSeenWelcome: StateFlow<Boolean> = _onboardingSeenWelcome.asStateFlow()
@@ -265,6 +274,8 @@ class AppearanceStore : ViewModel() {
         _onboardingFurthestStep.value = p.getInt(KEY_ONB_FURTHEST_STEP, 0)
         _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
         _showSubagentPanel.value = p.getBoolean(KEY_SHOW_SUBAGENT_PANEL, FeatureFlags.showSubagentPanel)
+        _enabledAgents.value =
+            p.getStringSet(KEY_ENABLED_AGENTS, null)?.toSet() ?: FeatureFlags.defaultEnabledAgents.toSet()
 
         // Stable DEVICE id (no accounts): persist a generated id once so the
         // bucket never moves. Then assign the bucket once and persist it —
@@ -336,6 +347,16 @@ class AppearanceStore : ViewModel() {
     fun setShowSubagentPanel(value: Boolean) {
         _showSubagentPanel.value = value
         prefs?.edit()?.putBoolean(KEY_SHOW_SUBAGENT_PANEL, value)?.apply()
+    }
+
+    /** Enable/disable an agent in the new-session picker. Default agents
+     *  (claude/codex) can be toggled too but [FeatureFlags.visibleAgents]
+     *  keeps them visible regardless, so the picker is never empty. */
+    fun setAgentEnabled(agent: String, enabled: Boolean) {
+        val next = _enabledAgents.value.toMutableSet()
+        if (enabled) next.add(agent) else next.remove(agent)
+        _enabledAgents.value = next
+        prefs?.edit()?.putStringSet(KEY_ENABLED_AGENTS, next)?.apply()
     }
 
     fun setFontFamily(value: FontFamily) {
@@ -442,6 +463,7 @@ class AppearanceStore : ViewModel() {
         private const val KEY_ONB_FURTHEST_STEP = "onboarding.furthestStep"
         private const val KEY_ONB_GUIDE = "onboarding.guide"
         private const val KEY_SHOW_SUBAGENT_PANEL = "debug.showSubagentPanel"
+        private const val KEY_ENABLED_AGENTS = "newSession.enabledAgents"
     }
 }
 

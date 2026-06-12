@@ -41,6 +41,8 @@ fun AppRoot(
     var showSplash by remember { mutableStateOf(true) }
     var showAddServer by remember { mutableStateOf(false) }
     var showOnboarding by remember { mutableStateOf(false) }
+    // Fix 1: track which entry intent opened the manual onboarding sheet.
+    var onboardingEntry by remember { mutableStateOf(FeatureFlags.OnboardingEntry.replay) }
     var showAgentPicker by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showVoice by remember { mutableStateOf(false) }
@@ -152,7 +154,10 @@ fun AppRoot(
                                 // The tablet rail header already shows a Settings
                                 // gear — don't render a second one in the center.
                                 showSettingsButton = false,
-                                onOpenOnboarding = { showOnboarding = true },
+                                onOpenOnboarding = {
+                                    onboardingEntry = FeatureFlags.OnboardingEntry.replay
+                                    showOnboarding = true
+                                },
                             )
                         }
                     }
@@ -194,7 +199,10 @@ fun AppRoot(
                             onVoice = { showVoice = true },
                             onOpenApprovals = { showApprovals = true },
                             onOpenBoxHealth = { server -> boxHealthTarget = server },
-                            onOpenOnboarding = { showOnboarding = true },
+                            onOpenOnboarding = {
+                                onboardingEntry = FeatureFlags.OnboardingEntry.replay
+                                showOnboarding = true
+                            },
                         )
                     }
                 }
@@ -208,7 +216,10 @@ fun AppRoot(
             pushStore = pushStore,
             onDismiss = { showSettings = false },
             onOpenLicenses = { showLicenses = true },
-            onOpenOnboarding = {
+            // Fix 1: Settings passes the intent so replay/addMachine never
+            // land on Done directly.
+            onOpenOnboarding = { entry ->
+                onboardingEntry = entry
                 showSettings = false
                 showOnboarding = true
             },
@@ -377,10 +388,12 @@ fun AppRoot(
     // Re-opened onboarding guide (from no-boxes CTA or Settings "How it works").
     // Shown over the main app without gating on the pairing state; dismiss sends
     // the user back to Home with all their existing sessions intact.
+    // Fix 1: pass the entry intent so replay/addMachine never land on Done.
     if (showOnboarding) {
         OnboardingScreen(
             store = store,
             onFinish = { showOnboarding = false },
+            entry = onboardingEntry,
         )
     }
 

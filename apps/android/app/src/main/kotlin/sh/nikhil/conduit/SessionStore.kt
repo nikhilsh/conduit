@@ -120,6 +120,13 @@ sealed class VisibleSession {
     }
 }
 
+
+/**
+ * Phase of an in-app approval resolve (Fix 9). [Stale] is the broker's 404
+ * "nothing pending" — surfaced honestly rather than as a false success.
+ */
+enum class ApprovalResolvePhase { Idle, Resolving, Resolved, Stale, Failed }
+
 data class Endpoint(val url: String = "", val token: String = "") {
     val isComplete get() = url.isNotBlank() && token.isNotBlank()
 
@@ -512,8 +519,181 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * on connect / foreground / reconnect. The transcript echo reads this to
      * draw the clock / "failed" indicator. Mirror of iOS `pendingChats`.
      */
+
     private val _pendingChats = MutableStateFlow(PendingChatQueue())
     val pendingChats: StateFlow<PendingChatQueue> = _pendingChats.asStateFlow()
+
+    /**
+     * Fix 9 — per-session "auto-approve in this session" toggle. Local +
+     * session-scoped (in-memory only, intentionally NOT persisted: an
+     * auto-approve grant should not silently survive a relaunch). While a
+     * session id is in this set AND we are connected, an incoming approval is
+     * auto-resolved with a quiet audited transcript line instead of prompting.
+     */
+    private val _autoApproveSessions = MutableStateFlow<Set<String>>(emptySet())
+    val autoApproveSessions: StateFlow<Set<String>> = _autoApproveSessions.asStateFlow()
+
+    /**
+     * Fix 9 — transient in-app approval-resolve state per session, so the
+     * Approvals surface can show resolving/approved/denied/failed without
+     * fabricating an outcome. Cleared on session open / next pending item.
+     */
+    private val _approvalResolve = MutableStateFlow<Map<String, ApprovalResolvePhase>>(emptyMap())
+    val approvalResolve: StateFlow<Map<String, ApprovalResolvePhase>> = _approvalResolve.asStateFlow()
+
+    /** Flip the per-session auto-approve grant. */
+    fun setAutoApprove(sessionId: String, enabled: Boolean) {
+        _autoApproveSessions.value = if (enabled) {
+            _autoApproveSessions.value + sessionId
+        } else {
+            _autoApproveSessions.value - sessionId
+        }
+        Telemetry.breadcrumb(
+            "approval", "auto-approve toggled",
+            mapOf("session" to sessionId, "enabled" to enabled.toString()),
+        )
+    }
+
+    /**
+     * Resolve an approval from the in-app surface (Fix 9). POSTs to the same
+     * /api/session/approval endpoint the push action uses, authed off the
+     * active endpoint. Drives [approvalResolve] so the row can show visible
+     * state, and on success appends a quiet audited transcript line. A 404
+     * (nothing pending) is surfaced as Stale, not a false success.
+     */
+    fun resolveApprovalInApp(sessionId: String, decision: String) {
+        val endpoint = _endpoint.value
+        if (!endpoint.isComplete) {
+            _approvalResolve.value = _approvalResolve.value + (sessionId to ApprovalResolvePhase.Failed)
+            return
+        }
+        Telemetry.breadcrumb(
+            "approval", "resolve start (in-app)",
+            mapOf("session" to sessionId, "decision" to decision),
+        )
+        _approvalResolve.value = _approvalResolve.value + (sessionId to ApprovalResolvePhase.Resolving)
+        viewModelScope.launch {
+            val phase = withContext(Dispatchers.IO) { postApprovalResolve(endpoint, sessionId, decision) }
+            Telemetry.breadcrumb(
+                "approval", "resolve result (in-app)",
+                mapOf("session" to sessionId, "decision" to decision, "phase" to phase.name),
+            )
+            if (phase == ApprovalResolvePhase.Failed) {
+                Telemetry.capture(
+                    error = IllegalStateException("in-app approval resolve failed"),
+                    message = "Android in-app approval resolve failed",
+                    tags = mapOf("surface" to "android", "phase" to "approval_resolve_inapp"),
+                    extras = mapOf("session" to sessionId, "decision" to decision),
+                )
+            }
+            if (phase == ApprovalResolvePhase.Resolved) {
+                appendAuditedApprovalLine(sessionId, decision, auto = false)
+            }
+            _approvalResolve.value = _approvalResolve.value + (sessionId to phase)
+        }
+    }
+
+    /**
+     * Auto-resolve an incoming approval for a session that has the
+     * "auto-approve in this session" grant active AND a live connection
+     * (Fix 9). No-op when the grant is off or we are offline. Renders a quiet
+     * audited transcript line so the auto-grant is never silent.
+     */
+
+    private val _autoApprovedItems = mutableSetOf<String>()
+
+    fun maybeAutoApprove(sessionId: String) {
+        if (sessionId !in _autoApproveSessions.value) return
+        if (!hasPendingAsk(sessionId)) return
+        if (!_harness.value.canIssueCommands) return
+        val endpoint = _endpoint.value
+        if (!endpoint.isComplete) return
+        // Fire once per distinct pending item — refreshConversation runs on
+        // every frame, so without this we would POST the same approval
+        // repeatedly while it stays pending.
+        val pendingId = _conversationLog.value[sessionId]?.lastOrNull()?.id ?: return
+        if (!_autoApprovedItems.add("$sessionId|$pendingId")) return
+        Telemetry.breadcrumb("approval", "auto-approve resolving", mapOf("session" to sessionId))
+        viewModelScope.launch {
+            val phase = withContext(Dispatchers.IO) { postApprovalResolve(endpoint, sessionId, "approve") }
+            Telemetry.breadcrumb(
+                "approval", "auto-approve result",
+                mapOf("session" to sessionId, "phase" to phase.name),
+            )
+            if (phase == ApprovalResolvePhase.Resolved) {
+                appendAuditedApprovalLine(sessionId, "approve", auto = true)
+            }
+        }
+    }
+
+    /**
+     * The blocking POST shared by [resolveApprovalInApp] and [maybeAutoApprove].
+     * Authed exactly like /api/push/register. Call on Dispatchers.IO.
+     */
+    private fun postApprovalResolve(endpoint: Endpoint, sessionId: String, decision: String): ApprovalResolvePhase {
+        val base = endpoint.httpBaseUrl ?: return ApprovalResolvePhase.Failed
+        val body = JSONObject().apply {
+            put("session_id", sessionId)
+            put("decision", decision)
+        }.toString()
+        return runCatching {
+            val conn = (URL("$base/api/session/approval").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 7_000
+                readTimeout = 10_000
+            }
+            try {
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                when {
+                    code == 404 -> ApprovalResolvePhase.Stale
+                    code in 200..299 -> {
+                        val resp = conn.inputStream.bufferedReader().use { it.readText() }
+                        val ok = runCatching { JSONObject(resp).optBoolean("ok", false) }.getOrDefault(false)
+                        if (ok) ApprovalResolvePhase.Resolved else ApprovalResolvePhase.Failed
+                    }
+                    else -> ApprovalResolvePhase.Failed
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrDefault(ApprovalResolvePhase.Failed)
+    }
+
+    /** Append a quiet, audited transcript line recording an approval decision. */
+    private fun appendAuditedApprovalLine(sessionId: String, decision: String, auto: Boolean) {
+        val verb = if (decision == "approve") "Approved" else "Denied"
+        val suffix = if (auto) " (auto-approve in this session)" else ""
+        val line = "$verb$suffix"
+        val ts = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        val item = ConversationItem(
+            id = "local-approval-${java.util.UUID.randomUUID()}",
+            role = "system",
+            kind = "message",
+            status = "done",
+            content = line,
+            ts = ts,
+            files = emptyList(),
+            toolName = null,
+            command = null,
+            exitCode = null,
+            durationMs = null,
+            diffSummary = null,
+            pendingOptions = emptyList(),
+            sourceAgent = null,
+            targetAgent = null,
+            taskText = null,
+            resultSummary = null,
+            planSteps = emptyList(),
+        )
+        _conversationLog.value = _conversationLog.value.toMutableMap().also { m ->
+            m[sessionId] = (m[sessionId] ?: emptyList()) + item
+        }
+    }
 
     /**
      * Box (SavedServer.id) each session was last reconciled from.
@@ -1030,6 +1210,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         _savedServers.value = current
         persistSavedServers(current)
+    }
+
+    /**
+     * Rename a saved server in-place (Fix 4). Writes the new [name] into the
+     * [SavedServer] entry and persists immediately. No-op when the id is unknown.
+     */
+    fun renameSavedServer(serverId: String, name: String) {
+        val current = _savedServers.value.toMutableList()
+        val idx = current.indexOfFirst { it.id == serverId }
+        if (idx < 0) return
+        current[idx] = current[idx].copy(name = name.trim().ifEmpty { current[idx].name })
+        _savedServers.value = current
+        persistSavedServers(current)
+        Telemetry.breadcrumb("boxes", "server renamed", mapOf("id" to serverId))
     }
 
     fun selectSavedServer(serverId: String, autoConnect: Boolean) {
@@ -2406,8 +2600,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * is null — it just leaves the entry queued for a later flush. Shared by
      * the send path and [flushPendingChats]. Mirror of iOS `attemptDeliver`.
      */
-    private fun attemptDeliver(sessionId: String, localId: String, msg: String) {
-        val c = client ?: return
+
+    private fun attemptDeliver(sessionId: String, localId: String, msg: String, manualRetry: Boolean = false) {
+        val c = client ?: run {
+            // No live client. On a manual retry the user is watching, so don't
+            // leave the spinner spinning forever — surface failed immediately.
+            if (manualRetry) {
+                setEchoStatus(sessionId, localId, "failed")
+                Telemetry.breadcrumb("chat", "retry_result",
+                    mapOf("session" to sessionId, "local_id" to localId, "ok" to "false", "reason" to "not_connected"))
+            }
+            return
+        }
         // Box-identity gate: if the session was stamped to a different box
         // than the one we are currently connected to, sending into this
         // client is wrong — it would reach the wrong broker and produce
@@ -2428,14 +2632,25 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         viewModelScope.launch {
             val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
+
             if (result.isSuccess) {
                 // Ack: drop from the queue and flip the echo to "done".
                 updatePendingChats { it.markDelivered(sessionId, localId) }
                 setEchoStatus(sessionId, localId, "done")
+                if (manualRetry) {
+                    Telemetry.breadcrumb("chat", "retry_result",
+                        mapOf("session" to sessionId, "local_id" to localId, "ok" to "true"))
+                }
             } else {
                 updatePendingChats { it.markAttemptFailed(sessionId, localId) }
-                if (_pendingChats.value.isFailed(localId, sessionId)) {
+                if (_pendingChats.value.isFailed(localId, sessionId) || manualRetry) {
+                    // Hard fail, or a manual retry the user is watching: surface
+                    // failed so the spinner resolves to the retry affordance.
                     setEchoStatus(sessionId, localId, "failed")
+                    if (manualRetry) {
+                        Telemetry.breadcrumb("chat", "retry_result",
+                            mapOf("session" to sessionId, "local_id" to localId, "ok" to "false"))
+                    }
                     Telemetry.capture(
                         error = result.exceptionOrNull() ?: RuntimeException("chat send failed"),
                         message = "chat send to agent failed (gave up after retries)",
@@ -2588,11 +2803,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * User tapped retry on a failed message bubble — re-arm the entry and
      * attempt delivery again immediately. Mirror of iOS `retryPendingChat`.
      */
+
     fun retryPendingChat(sessionId: String, localId: String) {
         val entry = _pendingChats.value.entries(sessionId).firstOrNull { it.localId == localId } ?: return
+        Telemetry.breadcrumb(
+            "chat",
+            "retry_resend",
+            mapOf("session" to sessionId, "local_id" to localId),
+        )
         updatePendingChats { it.retry(sessionId, localId) }
-        setEchoStatus(sessionId, localId, "pending")
-        attemptDeliver(sessionId, localId, entry.message)
+        // "retrying" drives the spinner footer; attemptDeliver flips it to
+        // done/failed on the genuine WS result. manualRetry=true makes even a
+        // single transient failure surface as failed (the user is watching).
+        setEchoStatus(sessionId, localId, "retrying")
+        attemptDeliver(sessionId, localId, entry.message, manualRetry = true)
     }
 
     /**
@@ -3254,9 +3478,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // collapsing to 0L and jumping above the user turn that
                 // preceded it (device bug: agent reply rendered before the
                 // user's prompt). See [sortedByConversationTs].
+
                 val merged = (items + stillPending).sortedByConversationTs { it.ts }
                 _conversationLog.value = _conversationLog.value + (sessionId to merged)
             }
+        // Fix 9: if this session has the per-session auto-approve grant and the
+        // refreshed transcript now ends on a pending approval, auto-resolve it.
+        maybeAutoApprove(sessionId)
     }
 
     private fun updateLifecycle(transform: (Map<String, SessionLifecycle>) -> Map<String, SessionLifecycle>) {

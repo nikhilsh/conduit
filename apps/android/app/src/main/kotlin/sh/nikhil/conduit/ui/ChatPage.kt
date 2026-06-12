@@ -53,9 +53,16 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
+
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -97,6 +104,7 @@ import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.PendingChatKind
 import sh.nikhil.conduit.PinnedContext
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.sortedByConversationTs
 import sh.nikhil.conduit.stripPendingSentinel
@@ -120,8 +128,15 @@ private const val PENDING_INPUT_SENTINEL = "[[conduit:needs-input]]"
  * threading them through every card signature. Provided by [ChatPage]
  * where both are in scope; null in detached previews / read-only opens.
  */
+
 internal val LocalSessionStore = compositionLocalOf<SessionStore?> { null }
 internal val LocalSessionId = compositionLocalOf<String?> { null }
+
+/**
+ * Host for the chat-local Material snackbar (failed-send RETRY action). Provided
+ * by [ChatPage] over its root content; null in read-only panes (no live send).
+ */
+internal val LocalChatSnackbar = compositionLocalOf<SnackbarHostState?> { null }
 
 /**
  * Lets the command card jump the session to its Terminal tab ("Open in
@@ -426,7 +441,11 @@ fun ChatPage(
     // per chat surface, kept across recompositions (and session swaps,
     // since the content-hash key is session-agnostic and identical text
     // legitimately shares an entry).
+
     val markdownCache = remember { ParsedMarkdownCache() }
+
+    // Fix 8: chat-local snackbar host for the failed-send RETRY action.
+    val chatSnackbar = remember { SnackbarHostState() }
 
     // Task #39: streaming auto-scroll that doesn't fight the user.
     var autoScroll by remember { mutableStateOf(ChatAutoScrollModel()) }
@@ -517,8 +536,16 @@ fun ChatPage(
     // transition is computed correctly. Re-seeded per session so a stale busy
     // state doesn't fire a spurious tap on session switch.
     val replyHapticsView = androidx.compose.ui.platform.LocalView.current
+
     val appearanceStore = sh.nikhil.conduit.LocalAppearanceStore.current
     val replyHapticsEnabled by appearanceStore.replyHaptics.collectAsState()
+    // Fix 10: arm-B (Signature) coalesces consecutive tool turns into clusters.
+    val chatStylePref by appearanceStore.chatStylePreference.collectAsState()
+    val chatExperimentKilled by appearanceStore.chatExperimentKilled.collectAsState()
+    val chatAssignedArm by appearanceStore.chatAssignedArm.collectAsState()
+    val signatureArm = FeatureFlags.resolvedChatArm(
+        chatStylePref, chatExperimentKilled, chatAssignedArm,
+    ) == FeatureFlags.ChatArm.B
     var replyHaptics by remember(session.id) { mutableStateOf(ReplyHapticsModel()) }
     LaunchedEffect(showTyping, replyHapticsEnabled, session.id) {
         val (next, event) = replyHaptics.observe(
@@ -649,8 +676,10 @@ fun ChatPage(
         LocalParsedMarkdownCache provides markdownCache,
         // Read-only transcripts have no live WS to write into, so don't
         // expose the store there — the command card's Re-run stays disabled.
+
         LocalSessionStore provides (if (readOnly) null else store),
         LocalSessionId provides session.id,
+        LocalChatSnackbar provides (if (readOnly) null else chatSnackbar),
         // Only the live tabbed pager wires a Terminal jump; read-only / tablet
         // panes pass null, which disables "Open in terminal".
         LocalOpenInTerminal provides (if (readOnly) null else onOpenTerminal),
@@ -689,29 +718,40 @@ fun ChatPage(
                     },
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+
                 if (events.isEmpty()) {
                     item { EmptyConversationCard(assistant = session.assistant) }
                 } else {
-                    items(events.size) { index ->
-                        val previousRole = if (index > 0) events[index - 1].role else null
-                        val ev = events[index]
-                        ConversationEventRow(
-                            ev = ev,
-                            agentAccent = agentAccent,
-                            isContinuation = previousRole?.lowercase() == ev.role.lowercase(),
-                            pendingAnswered = ev.id in answeredPendingIds
-                                || pendingContentFingerprint(ev) in answeredPendingFingerprints,
-                            // A pending-input answer is delivered as the user's
-                            // next chat message — the broker matches it to the
-                            // blocked AskUserQuestion control request. Mirror of
-                            // iOS (`store.sendChat`), not the draft-fill path the
-                            // composer's quick-reply chips use.
-                            onAnswerPending = { msg -> store.sendChat(session.id, msg) },
-                            onPendingAnswered = {
-                                answeredPendingIds = answeredPendingIds + ev.id
-                                answeredPendingFingerprints = answeredPendingFingerprints + pendingContentFingerprint(ev)
-                            },
-                        )
+                    // Fix 10: in arm B, fold runs of 2+ consecutive tool turns
+                    // into one cluster unit; arm A and lone tools stay inline.
+                    val renderUnits = groupChatUnits(events.map { it.role }, signatureArm)
+                    items(renderUnits.size) { unitIndex ->
+                        when (val unit = renderUnits[unitIndex]) {
+                            is ChatRenderUnit.ToolCluster ->
+                                ToolClusterCard(unit.indices.map { events[it] })
+                            is ChatRenderUnit.Single -> {
+                                val index = unit.index
+                                val previousRole = if (index > 0) events[index - 1].role else null
+                                val ev = events[index]
+                                ConversationEventRow(
+                                    ev = ev,
+                                    agentAccent = agentAccent,
+                                    isContinuation = previousRole?.lowercase() == ev.role.lowercase(),
+                                    pendingAnswered = ev.id in answeredPendingIds
+                                        || pendingContentFingerprint(ev) in answeredPendingFingerprints,
+                                    // A pending-input answer is delivered as the user's
+                                    // next chat message — the broker matches it to the
+                                    // blocked AskUserQuestion control request. Mirror of
+                                    // iOS (`store.sendChat`), not the draft-fill path the
+                                    // composer's quick-reply chips use.
+                                    onAnswerPending = { msg -> store.sendChat(session.id, msg) },
+                                    onPendingAnswered = {
+                                        answeredPendingIds = answeredPendingIds + ev.id
+                                        answeredPendingFingerprints = answeredPendingFingerprints + pendingContentFingerprint(ev)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
                 // "Agent is typing…" — last content row (before the
@@ -836,10 +876,18 @@ fun ChatPage(
                 agentWorking = agentWorking,
                 // Codex with an active turn: send button shows steer glyph.
                 sendIsSteer = agentWorking && supportsSteer,
+
                 onStop = { store.stopTurn(session.id) },
             )
         }
     }
+        // Fix 8: failed-send RETRY snackbar, anchored to the chat bottom.
+        if (!readOnly) {
+            SnackbarHost(
+                hostState = chatSnackbar,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
     } // BoxWithConstraints
     }
 
@@ -889,8 +937,47 @@ private suspend fun scrollToTrueBottom(listState: androidx.compose.foundation.la
             last.offset + last.size <= listState.layoutInfo.viewportEndOffset + 4
         if (atBottom) return
     }
+
     // Final hard snap in case animation kept losing the race to layout.
     listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+}
+
+/**
+ * Fix 10 — a unit of the chat list after arm-B tool grouping. A [Single]
+ * renders one event inline exactly as today; a [ToolCluster] coalesces 2+
+ * CONSECUTIVE tool-role events into one collapsible cluster. Carries event
+ * indices so the existing index-keyed continuation logic is preserved.
+ */
+private sealed class ChatRenderUnit {
+    data class Single(val index: Int) : ChatRenderUnit()
+    data class ToolCluster(val indices: List<Int>) : ChatRenderUnit()
+}
+
+/**
+ * Coalesce consecutive tool-role events into clusters for arm B (Signature)
+ * ONLY. Arm A and a lone tool call pass through as [ChatRenderUnit.Single],
+ * so the existing inline rendering is untouched. Pure + index-based so it is
+ * unit-testable and keeps the continuation/key logic intact.
+ */
+private fun groupChatUnits(roles: List<String>, signature: Boolean): List<ChatRenderUnit> {
+    if (!signature) return roles.indices.map { ChatRenderUnit.Single(it) }
+    val units = mutableListOf<ChatRenderUnit>()
+    var i = 0
+    while (i < roles.size) {
+        if (roles[i].lowercase() == "tool") {
+            var j = i
+            while (j < roles.size && roles[j].lowercase() == "tool") j++
+            val run = (i until j).toList()
+            // Only 2+ consecutive tool turns collapse; a single one stays inline.
+            if (run.size >= 2) units.add(ChatRenderUnit.ToolCluster(run))
+            else units.add(ChatRenderUnit.Single(run[0]))
+            i = j
+        } else {
+            units.add(ChatRenderUnit.Single(i))
+            i++
+        }
+    }
+    return units
 }
 
 /**
@@ -1849,19 +1936,60 @@ private fun SendStatusFooter(ev: ConversationItem) {
                 )
             }
         }
+
+        "retrying" -> {
+            // Fix 8: transient state while a manual retry's WS write is
+            // in-flight. Flips back to done/failed when attemptDeliver settles.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                CircularProgressIndicator(
+                    strokeWidth = 1.5.dp,
+                    color = neon.textDim,
+                    modifier = Modifier.size(11.dp),
+                )
+                Text(
+                    "retrying…",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
+                )
+            }
+        }
         "failed" -> {
             val store = LocalSessionStore.current
             val sessionId = LocalSessionId.current
+            val snackbar = LocalChatSnackbar.current
+            val scope = rememberCoroutineScope()
+            val doRetry: () -> Unit = retry@{
+                if (store == null || sessionId == null) return@retry
+                Telemetry.breadcrumb(
+                    "chat",
+                    "retry_tap",
+                    mapOf("session" to sessionId, "local_id" to ev.id),
+                )
+                store.retryPendingChat(sessionId, ev.id)
+            }
             // Warning + retry icon pair mirrors iOS exclamation+refresh.
-            // Semantic Button role for TalkBack accessibility.
+            // Semantic Button role for TalkBack accessibility. Tapping the chip
+            // OR the snackbar RETRY action re-submits the same content.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
                     .semantics { role = Role.Button }
                     .clickable(enabled = store != null && sessionId != null) {
-                        if (store != null && sessionId != null) {
-                            store.retryPendingChat(sessionId, ev.id)
+                        doRetry()
+                        if (snackbar != null) {
+                            scope.launch {
+                                val result = snackbar.showSnackbar(
+                                    message = "Couldn't send",
+                                    actionLabel = "RETRY",
+                                    duration = SnackbarDuration.Short,
+                                )
+                                if (result == SnackbarResult.ActionPerformed) doRetry()
+                            }
                         }
                     },
             ) {
@@ -2232,10 +2360,144 @@ private fun ConversationToolCard(ev: ConversationItem) {
     // get the COMMAND headline card; everything else gets the compact
     // tool card. Both keep ConversationRenderer.toolSections intact for
     // the expanded body.
+
     if (isNeonCommandCard(ev.toolName, ev.command)) {
         NeonCommandCard(ev)
     } else {
         NeonToolCard(ev)
+    }
+}
+
+/** Worst (highest-magnitude non-zero) exit code across a tool cluster. */
+private fun clusterWorstExit(items: List<ConversationItem>): Int? {
+    val exits = items.mapNotNull { it.exitCode?.toInt() }
+    if (exits.isEmpty()) return null
+    return exits.firstOrNull { it != 0 } ?: 0
+}
+
+/** One-line label for a clustered tool row: its command, else the tool name. */
+private fun clusterRowLabel(ev: ConversationItem): String {
+    ev.command?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    ev.toolName?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    return ev.kind.replaceFirstChar { it.uppercase() }
+}
+
+/**
+ * Fix 10 — arm-B grouped tool cluster. Header summarizes the run
+ * ("3 commands · all exit 0", or the worst non-zero exit), then hairline-split
+ * one-line command rows. Collapsed (default) shows header + rows; tapping the
+ * header expands to the full inline tool cards for each call. A single tool
+ * call never reaches here (see [groupChatUnits]) so the inline path is intact.
+ */
+@Composable
+private fun ToolClusterCard(items: List<ConversationItem>) {
+    val neon = LocalNeonTheme.current
+    var expanded by remember { mutableStateOf(false) }
+    val worstExit = remember(items) { clusterWorstExit(items) }
+    val anyFailed = items.any { it.status.equals("failed", true) } ||
+        (worstExit != null && worstExit != 0)
+    val summary = remember(items, worstExit, anyFailed) {
+        val n = items.size
+        val noun = if (n == 1) "command" else "commands"
+        when {
+            worstExit == null && !anyFailed -> "$n $noun"
+            worstExit == 0 && !anyFailed -> "$n $noun · all exit 0"
+            worstExit != null -> "$n $noun · exit $worstExit"
+            else -> "$n $noun · failed"
+        }
+    }
+    val chevron by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        label = "clusterChevron",
+    )
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface, failed = anyFailed),
+    ) {
+        // Header — tap toggles expand.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(neon.green.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.Terminal, null, tint = neon.green, modifier = Modifier.size(14.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                summary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = if (anyFailed) neon.red else neon.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+
+            Icon(
+                Icons.Default.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = neon.textDim,
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer { rotationZ = chevron },
+            )
+        }
+        if (expanded) {
+            // Expanded: the full inline tool cards, one per call.
+            Column(
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items.forEach { ConversationToolCard(it) }
+            }
+        } else {
+            // Collapsed: hairline-split one-line command rows.
+            Column(modifier = Modifier.fillMaxWidth()) {
+                items.forEach { ev ->
+                    HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+                    val exit = ev.exitCode?.toInt()
+                    val rowFailed = ev.status.equals("failed", true) || (exit != null && exit != 0)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            clusterRowLabel(ev),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = neon.mono,
+                            color = neon.codeText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (exit != null) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "exit $exit",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                fontFamily = neon.mono,
+                                color = if (rowFailed) neon.red else neon.green,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

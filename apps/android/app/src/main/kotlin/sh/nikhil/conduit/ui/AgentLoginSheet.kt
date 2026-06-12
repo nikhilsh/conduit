@@ -1,5 +1,6 @@
 package sh.nikhil.conduit.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,16 +18,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -204,53 +209,66 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    val neon = LocalNeonTheme.current
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        // Fix 2: TopAppBar with trailing X to close (replaces the old "Cancel" text).
+        TopAppBar(
+            title = {
+                Text(
+                    "Agent accounts",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
+                )
+            },
+            actions = {
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        tint = neon.textDim,
+                    )
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(
-                "Agent accounts",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                "Sign in to the model providers you want to use through Conduit. " +
-                    "You sign in in your own browser; Conduit ships the resulting credential " +
-                    "to the broker so agents run on your account.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
+            // Fix 2: one card, one row per provider with avatar tint, name,
+            // signed-in status, and a Manage / Sign in trailing action.
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
+                    // Claude row
                     ProviderRow(
-                        title = "Login with ChatGPT",
-                        subtitle = if (OAuthProvider.OPENAI in signedInProviders)
-                            "Signed in · tap to sign in again"
-                        else
-                            "Codex / ChatGPT OAuth · auth.openai.com",
-                        enabled = !isWorking,
-                        signedIn = OAuthProvider.OPENAI in signedInProviders,
-                        onClick = { loginChatGPT() },
-                    )
-                    HorizontalDivider()
-                    ProviderRow(
-                        title = "Login with Claude",
-                        subtitle = if (OAuthProvider.ANTHROPIC in signedInProviders)
-                            "Signed in · tap to sign in again"
-                        else
-                            "Claude OAuth · claude.ai (paste code)",
-                        enabled = !isWorking,
+                        agentId = "claude",
+                        title = "Claude",
                         signedIn = OAuthProvider.ANTHROPIC in signedInProviders,
+                        enabled = !isWorking,
                         onClick = { beginClaude() },
+                    )
+                    HorizontalDivider(color = neon.border)
+                    // ChatGPT / Codex row
+                    ProviderRow(
+                        agentId = "codex",
+                        title = "ChatGPT",
+                        signedIn = OAuthProvider.OPENAI in signedInProviders,
+                        enabled = !isWorking,
+                        onClick = { loginChatGPT() },
                     )
                 }
             }
@@ -297,48 +315,80 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * Fix 2: per-provider row with agent-tinted avatar, name, signed-in status dot,
+ * and a Manage / Sign in trailing chevron. Plan badge omitted — no plan source
+ * exists today; never invent it.
+ */
 @Composable
 private fun ProviderRow(
+    agentId: String,
     title: String,
-    subtitle: String,
-    enabled: Boolean,
     signedIn: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
+    val tint = neonAgentColor(agentId, neon)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 10.dp),
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            Icons.Filled.AccountCircle,
-            contentDescription = null,
-            tint = if (enabled) neon.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(22.dp),
-        )
+        AgentAvatar(assistant = agentId, size = 36.dp)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (signedIn) neon.green else MaterialTheme.colorScheme.onSurfaceVariant,
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
             )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                if (signedIn) {
+                    androidx.compose.foundation.Canvas(Modifier.size(6.dp)) {
+                        drawCircle(color = tint.copy(alpha = 0.9f))
+                    }
+                    Text(
+                        "signed in",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.green,
+                    )
+                } else {
+                    Text(
+                        "not signed in",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.textDim,
+                    )
+                }
+            }
         }
         if (!enabled) {
-            CircularProgressIndicator(modifier = Modifier.size(18.dp))
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
         } else if (signedIn) {
-            Icon(
-                Icons.Filled.CheckCircle,
-                contentDescription = "Signed in",
-                tint = neon.green,
-                modifier = Modifier.size(20.dp),
+            Text(
+                "Manage",
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = neon.sans,
+                color = neon.textDim,
             )
+            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint, modifier = Modifier.size(18.dp))
         } else {
-            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "Sign in",
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = neon.sans,
+                color = tint,
+            )
+            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
         }
     }
 }

@@ -109,6 +109,7 @@
           service via the SDK's internal intent mechanism; no external callers
           should be able to address it directly.
         -->
+
         <service
             android:name=".push.ConduitFcmService"
             android:exported="false">
@@ -116,5 +117,21 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <!--
+          Approval action receiver (Fix 9). Targets only our own action-button
+          PendingIntents from a category=="approval" push; resolves the approval
+          over HTTP (POST /api/session/approval) off the main thread.
+
+          android:exported="false": only our same-process PendingIntents address
+          it, never arbitrary external callers.
+        -->
+        <receiver
+            android:name=".push.ApprovalActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="sh.nikhil.conduit.APPROVAL_RESOLVE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

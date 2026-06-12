@@ -125,9 +125,9 @@ fun SettingsScreen(
     // When true, render inline as a tablet section pane (no bottom-sheet
     // shell) — mirrors iOS ConduitUI.SettingsView(embedded:).
     embedded: Boolean = false,
-    // Called when the user taps "How it works" to re-open the onboarding
-    // guide. Caller dismisses settings and presents the guide.
-    onOpenOnboarding: (() -> Unit)? = null,
+    // Fix 1: called with an OnboardingEntry so replay/addMachine never land on Done.
+    // Caller dismisses settings and presents the guide with the correct intent.
+    onOpenOnboarding: ((FeatureFlags.OnboardingEntry) -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val appearance = LocalAppearanceStore.current
@@ -425,6 +425,34 @@ fun SettingsScreen(
                 )
             }
 
+            // New session — which agents appear in the picker. claude + codex
+            // are always available; the rest are opt-in to keep the picker
+            // uncluttered for the common case.
+            SettingsSection("New session") {
+                val neon = LocalNeonTheme.current
+                val enabledAgents by appearance.enabledAgents.collectAsState()
+                val descriptors by store.agentDescriptors.collectAsState()
+                Text(
+                    "Claude and Codex are always shown. Enable others to offer them when you start a session.",
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = neon.textFaint,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                )
+                FeatureFlags.optionalAgents.forEachIndexed { idx, agent ->
+                    if (idx > 0) SettingsDivider()
+                    val name = descriptors[agent]?.displayName
+                        ?: agent.replaceFirstChar { it.uppercaseChar() }
+                    ToggleRow(
+                        icon = Icons.Filled.Person,
+                        title = name,
+                        subtitle = "Show $name in the new-session picker",
+                        isOn = agent in enabledAgents,
+                        onChange = { appearance.setAgentEnabled(agent, it) },
+                    )
+                }
+            }
+
             // Labs — chat-shell-v2 A/B override (§2). Auto follows the
             // assigned bucket; A/B are a local override for dogfooding.
             // Also hosts the debug-gated Agents panel toggle.
@@ -483,16 +511,26 @@ fun SettingsScreen(
             // third-party licenses + trademark attribution screen.
             SettingsSection("About") {
                 KeyValueRow(label = "Conduit", value = versionLabel)
-                // "How it works" row — re-opens the onboarding guide.
+                // Fix 1: "Replay walkthrough" and "Add a machine" entries.
                 if (onOpenOnboarding != null) {
                     SettingsDivider()
                     SettingsRow(
                         icon = Icons.Default.AutoAwesome,
-                        title = "How it works",
-                        subtitle = "Add a box, run agents, work from anywhere",
+                        title = "Replay walkthrough",
+                        subtitle = "Start from Welcome and walk through the setup flow",
                         onClick = {
-                            Telemetry.breadcrumb("settings", "how_it_works_tapped")
-                            onOpenOnboarding()
+                            Telemetry.breadcrumb("settings", "replay_walkthrough_tapped")
+                            onOpenOnboarding(FeatureFlags.OnboardingEntry.replay)
+                        },
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = Icons.Filled.AddCircle,
+                        title = "Add a machine",
+                        subtitle = "Install the broker on another box and pair it",
+                        onClick = {
+                            Telemetry.breadcrumb("settings", "add_machine_tapped")
+                            onOpenOnboarding(FeatureFlags.OnboardingEntry.addMachine)
                         },
                     )
                 }

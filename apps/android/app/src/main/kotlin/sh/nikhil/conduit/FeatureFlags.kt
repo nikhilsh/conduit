@@ -38,12 +38,50 @@ object FeatureFlags {
     /** Launch routing target (accounts-free, device-local gating). */
     enum class OnboardingRoute { None, Full }
 
+    /**
+     * Entry intent for the onboarding wizard (Fix 1).
+     *
+     *  - [firstRun]   : automatic gate on first launch; may resolve to Done
+     *                   when already paired.
+     *  - [replay]     : Settings "Replay walkthrough"; always starts at Welcome.
+     *  - [addMachine] : Settings "Add a machine"; always starts at Install.
+     *
+     * Only [firstRun] may resolve to Done directly. The other two intents
+     * always run the flow so the user sees actual wizard steps.
+     */
+    enum class OnboardingEntry { firstRun, replay, addMachine }
+
     /** Onboarding step indices — shared by the routing math and the wizard. */
     object Step {
         const val WELCOME = 0
         const val INSTALL = 1
         const val PAIR = 2
         const val DONE = 3
+    }
+
+    // ── Enabled agents (new-session picker) ─────────────────────────────
+
+    /**
+     * Agents enabled by default in the new-session picker. claude + codex
+     * ship on; gemini / opencode are opt-in via Settings. The persisted
+     * override lives on [sh.nikhil.conduit.AppearanceStore.enabledAgents].
+     */
+    val defaultEnabledAgents: List<String> = listOf("claude", "codex")
+
+    /**
+     * Agents the picker MAY offer the user to enable (opt-in beyond the
+     * always-available defaults). Order is the Settings list order.
+     */
+    val optionalAgents: List<String> = listOf("gemini", "opencode")
+
+    /**
+     * Filter a candidate agent id list down to the [enabled] set, preserving
+     * the candidate order. Defaults are always retained even if absent from
+     * [enabled] (a corrupt/empty persisted set never hides claude/codex).
+     */
+    fun visibleAgents(candidates: List<String>, enabled: Set<String>): List<String> {
+        val keep = enabled + defaultEnabledAgents
+        return candidates.filter { it in keep }
     }
 
     // ── Debug flags ─────────────────────────────────────────────────────
@@ -113,4 +151,31 @@ object FeatureFlags {
                 maxOf(floor, minOf(furthestStep, Step.PAIR))
             }
         }
+
+    /**
+     * Resolve the initial step for the wizard given an explicit entry intent
+     * (Fix 1). The intent takes priority over the firstRun routing math:
+     *
+     *  - [OnboardingEntry.replay]      → always Welcome (run the full flow).
+     *  - [OnboardingEntry.addMachine]  → always Install (skip Welcome).
+     *  - [OnboardingEntry.firstRun]    → delegate to [onboardingInitialStep]
+     *                                    (may return Done when already paired).
+     *
+     * Only [firstRun] can produce Done; replay/addMachine never land there
+     * on entry — Done is only reachable by *finishing* the flow.
+     */
+    fun resolveInitialStep(
+        entry: OnboardingEntry,
+        pairedBrokers: Int,
+        brokerReachable: Boolean,
+        seenWelcome: Boolean,
+        furthestStep: Int,
+    ): Int = when (entry) {
+        OnboardingEntry.replay      -> Step.WELCOME
+        OnboardingEntry.addMachine  -> Step.INSTALL
+        OnboardingEntry.firstRun    -> {
+            val route = onboardingRoute(pairedBrokers, brokerReachable)
+            onboardingInitialStep(route, seenWelcome, furthestStep)
+        }
+    }
 }

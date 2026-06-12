@@ -35,15 +35,23 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -127,6 +135,39 @@ fun HomeScreen(
     var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
     // SSH re-bootstrap sheet (same pattern as ProjectListScreen).
     var showSshReBoot by remember { mutableStateOf(false) }
+    // Fix 4: rename dialog state.
+    var renameTarget by remember { mutableStateOf<SavedServer?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+    // Fix 4: reachability state for non-active saved servers. Probed once per
+    // composition via GET <endpoint>/api/capabilities with a short timeout.
+    // null = not yet probed, true = reachable, false = offline.
+    val reachabilityMap = remember { mutableStateMapOf<String, Boolean>() }
+    val scope = rememberCoroutineScope()
+    val endpoint_ by store.endpoint.collectAsState()
+    LaunchedEffect(savedServers) {
+        savedServers.forEach { server ->
+            if (server.endpoint == endpoint_) return@forEach // active box uses harness state
+            if (reachabilityMap.containsKey(server.id)) return@forEach // already probed
+            scope.launch(Dispatchers.IO) {
+                val reachable = withTimeoutOrNull(4_000L) {
+                    runCatching {
+                        val base = server.endpoint.httpBaseUrl ?: return@runCatching false
+                        val conn = java.net.URL("$base/api/capabilities").openConnection() as java.net.HttpURLConnection
+                        conn.setRequestProperty("Authorization", "Bearer ${server.endpoint.token}")
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        val code = conn.responseCode
+                        conn.disconnect()
+                        code in 200..299
+                    }.getOrDefault(false)
+                } ?: false
+                reachabilityMap[server.id] = reachable
+                if (!reachable) {
+                    Telemetry.breadcrumb("boxes", "reachability probe offline", mapOf("server" to server.name))
+                }
+            }
+        }
+    }
 
     val neon = LocalNeonTheme.current
 
@@ -706,12 +747,20 @@ fun HomeScreen(
                         server = server,
                         isActive = server.endpoint == endpoint,
                         harness = harness,
-                        // Sessions live on the connected endpoint, so the
-                        // connected box's count is the whole session list.
                         sessionCount = sessions.size,
-                        // Tap opens the box's health detail; reconnect now
-                        // lives inside Box health (its onReconnect action).
+                        // Fix 4: non-active reachability from probe.
+                        reachable = reachabilityMap[server.id],
                         onClick = { onOpenBoxHealth(server) },
+                        // Fix 4: long-press to rename.
+                        onLongClick = {
+                            renameTarget = server
+                            renameDraft = server.name
+                        },
+                        // Fix 4: per-row Connect (switches to this box).
+                        onConnect = {
+                            Telemetry.breadcrumb("boxes", "connect tapped", mapOf("server" to server.name))
+                            store.selectSavedServer(server.id, autoConnect = true)
+                        },
                     )
                 }
             }
@@ -778,6 +827,33 @@ fun HomeScreen(
     if (showSshReBoot) {
         SSHLoginSheet(store = store, onDismiss = { showSshReBoot = false })
     }
+
+    // Fix 4: rename dialog — long-press on a box row.
+    renameTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename box") },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { renameDraft = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (renameDraft.isNotBlank()) {
+                        store.renameSavedServer(target.id, renameDraft)
+                    }
+                    renameTarget = null
+                }) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 /**
@@ -788,6 +864,13 @@ fun HomeScreen(
  * §3a). Mirrors iOS `ConduitHomeView.boxRow`. Never shows quota: plan limits are
  * per-account (§3b), surfaced via the usage strip, not per box.
  */
+/**
+ * A paired-machine ("box") row on Home. Fix 4: supports long-press rename,
+ * per-row Connect (switches to the box), and reachability probe for non-active
+ * boxes (null = not yet probed). Active box reads harness state; others read
+ * the probe result.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomeBoxRow(
     neon: NeonTheme,
@@ -795,14 +878,22 @@ private fun HomeBoxRow(
     isActive: Boolean,
     harness: HarnessState,
     sessionCount: Int,
+    // Fix 4: reachability probe result for non-active boxes; null = pending.
+    reachable: Boolean? = null,
     onClick: () -> Unit,
+    // Fix 4: long-press opens rename dialog.
+    onLongClick: () -> Unit = {},
+    // Fix 4: per-row Connect switches to this box.
+    onConnect: () -> Unit = {},
 ) {
     val connected = isActive && (harness is HarnessState.Live || harness is HarnessState.Linked)
     val (statusText, statusColor) = when {
-        !isActive -> "tap to connect" to neon.textFaint
-        connected -> "connected · $sessionCount ${if (sessionCount == 1) "session" else "sessions"}" to neon.green
-        harness is HarnessState.Connecting -> "connecting…" to neon.yellow
-        harness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
+        isActive && connected -> "connected · $sessionCount ${if (sessionCount == 1) "session" else "sessions"}" to neon.green
+        isActive && harness is HarnessState.Connecting -> "connecting…" to neon.yellow
+        isActive && harness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
+        isActive -> "offline" to neon.textFaint
+        reachable == null -> "probing…" to neon.textFaint
+        reachable == true -> "reachable" to neon.green
         else -> "offline" to neon.textFaint
     }
     val glyphColor = if (connected) neon.green else if (isActive) neon.accent else neon.textFaint
@@ -816,7 +907,7 @@ private fun HomeBoxRow(
                 borderColor = if (connected) neon.green.copy(alpha = 0.27f) else neon.border,
                 glowTint = if (connected) neon.green else null,
             )
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 13.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(11.dp),
@@ -839,8 +930,6 @@ private fun HomeBoxRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            // Show the real SSH host:port for SSH-tunnelled boxes;
-            // loopback address is the tunnel, not the actual machine.
             Text(
                 server.ssh?.let { "${it.host}:${it.port}" } ?: server.endpoint.displayHost,
                 style = MaterialTheme.typography.labelSmall,
@@ -861,6 +950,19 @@ private fun HomeBoxRow(
                 modifier = Modifier
                     .background(neon.green.copy(alpha = 0.14f), CircleShape)
                     .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        } else {
+            // Fix 4: per-row Connect button for non-active boxes.
+            Text(
+                "Connect",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.sp,
+                color = neon.accent,
+                modifier = Modifier
+                    .clickable(onClick = onConnect)
+                    .background(neon.accent.copy(alpha = 0.13f), CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
             )
         }
         Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
