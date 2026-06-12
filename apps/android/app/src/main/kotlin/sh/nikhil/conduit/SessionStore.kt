@@ -1032,6 +1032,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
         persistSavedServers(current)
     }
 
+    /**
+     * Rename a saved server in-place (Fix 4). Writes the new [name] into the
+     * [SavedServer] entry and persists immediately. No-op when the id is unknown.
+     */
+    fun renameSavedServer(serverId: String, name: String) {
+        val current = _savedServers.value.toMutableList()
+        val idx = current.indexOfFirst { it.id == serverId }
+        if (idx < 0) return
+        current[idx] = current[idx].copy(name = name.trim().ifEmpty { current[idx].name })
+        _savedServers.value = current
+        persistSavedServers(current)
+        Telemetry.breadcrumb("boxes", "server renamed", mapOf("id" to serverId))
+    }
+
     fun selectSavedServer(serverId: String, autoConnect: Boolean) {
         val server = _savedServers.value.firstOrNull { it.id == serverId } ?: return
         val next = _savedServers.value.map { it.copy(isDefault = it.id == serverId) }
