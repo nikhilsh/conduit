@@ -409,6 +409,9 @@ fi
 # Only export the API keys when non-empty (the broker strips empty
 # ANTHROPIC_API_KEY / OPENAI_API_KEY, but leaving them unset is cleaner).
 mkdir -p "$STATE_DIR"
+# Ensure ~/.local/bin exists — agent installers (claude/codex) write here.
+# Cheap insurance even if no install happens this run.
+mkdir -p "$HOME/.local/bin"
 export CONDUIT_TOKEN="$TOKEN"
 if [ -n "$ANTHROPIC" ]; then export ANTHROPIC_API_KEY="$ANTHROPIC"; fi
 if [ -n "$OPENAI" ]; then export OPENAI_API_KEY="$OPENAI"; fi
@@ -443,10 +446,16 @@ fi
 if [ "$_use_systemd" = "1" ]; then
   mkdir -p "$SYSTEMD_UNIT_DIR"
 
-  # Build Environment= lines — CONDUIT_TOKEN always; API keys only when set;
+  # Build Environment= lines — PATH first (so the broker can find agent CLIs
+  # installed in ~/.local/bin by the post-OK install step or by hand);
+  # CONDUIT_TOKEN always; API keys only when set;
   # CONDUIT_NTFY_URL when ntfy was installed successfully (so the broker
   # advertises it in /api/capabilities features.ntfy_url).
-  _env_lines="Environment=\"CONDUIT_TOKEN=$TOKEN\""
+  # Use $HOME (expanded at write time) rather than %h so the shell heredoc
+  # does not need quoting gymnastics; both are equivalent in user units.
+  _env_lines="Environment=\"PATH=$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
+  _env_lines="$_env_lines
+Environment=\"CONDUIT_TOKEN=$TOKEN\""
   if [ -n "$ANTHROPIC" ]; then
     _env_lines="$_env_lines
 Environment=\"ANTHROPIC_API_KEY=$ANTHROPIC\""
@@ -497,6 +506,9 @@ if [ "$_use_systemd" = "0" ]; then
   # Classic detached path: setsid so the broker survives this one-shot SSH
   # exec.  Bind to 127.0.0.1 — reachable only through the SSH tunnel.
   # (For a reboot-persistent install, use the systemd unit in SELF-HOST.md.)
+  # Export PATH so the broker inherits ~/.local/bin and can find agent CLIs
+  # (same guarantee as the systemd unit's Environment=PATH= line above).
+  export PATH="$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   # Inject CONDUIT_NTFY_URL when ntfy was started so the broker advertises it.
   if [ -n "$_ntfy_url" ]; then
     CONDUIT_NTFY_URL="$_ntfy_url" setsid "$BIN" up --addr "127.0.0.1:$HOST_PORT" >"$LOGFILE" 2>&1 &
