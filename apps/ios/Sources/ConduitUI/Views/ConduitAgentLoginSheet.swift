@@ -58,6 +58,7 @@ extension ConduitUI {
                     ConduitUI.Palette.surface.color.ignoresSafeArea()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
+                            // Fix 2: "Agent accounts" title shown as section header.
                             intro
                             providersCard
                             if awaitingPaste {
@@ -75,14 +76,51 @@ extension ConduitUI {
                     }
                     .scrollIndicators(.hidden)
                 }
-                .navigationTitle("Sign in")
+                .safeAreaInset(edge: .bottom) {
+                    // Fix 2: green Done CTA anchored at the bottom.
+                    if !awaitingPaste {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Text("Done")
+                                .font(neon.sans(15).weight(.semibold))
+                                .foregroundStyle(neon.accentText)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(neon.green)
+                                )
+                                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.green) : nil)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isWorking)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+                        .padding(.bottom, 12)
+                        .background(
+                            ConduitUI.Palette.surface.color
+                                .overlay(alignment: .top) {
+                                    Rectangle().fill(ConduitUI.Palette.separator.color).frame(height: 1)
+                                }
+                                .ignoresSafeArea(edges: .bottom)
+                        )
+                    }
+                }
+                // Fix 2: renamed to "Agent accounts"; trailing X replaces "Cancel".
+                .navigationTitle("Agent accounts")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             dismiss()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(ConduitUI.Palette.textMuted.color)
                         }
                         .disabled(isWorking)
+                        .accessibilityLabel("Close")
                     }
                 }
             }
@@ -118,38 +156,124 @@ extension ConduitUI {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
 
+        // Fix 2: structured provider card with plan badge + signed-in status + Manage/Sign-in trailing.
         private var providersCard: some View {
             VStack(alignment: .leading, spacing: 0) {
-                providerRow(
-                    icon: "person.crop.circle.badge.checkmark",
-                    tint: neon.agentTint(forAgent: "codex"),
-                    title: "Login with ChatGPT",
-                    subtitle: signedInProviders.contains(.openai)
-                        ? "Signed in · tap to sign in again"
-                        : "Codex / ChatGPT OAuth · auth.openai.com",
+                // Claude row
+                let claudeStatus = agentStatus(agent: "claude", provider: .anthropic)
+                agentRow(
+                    status: claudeStatus,
+                    signedIn: signedInProviders.contains(.anthropic),
                     enabled: !isWorking,
-                    signedIn: signedInProviders.contains(.openai),
-                    action: { Task { await loginChatGPT() } }
+                    action: { Task { await beginClaude() } }
                 )
                 Divider()
                     .background(ConduitUI.Palette.separator.color)
-                    .padding(.vertical, 6)
-                providerRow(
-                    icon: "ant.circle",
-                    tint: neon.agentTint(forAgent: "claude"),
-                    title: "Login with Claude",
-                    subtitle: signedInProviders.contains(.anthropic)
-                        ? "Signed in · tap to sign in again"
-                        : "Claude OAuth · claude.ai (paste code)",
+                // ChatGPT / Codex row
+                let codexStatus = agentStatus(agent: "codex", provider: .openai)
+                agentRow(
+                    status: codexStatus,
+                    signedIn: signedInProviders.contains(.openai),
                     enabled: !isWorking,
-                    signedIn: signedInProviders.contains(.anthropic),
-                    action: { Task { await beginClaude() } }
+                    action: { Task { await loginChatGPT() } }
                 )
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .conduitGlassRoundedRect(cornerRadius: 14)
+        }
+
+        /// Build a fresh AgentAccountStatus snapshot for the given provider.
+        /// Used to surface the plan badge without a full store refresh.
+        private func agentStatus(agent: String, provider: OAuthProvider) -> AgentAccountStatus {
+            let displayName = agent == "claude" ? "Claude" : "ChatGPT"
+            let credential = OAuthCredentialStore.load(provider: provider)
+            let planLabel = credential.flatMap(AgentAccountStatus.planLabel(for:))
+            let expired = credential.map { AgentAccountStatus.isExpired($0) } ?? false
+            return AgentAccountStatus(
+                agent: agent,
+                provider: provider,
+                displayName: displayName,
+                signedIn: credential != nil,
+                expired: expired,
+                planLabel: planLabel
+            )
+        }
+
+        /// One structured agent row per the Fix-2 spec:
+        /// tinted avatar | name + plan badge | status dot | Manage/Sign in trailing.
+        private func agentRow(
+            status: AgentAccountStatus,
+            signedIn: Bool,
+            enabled: Bool,
+            action: @escaping () -> Void
+        ) -> some View {
+            let tint = neon.agentTint(forAgent: status.agent)
+            let (statusText, statusColor): (String, Color) =
+                signedIn ? ("signed in", neon.green)
+                : status.expired ? ("sign-in expired", neon.yellow)
+                : ("not signed in", ConduitUI.Palette.textMuted.color)
+            return Button(action: action) {
+                HStack(spacing: 12) {
+                    // Tinted avatar tile
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(tint.opacity(0.14))
+                        .frame(width: 38, height: 38)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(tint.opacity(0.35), lineWidth: 1)
+                        )
+                        .overlay(ConduitUI.ConduitMark(size: 22, color: tint, glow: neon.glow))
+                    VStack(alignment: .leading, spacing: 3) {
+                        // Name + optional plan badge
+                        HStack(spacing: 7) {
+                            Text(status.displayName)
+                                .font(neon.sans(15).weight(.bold))
+                                .foregroundStyle(enabled ? ConduitUI.Palette.textPrimary.color : ConduitUI.Palette.textMuted.color)
+                            if let plan = status.planLabel {
+                                Text(plan)
+                                    .font(neon.mono(9).weight(.bold))
+                                    .tracking(0.6)
+                                    .foregroundStyle(tint)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(tint.opacity(0.14)))
+                                    .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
+                            }
+                        }
+                        // Status dot + text
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(statusColor)
+                                .frame(width: 5, height: 5)
+                            Text(statusText)
+                                .font(neon.mono(10.5))
+                                .foregroundStyle(statusColor)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    // Trailing Manage / Sign in
+                    HStack(spacing: 4) {
+                        Text(signedIn ? "Manage" : "Sign in")
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(signedIn ? ConduitUI.Palette.textMuted.color : neon.green)
+                        if isWorking && enabled {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(tint)
+                                .frame(width: 16, height: 16)
+                        } else {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled)
         }
 
         /// Claude's code-display flow: after the browser shows a code, the
@@ -179,51 +303,6 @@ extension ConduitUI {
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .conduitGlassRoundedRect(cornerRadius: 14)
-        }
-
-        @ViewBuilder
-        private func providerRow(
-            icon: String,
-            tint: Color,
-            title: String,
-            subtitle: String,
-            enabled: Bool,
-            signedIn: Bool,
-            action: @escaping () -> Void
-        ) -> some View {
-            Button(action: action) {
-                HStack(spacing: 12) {
-                    Image(systemName: icon)
-                        .font(.body)
-                        .frame(width: 22)
-                        .foregroundStyle(enabled ? tint : ConduitUI.Palette.textMuted.color)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(enabled ? ConduitUI.Palette.textPrimary.color : ConduitUI.Palette.textMuted.color)
-                        Text(subtitle)
-                            .font(.caption2)
-                            .foregroundStyle(signedIn ? neon.green : ConduitUI.Palette.textMuted.color)
-                    }
-                    Spacer()
-                    if isWorking, enabled {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(tint)
-                    } else if signedIn {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.body)
-                            .foregroundStyle(neon.green)
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(ConduitUI.Palette.textMuted.color)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!enabled)
         }
 
         private func statusPill(text: String, tint: Color) -> some View {
