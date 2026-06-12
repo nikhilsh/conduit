@@ -157,6 +157,88 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 18
 fi
 
+# ── Idempotent per-agent ensure ──────────────────────────────────────────
+# Ensures EACH agent CLI (claude, codex) is present independently and
+# idempotently.  Called on BOTH the reuse path and the fresh-install path so
+# re-adding a box that already has claude (but not codex) installs the missing
+# agent without reinstalling the one that's already there.
+#
+# Rules:
+#   - Each agent is checked individually; presence → skip (no reinstall).
+#   - Absent agent → attempt bounded install.
+#   - All installs are best-effort: a failure or timeout is logged to stderr
+#     and NEVER causes the bootstrap to fail or the OK line to become ERR.
+#   - CONDUIT_AUTOINSTALL_AGENT=0 → skip all installs (log + return).
+#   - ~/.local/bin is created and prepended to PATH so post-install
+#     `command -v` checks succeed within this script.
+_ensure_agents() {
+  if [ "${CONDUIT_AUTOINSTALL_AGENT:-1}" = "0" ]; then
+    echo "conduit: CONDUIT_AUTOINSTALL_AGENT=0; skipping agent CLI install (install manually — see docs/SELF-HOST.md)" >&2
+    return 0
+  fi
+
+  _local_bin="$HOME/.local/bin"
+  mkdir -p "$_local_bin"
+  case ":$PATH:" in
+    *":$_local_bin:"*) ;;
+    *) export PATH="$_local_bin:$PATH" ;;
+  esac
+
+  # ── claude ────────────────────────────────────────────────────────────────
+  if command -v claude >/dev/null 2>&1; then
+    echo "conduit: claude present" >&2
+  else
+    echo "STEP install_agent" >&2
+    echo "conduit: claude not found; attempting install ..." >&2
+    _claude_ok=0
+    if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
+         'curl -fsSL --connect-timeout 15 --max-time 60 https://claude.ai/install.sh | bash' \
+         >/dev/null 2>&1; then
+      if command -v claude >/dev/null 2>&1; then
+        echo "conduit: claude installed" >&2
+        _claude_ok=1
+      fi
+    fi
+    if [ "$_claude_ok" = "0" ]; then
+      echo "conduit: claude install failed or timed out (non-fatal)" >&2
+    fi
+  fi
+
+  # ── codex ─────────────────────────────────────────────────────────────────
+  if command -v codex >/dev/null 2>&1; then
+    echo "conduit: codex present" >&2
+  else
+    echo "STEP install_agent" >&2
+    echo "conduit: codex not found; attempting install ..." >&2
+    _codex_ok=0
+
+    # Attempt 1: official codex install script.
+    if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
+         'curl -fsSL --connect-timeout 15 --max-time 60 https://chatgpt.com/codex/install.sh | sh' \
+         >/dev/null 2>&1; then
+      if command -v codex >/dev/null 2>&1; then
+        echo "conduit: codex installed" >&2
+        _codex_ok=1
+      fi
+    fi
+
+    # Attempt 2: npm fallback.
+    if [ "$_codex_ok" = "0" ] && command -v npm >/dev/null 2>&1; then
+      echo "conduit: codex script failed or timed out; trying npm install -g @openai/codex ..." >&2
+      if timeout "$AGENT_INSTALL_TIMEOUT_S" npm install -g @openai/codex >/dev/null 2>&1; then
+        if command -v codex >/dev/null 2>&1; then
+          echo "conduit: codex installed via npm" >&2
+          _codex_ok=1
+        fi
+      fi
+    fi
+
+    if [ "$_codex_ok" = "0" ]; then
+      echo "conduit: codex install failed or timed out (non-fatal)" >&2
+    fi
+  fi
+}
+
 # ── Idempotent unit-ensure ────────────────────────────────────────────────
 # Called on the reuse path (broker already healthy) to guarantee the systemd
 # unit is up-to-date.  Boxes bootstrapped by an older build may have a unit
@@ -261,6 +343,7 @@ _UNIT
 echo "STEP reuse_check" >&2
 if curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ensure_broker_unit
+  _ensure_agents >&2 || true
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
@@ -273,6 +356,7 @@ fi
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null \
    && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$HEALTH" >/dev/null 2>&1; then
   _ensure_broker_unit
+  _ensure_agents >&2 || true
   _ntfy_suffix=""
   if [ "$_with_ntfy" = "1" ] && curl -fsS --max-time "$CURL_HEALTH_MAX_TIME" "$NTFY_HEALTH" >/dev/null 2>&1; then
     _ntfy_suffix=" ntfy=http://127.0.0.1:$NTFY_PORT"
@@ -632,71 +716,11 @@ while [ "$i" -le 15 ]; do
     echo "OK port=$HOST_PORT token=$TOKEN reused=false${_ntfy_suffix}"
     # ── Best-effort agent CLI install (non-fatal, after OK is emitted) ─────
     # The broker is already healthy; the app has its connection.  Now we
-    # attempt to install an agent CLI if none is present.  Any failure is
-    # logged to stderr and silently ignored — it MUST NOT affect the exit
-    # code or the OK line already printed.
-    _try_agent_install() {
-      if command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1; then
-        return 0
-      fi
-      if [ "$CONDUIT_AUTOINSTALL_AGENT" = "0" ]; then
-        echo "conduit: CONDUIT_AUTOINSTALL_AGENT=0; skipping agent CLI install (install manually — see docs/SELF-HOST.md)" >&2
-        return 0
-      fi
-
-      echo "STEP install_agent" >&2
-      echo "conduit: no agent CLI found; attempting user-space install (set CONDUIT_AUTOINSTALL_AGENT=0 to skip)" >&2
-
-      # Ensure ~/.local/bin is on PATH so a freshly installed binary is visible.
-      LOCAL_BIN="$HOME/.local/bin"
-      mkdir -p "$LOCAL_BIN"
-      case ":$PATH:" in
-        *":$LOCAL_BIN:"*) ;;
-        *) PATH="$LOCAL_BIN:$PATH" ;;
-      esac
-
-      _installed_agent=0
-
-      # Attempt 1: claude — official native installer.
-      echo "conduit: trying claude native installer ..." >&2
-      if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
-           'curl -fsSL --connect-timeout 15 --max-time 60 https://claude.ai/install.sh | bash' \
-           >/dev/null 2>&1; then
-        if command -v claude >/dev/null 2>&1; then
-          echo "conduit: claude installed successfully" >&2
-          _installed_agent=1
-        fi
-      fi
-
-      # Attempt 2: codex — official install script.
-      if [ "$_installed_agent" = "0" ]; then
-        echo "conduit: claude install failed or timed out; trying codex install script ..." >&2
-        if timeout "$AGENT_INSTALL_TIMEOUT_S" sh -c \
-             'curl -fsSL --connect-timeout 15 --max-time 60 https://chatgpt.com/codex/install.sh | sh' \
-             >/dev/null 2>&1; then
-          if command -v codex >/dev/null 2>&1; then
-            echo "conduit: codex installed successfully" >&2
-            _installed_agent=1
-          fi
-        fi
-      fi
-
-      # Attempt 3: codex via npm (fallback for hosts with npm but no direct DL).
-      if [ "$_installed_agent" = "0" ] && command -v npm >/dev/null 2>&1; then
-        echo "conduit: codex script failed or timed out; trying npm install -g @openai/codex ..." >&2
-        if timeout "$AGENT_INSTALL_TIMEOUT_S" npm install -g @openai/codex >/dev/null 2>&1; then
-          if command -v codex >/dev/null 2>&1; then
-            echo "conduit: codex installed via npm" >&2
-            _installed_agent=1
-          fi
-        fi
-      fi
-
-      if [ "$_installed_agent" = "0" ]; then
-        echo "conduit: no agent CLI (claude/codex) on PATH; auto-install failed or timed out; install/sign in from the app — see docs/SELF-HOST.md" >&2
-      fi
-    }
-    _try_agent_install >&2 || true
+    # ensure each agent CLI is present independently (claude and codex are
+    # each checked and installed if missing — neither gates the other).
+    # Any failure is logged to stderr and silently ignored — it MUST NOT
+    # affect the exit code or the OK line already printed.
+    _ensure_agents >&2 || true
     exit 0
   fi
   sleep 1
