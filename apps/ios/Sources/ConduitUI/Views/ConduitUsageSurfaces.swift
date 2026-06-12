@@ -80,7 +80,7 @@ extension ConduitUI {
             if !agents.isEmpty {
                 VStack(spacing: 8) {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                        withAnimation(.easeInOut(duration: 0.28)) { expanded.toggle() }
                     } label: {
                         HStack(spacing: 10) {
                             ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
@@ -90,9 +90,11 @@ extension ConduitUI {
                                 agentGlance(a)
                             }
                             Spacer(minLength: 4)
-                            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            Image(systemName: "chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(neon.textFaint)
+                                .rotationEffect(.degrees(expanded ? 180 : 0))
+                                .animation(.easeInOut(duration: 0.28), value: expanded)
                         }
                     }
                     .buttonStyle(.plain)
@@ -121,6 +123,7 @@ extension ConduitUI {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 .padding(.horizontal, 12)

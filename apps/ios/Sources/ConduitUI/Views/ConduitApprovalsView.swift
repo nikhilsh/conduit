@@ -2,42 +2,41 @@ import SwiftUI
 
 // MARK: - ConduitApprovalsView
 //
-// Conduit redesign "Approvals inbox" surface (handoff §B.5, image 06).
+// Conduit redesign "Approvals inbox" surface (handoff SS.B.5, image 06).
 // A dedicated queue of the sessions whose agent is currently BLOCKED on
-// the user — each row shows the agent + session name + branch, the exact
+// the user -- each row shows the agent + session name + branch, the exact
 // pending prompt / command text, a risk chip (safe / writes files /
-// destructive), and `Approve · Deny · open-chat`.
+// destructive), and Approve / Deny / open-chat actions.
 //
-// DATA SOURCE — real signal only, no fabrication. The queue is built from
+// DATA SOURCE -- real signal only, no fabrication. The queue is built from
 // the SAME "awaiting input" signal the Home "needs-you" banner uses: a
 // session whose LAST `ConversationItem` is a non-user item with
-// `kind == "pending_input"` (Codex `[A]pprove/[E]dit/[R]eject` prompts,
-// numbered menus, `request_user_input` — classified in
+// `kind == "pending_input"` (Codex [A]pprove/[E]dit/[R]eject prompts,
+// numbered menus, `request_user_input` -- classified in
 // `core/src/conversation.rs`). We reuse `ConduitUI.HomeViewModel.isAwaitingInput`
 // verbatim for that classification rather than re-deriving it differently,
 // and never synthesize an approval item that isn't actually pending.
 //
-// APPROVE / DENY — there is no broker endpoint to programmatically
-// approve/deny an agent prompt; the user normally answers inside the chat
-// (Codex menus, request_user_input). So every action here — Approve, Deny,
-// and the open-chat affordance — OPENS THE SESSION'S CHAT via
-// `onOpenSession`, where the user actually responds. We don't fabricate an
-// approve API. (If the broker ever gains a programmatic approve/deny, wire
-// it in `ApprovalAction` here.)
+// APPROVE / DENY -- both actions call `POST /api/session/approval` on the
+// broker (same transport AppDelegate uses for push-action resolves). This
+// is uniform with the lock-screen buttons and avoids duplicating WS logic.
+// The endpoint is resolved from the active SessionStore endpoint. A 200 ->
+// "continuing..." visual; 404 -> nothing pending, fall back to opening
+// chat; network error -> Telemetry.capture.
 //
-// PRESENTATION (wired later by the caller): present either as a full
-// screen pushed from a Home toolbar/needs-you tap, or as a sheet. The
-// entry-point's count badge should reflect `ApprovalsViewModel.queue(...)
-// .count` (the same number as the Home banner). This file does NOT wire
-// any entry point, badge, or push notification — it only renders the
-// queue and exposes the pure helper.
+// PER-SESSION AUTO-APPROVE -- a local toggle on each card. While the app is
+// foreground-connected and an approval arrives for a session with the toggle
+// on, the resolve endpoint is called automatically with "approve" and a
+// quiet audited line is shown. Persisted in-memory only (resets on restart,
+// intentionally -- a blanket approval from a previous session shouldn't
+// carry over).
 
 extension ConduitUI {
 
     // MARK: Risk
 
     /// Honest, heuristic risk classification for a pending command. Derived
-    /// from the command/prompt text — clearly a best-effort guess, defaults
+    /// from the command/prompt text -- clearly a best-effort guess, defaults
     /// to `.safe` when nothing risky is detected (never invents danger).
     enum ApprovalRisk: Equatable {
         /// Irreversible / data-losing (`rm -rf`, `git push --force`, `DROP
@@ -76,7 +75,7 @@ extension ConduitUI {
     enum ApprovalsViewModel {
 
         /// Build the queue from per-session candidates. A candidate is
-        /// included ONLY when it is genuinely awaiting input — the same
+        /// included ONLY when it is genuinely awaiting input -- the same
         /// signal `HomeViewModel.isAwaitingInput` gates the needs-you banner
         /// on (last transcript item is a non-user `pending_input`). Input
         /// order is preserved. `command`/`content` come from that last item.
@@ -121,7 +120,7 @@ extension ConduitUI {
         }
 
         /// Heuristic risk from the command (preferred) or prompt body.
-        /// Honest best-effort — destructive patterns win, then file-writing
+        /// Honest best-effort -- destructive patterns win, then file-writing
         /// patterns, else `.safe`. Case-insensitive.
         static func classifyRisk(command: String?, content: String) -> ApprovalRisk {
             let haystack = ((command ?? "") + " " + content).lowercased()
@@ -158,6 +157,22 @@ extension ConduitUI {
         ]
     }
 
+    // MARK: - Per-card approval state
+
+    /// Per-session UI state for in-app approve/deny actions.
+    enum ApprovalCardState: Equatable {
+        /// Idle -- buttons live.
+        case idle
+        /// HTTP request in flight.
+        case resolving
+        /// Resolved successfully.
+        case resolved(String)   // "continuing..." / "denied"
+        /// 404 -- nothing pending; open chat.
+        case notPending
+        /// Network / server error.
+        case failed(String)
+    }
+
     // MARK: View
 
     struct ApprovalsView: View {
@@ -165,13 +180,17 @@ extension ConduitUI {
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
 
-        /// Opens the given session's chat — the real "respond here" path for
-        /// Approve / Deny / open-chat (no programmatic approve endpoint).
+        /// Opens the given session's chat.
         var onOpenSession: (String) -> Void = { _ in }
 
-        /// Hosted inline (e.g. tablet right pane) → drop the NavigationStack
+        /// Hosted inline (e.g. tablet right pane) -> drop the NavigationStack
         /// chrome and the close affordance.
         var embedded: Bool = false
+
+        /// Per-session approve/deny state.
+        @State private var cardState: [String: ApprovalCardState] = [:]
+        /// Per-session auto-approve toggle (in-memory, resets on restart).
+        @State private var autoApprove: Set<String> = []
 
         var body: some View {
             if embedded {
@@ -231,7 +250,7 @@ extension ConduitUI {
             return ConduitUI.ApprovalsViewModel.queue(candidates)
         }
 
-        /// Header count badge — a small filled gold pill showing the queue
+        /// Header count badge -- a small filled gold pill showing the queue
         /// size, mirroring the Android header badge (`ApprovalsScreen.kt`).
         /// Only shown when there is something waiting.
         @ViewBuilder private var countBadge: some View {
@@ -269,6 +288,19 @@ extension ConduitUI {
                     }
                 }
             }
+            // Auto-approve: when a new item arrives and the toggle is on,
+            // fire the resolve immediately. The queue is derived from live
+            // store state so it updates when pending_input items appear.
+            .onChange(of: queue) { _, newQueue in
+                for item in newQueue {
+                    guard autoApprove.contains(item.id),
+                          cardState[item.id] == nil || cardState[item.id] == .idle
+                    else { continue }
+                    Telemetry.breadcrumb("approvals", "auto-approve triggered",
+                        data: ["session": item.id])
+                    resolve(sessionID: item.id, decision: "approve", autoApproved: true)
+                }
+            }
         }
 
         // MARK: Empty
@@ -295,8 +327,10 @@ extension ConduitUI {
 
         private func card(_ item: ConduitUI.ApprovalItem) -> some View {
             let tint = neon.agentTint(forAgent: item.agent)
+            let state = cardState[item.id] ?? .idle
+            let isAutoApprove = autoApprove.contains(item.id)
             return VStack(alignment: .leading, spacing: 12) {
-                // Header: avatar · name · agent·branch · risk chip
+                // Header: avatar · name · agent/branch · risk chip
                 HStack(spacing: 11) {
                     avatarTile(tint)
                     VStack(alignment: .leading, spacing: 3) {
@@ -323,6 +357,26 @@ extension ConduitUI {
                     riskChip(item.risk)
                 }
 
+                // Auto-approve toggle (per-session, in-memory).
+                Toggle(isOn: Binding(
+                    get: { isAutoApprove },
+                    set: { on in
+                        if on { autoApprove.insert(item.id) }
+                        else  { autoApprove.remove(item.id) }
+                        Telemetry.breadcrumb("approvals", "auto-approve toggled",
+                            data: ["session": item.id, "on": "\(on)"])
+                    }
+                )) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("Auto-approve this session")
+                            .font(neon.mono(11).weight(.semibold))
+                    }
+                    .foregroundStyle(isAutoApprove ? neon.green : neon.textFaint)
+                }
+                .tint(neon.green)
+
                 // "wants to <ask>" + the exact command/prompt in a code tile.
                 VStack(alignment: .leading, spacing: 8) {
                     Text("wants to \(intentPhrase(item.risk))")
@@ -345,42 +399,183 @@ extension ConduitUI {
                         )
                 }
 
-                // Actions — Approve · Deny both open the chat (no programmatic
-                // approve endpoint); the trailing bubble opens chat too.
-                HStack(spacing: 9) {
-                    actionButton(
-                        label: "Approve",
-                        systemImage: "checkmark",
-                        tint: neon.green,
-                        filled: true
-                    ) { onOpenSession(item.id) }
-                    actionButton(
-                        label: "Deny",
-                        systemImage: "xmark",
-                        tint: neon.textDim,
-                        filled: false
-                    ) { onOpenSession(item.id) }
-                    Button {
-                        onOpenSession(item.id)
-                    } label: {
-                        Image(systemName: "bubble.left")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(neon.accent)
-                            .frame(width: 44, height: 38)
-                            .neonCardSurface(
-                                neon,
-                                fill: neon.surface,
-                                cornerRadius: 11,
-                                border: neon.border
-                            )
+                // State-aware action area.
+                switch state {
+                case .idle:
+                    actionRow(item: item, tint: tint)
+                case .resolving:
+                    HStack {
+                        ProgressView()
+                            .tint(neon.accent)
+                            .scaleEffect(0.9)
+                        Text("Sending...")
+                            .font(neon.mono(12))
+                            .foregroundStyle(neon.textDim)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open chat")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                case .resolved(let msg):
+                    Text(msg)
+                        .font(neon.mono(12).weight(.semibold))
+                        .foregroundStyle(neon.green)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                case .notPending:
+                    // 404: nothing pending -- offer to open chat.
+                    HStack(spacing: 8) {
+                        Text("Nothing pending -- open chat?")
+                            .font(neon.mono(11))
+                            .foregroundStyle(neon.textDim)
+                        Spacer(minLength: 4)
+                        Button {
+                            onOpenSession(item.id)
+                        } label: {
+                            Image(systemName: "bubble.left")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(neon.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 6)
+                case .failed(let msg):
+                    Text(msg)
+                        .font(neon.mono(11))
+                        .foregroundStyle(neon.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
                 }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .neonCardSurface(neon, fill: neon.surface, cornerRadius: neon.radius - 4)
+        }
+
+        private func actionRow(item: ConduitUI.ApprovalItem, tint: Color) -> some View {
+            HStack(spacing: 9) {
+                actionButton(
+                    label: "Approve",
+                    systemImage: "checkmark",
+                    tint: neon.green,
+                    filled: true
+                ) {
+                    Telemetry.breadcrumb("approvals", "in-app approve tapped",
+                        data: ["session": item.id, "risk": item.risk.label])
+                    resolve(sessionID: item.id, decision: "approve", autoApproved: false)
+                }
+                actionButton(
+                    label: "Deny",
+                    systemImage: "xmark",
+                    tint: neon.textDim,
+                    filled: false
+                ) {
+                    Telemetry.breadcrumb("approvals", "in-app deny tapped",
+                        data: ["session": item.id, "risk": item.risk.label])
+                    resolve(sessionID: item.id, decision: "deny", autoApproved: false)
+                }
+                Button {
+                    onOpenSession(item.id)
+                } label: {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(neon.accent)
+                        .frame(width: 44, height: 38)
+                        .neonCardSurface(
+                            neon,
+                            fill: neon.surface,
+                            cornerRadius: 11,
+                            border: neon.border
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open chat")
+            }
+        }
+
+        // MARK: - HTTP resolve
+
+        /// POST to `POST /api/session/approval` with the given decision.
+        /// Updates `cardState` for the session's card. On 404 falls back to
+        /// opening chat. On success shows a brief "continuing..." / "denied".
+        private func resolve(sessionID: String, decision: String, autoApproved: Bool) {
+            cardState[sessionID] = .resolving
+
+            let endpoint = store.endpoint
+            guard endpoint.isComplete, let base = endpoint.httpBaseURL else {
+                cardState[sessionID] = .failed("No active endpoint")
+                return
+            }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/session/approval"
+            guard let url = components?.url else {
+                cardState[sessionID] = .failed("Bad URL")
+                return
+            }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 20
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            struct ApprovalBody: Encodable {
+                let session_id: String
+                let decision: String
+            }
+            guard let body = try? JSONEncoder().encode(
+                ApprovalBody(session_id: sessionID, decision: decision)
+            ) else {
+                cardState[sessionID] = .failed("Encoding error")
+                return
+            }
+            req.httpBody = body
+
+            Telemetry.breadcrumb("approvals", "resolve POST start",
+                data: ["session": sessionID, "decision": decision,
+                       "auto": "\(autoApproved)", "host": endpoint.displayHost])
+
+            Task { @MainActor in
+                do {
+                    let (_, resp) = try await URLSession.shared.data(for: req)
+                    if let http = resp as? HTTPURLResponse {
+                        switch http.statusCode {
+                        case 200..<300:
+                            let msg = decision == "approve" ? "continuing..." : "denied"
+                            Telemetry.breadcrumb("approvals", "resolve: resolved",
+                                data: ["session": sessionID, "decision": decision,
+                                       "auto": "\(autoApproved)"])
+                            cardState[sessionID] = .resolved(msg)
+                        case 404:
+                            Telemetry.breadcrumb("approvals", "resolve: 404 nothing pending",
+                                data: ["session": sessionID])
+                            if autoApproved {
+                                // Auto-approve on an already-resolved item: clear quietly.
+                                cardState[sessionID] = .idle
+                            } else {
+                                cardState[sessionID] = .notPending
+                                onOpenSession(sessionID)
+                            }
+                        default:
+                            let msg = "HTTP \(http.statusCode)"
+                            Telemetry.capture(
+                                error: NSError(domain: "ios.approvals", code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: "approval resolve HTTP error"]),
+                                message: "in-app approval resolve failed",
+                                tags: ["surface": "ios", "phase": "approvals"],
+                                extras: ["session": sessionID, "decision": decision,
+                                         "status": "\(http.statusCode)"]
+                            )
+                            cardState[sessionID] = .failed(msg)
+                        }
+                    }
+                } catch {
+                    Telemetry.capture(
+                        error: error,
+                        message: "in-app approval resolve network error",
+                        tags: ["surface": "ios", "phase": "approvals"],
+                        extras: ["session": sessionID, "decision": decision,
+                                 "detail": error.localizedDescription]
+                    )
+                    cardState[sessionID] = .failed("Network error")
+                }
+            }
         }
 
         private func avatarTile(_ tint: Color) -> some View {

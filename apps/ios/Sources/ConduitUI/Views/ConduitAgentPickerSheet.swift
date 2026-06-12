@@ -113,11 +113,10 @@ extension ConduitUI {
                                     )
                                 }
                             }
-                            // Always show where the session will run — even
-                            // with one box. Device feedback round 4: with the
-                            // section gated on >1 servers, a single-box user
-                            // "can't choose the box" and can't tell local vs
-                            // server. One box = one checked row + footnote.
+                            // Always show where the session will run.
+                            // A single "Runs on <name>" row with a "Change >"
+                            // link to the server switcher replaces the old
+                            // dead "Switch in Settings" rows.
                             if !store.savedServers.isEmpty {
                                 sectionLabel("Box")
                                 boxSection
@@ -356,9 +355,13 @@ extension ConduitUI {
                 .sorted()
         }
 
-        /// All agent kinds to show in the picker: hardcoded first, then extras.
+        /// All agent kinds to show in the picker: hardcoded first, then extras,
+        /// filtered by `flags.enabledAgents` (default: ["claude","codex"]).
         private var allAgentKinds: [String] {
-            ["claude", "codex"] + extraAgentKinds
+            let enabled = Set(flags.enabledAgents.map { $0.lowercased() })
+            let base: [String] = ["claude", "codex"].filter { enabled.contains($0) }
+            let extras = extraAgentKinds.filter { enabled.contains($0.lowercased()) }
+            return base + extras
         }
 
         /// Side-by-side agent card (§3, `02-ns`). Carries the agent's brand
@@ -441,65 +444,47 @@ extension ConduitUI {
         }
 
 
-        /// One row per paired box; the session is created on the checked
-        /// one. Only the currently-connected box is selectable — readiness,
-        /// directory browser, and create all use the connected box's client,
-        /// so allowing a different selection would show the connected box's
-        /// readiness/filesystem but create elsewhere (incoherent). Multi-box
-        /// concurrent sessions are a future feature; for now, non-connected
-        /// boxes show a "Switch in Settings" note and are disabled.
-        /// "This device" on the home Boxes list is display-only — a phone
-        /// can't host the broker — so it is deliberately not a target here.
+        /// Single "Runs on" row: shows the active box name + live connection
+        /// dot. "Change >" navigates to ServerSwitcherView to switch boxes.
+        /// No dead "Switch in Settings" rows -- the server switcher handles
+        /// the full list and actually switches the active endpoint.
         private var boxSection: some View {
-            VStack(spacing: 6) {
-                ForEach(store.savedServers) { server in
-                    let isConnected = server.endpoint == store.endpoint
-                    let isSelected = server.id == resolvedServer?.id
-                    HStack(spacing: 12) {
-                        Image(systemName: "server.rack")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(isSelected ? neon.accent : neon.textDim)
-                            .frame(width: 30, height: 30)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(server.name)
-                                .font(neon.sans(13).weight(.semibold))
-                                .foregroundStyle(neon.text)
-                            if isConnected {
-                                Text(server.endpoint.displayHost)
-                                    .font(neon.mono(11))
-                                    .foregroundStyle(neon.textDim)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            } else {
-                                Text("Switch to this box in Settings to start a session on it.")
-                                    .font(neon.mono(10.5))
-                                    .foregroundStyle(neon.textFaint)
-                                    .lineLimit(2)
-                            }
-                        }
-                        Spacer()
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(isSelected ? neon.accent : neon.textFaint)
+            let server = resolvedServer
+            let isLive = store.harness.isReachable
+            let name = server?.name ?? store.endpoint.displayHost
+            let dotColor: Color = isLive ? neon.green : neon.yellow
+            return NavigationLink {
+                ConduitUI.ServerSwitcherView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(neon.accent)
+                        .frame(width: 30, height: 30)
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(dotColor)
+                            .frame(width: 7, height: 7)
+                        Text(name)
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .neonCardSurface(
-                        neon,
-                        fill: isSelected ? neon.accent.opacity(neon.dark ? 0.10 : 0.07) : neon.surface,
-                        cornerRadius: 13,
-                        border: isSelected ? neon.accent.opacity(0.5) : neon.border
-                    )
-                    .opacity(isConnected ? 1.0 : 0.55)
-                }
-                if store.savedServers.count == 1 {
-                    Text("Sessions run on a paired box — this device can't host them. Pair another box in Settings.")
-                        .font(neon.mono(10.5))
+                    Spacer(minLength: 8)
+                    Text("Change")
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.textDim)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(neon.textFaint)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 2)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("ConduitAgentPickerSheet.boxSection")
         }
 
@@ -607,6 +592,8 @@ extension ConduitUI {
         /// `supportsFastMode`. Sent as nil otherwise so the start path is
         /// byte-identical to before.
         @State private var fastMode: Bool = false
+        /// Whether the Conduit-native model picker sheet is open.
+        @State private var showModelPicker: Bool = false
 
         init(
             agentKind: String,
@@ -778,19 +765,18 @@ extension ConduitUI {
         private var modelSection: some View {
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel("Model")
-                Menu {
-                    Picker("Model", selection: $model) {
-                        ForEach(modelOptions, id: \.self) { option in
-                            Text(ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)).tag(option)
-                        }
-                    }
+                // Conduit-native model picker: tapping the row opens a sheet
+                // with one card per model, RECOMMENDED badge on the default,
+                // checkmark on the selected, description caption below each.
+                Button {
+                    showModelPicker = true
                 } label: {
                     HStack {
                         Text(ConduitUI.ForkOptions.modelLabel(model, catalog: catalog))
                             .font(neon.sans(13).weight(.medium))
                             .foregroundStyle(neon.text)
                         Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
+                        Image(systemName: "chevron.right")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(neon.textDim)
                     }
@@ -798,8 +784,11 @@ extension ConduitUI {
                     .padding(.vertical, 12)
                     .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
                 }
-                .tint(neon.accent)
-                // The agent's own description of the (resolved) selection —
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showModelPicker) {
+                    modelPickerSheet
+                }
+                // The agent's own description of the (resolved) selection --
                 // e.g. "Sonnet 4.6 · Efficient for routine tasks". Only when
                 // the live catalog is in; the static fallback has none.
                 if let detail = ConduitUI.ForkOptions.modelDetail(model, catalog: catalog) {
@@ -822,6 +811,95 @@ extension ConduitUI {
                     .tint(Color.yellow)
                 }
             }
+        }
+
+        /// Conduit-native model picker presented as a detented sheet.
+        /// Each option is a card: display name + description, RECOMMENDED
+        /// badge when it is the agent's default model, checkmark when selected.
+        private var modelPickerSheet: some View {
+            NavigationStack {
+                ZStack {
+                    GlassAppBackground()
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(modelOptions, id: \.self) { option in
+                                let entry = ConduitUI.ForkOptions.catalogEntry(for: option, in: catalog)
+                                let isSelected = option == model
+                                let isRecommended = entry?.isDefault == true || option == ConduitUI.ForkOptions.inheritModel
+                                let label = ConduitUI.ForkOptions.modelLabel(option, catalog: catalog)
+                                let detail = ConduitUI.ForkOptions.modelDetail(option, catalog: catalog)
+                                Button {
+                                    model = option
+                                    Telemetry.breadcrumb("new_session", "model picked",
+                                        data: ["model": option, "agent": agentKind])
+                                    showModelPicker = false
+                                } label: {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(spacing: 6) {
+                                                Text(label)
+                                                    .font(neon.sans(14).weight(.semibold))
+                                                    .foregroundStyle(neon.text)
+                                                if isRecommended {
+                                                    Text("RECOMMENDED")
+                                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                                        .tracking(0.4)
+                                                        .foregroundStyle(tint)
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 2)
+                                                        .background(Capsule().fill(tint.opacity(0.14)))
+                                                        .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 1))
+                                                }
+                                            }
+                                            if let d = detail, !d.isEmpty {
+                                                Text(d)
+                                                    .font(neon.sans(12))
+                                                    .foregroundStyle(neon.textDim)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
+                                        }
+                                        Spacer(minLength: 0)
+                                        if isSelected {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 13, weight: .bold))
+                                                .foregroundStyle(tint)
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .neonCardSurface(
+                                        neon,
+                                        fill: isSelected ? tint.opacity(neon.dark ? 0.12 : 0.07) : neon.surface,
+                                        cornerRadius: 13,
+                                        border: isSelected ? tint.opacity(0.45) : neon.border
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 18)
+                    }
+                    .scrollIndicators(.hidden)
+                }
+                .navigationTitle("Model")
+                .navigationBarTitleDisplayMode(.inline)
+                .tint(tint)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button {
+                            showModelPicker = false
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(neon.textFaint)
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationCornerRadius(26)
+            .appearanceColorScheme()
         }
 
         @ViewBuilder

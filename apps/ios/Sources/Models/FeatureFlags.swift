@@ -65,6 +65,7 @@ final class FeatureFlags {
         static let sshTunnelTransport = "conduit.flags.transport.sshTunnel"
         static let showSubagentPanel = "conduit.flags.debug.showSubagentPanel"
         static let concurrentMultiBox = "conduit.flags.transport.concurrentMultiBox"
+        static let enabledAgents = "conduit.flags.newSession.enabledAgents"
     }
 
     // MARK: - Concurrent multi-box (connection-critical) — default OFF
@@ -90,6 +91,19 @@ final class FeatureFlags {
     /// (OFF) so the two never diverge.
     static func concurrentMultiBoxEnabled(defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: Keys.concurrentMultiBox) as? Bool ?? false
+    }
+
+    // MARK: - Enabled agents (new-session picker) — default ["claude","codex"]
+
+    /// The agent kinds shown in the new-session picker. Default is
+    /// `["claude","codex"]` — both first-class agents. Staff can narrow this
+    /// (e.g. claude-only) or widen it to include generic extra agents. Persisted
+    /// as a comma-separated string. Extra agents from the broker's descriptor
+    /// map that are NOT in this list are silently hidden in the picker.
+    var enabledAgents: [String] {
+        didSet {
+            defaults.set(enabledAgents.joined(separator: ","), forKey: Keys.enabledAgents)
+        }
     }
 
     // MARK: - SSH tunnel transport (connection-critical) — default ON
@@ -224,6 +238,13 @@ final class FeatureFlags {
         self.sshTunnelTransport = defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
         self.showSubagentPanel = defaults.object(forKey: Keys.showSubagentPanel) as? Bool ?? false
         self.concurrentMultiBox = defaults.object(forKey: Keys.concurrentMultiBox) as? Bool ?? false
+        if let stored = defaults.string(forKey: Keys.enabledAgents), !stored.isEmpty {
+            self.enabledAgents = stored.components(separatedBy: ",").map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }.filter { !$0.isEmpty }
+        } else {
+            self.enabledAgents = ["claude", "codex"]
+        }
 
         self.chatStylePreference = (defaults.string(forKey: Keys.chatStylePreference)
             .flatMap(ChatStylePreference.init(rawValue:))) ?? .auto
