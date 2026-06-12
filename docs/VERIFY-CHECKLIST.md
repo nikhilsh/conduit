@@ -9,6 +9,22 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.143
+
+- **Codex needs-input marker-leak fix** — the `[[conduit:needs-input]]` sentinel
+  no longer renders as a duplicate raw chat bubble; the live chat path now strips
+  it (and dedupes against the typed card). PR #518. Verify: trigger a codex
+  needs-input prompt → the sentinel does not appear as a raw bubble in the chat;
+  only the typed card shows. [app, on-device]
+- **Codex plan mode** — the broker injects a planning `developerInstructions`
+  when plan mode is set, so codex proposes a plan instead of acting (read-only
+  sandbox alone only gated writes); broker logs the applied
+  permission_mode/sandbox. Broker has ALREADY been redeployed with this change.
+  PR #517. Verify: start a codex session in plan mode → codex proposes a plan
+  before making changes rather than acting immediately. [broker, on-device]
+
+---
+
 ## v0.0.142
 
 - **Live git state + worktree name per session** — session Info + rail show
