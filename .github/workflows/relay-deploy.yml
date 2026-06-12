@@ -1,0 +1,44 @@
+# Deploy the push relay (Cloudflare Worker) — manual trigger only.
+#
+# Uses the CLOUDFLARE_API_TOKEN repo secret ("Edit Cloudflare Workers"
+# template). Worker secrets (APNS_KEY, FCM_SERVICE_ACCOUNT, ...) are
+# provisioned on the worker itself via `wrangler secret put` and are NOT
+# touched by a code deploy. See relay/README.md.
+#
+# Deploy-order footgun: when the broker starts emitting a new push category,
+# this worker must deploy BEFORE the broker (the worker 400s categories it
+# doesn't know, killing those pushes outright).
+
+name: relay-deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: relay-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: wrangler deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - name: npm ci
+        working-directory: relay
+        run: npm ci
+      - name: typecheck + tests
+        working-directory: relay
+        run: |
+          npx tsc --noEmit
+          npx vitest run
+      - name: deploy
+        working-directory: relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler deploy
