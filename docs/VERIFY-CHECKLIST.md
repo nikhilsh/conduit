@@ -9,6 +9,35 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.144
+
+- **claude missing-CLI now surfaces an error** — when the `claude` CLI isn't on
+  the box, the session now shows `⚠️ claude: failed to start: …` in chat (like
+  codex) instead of hanging silently on "ASSISTANT". PR #521. REQUIRES BROKER
+  REDEPLOY. Verify: remove or rename the `claude` binary on a box → session
+  shows the error message in chat immediately rather than hanging. [broker, on-device]
+- **Box-grouped sessions + send-gating** — Active Sessions are grouped under box
+  headers; the connected box's sessions are live, other boxes' sessions are
+  dimmed and tapping one switches to that box first; sends are gated to the
+  session's box, eliminating the `UnknownSession`/"chat send gave up after
+  retries" failures. PR #522. Verify: open the session list with multiple boxes
+  → sessions are grouped by box, non-active boxes are dimmed; tap a session on a
+  different box → box switches before opening the session; send a message →
+  verify no `UnknownSession` error. [app, on-device, tablet+phone]
+- **Pairing-flow "Continue" first-tap responsiveness** — the post-pair
+  agent-picker "Continue" button now shows an immediate spinner + single-flight
+  on the first tap (was unresponsive until spam-tapped). PR #522. Verify: pair a
+  new box → tap "Continue" once → spinner appears immediately and the flow
+  proceeds without requiring repeated taps. [app, on-device]
+- **Live Activity background-start guard** — the app no longer calls
+  `Activity.request` from the background (the ActivityKit `.visibility` error),
+  and the LA-failure is demoted to a breadcrumb (quota hygiene). PR #523.
+  Verify: background the app, start a session → no `.visibility` ActivityKit
+  crash/error; Sentry shows a breadcrumb rather than a full event on LA failure.
+  [iOS, on-device]
+
+---
+
 ## v0.0.143
 
 - **Codex needs-input marker-leak fix** — the `[[conduit:needs-input]]` sentinel
