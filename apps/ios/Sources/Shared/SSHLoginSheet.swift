@@ -253,6 +253,15 @@ struct SSHLoginSheet: View {
     private var connectButton: some View {
         VStack(spacing: 6) {
             Button {
+                // Dismiss the keyboard immediately so this tap is NEVER
+                // swallowed by the scroll-dismiss-keyboard gesture. Without
+                // this, when a text field is focused the first tap lands on
+                // the keyboard-dismiss layer and the button action never fires
+                // (the user has to tap twice: once to dismiss, once to connect).
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil, from: nil, for: nil
+                )
                 let reasons = disabledReasons
                 Telemetry.breadcrumb("ssh_addbox", "connect tapped", data: [
                     "enabled": reasons.isEmpty ? "true" : "false",

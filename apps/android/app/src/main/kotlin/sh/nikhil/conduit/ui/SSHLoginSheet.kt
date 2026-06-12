@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -65,6 +66,7 @@ fun SSHLoginSheet(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val credStore = remember { SshCredentialStore.forContext(context.applicationContext) }
     val bootstrap by store.sshBootstrap.collectAsState()
     val harness by store.harness.collectAsState()
@@ -342,6 +344,9 @@ fun SSHLoginSheet(
 
             Button(
                 onClick = {
+                    // Dismiss keyboard immediately so this tap is never
+                    // intercepted by the IME layer on first press.
+                    focusManager.clearFocus()
                     Telemetry.breadcrumb(
                         "ssh_addbox",
                         "connect tapped",

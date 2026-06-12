@@ -798,6 +798,17 @@ final class SessionStore {
     /// (the UI says "default model") — never fabricated.
     var modelBySession: [String: String] = [:]
 
+    /// Box (SavedServer.id) each session was last reconciled from.
+    /// Populated in `reconcileLiveSessions` on every broker live-set
+    /// fetch; keyed by session id. Survives box switches — entries are
+    /// only added/updated, never wiped on disconnect. Used to:
+    ///   1. Group sessions under their originating box on the home list.
+    ///   2. Gate `attemptDeliver` so a message is never routed into the
+    ///      wrong broker (root cause of ConduitError: UnknownSession).
+    var sessionBox: [String: String] = SessionStore.loadSessionBox() {
+        didSet { SessionStore.persistSessionBox(sessionBox) }
+    }
+
     /// Broker AI-generated session titles (task: ai-session-titles) — keyed
     /// by session id, value is the short title the broker minted from the
     /// conversation's purpose, delivered as a `view:"session_title"`
@@ -2463,6 +2474,25 @@ final class SessionStore {
     /// later flush. Shared by the send path and `flushPendingChats`.
     private func attemptDeliver(sessionID: String, localID: String, message: String) {
         guard let client else { return }
+        // Box-identity gate: if the session was stamped to a different box
+        // than the one we're currently connected to, sending into this
+        // client is wrong — it would reach the wrong broker and produce
+        // ConduitError: UnknownSession. Surface the mismatch and leave the
+        // message queued; the user must switch boxes to deliver it.
+        let currentBoxID = savedHistoryServerID
+        if let stamped = sessionBox[sessionID], stamped != currentBoxID {
+            let boxName = savedServers.first(where: { $0.id == stamped })?.name
+                ?? stamped
+            Telemetry.breadcrumb("chat", "blocked — session on different box",
+                data: ["session": sessionID, "session_box": stamped,
+                       "current_box": currentBoxID])
+            // Mark the echo as failed and remove from queue so it isn't
+            // retried into the wrong broker on every flush.
+            setEchoStatus(sessionID: sessionID, localID: localID, status: "failed")
+            pendingChats.markDelivered(sessionID: sessionID, localID: localID)
+            sessionCreationError = "Session is on '\(boxName)'. Switch to that box to send."
+            return
+        }
         Task {
             do {
                 try await client.sendChat(sessionId: sessionID, msg: message)
@@ -3539,6 +3569,26 @@ final class SessionStore {
         }
     }
 
+    private static let sessionBoxKey = "conduit.session.sessionBox"
+
+    static func loadSessionBox() -> [String: String] {
+        guard let raw = UserDefaults.standard.data(forKey: sessionBoxKey),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: raw) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    static func persistSessionBox(_ map: [String: String]) {
+        if map.isEmpty {
+            UserDefaults.standard.removeObject(forKey: sessionBoxKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(map) {
+            UserDefaults.standard.set(data, forKey: sessionBoxKey)
+        }
+    }
+
     private static let pendingChatsKey = "conduit.session.pendingChats"
 
     static func loadPendingChats() -> PendingChatQueue {
@@ -3595,6 +3645,27 @@ final class SessionStore {
     ///   3. The first user chat message (live: scanned from
     ///      `conversationLog`), trimmed to a short single line.
     ///   4. Fallback: `"<agent> · <relative start time>"`.
+    /// True when the session was reconciled from the currently-connected
+    /// box (or has no stamp yet — optimistic assume local until reconciled).
+    func isSessionOnCurrentBox(_ sessionID: String) -> Bool {
+        guard let stamped = sessionBox[sessionID] else { return true }
+        return stamped == savedHistoryServerID
+    }
+
+    /// Display name for the box a session belongs to. Used in the home
+    /// list to label sessions from non-connected boxes.
+    func boxDisplayName(for sessionID: String) -> String? {
+        guard let boxID = sessionBox[sessionID] else { return nil }
+        return savedServers.first(where: { $0.id == boxID })?.name
+            ?? savedServers.first(where: { $0.id == boxID })?.endpoint.displayHost
+    }
+
+    /// The saved server that owns this session (nil if unknown or current).
+    func server(for sessionID: String) -> SavedServer? {
+        guard let boxID = sessionBox[sessionID] else { return nil }
+        return savedServers.first(where: { $0.id == boxID })
+    }
+
     func displayName(for session: ProjectSession) -> String {
         if let custom = displayNames[session.id],
            !SessionNaming.looksLikeRawID(custom, sessionID: session.id) {
@@ -3800,6 +3871,13 @@ final class SessionStore {
                 "alive": "\(running.count)",
                 "reported": "\(aliveList.count)",
             ])
+
+            // Stamp each live session with the box it came from so we can
+            // (a) group by box on the home list and (b) gate sends to avoid
+            // routing into the wrong broker (UnknownSession root cause).
+            for info in running {
+                sessionBox[info.id] = serverID
+            }
 
             // 1. Reattach genuinely-alive sessions the broker is keeping
             //    running. Skip tombstoned ids and ones already live locally.

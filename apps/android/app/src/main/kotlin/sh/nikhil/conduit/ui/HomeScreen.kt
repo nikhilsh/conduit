@@ -46,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +68,7 @@ import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.brokerVersionStatus
 import sh.nikhil.conduit.needsYouBanner
 
@@ -102,6 +104,7 @@ fun HomeScreen(
     val harness by store.harness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
     val sessions by store.sessions.collectAsState()
+    val sessionBox by store.sessionBox.collectAsState()
     val displayNames by store.displayNames.collectAsState()
     // Collected so a row's friendly name recomposes the moment the first
     // user message lands in the conversation log.
@@ -348,6 +351,13 @@ fun HomeScreen(
                             ?: s.lastActivityAt
                             ?: s.startedAt
                     }
+                    // Current box ID for cross-box detection. Mirrors iOS
+                    // SessionStore.savedHistoryServerID, which returns the
+                    // UUID of the connected box (or host string as fallback).
+                    val currentBoxId = remember(savedServers, endpoint) {
+                        savedServers.firstOrNull { it.endpoint == endpoint }?.id
+                            ?: endpoint.displayHost
+                    }
                     sortedSessions.forEach { session ->
                         val isSelected = selectedId == session.id
                         // device bug #9: dot tracks run state, not selection.
@@ -383,6 +393,16 @@ fun HomeScreen(
                         val activityPreview = sh.nikhil.conduit.latestActivityPreviewOf(
                             conversationLog[session.id],
                         )
+                        // Box-scoped session: determine if this session is on
+                        // the currently connected box. Sessions stamped to
+                        // another box are dimmed + show a box-name badge.
+                        // Tapping a cross-box session switches boxes first.
+                        val stampedBoxId = sessionBox[session.id]
+                        val isCurrentBox = stampedBoxId == null || stampedBoxId == currentBoxId
+                        val crossBoxServer = if (!isCurrentBox) {
+                            savedServers.firstOrNull { it.id == stampedBoxId }
+                        } else null
+                        val crossBoxName = crossBoxServer?.name ?: stampedBoxId
                         // Every row now sits on a real Material 3 card — a
                         // faint surfaceVariant fill, rounded corners, and the
                         // status dot brought inside the card rather than
@@ -397,6 +417,7 @@ fun HomeScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .alpha(if (isCurrentBox) 1f else 0.55f)
                                 .neonCardSurface(
                                     neon = neon,
                                     shape = rowShape,
@@ -405,7 +426,26 @@ fun HomeScreen(
                                     glowTint = if (isSelected) agentTint else null,
                                 )
                                 .combinedClickable(
-                                    onClick = { store.select(session.id) },
+                                    onClick = {
+                                        if (isCurrentBox) {
+                                            store.select(session.id)
+                                        } else {
+                                            // Cross-box tap: switch to the
+                                            // session's box first, then select
+                                            // the session. Mirrors iOS
+                                            // store.selectSavedServer + selectedSessionID.
+                                            Telemetry.breadcrumb(
+                                                "session",
+                                                "cross_box_tap_switch",
+                                                mapOf(
+                                                    "session_id" to session.id,
+                                                    "target_box" to (stampedBoxId ?: ""),
+                                                ),
+                                            )
+                                            crossBoxServer?.let { store.selectSavedServer(it.id, autoConnect = true) }
+                                            store.select(session.id)
+                                        }
+                                    },
                                     onLongClick = {
                                         pendingDelete = SessionDeleteTarget(session.id, rowTitle)
                                     },
@@ -495,6 +535,37 @@ fun HomeScreen(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
+                                    }
+                                    // Box-name badge: shown only for sessions
+                                    // that belong to a different box. Mirrors
+                                    // iOS HomeRowView box-name capsule.
+                                    if (!isCurrentBox && crossBoxName != null) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Storage,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(9.dp),
+                                                tint = neon.accent,
+                                            )
+                                            Text(
+                                                crossBoxName,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontFamily = neon.mono,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = neon.accent,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier
+                                                    .background(
+                                                        neon.accent.copy(alpha = 0.12f),
+                                                        RoundedCornerShape(50),
+                                                    )
+                                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                                            )
+                                        }
                                     }
                                 }
                             }

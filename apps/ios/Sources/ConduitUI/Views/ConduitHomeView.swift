@@ -445,6 +445,7 @@ extension ConduitUI {
                     ?? status?.lastActivityAt
                     ?? status?.startedAt
                 let cwd = status?.cwd ?? s.cwd
+                let isCurrentBox = store.isSessionOnCurrentBox(s.id)
                 return ConduitUI.HomeSnapshotSession(
                     id: s.id,
                     displayName: store.displayName(for: s),
@@ -457,7 +458,9 @@ extension ConduitUI {
                     lastActivityPreview: latestActivityPreview(for: s.id),
                     // Amber "starting" until the broker confirms the session
                     // is interactive (~30s cold-boot window).
-                    isConfirmedLive: store.isConfirmedLive(sessionID: s.id)
+                    isConfirmedLive: store.isConfirmedLive(sessionID: s.id),
+                    isCurrentBox: isCurrentBox,
+                    boxName: isCurrentBox ? nil : store.boxDisplayName(for: s.id)
                 )
             }
             return ConduitUI.HomeSnapshot(
@@ -588,11 +591,26 @@ extension ConduitUI {
                                     bottom: HomeRowMetrics.interRowSpacing / 2,
                                     trailing: 14
                                 ))
+                                .opacity(row.isCurrentBox ? 1.0 : 0.55)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     if case .session(let id) = row.kind {
-                                        store.selectedSessionID = id
-                                        selectedSessionID = id
+                                        if row.isCurrentBox {
+                                            store.selectedSessionID = id
+                                            selectedSessionID = id
+                                        } else {
+                                            // Cross-box session: switch to its
+                                            // box first, then open the chat.
+                                            Telemetry.breadcrumb("session",
+                                                "cross_box_tap_switch",
+                                                data: ["session": id,
+                                                       "box": row.boxName ?? "?"])
+                                            if let server = store.server(for: id) {
+                                                store.selectSavedServer(server.id, autoConnect: true)
+                                                store.selectedSessionID = id
+                                                selectedSessionID = id
+                                            }
+                                        }
                                     }
                                 }
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -944,6 +962,18 @@ private struct HomeRowView: View {
                         .foregroundStyle(neon.textFaint)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                }
+                // Cross-box badge: shows which box owns this session when
+                // it is NOT from the currently-connected box.
+                if !row.isCurrentBox, let boxName = row.boxName {
+                    Spacer(minLength: 0)
+                    Text(boxName)
+                        .font(neon.mono(HomeRowMetrics.subtitlePointSize - 0.5).weight(.semibold))
+                        .foregroundStyle(neon.accent)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(neon.accent.opacity(0.12)))
+                        .lineLimit(1)
                 }
             }
             .lineLimit(1)

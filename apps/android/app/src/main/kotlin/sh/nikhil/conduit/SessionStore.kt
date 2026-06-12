@@ -502,6 +502,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _pendingChats = MutableStateFlow(PendingChatQueue())
     val pendingChats: StateFlow<PendingChatQueue> = _pendingChats.asStateFlow()
 
+    /**
+     * Box (SavedServer.id) each session was last reconciled from.
+     * Populated when [connect] / [refreshSessions] runs and sessions
+     * come from the broker. Survives box switches — entries are only
+     * added/updated, never wiped on disconnect. Used to:
+     *   1. Show which box a session belongs to on the home list.
+     *   2. Gate [attemptDeliver] so a message is never sent to the wrong
+     *      broker (root cause of ConduitError: UnknownSession).
+     * Mirror of iOS [SessionStore.sessionBox].
+     */
+    private val _sessionBox = MutableStateFlow<Map<String, String>>(emptyMap())
+    val sessionBox: StateFlow<Map<String, String>> = _sessionBox.asStateFlow()
+
     /** Mutate the pending queue and persist it in one step. */
     private fun updatePendingChats(transform: (PendingChatQueue) -> PendingChatQueue) {
         val next = transform(_pendingChats.value)
@@ -2115,6 +2128,24 @@ class SessionStore : ViewModel(), ConduitDelegate {
      */
     private fun attemptDeliver(sessionId: String, localId: String, msg: String) {
         val c = client ?: return
+        // Box-identity gate: if the session was stamped to a different box
+        // than the one we are currently connected to, sending into this
+        // client is wrong — it would reach the wrong broker and produce
+        // ConduitError: UnknownSession. Surface the mismatch and remove
+        // the entry from the queue so it is not retried into the wrong broker.
+        val currentBoxId = savedHistoryServerId()
+        val stampedBox = _sessionBox.value[sessionId]
+        if (stampedBox != null && stampedBox != currentBoxId) {
+            val boxName = _savedServers.value.firstOrNull { it.id == stampedBox }?.name
+                ?: stampedBox
+            Telemetry.breadcrumb("chat", "blocked — session on different box",
+                mapOf("session" to sessionId, "session_box" to stampedBox,
+                    "current_box" to currentBoxId))
+            setEchoStatus(sessionId, localId, "failed")
+            updatePendingChats { it.markDelivered(sessionId, localId) }
+            _sessionCreationError.value = "Session is on '$boxName'. Switch to that box to send."
+            return
+        }
         viewModelScope.launch {
             val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
             if (result.isSuccess) {
@@ -2867,6 +2898,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // tombstone set is the guarantee that delete stays terminal.
         val deleted = _deletedIds.value.toSet()
         val list = c.listSessions().filterNot { it.id in deleted }
+        // Stamp each listed session with the currently-connected box so we
+        // can (a) group by box on the home list and (b) gate sends to avoid
+        // routing into the wrong broker (UnknownSession root cause).
+        val currentBoxId = savedHistoryServerId()
+        if (list.isNotEmpty()) {
+            val updates = list.associate { it.id to currentBoxId }
+            _sessionBox.value = _sessionBox.value + updates
+            Telemetry.breadcrumb("session", "stamped_box",
+                mapOf("count" to list.size.toString(), "box" to currentBoxId))
+        }
         // A fresh client returns [] until the first SessionStatus delta lands,
         // so blindly assigning `_sessions.value = list` blanks the visible list
         // on every reconnect — most visibly on the always-on tablet rail, which
