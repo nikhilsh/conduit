@@ -2265,8 +2265,34 @@ final class SessionStore {
         endpoint = server.endpoint
         if autoConnect {
             if endpointChanged || !harness.isReachable {
-                disconnect()
-                connect()
+                if server.ssh != nil {
+                    // SSH box: the persisted endpoint is a loopback ws://127.0.0.1:<port>
+                    // that only works while THAT box's russh tunnel is live. Switching
+                    // to a different SSH box (or the same one whose tunnel dropped) must
+                    // re-bootstrap the tunnel instead of dialing a dead loopback port.
+                    // If the held tunnel is already alive AND the endpoint matches we
+                    // can skip the bootstrap and just re-dial the WS layer.
+                    let tunnelAlive = sshTunnel?.isAlive() == true
+                    if tunnelAlive && !endpointChanged {
+                        // Tunnel is up, just bounce the WebSocket.
+                        disconnect()
+                        connect()
+                    } else {
+                        // No live tunnel for the target box — re-bootstrap.
+                        // attemptSshSelfHeal uses self.endpoint (already updated above)
+                        // to look up the SSH ref and re-run the full tunnel bootstrap.
+                        Telemetry.breadcrumb("ssh_tunnel", "selectSavedServer triggering re-bootstrap", data: [
+                            "server": serverID,
+                            "endpointChanged": "\(endpointChanged)",
+                            "tunnelAlive": "\(tunnelAlive)",
+                        ])
+                        attemptSshSelfHeal()
+                    }
+                } else {
+                    // Token-paired (conduit://) box — plain disconnect+reconnect.
+                    disconnect()
+                    connect()
+                }
             }
         }
     }
@@ -2536,6 +2562,13 @@ final class SessionStore {
         sessionLifecycle[sessionID] = nil
         if selectedSessionID == sessionID { selectedSessionID = nil }
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // End any Live Activity for this session immediately. The bridge
+        // only drives `.end` when it sees an "exited..." phase in a future
+        // frame, but archive removes the session from the live list, so the
+        // bridge never observes that transition. Call the controller
+        // directly so the lock-screen card disappears right away.
+        TurnLiveActivityController.shared.sessionExited(sessionID: sessionID)
+        Telemetry.breadcrumb("live_activity", "ended on archive", data: ["session": sessionID])
         // NOTE: deliberately NO `SavedSessionsStore.shared.remove(...)` here.
         // Archiving must leave the history row intact so it stays viewable
         // as a read-only transcript. Permanent removal lives in
@@ -2558,6 +2591,10 @@ final class SessionStore {
         if selectedSessionID == sessionID { selectedSessionID = nil }
         pendingChats.clear(sessionID: sessionID)
         if useRustStore { rustStore.forgetSession(sessionId: sessionID) }
+        // End any Live Activity for this session immediately — same
+        // reasoning as archive(sessionID:) above.
+        TurnLiveActivityController.shared.sessionExited(sessionID: sessionID)
+        Telemetry.breadcrumb("live_activity", "ended on delete", data: ["session": sessionID])
         // Delete is terminal: sweep the persistent "Resume" index AND record
         // the tombstone so a status/list refresh (the broker's tmux can
         // linger, #199) can never re-add the row to History.
@@ -2743,12 +2780,96 @@ final class SessionStore {
         return agentDescriptors[assistant.lowercased()]?.supports.steer ?? false
     }
 
+    /// True when the session is blocked on a pending AskUserQuestion: the last
+    /// non-user item in the typed conversation log is an unanswered
+    /// `pending_input` kind. Used to bypass the turn-queue gate so the answer
+    /// reaches the broker immediately instead of deadlocking in the queue.
+    func hasPendingAsk(sessionID: String) -> Bool {
+        let items = conversationLog[sessionID] ?? []
+        guard let last = items.last(where: { $0.role.lowercased() != "user" }) else { return false }
+        return last.kind.lowercased() == "pending_input"
+    }
+
+    /// Deliver an elicitation answer DIRECTLY, bypassing the `isTurnActive`
+    /// queue gate. The broker's `sendChat` handler already routes a message
+    /// that arrives while a `pending_ask` is active to `takePendingAsk` /
+    /// `encodeAskAnswer`, which resumes the blocked turn. Trapping the answer
+    /// in `sendChatQueued` instead causes a deadlock: the turn never ends
+    /// (result never arrives), so `flushQueuedOnTurnComplete` never fires.
+    ///
+    /// This path intentionally skips slash-command routing, optimistic echo
+    /// (the pending-input card is already the visual placeholder), and the
+    /// normal `pendingChats` queue -- it just registers a pending entry and
+    /// immediately attempts WS delivery, the same as the bottom half of
+    /// `sendChat` when the turn is idle.
+    func answerPendingInput(sessionID: String, message: String) {
+        Telemetry.breadcrumb("chat", "answer-pending-input",
+            data: ["session": sessionID, "chars": "\(message.count)"])
+        // Anchor the echo into the broker clock domain (same approach as
+        // `sendChat`) so it sorts ahead of the agent's reply regardless of
+        // device-vs-broker clock drift.
+        let lastKnownEpoch = ((conversationLog[sessionID] ?? []).map { $0.ts }
+            + (chatLog[sessionID] ?? []).map { $0.ts })
+            .map { conduitConversationTsEpoch($0) }
+            .filter { $0 < .greatestFiniteMagnitude }
+            .max()
+        let startedEpoch = (statusBySession[sessionID]?.startedAt)
+            .map { conduitConversationTsEpoch($0) }
+            .flatMap { $0 < .greatestFiniteMagnitude ? $0 : nil }
+        let echoEpoch = lastKnownEpoch.map { $0 + 0.001 }
+            ?? startedEpoch.map { $0 + 0.001 }
+            ?? Date().timeIntervalSince1970
+        let now = conduitConversationTsString(epoch: echoEpoch)
+        let localID = "local-\(UUID().uuidString)"
+        // Optimistic echo so the user sees their answer immediately.
+        let item = ConversationItem(
+            id: localID,
+            role: "user",
+            kind: "message",
+            status: "pending",
+            content: message,
+            ts: now,
+            files: [],
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: [],
+            sourceAgent: nil,
+            targetAgent: nil,
+            taskText: nil,
+            resultSummary: nil,
+            planSteps: []
+        )
+        conversationLog[sessionID, default: []].append(item)
+        let localEvent = ChatEvent(role: "user", content: message, ts: now, files: [])
+        chatLog[sessionID, default: []].append(localEvent)
+        quickReplies[sessionID] = nil
+        if useRustStore {
+            ensureRustSessionPresent(sessionID)
+            _ = rustStore.applyChat(sessionId: sessionID, event: localEvent)
+        }
+        pendingChats.enqueue(sessionID: sessionID, localID: localID, message: message, ts: now)
+        attemptDeliver(sessionID: sessionID, localID: localID, message: message)
+    }
+
     func sendChat(sessionID: String, message: String) {
         // Slash-command routing: intercept recognised `/`-commands before
         // they reach the agent. Pass-through commands (Claude only) fall
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if handleSlashCommand(sessionID: sessionID, message: message) { return }
+
+        // ELICITATION BYPASS: if the session is blocked on a pending
+        // AskUserQuestion, the answer MUST bypass the turn-queue gate and
+        // reach the broker immediately. Routing through `sendChatQueued`
+        // here deadlocks: the answer is held until the turn ends, but the
+        // turn can only end once the answer is delivered.
+        if hasPendingAsk(sessionID: sessionID) {
+            answerPendingInput(sessionID: sessionID, message: message)
+            return
+        }
 
         // QUEUED-NEXT GATE: if a turn is active, queue the message in the
         // "Queued Next" panel instead of delivering immediately. For codex

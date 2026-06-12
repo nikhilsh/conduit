@@ -408,6 +408,12 @@ fun ChatPage(
     // recreated as new events stream in, so a settled card can't re-fire.
     // Mirror of iOS `ConduitChatView.answeredPendingIDs`.
     var answeredPendingIds by remember { mutableStateOf(setOf<String>()) }
+    // Content fingerprints of answered pending-input cards: prompt + sorted
+    // options joined with "|". Supplements `answeredPendingIds` so a broker
+    // re-emitting the SAME pending card with a fresh id (after an app
+    // reconnect) still renders locked / "Sent" rather than showing a duplicate
+    // interactive card. Mirror of iOS `answeredPendingFingerprints`.
+    var answeredPendingFingerprints by remember { mutableStateOf(setOf<String>()) }
     val listState = rememberLazyListState()
     val pinnedContextsMap by store.pinnedContexts.collectAsState()
     val pinnedContexts = pinnedContextsMap[session.id] ?: emptyList()
@@ -693,14 +699,18 @@ fun ChatPage(
                             ev = ev,
                             agentAccent = agentAccent,
                             isContinuation = previousRole?.lowercase() == ev.role.lowercase(),
-                            pendingAnswered = ev.id in answeredPendingIds,
+                            pendingAnswered = ev.id in answeredPendingIds
+                                || pendingContentFingerprint(ev) in answeredPendingFingerprints,
                             // A pending-input answer is delivered as the user's
                             // next chat message — the broker matches it to the
                             // blocked AskUserQuestion control request. Mirror of
                             // iOS (`store.sendChat`), not the draft-fill path the
                             // composer's quick-reply chips use.
                             onAnswerPending = { msg -> store.sendChat(session.id, msg) },
-                            onPendingAnswered = { answeredPendingIds = answeredPendingIds + ev.id },
+                            onPendingAnswered = {
+                                answeredPendingIds = answeredPendingIds + ev.id
+                                answeredPendingFingerprints = answeredPendingFingerprints + pendingContentFingerprint(ev)
+                            },
                         )
                     }
                 }
@@ -1182,6 +1192,17 @@ private fun NeonStatusDot(color: Color, pulsing: Boolean, size: Dp = 8.dp) {
             .graphicsLayer { this.alpha = alpha }
             .background(color, CircleShape),
     )
+}
+
+/**
+ * Content fingerprint for a pending-input event: prompt + sorted options,
+ * joined with "|". Used as a dedupe key that survives broker re-emission of
+ * the same pending card under a fresh id. Mirror of iOS `pendingFingerprint`.
+ */
+private fun pendingContentFingerprint(ev: ConversationItem): String {
+    val opts = ev.pendingOptions.sorted().joinToString(",")
+    val prompt = ev.content.trim()
+    return "$prompt|$opts"
 }
 
 @Composable

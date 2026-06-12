@@ -261,6 +261,115 @@ struct SessionStoreTests {
         #expect(stored?.cwd == "/tmp/work")
         #expect(stored?.assistant == "claude")
     }
+
+    // MARK: - hasPendingAsk + elicitation bypass (Bug 4 deadlock fix)
+
+    /// `hasPendingAsk` must be true when the last non-user item is a
+    /// `pending_input` and false otherwise. Pins the detection predicate
+    /// so a rename of the kind string doesn't silently re-introduce the
+    /// deadlock.
+    @Test func hasPendingAskDetectsPendingInputKind() {
+        let store = SessionStore()
+        let sessionID = "test-pending-ask-\(UUID().uuidString)"
+
+        // No items: should be false.
+        #expect(!store.hasPendingAsk(sessionID: sessionID))
+
+        // Seed a pending_input item directly into conversationLog.
+        let pendingItem = ConversationItem(
+            id: "pi-1", role: "assistant", kind: "pending_input",
+            status: "pending", content: "Do you approve?",
+            ts: "2026-06-12T10:00:00Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: ["Yes", "No"],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        store.conversationLog[sessionID] = [pendingItem]
+        #expect(store.hasPendingAsk(sessionID: sessionID))
+
+        // After a user message follows, it should be false (last non-user is still pending_input,
+        // but the user already answered -- the user echo is last overall).
+        // hasPendingAsk looks at last NON-user item, so it stays true until
+        // the pending_input is replaced by a normal assistant item.
+        let userEcho = ConversationItem(
+            id: "local-1", role: "user", kind: "message",
+            status: "pending", content: "Yes",
+            ts: "2026-06-12T10:00:01Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        store.conversationLog[sessionID] = [pendingItem, userEcho]
+        // Last non-user is still the pending_input item -- turnActive=false would
+        // mean it's resolved; in practice the broker removes it. For the test:
+        // the predicate only looks at the last non-user kind.
+        #expect(store.hasPendingAsk(sessionID: sessionID))
+
+        // Replace the pending_input with a normal assistant response.
+        let reply = ConversationItem(
+            id: "srv-2", role: "assistant", kind: "message",
+            status: "done", content: "Approved!",
+            ts: "2026-06-12T10:00:02Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: [],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        store.conversationLog[sessionID] = [pendingItem, userEcho, reply]
+        #expect(!store.hasPendingAsk(sessionID: sessionID))
+    }
+
+    /// `answerPendingInput` must create an optimistic echo and register a
+    /// pending entry for delivery -- same guarantees as `sendChat` for the
+    /// non-queued path. This pins that the answer is NOT dropped into the
+    /// "Queued Next" queue (which would deadlock), and that the echo appears.
+    @Test func answerPendingInputBypassesQueueAndEchoes() {
+        let store = SessionStore()
+        let sessionID = "test-answer-\(UUID().uuidString)"
+
+        // Seed a pending_input so hasPendingAsk returns true.
+        let pendingItem = ConversationItem(
+            id: "pi-1", role: "assistant", kind: "pending_input",
+            status: "pending", content: "Approve?",
+            ts: "2026-06-12T10:00:00Z", files: [],
+            toolName: nil, command: nil, exitCode: nil, durationMs: nil,
+            diffSummary: nil, pendingOptions: ["Yes", "No"],
+            sourceAgent: nil, targetAgent: nil, taskText: nil,
+            resultSummary: nil, planSteps: []
+        )
+        store.conversationLog[sessionID] = [pendingItem]
+
+        // Simulate a broker turn_active=true status (the deadlock condition).
+        let activeStatus = SessionStatus(
+            session: sessionID, assistant: "claude", phase: "running",
+            health: "healthy", rows: 40, cols: 120, yolo: false, preview: nil,
+            sessionName: nil, viewers: nil, turnActive: true,
+            reasoningEffort: nil, cwd: nil, startedAt: nil, lastActivityAt: nil,
+            displayName: nil, totalInputTokens: nil, totalOutputTokens: nil,
+            totalCachedTokens: nil, totalCostUsd: nil, contextUsedTokens: nil,
+            contextWindowTokens: nil
+        )
+        store.ingestStatus(activeStatus)
+        #expect(store.isTurnActive(sessionID: sessionID))
+
+        // sendChat must route to answerPendingInput and bypass the queue.
+        store.sendChat(sessionID: sessionID, message: "Yes")
+
+        // The echo must appear in the conversation log (not just the queue).
+        let log = store.conversationLog[sessionID] ?? []
+        let userEcho = log.first(where: { $0.role == "user" })
+        #expect(userEcho != nil)
+        #expect(userEcho?.content == "Yes")
+        #expect(userEcho?.id.hasPrefix("local-") == true)
+
+        // The answer must be in the NORMAL pending queue (not queuedTurn).
+        let pending = store.pendingChats.entries(for: sessionID)
+        #expect(pending.contains(where: { $0.message == "Yes" }))
+        let queuedTurn = store.pendingChats.queuedTurnEntries(for: sessionID)
+        #expect(queuedTurn.isEmpty, "elicitation answer must NOT go into the queuedTurn panel")
+    }
 }
 
 /// `restore-chat-on-reattach` — pins the conversation merge that splices a
