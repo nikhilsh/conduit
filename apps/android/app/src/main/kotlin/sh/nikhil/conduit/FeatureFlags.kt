@@ -59,6 +59,31 @@ object FeatureFlags {
         const val DONE = 3
     }
 
+    // ── Enabled agents (new-session picker) ─────────────────────────────
+
+    /**
+     * Agents enabled by default in the new-session picker. claude + codex
+     * ship on; gemini / opencode are opt-in via Settings. The persisted
+     * override lives on [sh.nikhil.conduit.AppearanceStore.enabledAgents].
+     */
+    val defaultEnabledAgents: List<String> = listOf("claude", "codex")
+
+    /**
+     * Agents the picker MAY offer the user to enable (opt-in beyond the
+     * always-available defaults). Order is the Settings list order.
+     */
+    val optionalAgents: List<String> = listOf("gemini", "opencode")
+
+    /**
+     * Filter a candidate agent id list down to the [enabled] set, preserving
+     * the candidate order. Defaults are always retained even if absent from
+     * [enabled] (a corrupt/empty persisted set never hides claude/codex).
+     */
+    fun visibleAgents(candidates: List<String>, enabled: Set<String>): List<String> {
+        val keep = enabled + defaultEnabledAgents
+        return candidates.filter { it in keep }
+    }
+
     // ── Debug flags ─────────────────────────────────────────────────────
 
     /**

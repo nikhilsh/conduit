@@ -425,6 +425,34 @@ fun SettingsScreen(
                 )
             }
 
+            // New session — which agents appear in the picker. claude + codex
+            // are always available; the rest are opt-in to keep the picker
+            // uncluttered for the common case.
+            SettingsSection("New session") {
+                val neon = LocalNeonTheme.current
+                val enabledAgents by appearance.enabledAgents.collectAsState()
+                val descriptors by store.agentDescriptors.collectAsState()
+                Text(
+                    "Claude and Codex are always shown. Enable others to offer them when you start a session.",
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = neon.textFaint,
+                    modifier = Modifier.padding(horizontal = 16.dp, top = 10.dp),
+                )
+                FeatureFlags.optionalAgents.forEachIndexed { idx, agent ->
+                    if (idx > 0) SettingsDivider()
+                    val name = descriptors[agent]?.displayName
+                        ?: agent.replaceFirstChar { it.uppercaseChar() }
+                    ToggleRow(
+                        icon = Icons.Filled.Person,
+                        title = name,
+                        subtitle = "Show $name in the new-session picker",
+                        isOn = agent in enabledAgents,
+                        onChange = { appearance.setAgentEnabled(agent, it) },
+                    )
+                }
+            }
+
             // Labs — chat-shell-v2 A/B override (§2). Auto follows the
             // assigned bucket; A/B are a local override for dogfooding.
             // Also hosts the debug-gated Agents panel toggle.

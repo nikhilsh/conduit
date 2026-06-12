@@ -243,7 +243,8 @@ private fun AgentStep(
             // ("GPT-5.5", "Opus 4.8") — the static strings are only the
             // offline fallback, so the cards never pin a stale model name.
             // Unknown agents (e.g. "opencode") get a generic card.
-            val agentList = agentListFor(descriptors)
+            val enabled by appearance.enabledAgents.collectAsState()
+            val agentList = sh.nikhil.conduit.FeatureFlags.visibleAgents(agentListFor(descriptors), enabled)
             Row(horizontalArrangement = Arrangement.spacedBy(11.dp), modifier = Modifier.fillMaxWidth()) {
                 agentList.forEach { agent ->
                     AgentCardForAssistant(
@@ -275,42 +276,54 @@ private fun AgentStep(
                 onTap = { onPick("codex") },
             )
         }
-        // Box choice — always shown so the user can see where the session
-        // will run (device feedback round 4: gated on >1 servers, a
-        // single-box user "can't choose the box" and can't tell local vs
-        // server). Only the currently-connected box is selectable — readiness,
-        // directory browser, and create all use the connected box's client.
-        // Non-connected boxes are shown dimmed with a "Switch in Settings" note.
-        // "This device" on the home Boxes list is display-only (a phone can't
-        // host the broker), so it is deliberately not a target here.
-        // Mirror of iOS boxSection.
+        // Runs-on line (round-3 declutter): one row naming the box the session
+        // will be created on + its live state, with "Change >" opening the box
+        // switcher. Sessions always create on the CONNECTED box, so switching
+        // boxes here connects to the picked box. Replaces the old dead list of
+        // non-interactive rows where only one box was ever selectable.
         val currentEndpoint by store.endpoint.collectAsState()
+        val harnessState by store.harness.collectAsState()
+        var showBoxSwitcher by remember { mutableStateOf(false) }
         if (servers.isNotEmpty()) {
-            Text(
-                "BOX",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = neon.mono,
-                fontWeight = FontWeight.Bold,
-                color = neon.textFaint,
+            val connected = servers.firstOrNull { it.endpoint == currentEndpoint }
+            // Keep onSelectServer in sync so create() targets the connected box.
+            LaunchedEffect(connected?.id) { connected?.id?.let(onSelectServer) }
+            RunsOnRow(
+                boxName = connected?.name
+                    ?: servers.firstOrNull { it.isDefault }?.name
+                    ?: servers.first().name,
+                stateLabel = boxStateLabel(harnessState, connected != null),
+                stateOk = harnessState.isReachable,
+                canChange = servers.size > 1,
+                onChange = { showBoxSwitcher = true },
             )
-            servers.forEach { server ->
-                val isConnected = server.endpoint == currentEndpoint
-                BoxRow(
-                    name = server.name,
-                    host = server.endpoint.displayHost,
-                    selected = server.id == selectedServerId,
-                    enabled = isConnected,
-                    disabledNote = if (!isConnected) "Switch to this box in Settings to start a session on it." else null,
-                    onTap = { if (isConnected) onSelectServer(server.id) },
-                )
-            }
-            if (servers.size == 1) {
-                Text(
-                    "Sessions run on a paired box — this device can't host them. Pair another box in Settings.",
-                    fontFamily = neon.mono,
-                    fontSize = 10.5.sp,
-                    color = neon.textFaint,
-                )
+        }
+        if (showBoxSwitcher) {
+            BoxSwitcherSheet(
+                servers = servers,
+                activeEndpoint = currentEndpoint,
+                onPick = { server ->
+                    Telemetry.breadcrumb(
+                        "boxes",
+                        "new-session box switch",
+                        mapOf("box" to server.name, "host" to server.endpoint.displayHost),
+                    )
+                    store.selectSavedServer(server.id, autoConnect = true)
+                    onSelectServer(server.id)
+                    showBoxSwitcher = false
+                },
+                onDismiss = { showBoxSwitcher = false },
+            )
+        }
+        // Readiness hints folded under the box line (round-3 declutter: no
+        // separate third section). Only NOT-OK rows show — actionable sign-in
+        // / install nudges, never a green wall. Informational, never blocking.
+        val readiness by store.brokerReadiness.collectAsState()
+        readiness?.let { r ->
+            val pending = readinessCheckItems(r, descriptors)
+                .filter { it.status != sh.nikhil.conduit.ReadinessStatus.Ok }
+            if (pending.isNotEmpty()) {
+                ReadinessChecklist(items = pending, onSignIn = onSignIn)
             }
         }
         if (!canIssue) {
@@ -362,16 +375,6 @@ private fun AgentStep(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-            }
-        }
-        // WS-H.3: post-pair readiness checklist — informational, never blocking.
-        // Only shown when the broker sent a readiness block (null = old broker).
-        val readiness by store.brokerReadiness.collectAsState()
-        readiness?.let { r ->
-            val items = readinessCheckItems(r, descriptors)
-            if (items.isNotEmpty()) {
-                SectionLabel("Box readiness")
-                ReadinessChecklist(items = items, onSignIn = onSignIn)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -1016,6 +1019,132 @@ private fun displayName(path: String): String {
     val trimmed = path.trimEnd('/')
     val last = trimmed.substringAfterLast('/', "")
     return last.ifEmpty { trimmed }
+}
+
+/**
+ * Short live-state label for the connected box, derived from harness state.
+ * [connected] is false when no saved server matches the active endpoint
+ * (e.g. a freshly-paired box whose endpoint has not been adopted yet).
+ */
+internal fun boxStateLabel(state: sh.nikhil.conduit.HarnessState, connected: Boolean): String = when {
+    !connected -> "not connected"
+    state.isReachable -> "connected"
+    state is sh.nikhil.conduit.HarnessState.Reconnecting -> "reconnecting"
+    state is sh.nikhil.conduit.HarnessState.Connecting -> "connecting"
+    state is sh.nikhil.conduit.HarnessState.Failed -> "offline"
+    else -> "connecting"
+}
+
+/**
+ * Round-3 declutter: a single "Runs on" line replacing the old dead list of
+ * non-interactive box rows. Names the box the session will be created on, its
+ * live state dot, and a "Change >" affordance (only when there is more than
+ * one box to switch to) that opens the real box switcher.
+ */
+@Composable
+private fun RunsOnRow(
+    boxName: String,
+    stateLabel: String,
+    stateOk: Boolean,
+    canChange: Boolean,
+    onChange: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neonCardSurface(neon = neon, shape = RoundedCornerShape(13.dp), fill = neon.surface)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "RUNS ON",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                color = neon.textFaint,
+            )
+            Spacer(Modifier.height(3.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(
+                    boxName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box(Modifier.size(6.dp).clip(CircleShape).background(if (stateOk) neon.green else neon.textFaint))
+                Text(
+                    stateLabel,
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = if (stateOk) neon.green else neon.textFaint,
+                )
+            }
+        }
+        if (canChange) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onChange)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Change", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = neon.accent)
+                Icon(Icons.Filled.ChevronRight, contentDescription = "Change box", tint = neon.accent, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Box switcher for the new-session flow: pick a paired box to create the
+ * session on. Tapping a row connects to that box (selectSavedServer +
+ * autoConnect) so create() targets it. The currently-active box is marked.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BoxSwitcherSheet(
+    servers: List<sh.nikhil.conduit.SavedServer>,
+    activeEndpoint: sh.nikhil.conduit.Endpoint,
+    onPick: (sh.nikhil.conduit.SavedServer) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = neon.surfaceSolid,
+        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                "Choose a box",
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+            )
+            servers.forEach { server ->
+                val active = server.endpoint == activeEndpoint
+                BoxRow(
+                    name = server.name,
+                    host = server.endpoint.displayHost,
+                    selected = active,
+                    enabled = true,
+                    onTap = { onPick(server) },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
 }
 
 /**
