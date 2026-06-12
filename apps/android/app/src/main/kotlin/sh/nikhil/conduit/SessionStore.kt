@@ -2205,6 +2205,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
         refreshAccountUsage(id)
     }
 
+    /**
+     * True when the session is blocked on a pending AskUserQuestion: the last
+     * non-user item in the typed conversation log is an unanswered
+     * `pending_input` kind. Used to bypass the turn-queue gate so the answer
+     * reaches the broker immediately instead of deadlocking in the queue.
+     */
+    fun hasPendingAsk(sessionId: String): Boolean {
+        val items = _conversationLog.value[sessionId] ?: return false
+        val last = items.lastOrNull { it.role.lowercase() != "user" } ?: return false
+        return last.kind.lowercase() == "pending_input"
+    }
+
     fun sendChat(sessionId: String, msg: String) {
         // Funnel: first ever turn sent — first session, no prior server-side conversation items.
         val priorItems = _conversationLog.value[sessionId].orEmpty().filter { !it.id.startsWith("local-") }
@@ -2221,6 +2233,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // through to the normal send below; app-handled ones are handled
         // here and we return early. See docs/SLASH-COMMANDS.md.
         if (handleSlashCommand(sessionId, msg)) return
+        // ELICITATION BYPASS: if the session is blocked on a pending
+        // AskUserQuestion, the answer MUST bypass the turn-queue gate and
+        // reach the broker immediately. Routing through the turnActive queue
+        // deadlocks: the answer is held until the turn ends, but the turn
+        // can only end once the answer is delivered.
+        val pendingAsk = hasPendingAsk(sessionId)
+        if (pendingAsk) {
+            Telemetry.breadcrumb("chat", "answer_pending_ask",
+                mapOf("session" to sessionId, "chars" to msg.length.toString()))
+        }
         // Build the optimistic echo timestamp (anchored to the server clock domain).
         // Timestamp must be ANCHORED to the server clock domain, not the
         // device wall-clock. Every persisted item already in the log is
@@ -2296,6 +2318,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) +
                 ChatEvent(role = "user", content = msg, ts = ts, files = emptyList())
+        }
+        // Elicitation bypass: skip the turnActive queue gate and deliver
+        // directly. The broker already routes a message-during-pending-ask
+        // to the control channel (takePendingAsk / encodeAskAnswer).
+        if (pendingAsk) {
+            updatePendingChats { it.enqueue(sessionId, localId, msg, ts) }
+            Telemetry.breadcrumb("chat", "answer_pending_ask_deliver",
+                mapOf("session" to sessionId, "chars" to msg.length.toString()))
+            attemptDeliver(sessionId, localId, msg)
+            return
         }
         if (turnActive) {
             val agent = _sessions.value.firstOrNull { it.id == sessionId }?.assistant ?: ""
