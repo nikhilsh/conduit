@@ -198,6 +198,10 @@ private fun AgentStep(
     // button before the user commits. Defaults to Claude (first card).
     var selectedAgent by remember { mutableStateOf("claude") }
     val sheetTint = neonAgentColor(selectedAgent, neon)
+    // Single-flight guard: set true on the first tap so duplicate taps during
+    // the recomposition that switches AgentStep -> DirectoryStep are dropped,
+    // and the button shows a spinner for immediate visual feedback.
+    var isLaunching by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -317,7 +321,21 @@ private fun AgentStep(
         // drills in on tap, so no button there.
         if (useCards && canIssue) {
             Button(
-                onClick = { onPick(selectedAgent) },
+                onClick = {
+                    if (isLaunching) return@Button
+                    isLaunching = true
+                    // Breadcrumb so we can confirm the tap fires in Sentry.
+                    Telemetry.breadcrumb(
+                        "pairing",
+                        "setup connect tapped",
+                        mapOf(
+                            "agent" to selectedAgent,
+                            "host" to store.endpoint.value.displayHost,
+                        ),
+                    )
+                    onPick(selectedAgent)
+                },
+                enabled = !isLaunching,
                 shape = RoundedCornerShape(14.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                     containerColor = sheetTint,
@@ -325,11 +343,21 @@ private fun AgentStep(
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    "Continue with ${descriptors[selectedAgent]?.displayName ?: selectedAgent.replaceFirstChar { it.uppercaseChar() }}",
-                    fontFamily = neon.sans,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                if (isLaunching) {
+                    // Immediate visual feedback: spinner replaces the label so
+                    // the user knows the first tap was registered.
+                    CircularProgressIndicator(
+                        color = neon.accentText,
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text(
+                        "Continue with ${descriptors[selectedAgent]?.displayName ?: selectedAgent.replaceFirstChar { it.uppercaseChar() }}",
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
         }
         // WS-H.3: post-pair readiness checklist — informational, never blocking.

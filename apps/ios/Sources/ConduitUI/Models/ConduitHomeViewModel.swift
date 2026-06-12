@@ -60,6 +60,11 @@ extension ConduitUI {
         /// session is actually interactive. Mutually exclusive with
         /// `isRunning`.
         var isStarting: Bool = false
+        /// Whether this session belongs to the currently-connected box.
+        /// false = dimmed, tapping triggers a box-switch before opening.
+        var isCurrentBox: Bool = true
+        /// Display name of the owning box when isCurrentBox is false.
+        var boxName: String?
 
         var id: String {
             switch kind {
@@ -164,6 +169,16 @@ extension ConduitUI {
         var gitBranch: String?
         /// Dirty-file count from `git status --porcelain`. nil = unknown.
         var gitDirty: UInt32?
+        /// SavedServer.id of the box this session was reconciled from.
+        /// nil means the session has no stamp yet (treat as current box).
+        var boxID: String?
+        /// Whether this session belongs to the currently-connected box.
+        /// Sessions from other boxes are dimmed and tapping them triggers
+        /// a box-switch before opening the chat.
+        var isCurrentBox: Bool
+        /// Display name of the box this session belongs to (shown when
+        /// isCurrentBox is false). nil for current-box sessions.
+        var boxName: String?
 
         init(
             id: String,
@@ -175,7 +190,10 @@ extension ConduitUI {
             lastActivityPreview: String? = nil,
             isConfirmedLive: Bool = true,
             gitBranch: String? = nil,
-            gitDirty: UInt32? = nil
+            gitDirty: UInt32? = nil,
+            boxID: String? = nil,
+            isCurrentBox: Bool = true,
+            boxName: String? = nil
         ) {
             self.id = id
             self.displayName = displayName
@@ -187,6 +205,9 @@ extension ConduitUI {
             self.isConfirmedLive = isConfirmedLive
             self.gitBranch = gitBranch
             self.gitDirty = gitDirty
+            self.boxID = boxID
+            self.isCurrentBox = isCurrentBox
+            self.boxName = boxName
         }
     }
 
@@ -229,7 +250,9 @@ extension ConduitUI {
                     lastActivityPreview: s.lastActivityPreview ?? "",
                     isSelected: snap.selectedSessionID == s.id,
                     isRunning: isRunning,
-                    isStarting: isStarting
+                    isStarting: isStarting,
+                    isCurrentBox: s.isCurrentBox,
+                    boxName: s.boxName
                 ))
             }
             for p in snap.placeholders {

@@ -38,6 +38,10 @@ extension ConduitUI {
         /// WS-H.3: show the agent-login sheet when the user taps "Sign in"
         /// on a not-signed-in readiness row.
         @State private var showAgentLogin = false
+        /// Single-flight guard for the Continue bar. Set true on the FIRST tap
+        /// so subsequent taps during the navigation-push animation are dropped
+        /// (and the button shows a spinner so the user sees the tap registered).
+        @State private var isContinueLaunching: Bool = false
 
         /// In cards mode (§3) the selected agent tints the whole sheet before
         /// the user commits with "Continue". Defaults to Claude (first card).
@@ -214,6 +218,11 @@ extension ConduitUI {
             .presentationDetents([.medium, .large])
             .presentationCornerRadius(26)
             .tint(neon.accent)
+            // Reset the single-flight guard when the user navigates BACK from
+            // DirectoryPicker (pickedAgent -> nil) so the Continue bar is live again.
+            .onChange(of: pickedAgent) { _, newValue in
+                if newValue == nil { isContinueLaunching = false }
+            }
             .task {
                 // Pull the live per-agent model catalog (broker-discovered
                 // from the agent CLIs) so the cards' model line and the
@@ -271,12 +280,30 @@ extension ConduitUI {
         private var continueBar: some View {
             let meta = agentMeta(selectedAgentKind)
             return Button {
+                // Single-flight: drop duplicate taps during the push animation.
+                guard !isContinueLaunching else { return }
+                isContinueLaunching = true
+                // Breadcrumb so we can confirm the tap fires in Sentry.
+                Telemetry.breadcrumb("pairing", "setup connect tapped", data: [
+                    "agent": selectedAgentKind,
+                    "host": store.endpoint.displayHost,
+                ])
                 pickedAgent = selectedAgentKind
             } label: {
                 HStack(spacing: 8) {
-                    Text("Continue with \(meta.name)")
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .bold))
+                    if isContinueLaunching {
+                        // Immediate visual feedback — spinner replaces the chevron
+                        // so the user knows the first tap was registered even
+                        // before the navigation-push animation begins.
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(neon.accentText)
+                            .scaleEffect(0.8)
+                    } else {
+                        Text("Continue with \(meta.name)")
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .bold))
+                    }
                 }
                 .font(neon.sans(15).weight(.semibold))
                 .foregroundStyle(neon.accentText)
@@ -284,11 +311,12 @@ extension ConduitUI {
                 .padding(.vertical, 14)
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(sheetTint)
+                        .fill(sheetTint.opacity(isContinueLaunching ? 0.7 : 1.0))
                 )
-                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(sheetTint) : nil)
+                .neonGlowBox(neon.glow && !isContinueLaunching ? neon.glowBox?.tinted(sheetTint) : nil)
             }
             .buttonStyle(.plain)
+            .disabled(isContinueLaunching)
             .padding(.horizontal, 16)
             .padding(.top, 10)
             .padding(.bottom, 12)
