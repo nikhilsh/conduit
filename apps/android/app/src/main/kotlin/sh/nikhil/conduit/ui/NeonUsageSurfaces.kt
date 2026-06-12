@@ -1,5 +1,13 @@
 package sh.nikhil.conduit.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -197,10 +206,17 @@ fun HomeUsageStrip(store: SessionStore, modifier: Modifier = Modifier) {
                 AgentGlance(neon, a)
             }
             Spacer(Modifier.weight(1f))
+            val chevronRotation by animateFloatAsState(
+                targetValue = if (expanded) 180f else 0f,
+                animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
+                label = "usageChevron",
+            )
             Icon(
-                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse usage" else "Expand usage",
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { rotationZ = chevronRotation },
                 tint = neon.textFaint,
             )
         }
@@ -209,7 +225,13 @@ fun HomeUsageStrip(store: SessionStore, modifier: Modifier = Modifier) {
         // only the reset caption, so the expanded view had LESS information
         // than the collapsed glance. Two rows per agent (5h + weekly),
         // agent-tinted.
-        if (expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = tween(280, easing = FastOutSlowInEasing)) +
+                fadeIn(animationSpec = tween(280, easing = FastOutSlowInEasing)),
+            exit = shrinkVertically(animationSpec = tween(280, easing = FastOutSlowInEasing)) +
+                fadeOut(animationSpec = tween(280, easing = FastOutSlowInEasing)),
+        ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 agents.forEachIndexed { idx, a ->
                     if (idx > 0) {
