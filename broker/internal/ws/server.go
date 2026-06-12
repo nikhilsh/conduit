@@ -242,6 +242,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/push/register", s.servePushRegister)
 	mux.HandleFunc("/api/push/unregister", s.servePushUnregister)
 	mux.HandleFunc("/api/push/test", s.servePushTest)
+	// Actionable approval resolution — resolves a pending codex/claude approval
+	// from a push notification action without opening the app (Round-3 fix #9).
+	// Exact match: wins over the `/api/session/` prefix (serveSessionDelete).
+	mux.HandleFunc("/api/session/approval", s.serveSessionApproval)
 	return mux
 }
 

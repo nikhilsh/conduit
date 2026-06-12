@@ -151,6 +151,11 @@ type codexAppServerProcess struct {
 	// the safety-net paths (timeout / EOF / Close) build the correct response
 	// shape. codexReqUnknown when nothing is pending.
 	pendingKind codexServerRequestKind
+	// pendingApprovalSummary is the human-readable summary of the outstanding
+	// approval request (command line or file-change description), stashed so
+	// the push notification body can carry it without re-parsing the card content.
+	// "" when nothing is pending or for non-approval kinds.
+	pendingApprovalSummary string
 	// pendingUserInput / pendingElicitation hold the parsed request for the
 	// non-approval kinds, needed to build their response payloads from the user's
 	// answer. Only the field matching pendingKind is meaningful.
@@ -1037,6 +1042,7 @@ func (c *codexAppServerProcess) handleApprovalRequest(rawID json.RawMessage, met
 	}
 	c.stashPending(rawID, content, codexReqApproval, func(p *codexAppServerProcess) {
 		p.pendingApprovalDecline = req.declineAvailable
+		p.pendingApprovalSummary = req.summary
 	})
 	fmt.Fprintf(os.Stderr, "codex app-server: approval request %q (id %s): %s\n", method, string(rawID), req.summary)
 	c.emitPendingCard(content)
@@ -1189,6 +1195,7 @@ func (c *codexAppServerProcess) clearPendingLocked() {
 	c.pendingApprovalID = nil
 	c.pendingApprovalCard = ""
 	c.pendingApprovalDecline = false
+	c.pendingApprovalSummary = ""
 	c.pendingKind = codexReqUnknown
 	c.pendingUserInput = codexUserInputRequest{}
 	c.pendingElicitation = codexElicitationRequest{}
@@ -1224,6 +1231,20 @@ func (c *codexAppServerProcess) PendingApprovalCard() (string, bool) {
 		return "", false
 	}
 	return c.pendingApprovalCard, true
+}
+
+// PendingApprovalSummary returns the human-readable summary of the outstanding
+// approval request (command or file-change description) and true when a codex
+// approval is pending, or ("", false) when nothing is pending or the pending
+// kind is not an approval (requestUserInput / elicitation don't have a summary).
+// Used by the push-notify path to populate the notification body.
+func (c *codexAppServerProcess) PendingApprovalSummary() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pendingApprovalID == nil || c.pendingKind != codexReqApproval {
+		return "", false
+	}
+	return c.pendingApprovalSummary, true
 }
 
 // clearPendingApproval denies any outstanding server request on EOF/Close so the

@@ -93,6 +93,12 @@ func (s *Session) maybeNotifyTurnEnd() {
 // blocked on an AskUserQuestion and no client is currently attached.
 // Uses a separate debounce latch from turn-end so a pending-input doesn't
 // suppress a subsequent turn-end push or vice-versa.
+//
+// When the pending input is a codex approval-type request (command or
+// file-change), the notification carries Category="approval" and the approval
+// summary as the body (truncated to 120 chars) so iOS/Android can render an
+// actionable approval notification without opening the app. Generic pending
+// input (AskUserQuestion, elicitation, etc.) carries Category="input".
 func (s *Session) maybeNotifyPendingInput() {
 	// LA update: emit for pending-input (choice/permission interrupt).
 	s.notifyLAPendingInput()
@@ -116,16 +122,36 @@ func (s *Session) maybeNotifyPendingInput() {
 	s.pushState.mu.Unlock()
 
 	name := s.displayOrAssistant()
+
+	// Distinguish approval-type pending input from generic pending input.
+	body := "Needs your input"
+	category := "input"
+	if summary, isApproval := s.PendingApprovalSummaryForPush(); isApproval && summary != "" {
+		category = "approval"
+		body = truncatePushBody(summary, 120)
+	}
+
 	payload := push.Payload{
 		Title:     name,
-		Body:      "Needs your input",
+		Body:      body,
 		SessionID: s.ID,
+		Category:  category,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := n.Notify(ctx, id, payload); err != nil {
 		fmt.Fprintf(os.Stderr, "push: pending-input notify session=%s: %v\n", s.ID, err)
 	}
+}
+
+// truncatePushBody truncates s to at most maxLen runes, appending "…" when
+// truncated. Used to bound approval summaries in push notification bodies.
+func truncatePushBody(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "…"
 }
 
 // displayOrAssistant returns the best human-readable label for the session
