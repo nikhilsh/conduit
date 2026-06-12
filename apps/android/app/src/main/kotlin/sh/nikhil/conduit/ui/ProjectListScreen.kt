@@ -55,6 +55,7 @@ fun ProjectListScreen(
     val endpoint by store.endpoint.collectAsState()
     val displayNames by store.displayNames.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
+    val chatLog by store.chatLog.collectAsState()
     val creationError by store.sessionCreationError.collectAsState()
     val brokerReadiness by store.brokerReadiness.collectAsState()
     var showAgentPicker by remember { mutableStateOf(false) }
@@ -187,6 +188,13 @@ fun ProjectListScreen(
                                 ),
                             )
                         }
+                        // On-demand install progress: surface the latest system
+                        // message from the raw chat log so the row shows real
+                        // progress (e.g. "Installing claude on this box…")
+                        // instead of sitting blank while the agent installs.
+                        val installHint = chatLog[entry.id]
+                            ?.lastOrNull { it.role.lowercase() == "system" && it.content.isNotBlank() }
+                            ?.content
                         SessionRow(
                             entry = entry,
                             displayName = friendly,
@@ -195,6 +203,7 @@ fun ProjectListScreen(
                             lifecycle = lifecycle[entry.id],
                             connected = connected,
                             selected = entry.id == selectedId,
+                            installHint = installHint,
                             onTap = {
                                 if (entry is VisibleSession.Real) {
                                     store.select(entry.session.id)
@@ -453,6 +462,7 @@ private fun SessionRow(
     lifecycle: SessionLifecycle?,
     connected: Boolean,
     selected: Boolean,
+    installHint: String? = null,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -528,7 +538,7 @@ private fun SessionRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    rowSubtitle(entry, phase, lifecycle),
+                    rowSubtitle(entry, phase, lifecycle, installHint),
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = neon.mono,
                     color = neon.textDim,
@@ -555,15 +565,24 @@ private fun rowTitle(entry: VisibleSession, displayName: String?): String = when
     is VisibleSession.Creating -> "Starting session…"
 }
 
-/** Supporting text: "<agent> — <status>" (e.g. "codex — running"). */
+/**
+ * Supporting text: "<agent> — <status>" (e.g. "codex — running").
+ *
+ * When [installHint] is non-null (the broker published a system install-
+ * progress message, e.g. "Installing claude on this box…"), it is shown
+ * as the subtitle so the row is never blank during a slow on-demand install.
+ */
 private fun rowSubtitle(
     entry: VisibleSession,
     phase: String?,
     lifecycle: SessionLifecycle?,
+    installHint: String? = null,
 ): String = when (entry) {
     is VisibleSession.Real ->
-        "${entry.session.assistant} — ${phase ?: "ready"}"
+        installHint?.takeIf { it.isNotBlank() && !(phase ?: "").startsWith("exited") }
+            ?: "${entry.session.assistant} — ${phase ?: "ready"}"
     is VisibleSession.Creating ->
         if (lifecycle is SessionLifecycle.FailedToStart) lifecycle.reason
-        else "asking server for a session…"
+        else installHint?.takeIf { it.isNotBlank() }
+            ?: "asking server for a session…"
 }

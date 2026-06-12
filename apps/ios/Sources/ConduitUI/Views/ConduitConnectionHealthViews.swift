@@ -124,7 +124,7 @@ extension ConduitUI {
 
         private func readinessRow(_ item: ReadinessCheckItem) -> some View {
             HStack(spacing: 10) {
-                statusIcon(item.status)
+                statusIcon(item)
                 Text(item.label)
                     .font(neon.sans(13).weight(.medium))
                     .foregroundStyle(item.status == .ok ? neon.text : neon.textDim)
@@ -135,9 +135,9 @@ extension ConduitUI {
             .padding(.vertical, 9)
             .neonCardSurface(
                 neon,
-                fill: rowFill(item.status),
+                fill: rowFill(item),
                 cornerRadius: 12,
-                border: rowBorder(item.status)
+                border: rowBorder(item)
             )
         }
 
@@ -167,9 +167,15 @@ extension ConduitUI {
                         .foregroundStyle(neon.textFaint)
                 }
             case .notInstalled:
-                Text("not installed")
-                    .font(neon.mono(10.5))
-                    .foregroundStyle(neon.textFaint)
+                if item.autoInstalls {
+                    Text("installs on first use")
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textFaint)
+                } else {
+                    Text("not installed")
+                        .font(neon.mono(10.5))
+                        .foregroundStyle(neon.textFaint)
+                }
             case .absent:
                 Text("missing")
                     .font(neon.mono(10.5))
@@ -177,11 +183,13 @@ extension ConduitUI {
             }
         }
 
-        private func statusIcon(_ status: ReadinessCheckItem.Status) -> some View {
-            let (name, color): (String, Color) = switch status {
+        private func statusIcon(_ item: ReadinessCheckItem) -> some View {
+            let (name, color): (String, Color) = switch item.status {
             case .ok:           ("checkmark.circle.fill", neon.green)
             case .notSignedIn:  ("exclamationmark.circle", neon.accent)
-            case .notInstalled: ("xmark.circle",           neon.red)
+            case .notInstalled: item.autoInstalls
+                                    ? ("arrow.down.circle", neon.textDim)
+                                    : ("xmark.circle",      neon.red)
             case .absent:       ("exclamationmark.triangle", neon.accent)
             }
             return Image(systemName: name)
@@ -190,20 +198,24 @@ extension ConduitUI {
                 .frame(width: 20)
         }
 
-        private func rowFill(_ status: ReadinessCheckItem.Status) -> Color {
-            switch status {
+        private func rowFill(_ item: ReadinessCheckItem) -> Color {
+            switch item.status {
             case .ok:           return neon.surface
             case .notSignedIn:  return neon.accent.opacity(neon.dark ? 0.07 : 0.05)
-            case .notInstalled: return neon.red.opacity(neon.dark ? 0.07 : 0.05)
+            case .notInstalled: return item.autoInstalls
+                                    ? neon.surface
+                                    : neon.red.opacity(neon.dark ? 0.07 : 0.05)
             case .absent:       return neon.accent.opacity(neon.dark ? 0.07 : 0.05)
             }
         }
 
-        private func rowBorder(_ status: ReadinessCheckItem.Status) -> Color {
-            switch status {
+        private func rowBorder(_ item: ReadinessCheckItem) -> Color {
+            switch item.status {
             case .ok:           return neon.border
             case .notSignedIn:  return neon.accent.opacity(0.3)
-            case .notInstalled: return neon.red.opacity(0.3)
+            case .notInstalled: return item.autoInstalls
+                                    ? neon.border
+                                    : neon.red.opacity(0.3)
             case .absent:       return neon.accent.opacity(0.3)
             }
         }
