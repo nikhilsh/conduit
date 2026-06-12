@@ -77,8 +77,9 @@ class ConnectionHealthTest {
         brokerVersion: String = "v0.0.120",
         nodePresent: Boolean = true,
         tmuxPresent: Boolean = true,
+        gitPresent: Boolean = true,
         agents: Map<String, AgentReadiness> = emptyMap(),
-    ) = BrokerReadiness(brokerVersion, nodePresent, tmuxPresent, agents)
+    ) = BrokerReadiness(brokerVersion, nodePresent, tmuxPresent, gitPresent, agents)
 
     @Test fun emptyAgentsProducesNoItems() {
         assertTrue(readinessCheckItems(readiness(), emptyMap()).isEmpty())
@@ -105,9 +106,16 @@ class ConnectionHealthTest {
         assertTrue(ids.contains("tmux"))
     }
 
+    @Test fun missingGitAppendsAbsentRow() {
+        val items = readinessCheckItems(readiness(gitPresent = false), emptyMap())
+        assertEquals(1, items.size)
+        assertEquals("git", items[0].id)
+        assertEquals(ReadinessStatus.Absent, items[0].status)
+    }
+
     @Test fun presentInfraProducesNoInfraRows() {
         val items = readinessCheckItems(readiness(), emptyMap())
-        assertFalse(items.any { it.id == "node" || it.id == "tmux" })
+        assertFalse(items.any { it.id == "node" || it.id == "tmux" || it.id == "git" })
     }
 
     @Test fun signedInAgentIsOk() {
@@ -193,6 +201,7 @@ class ConnectionHealthTest {
             "broker_version": "v0.0.120",
             "node_present": true,
             "tmux_present": false,
+            "git_present": false,
             "agents": {
               "claude": {"cli_present": true, "signed_in": true, "auth_expires_in_s": null},
               "codex":  {"cli_present": false, "signed_in": false}
@@ -204,11 +213,28 @@ class ConnectionHealthTest {
         assertEquals("v0.0.120", r.brokerVersion)
         assertTrue(r.nodePresent)
         assertFalse(r.tmuxPresent)
+        assertFalse(r.gitPresent)
         assertEquals(2, r.agents.size)
         assertTrue(r.agents["claude"]!!.cliPresent)
         assertTrue(r.agents["claude"]!!.signedIn)
         assertNull(r.agents["claude"]!!.authExpiresInS)
         assertFalse(r.agents["codex"]!!.cliPresent)
+    }
+
+    @Test fun parseReadinessMissingGitPresentDefaultsTrue() {
+        // Old brokers don't include git_present — should default to true (not flagged).
+        val json = """
+        {
+          "readiness": {
+            "broker_version": "v0.0.120",
+            "node_present": true,
+            "tmux_present": true,
+            "agents": {}
+          }
+        }
+        """.trimIndent()
+        val r = parseReadiness(json)!!
+        assertTrue(r.gitPresent)
     }
 
     @Test fun parseReadinessMissingBlockReturnsNull() {

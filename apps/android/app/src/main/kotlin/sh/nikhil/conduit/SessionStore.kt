@@ -1633,10 +1633,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
         is SshException.Handshake           -> "SSH handshake failed: ${e.message}"
         is SshException.HostKeyRejected     -> "Host key rejected: ${e.message}"
         is SshException.AuthFailed          -> "Authentication failed: ${e.message}"
-        is SshException.DockerMissing       -> "Docker is not installed on the server: ${e.message}"
-        is SshException.DockerPermission    -> "User can't reach Docker: ${e.message}"
+        // Dead variants — bare-binary bootstrap never emits these.
+        is SshException.DockerMissing       -> "This box isn't supported: Docker-based setup is no longer used."
+        is SshException.DockerPermission    -> "This box isn't supported: Docker-based setup is no longer used."
         is SshException.PortConflict        -> "Server port is already in use: ${e.message}"
         is SshException.HarnessStartTimeout -> "Server took too long to come up: ${e.message}"
+        is SshException.BrokerInstallFailed -> "Couldn't download the conduit broker — this box can't reach the release host (firewall/proxy?), or the download failed. Check egress and reconnect. (${e.message})"
+        is SshException.CurlMissing         -> "This box has no curl or wget — install one and reconnect."
+        is SshException.UnsupportedPlatform -> "conduit doesn't support this box (${e.message}). Supported: Linux x86_64 / arm64."
+        is SshException.BrokerExecFailed    -> "The conduit broker won't run on this box (architecture mismatch, noexec home, or a security policy). This box isn't supported. (${e.message})"
+        is SshException.HomeUnwritable      -> "Can't write to the home directory on this box (read-only or out of disk)."
         is SshException.BootstrapExitCode   -> "Bootstrap script failed: ${e.message}"
         is SshException.BootstrapParse      -> "Couldn't parse bootstrap output: ${e.message}"
         is SshException.PortForward         -> "Port forward failed: ${e.message}"
@@ -1652,6 +1658,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
         is SshException.DockerPermission    -> "docker_permission"
         is SshException.PortConflict        -> "port_conflict"
         is SshException.HarnessStartTimeout -> "harness_start_timeout"
+        is SshException.BrokerInstallFailed -> "broker_install_failed"
+        is SshException.CurlMissing         -> "curl_missing"
+        is SshException.UnsupportedPlatform -> "unsupported_platform"
+        is SshException.BrokerExecFailed    -> "broker_exec_failed"
+        is SshException.HomeUnwritable      -> "home_unwritable"
         is SshException.BootstrapExitCode   -> "bootstrap_exit"
         is SshException.BootstrapParse      -> "bootstrap_parse"
         is SshException.PortForward         -> "port_forward"
@@ -2851,6 +2862,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     "version" to readiness.brokerVersion,
                     "node" to if (readiness.nodePresent) "1" else "0",
                     "tmux" to if (readiness.tmuxPresent) "1" else "0",
+                    "git" to if (readiness.gitPresent) "1" else "0",
                     "agents" to readiness.agents.keys.sorted().joinToString(","),
                 ),
             )
