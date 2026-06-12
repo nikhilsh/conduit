@@ -9,6 +9,28 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.145
+
+- **SSH self-healing box setup (PATH + idempotent re-add)** — the SSH-bootstrap
+  broker unit now sets `PATH` including `~/.local/bin`, so agent CLIs
+  (claude/codex) installed there are found by the broker (fixes "exec: claude:
+  executable file not found" → sessions wouldn't start). The bootstrap
+  idempotently rewrites a stale unit (missing PATH) on re-add, so an existing
+  box self-heals on reconnect with no manual box commands. PR #526. Verify:
+  reconnect a previously-broken SSH box → claude sessions start without touching
+  the box. [broker-script via app/core, on-device]
+- **SSH tunnel self-heal (auto-reconnect)** — the russh tunnel now uses a tighter
+  keepalive (~45–60 s dead-peer detection) and the app auto-reconnects when the
+  tunnel drops (backoff + single-flight + persisted SSH creds), instead of
+  failing with "Connection refused" until a manual re-add. PR #527. Verify: drop
+  the tunnel (background app / network switch) → it reconnects on its own and
+  sessions/folder-listing resume. [core+app, on-device, tablet+phone]
+- **SSH Sentry quota hygiene** — the forced ssh connect-attempt/blocked/
+  bootstrap-success captures (added when telemetry was dark) are demoted to
+  breadcrumbs; genuine failures still capture as events. PR #525. [app]
+
+---
+
 ## v0.0.144
 
 - **claude missing-CLI now surfaces an error** — when the `claude` CLI isn't on
