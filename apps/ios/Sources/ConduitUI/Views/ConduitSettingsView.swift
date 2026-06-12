@@ -83,6 +83,7 @@ extension ConduitUI {
                             appearanceSection
                             notificationsSection
                             conversationSection
+                            agentsSection
                             labsSection
                             supportSection
                             aboutSection
@@ -893,6 +894,61 @@ extension ConduitUI {
                         subtitle: "Tap when a reply starts and finishes",
                         isOn: $flags.replyHaptics
                     )
+                }
+            }
+        }
+
+        // MARK: Agents (new-session picker toggles)
+
+        /// Which agents are offered in the new-session picker. Matches
+        /// `FeatureFlags.enabledAgents`. One toggle per known agent (claude,
+        /// codex, gemini, opencode); defaults claude+codex on. Prevents
+        /// disabling the last enabled agent -- the picker must always have at
+        /// least one choice.
+        private var agentsSection: some View {
+            @Bindable var flags = flags
+            let knownAgents: [(id: String, label: String, icon: String)] = [
+                ("claude",   "Claude",   "cpu"),
+                ("codex",    "Codex",    "curlybraces"),
+                ("gemini",   "Gemini",   "sparkle"),
+                ("opencode", "Opencode", "chevron.left.forwardslash.chevron.right"),
+            ]
+            return sectionCard(title: "Agents") {
+                VStack(spacing: 0) {
+                    ForEach(Array(knownAgents.enumerated()), id: \.element.id) { idx, agent in
+                        let enabled = flags.enabledAgents.contains(agent.id)
+                        let isLast = flags.enabledAgents.count == 1 && enabled
+                        let tint = neon.agentTint(forAgent: agent.id)
+                        ConduitUI.ListRow(
+                            icon: agent.icon,
+                            title: agent.label,
+                            subtitle: nil,
+                            iconTint: tint
+                        ) {
+                            Toggle("", isOn: Binding(
+                                get: { enabled },
+                                set: { on in
+                                    var next = flags.enabledAgents
+                                    if on {
+                                        if !next.contains(agent.id) { next.append(agent.id) }
+                                    } else if !isLast {
+                                        next.removeAll { $0 == agent.id }
+                                    }
+                                    flags.enabledAgents = next
+                                    Telemetry.breadcrumb("settings", "agent toggle",
+                                        data: ["agent": agent.id, "on": "\(on)"])
+                                }
+                            ))
+                            .labelsHidden()
+                            .tint(tint)
+                            .disabled(isLast)
+                        }
+                        if idx < knownAgents.count - 1 {
+                            Divider()
+                                .background(neon.border)
+                                .padding(.leading, 46)
+                        }
+                    }
                 }
             }
         }

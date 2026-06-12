@@ -113,11 +113,10 @@ extension ConduitUI {
                                     )
                                 }
                             }
-                            // Always show where the session will run — even
-                            // with one box. Device feedback round 4: with the
-                            // section gated on >1 servers, a single-box user
-                            // "can't choose the box" and can't tell local vs
-                            // server. One box = one checked row + footnote.
+                            // Always show where the session will run.
+                            // A single "Runs on <name>" row with a "Change >"
+                            // link to the server switcher replaces the old
+                            // dead "Switch in Settings" rows.
                             if !store.savedServers.isEmpty {
                                 sectionLabel("Box")
                                 boxSection
@@ -445,65 +444,47 @@ extension ConduitUI {
         }
 
 
-        /// One row per paired box; the session is created on the checked
-        /// one. Only the currently-connected box is selectable — readiness,
-        /// directory browser, and create all use the connected box's client,
-        /// so allowing a different selection would show the connected box's
-        /// readiness/filesystem but create elsewhere (incoherent). Multi-box
-        /// concurrent sessions are a future feature; for now, non-connected
-        /// boxes show a "Switch in Settings" note and are disabled.
-        /// "This device" on the home Boxes list is display-only — a phone
-        /// can't host the broker — so it is deliberately not a target here.
+        /// Single "Runs on" row: shows the active box name + live connection
+        /// dot. "Change >" navigates to ServerSwitcherView to switch boxes.
+        /// No dead "Switch in Settings" rows -- the server switcher handles
+        /// the full list and actually switches the active endpoint.
         private var boxSection: some View {
-            VStack(spacing: 6) {
-                ForEach(store.savedServers) { server in
-                    let isConnected = server.endpoint == store.endpoint
-                    let isSelected = server.id == resolvedServer?.id
-                    HStack(spacing: 12) {
-                        Image(systemName: "server.rack")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(isSelected ? neon.accent : neon.textDim)
-                            .frame(width: 30, height: 30)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(server.name)
-                                .font(neon.sans(13).weight(.semibold))
-                                .foregroundStyle(neon.text)
-                            if isConnected {
-                                Text(server.endpoint.displayHost)
-                                    .font(neon.mono(11))
-                                    .foregroundStyle(neon.textDim)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            } else {
-                                Text("Switch to this box in Settings to start a session on it.")
-                                    .font(neon.mono(10.5))
-                                    .foregroundStyle(neon.textFaint)
-                                    .lineLimit(2)
-                            }
-                        }
-                        Spacer()
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(isSelected ? neon.accent : neon.textFaint)
+            let server = resolvedServer
+            let isLive = store.harness.isReachable
+            let name = server?.name ?? store.endpoint.displayHost
+            let dotColor: Color = isLive ? neon.green : neon.yellow
+            return NavigationLink {
+                ConduitUI.ServerSwitcherView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(neon.accent)
+                        .frame(width: 30, height: 30)
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(dotColor)
+                            .frame(width: 7, height: 7)
+                        Text(name)
+                            .font(neon.sans(13).weight(.semibold))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .neonCardSurface(
-                        neon,
-                        fill: isSelected ? neon.accent.opacity(neon.dark ? 0.10 : 0.07) : neon.surface,
-                        cornerRadius: 13,
-                        border: isSelected ? neon.accent.opacity(0.5) : neon.border
-                    )
-                    .opacity(isConnected ? 1.0 : 0.55)
-                }
-                if store.savedServers.count == 1 {
-                    Text("Sessions run on a paired box — this device can't host them. Pair another box in Settings.")
-                        .font(neon.mono(10.5))
+                    Spacer(minLength: 8)
+                    Text("Change")
+                        .font(neon.sans(13).weight(.semibold))
+                        .foregroundStyle(neon.textDim)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(neon.textFaint)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 2)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .neonCardSurface(neon, fill: neon.surface, cornerRadius: 13)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("ConduitAgentPickerSheet.boxSection")
         }
 
