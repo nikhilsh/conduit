@@ -19,6 +19,9 @@ continue_args       = []
 model_args          = ["--model", "{model}"]
 effort_args         = ["-c", "model_reasoning_effort={effort}"]
 login_provider      = "openai"
+# On-demand install: if the codex CLI is absent at session start, the broker
+# runs this command (via sh -c) to install it, then retries the spawn.
+install_cmd         = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
 
 [permission_modes.plan]
 drop_args = ["--dangerously-bypass-approvals-and-sandbox"]

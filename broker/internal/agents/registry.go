@@ -120,6 +120,13 @@ type Adapter struct {
 	// When a session is created with a named permission mode the rule's
 	// drop_args are removed from the argv and add_args are appended.
 	PermissionModes map[string]PermissionModeRule `toml:"permission_modes"`
+
+	// InstallCmd is a shell command string that installs the agent CLI when
+	// it is not found on the host. Run with `sh -c <install_cmd>` by the
+	// broker's on-demand install path at session spawn time. Empty means no
+	// on-demand install is available for this adapter. Example:
+	//   install_cmd = "curl -fsSL https://claude.ai/install.sh | bash"
+	InstallCmd string `toml:"install_cmd"`
 }
 
 func (a Adapter) Validate() error {

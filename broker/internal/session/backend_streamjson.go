@@ -88,6 +88,16 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	// (which lives on the Session) persists across process restarts.
 	subagentH := s.subagentHandle()
 
+	// On-demand install: if the claude CLI is missing and the adapter has an
+	// install_cmd, install it now (single-flight, ~300 s timeout) and retry.
+	// A visible "Installing…" / "installed" / error message is published to
+	// the Chat tab so the user knows why the session is taking longer.
+	if installErr := maybeInstallAgent(adapter.Name, adapter.Command[0], adapter.InstallCmd, s.PublishText); installErr != nil {
+		fmt.Fprintf(os.Stderr, "session %s: agent install: %v (chat disabled)\n", s.ID, installErr)
+		publishChatSystem(s.PublishText, "⚠️ claude: failed to start: "+installErr.Error())
+		return spawnResult{}, installErr
+	}
+
 	chat, cerr := startChatProcess(
 		context.Background(),
 		argsFor(req.resumeChatSessionID, req.continueLatestChat),
