@@ -39,10 +39,12 @@ enum OnboardingStep {
 //   firstRun   -- automatic gate in RootView; may resolve to Done when already paired.
 //   replay     -- Settings "Replay walkthrough"; always starts at Welcome.
 //   addMachine -- Settings "Add a machine"; always starts at Install.
-enum OnboardingEntry {
+enum OnboardingEntry: Identifiable {
     case firstRun
     case replay
     case addMachine
+
+    var id: String { String(describing: self) }
 }
 
 extension ConduitUI {

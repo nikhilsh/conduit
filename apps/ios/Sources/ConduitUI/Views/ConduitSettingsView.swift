@@ -58,8 +58,10 @@ extension ConduitUI {
         /// Account whose Manage dialog (re-auth / sign out) is open.
         @State private var manageTarget: AgentAccountStatus?
         // Fix 1: onboarding entry intents from Settings.
-        @State private var onboardingEntry: OnboardingEntry = .firstRun
-        @State private var showOnboarding = false
+        // Presented via .fullScreenCover(item:) so the entry binds atomically
+        // and never snapshots a stale default (which routed already-paired
+        // users straight to Done).
+        @State private var onboardingEntry: OnboardingEntry?
 
         // WS-P.3: push notification settings state — observed from the
         // shared PushNotificationManager so the row updates live when the
@@ -103,8 +105,8 @@ extension ConduitUI {
                         }
                     }
                 }
-                .fullScreenCover(isPresented: $showOnboarding) {
-                    ConduitUI.OnboardingView(onFinish: { showOnboarding = false }, entry: onboardingEntry)
+                .fullScreenCover(item: $onboardingEntry) { entry in
+                    ConduitUI.OnboardingView(onFinish: { onboardingEntry = nil }, entry: entry)
                         .environment(store)
                         .environment(flags)
                 }
@@ -209,7 +211,6 @@ extension ConduitUI {
                     Button {
                         Telemetry.breadcrumb("onboarding", "settings: replay walkthrough tapped")
                         onboardingEntry = .replay
-                        showOnboarding = true
                     } label: {
                         ConduitUI.ListRow(
                             icon: "arrow.counterclockwise",
@@ -229,7 +230,6 @@ extension ConduitUI {
                     Button {
                         Telemetry.breadcrumb("onboarding", "settings: add a machine tapped")
                         onboardingEntry = .addMachine
-                        showOnboarding = true
                     } label: {
                         ConduitUI.ListRow(
                             icon: "plus.rectangle.on.rectangle",
