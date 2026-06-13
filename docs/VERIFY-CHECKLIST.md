@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.155
+
+Live Activity top declutter. iOS PR #573. App-only.
+
+- **1 · Live Activity top no longer double-prints the status** — for a "needs your input" Live Activity the top row was stacking two near-identical status lines ("needs your pick · claude" directly above "CLAUDE IS ASKING"). The redundant sub-line is now suppressed when the agent is asking, so the top is just mark + title + timer and the "CLAUDE IS ASKING" line carries the state once (lock screen + Dynamic Island expanded). Running/done activities are unchanged. Verify: trigger a choice/permission Live Activity → the top shows the title + one status line, not two. [iOS, on-device]
+
+---
+
 ## v0.0.154
 
 Multi-box correctness: broker auto-update on reconnect (finally working) + session/box attribution + counts. iOS PR #570, Android PR #571. App-only (no broker redeploy — the broker already reports its version).
