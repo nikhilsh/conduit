@@ -444,6 +444,15 @@ fun HomeScreen(
                             savedServers.firstOrNull { it.id == stampedBoxId }
                         } else null
                         val crossBoxName = crossBoxServer?.name ?: stampedBoxId
+                        // Box-name badge for EVERY active row (removes the
+                        // "which session belongs to which box" ambiguity): the
+                        // stamped box's name, falling back to the current box
+                        // when unstamped. Cross-box rows still tint with accent
+                        // (+ dimming above); current-box rows show a quieter
+                        // capsule. Mirrors the iOS de-suppression.
+                        val rowBoxId = stampedBoxId ?: currentBoxId
+                        val rowBoxName = savedServers.firstOrNull { it.id == rowBoxId }?.name
+                            ?: crossBoxName
                         // Every row now sits on a real Material 3 card — a
                         // faint surfaceVariant fill, rounded corners, and the
                         // status dot brought inside the card rather than
@@ -577,10 +586,13 @@ fun HomeScreen(
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                     }
-                                    // Box-name badge: shown only for sessions
-                                    // that belong to a different box. Mirrors
-                                    // iOS HomeRowView box-name capsule.
-                                    if (!isCurrentBox && crossBoxName != null) {
+                                    // Box-name badge on EVERY row so each active
+                                    // session shows which box it belongs to.
+                                    // Cross-box rows use the accent tint; the
+                                    // current box uses a quieter dim tint.
+                                    // Mirrors iOS HomeRowView box-name capsule.
+                                    if (rowBoxName != null) {
+                                        val badgeTint = if (isCurrentBox) neon.textDim else neon.accent
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -589,19 +601,19 @@ fun HomeScreen(
                                                 Icons.Filled.Storage,
                                                 contentDescription = null,
                                                 modifier = Modifier.size(9.dp),
-                                                tint = neon.accent,
+                                                tint = badgeTint,
                                             )
                                             Text(
-                                                crossBoxName,
+                                                rowBoxName,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontFamily = neon.mono,
                                                 fontWeight = FontWeight.SemiBold,
-                                                color = neon.accent,
+                                                color = badgeTint,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 modifier = Modifier
                                                     .background(
-                                                        neon.accent.copy(alpha = 0.12f),
+                                                        badgeTint.copy(alpha = 0.12f),
                                                         RoundedCornerShape(50),
                                                     )
                                                     .padding(horizontal = 5.dp, vertical = 2.dp),
@@ -747,12 +759,19 @@ fun HomeScreen(
                     }
                 }
                 boxes.forEach { server ->
+                    // Per-box count: only sessions attributed to THIS box (by
+                    // stable stamp) and live — not the whole mixed list. Keyed
+                    // on the collected session/stamp/status state so it
+                    // recomposes as sessions come and go on any box.
+                    val boxSessionCount = remember(server.id, sessions, sessionBox, statuses) {
+                        store.liveSessionCount(server.id)
+                    }
                     HomeBoxRow(
                         neon = neon,
                         server = server,
                         isActive = server.endpoint == endpoint,
                         harness = harness,
-                        sessionCount = sessions.size,
+                        sessionCount = boxSessionCount,
                         // Fix 4: non-active reachability from probe.
                         reachable = reachabilityMap[server.id],
                         onClick = { onOpenBoxHealth(server) },
@@ -892,18 +911,23 @@ private fun HomeBoxRow(
     onConnect: () -> Unit = {},
 ) {
     val connected = isActive && (harness is HarnessState.Live || harness is HarnessState.Linked)
+    // Real per-box session count suffix — shown for any box that has live
+    // sessions attributed to it, so non-active boxes surface their count too.
+    val countSuffix = if (sessionCount > 0) {
+        " · $sessionCount ${if (sessionCount == 1) "session" else "sessions"}"
+    } else ""
     val (statusText, statusColor) = when {
-        isActive && connected -> "connected · $sessionCount ${if (sessionCount == 1) "session" else "sessions"}" to neon.green
+        isActive && connected -> "connected$countSuffix" to neon.green
         isActive && harness is HarnessState.Connecting -> "connecting…" to neon.yellow
         isActive && harness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
         isActive -> "offline" to neon.textFaint
         // v151 ITEM C: SSH/tunnel boxes have no at-rest reachability (loopback
         // listens only while connected). Show a neutral cue + keep Connect rather
         // than a misleading "offline".
-        server.ssh != null -> "SSH · tap Connect" to neon.textFaint
+        server.ssh != null -> "SSH · tap Connect$countSuffix" to neon.textFaint
         reachable == null -> "probing…" to neon.textFaint
-        reachable == true -> "reachable" to neon.green
-        else -> "offline" to neon.textFaint
+        reachable == true -> "reachable$countSuffix" to neon.green
+        else -> "offline$countSuffix" to neon.textFaint
     }
     val glyphColor = if (connected) neon.green else if (isActive) neon.accent else neon.textFaint
     Row(

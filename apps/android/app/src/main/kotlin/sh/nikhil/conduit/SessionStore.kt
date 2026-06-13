@@ -783,6 +783,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     @Volatile private var isReconnecting: Boolean = false
 
     /**
+     * At-most-once-per-launch guard for the post-connect broker auto-update
+     * (Fix: broker stale on reconnect). Keyed by "boxId@brokerVersion" so a
+     * single re-bootstrap is attempted per box per stale broker version, and we
+     * stop nagging once the box reports the matching version. In-flight guard
+     * prevents two connects from racing the same re-bootstrap.
+     */
+    private val attemptedBrokerUpdate: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+    @Volatile private var brokerUpdateInFlight: Boolean = false
+
+    /**
      * True once the held tunnel reported `isAlive() == false` (the SSH session
      * died: network flap, server reboot, idle kill, app suspend). Drives a
      * "connection lost — reconnect" affordance. Reset on a fresh tunnel.
@@ -1513,6 +1523,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // while disconnected (reconnect window / backgrounded
                 // mid-send / killed before the WS flushed).
                 flushPendingChats()
+                // Fix: the tunnelAlive fast path in reconnect()/selectSavedServer()
+                // bounces only the WS, so the bootstrap script's broker
+                // version-update (reuse path) never runs on a reconnect. Probe the
+                // broker's reported version here and trigger a one-shot re-bootstrap
+                // when stale. Fire-and-forget; never fails the connect.
+                viewModelScope.launch { updateBrokerIfStale() }
             } catch (t: Throwable) {
                 val detail = describe(t)
                 _harness.value = HarnessState.Failed(detail)
@@ -1565,6 +1581,77 @@ class SessionStore : ViewModel(), ConduitDelegate {
         } else {
             disconnect()
             connect()
+        }
+    }
+
+    /**
+     * After a successful connect to an SSH box, compare the broker's reported
+     * version (`/api/capabilities` -> `readiness.broker_version`) against the
+     * app version and trigger a one-shot re-bootstrap when stale.
+     *
+     * Why: [reconnect] and [selectSavedServer] short-circuit to a WS-only bounce
+     * when the SSH tunnel is still alive, so the bootstrap script's reuse path
+     * (which runs `_update_broker_if_stale`) never fires on a reconnect and the
+     * broker drifts behind the app. This re-runs the full bootstrap via
+     * [attemptSshSelfHeal], whose reuse path updates the broker binary.
+     *
+     * Gated: single-flight ([brokerUpdateInFlight]) + at-most-once per
+     * (boxId, broker_version) per launch ([attemptedBrokerUpdate]). Token-paired
+     * boxes are skipped (no SSH ref => nothing to re-bootstrap). No-op when the
+     * version is empty/"dev"/already current.
+     */
+    private suspend fun updateBrokerIfStale() {
+        val ep = _endpoint.value
+        val server = _savedServers.value.firstOrNull { it.endpoint == ep }
+        // SSH boxes only — token-paired boxes have no bootstrap to re-run.
+        if (server?.ssh == null) return
+        val boxId = server.id
+
+        val raw = getJsonOrNull(ep, "/api/capabilities")
+        if (raw == null) {
+            Telemetry.breadcrumb("broker_update", "capabilities fetch failed (stale check)",
+                mapOf("box" to boxId, "host" to ep.displayHost))
+            return
+        }
+        val readiness = runCatching { parseReadiness(raw) }.getOrNull()
+        val brokerVersion = readiness?.brokerVersion.orEmpty()
+        val appVersion = BuildConfig.VERSION_NAME
+
+        // Unknown / dev brokers report "dev" or empty — never re-bootstrap those.
+        if (brokerVersion.isEmpty() || brokerVersion == "dev") {
+            Telemetry.breadcrumb("broker_update", "skip — unknown broker version",
+                mapOf("box" to boxId, "broker_version" to brokerVersion))
+            return
+        }
+        if (brokerVersion == appVersion) {
+            Telemetry.breadcrumb("broker_update", "broker current",
+                mapOf("box" to boxId, "version" to brokerVersion))
+            return
+        }
+
+        val key = "$boxId@$brokerVersion"
+        synchronized(attemptedBrokerUpdate) {
+            if (!attemptedBrokerUpdate.add(key)) {
+                Telemetry.breadcrumb("broker_update", "skip — already attempted this launch",
+                    mapOf("key" to key))
+                return
+            }
+        }
+        if (brokerUpdateInFlight || isReconnecting) {
+            Telemetry.breadcrumb("broker_update", "skip — update/reconnect in flight",
+                mapOf("key" to key))
+            return
+        }
+
+        brokerUpdateInFlight = true
+        Telemetry.breadcrumb("broker_update", "stale broker — triggering re-bootstrap",
+            mapOf("box" to boxId, "broker_version" to brokerVersion, "app_version" to appVersion))
+        try {
+            // attemptSshSelfHeal re-runs the full bootstrap (reuse path), which
+            // updates the broker binary when stale. Has its own single-flight.
+            attemptSshSelfHeal()
+        } finally {
+            brokerUpdateInFlight = false
         }
     }
 
@@ -2111,6 +2198,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * but is genuinely on its way live — the create round-trip owns that
      * state. A confirmed-exited phase (raced ahead) still wins.
      */
+    /**
+     * Count of live sessions attributed to [boxId] (a SavedServer.id).
+     *
+     * Fix: the Home BOXES row count previously used the whole mixed session
+     * list ([sessions].size) for EVERY box, so a non-active box showed the
+     * active box's count. This restricts to sessions whose stable per-session
+     * box stamp ([sessionBox]) equals [boxId] AND that are confirmed-live, so
+     * each row shows its own real count (including non-active boxes).
+     */
+    fun liveSessionCount(boxId: String): Int =
+        _sessions.value.count { s ->
+            _sessionBox.value[s.id] == boxId && isConfirmedLive(s.id)
+        }
+
     fun isConfirmedLive(sessionID: String): Boolean {
         return when (_sessionLifecycle.value[sessionID]) {
             is SessionLifecycle.Exited,
@@ -2494,10 +2595,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
             ?: 0
         val nowIso = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        // Box label must come from the session's STABLE box stamp, not the
+        // active endpoint at write time. Otherwise a session created on box A
+        // gets re-stamped to box B when a status frame lands while box B is
+        // active -> the same session shows up as duplicate history rows under
+        // two boxes. Fall back to the active endpoint only when unstamped.
+        val stableBoxId = _sessionBox.value[sessionId] ?: savedHistoryServerId()
         val next = SavedSessionsReducer.upsert(
             current = _savedSessions.value,
             session = session,
-            serverId = savedHistoryServerId(),
+            serverId = stableBoxId,
             status = _statusBySession.value[sessionId],
             firstUserMessage = firstUserMessageOf(_conversationLog.value[sessionId]),
             messageCount = messageCount,
