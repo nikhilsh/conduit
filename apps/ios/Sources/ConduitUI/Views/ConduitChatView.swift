@@ -143,6 +143,11 @@ extension ConduitUI {
         /// (after an app reconnect) still renders locked / "Sent" rather
         /// than presenting a duplicate interactive card.
         @State private var answeredPendingFingerprints: Set<String> = []
+        /// The chosen answer text per answered pending-input fingerprint, so a
+        /// card recreated after reopen still shows the selection (green check +
+        /// "Sent · <answer>") rather than a bare locked card. Keyed by the same
+        /// fingerprint as `answeredPendingFingerprints`.
+        @State private var answeredPendingText: [String: String] = [:]
 
         private var isReadOnly: Bool { readOnlyItems != nil || forceReadOnly }
 
@@ -523,14 +528,19 @@ extension ConduitUI {
                                         sessionID: session.id,
                                         pendingAnswered: answeredPendingIDs.contains(event.id)
                                             || answeredPendingFingerprints.contains(pendingFingerprint(event)),
+                                        answeredText: answeredPendingText[pendingFingerprint(event)],
                                         streamRevision: streamRevision(for: event.id),
                                         appearanceRevision: appearanceRevision,
                                         onQuickReply: { reply in
                                             store.sendChat(sessionID: session.id, message: reply)
                                         },
-                                        onPendingAnswered: {
+                                        onPendingAnswered: { answer in
                                             answeredPendingIDs.insert(event.id)
-                                            answeredPendingFingerprints.insert(pendingFingerprint(event))
+                                            let fp = pendingFingerprint(event)
+                                            answeredPendingFingerprints.insert(fp)
+                                            if let answer, !answer.isEmpty {
+                                                answeredPendingText[fp] = answer
+                                            }
                                         }
                                     )
                                     // Perf (litter-parity): skip re-rendering a
@@ -1502,6 +1512,10 @@ private struct ConduitEventRow: View, Equatable {
     /// Durable "already answered" flag for a pending-input card, owned by
     /// the ChatView so it survives this row being recreated.
     var pendingAnswered: Bool = false
+    /// The previously-chosen answer text for an answered pending-input card,
+    /// so a card recreated after reopen still shows the selection. nil when
+    /// unanswered or the text wasn't captured.
+    var answeredText: String? = nil
     /// Length of this event's live streaming buffer (0 when not
     /// streaming). In the Equatable digest so a streaming row rebuilds on
     /// each token while a settled row is skipped — without it,
@@ -1513,7 +1527,7 @@ private struct ConduitEventRow: View, Equatable {
     /// re-renders every row.
     var appearanceRevision: Int = 0
     let onQuickReply: (String) -> Void
-    var onPendingAnswered: () -> Void = {}
+    var onPendingAnswered: (String?) -> Void = { _ in }
     @Environment(AppearanceStore.self) private var appearance
 
     /// Skip re-rendering a row whose render-determining inputs are
@@ -1526,6 +1540,7 @@ private struct ConduitEventRow: View, Equatable {
             && lhs.isContinuation == rhs.isContinuation
             && lhs.sessionID == rhs.sessionID
             && lhs.pendingAnswered == rhs.pendingAnswered
+            && lhs.answeredText == rhs.answeredText
             && lhs.streamRevision == rhs.streamRevision
             && lhs.appearanceRevision == rhs.appearanceRevision
     }
@@ -1539,6 +1554,7 @@ private struct ConduitEventRow: View, Equatable {
             ConduitPendingInputCard(
                 event: event,
                 alreadyAnswered: pendingAnswered,
+                answeredText: answeredText,
                 onQuickReply: onQuickReply,
                 onAnswered: onPendingAnswered
             )
@@ -3607,10 +3623,14 @@ private struct ConduitPendingInputCard: View {
     /// when new events stream in). Once true the card stays settled and
     /// no further tap can fire — closes the double-send bug.
     var alreadyAnswered: Bool = false
+    /// The previously-chosen answer text (from the durable ChatView store) so
+    /// a card recreated after reopen still shows the "Sent · <answer>" echo and
+    /// the selected-row checkmark. nil when unanswered / not captured.
+    var answeredText: String? = nil
     let onQuickReply: (String) -> Void
     /// Called the instant the user submits so the ChatView records this
-    /// event as answered.
-    var onAnswered: () -> Void = {}
+    /// event as answered, carrying the chosen answer text for persistence.
+    var onAnswered: (String?) -> Void = { _ in }
     @Environment(\.neonTheme) private var neon
 
     /// Chosen option per single-select question index. Drives the
@@ -3648,11 +3668,14 @@ private struct ConduitPendingInputCard: View {
         // keeps tap-to-send.
         let needsSend = questions.count > 1 || questions.contains { $0.multiSelect }
         return VStack(alignment: .leading, spacing: 12) {
-            Text("NEEDS YOUR INPUT")
+            // Drop the urgent "NEEDS YOUR INPUT" treatment once answered: a
+            // settled card reads as "ANSWERED" in a calm tint with no glow, so
+            // it no longer looks like it still wants attention (#R4-5).
+            Text(submitted ? "ANSWERED" : "NEEDS YOUR INPUT")
                 .font(neon.mono(11).weight(.bold))
                 .tracking(0.8)
-                .foregroundStyle(neon.claude)
-                .neonTextGlow(neon.textGlow?.tinted(neon.claude))
+                .foregroundStyle(submitted ? neon.green : neon.claude)
+                .neonTextGlow(submitted ? nil : neon.textGlow?.tinted(neon.claude))
             ForEach(Array(questions.enumerated()), id: \.offset) { qIdx, question in
                 VStack(alignment: .leading, spacing: 8) {
                     if !question.prompt.isEmpty {
@@ -3682,7 +3705,7 @@ private struct ConduitPendingInputCard: View {
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 12, weight: .bold))
-                    Text(sentAnswer.map { "Sent · \($0)" } ?? "Sent")
+                    Text((sentAnswer ?? answeredText).map { "Sent · \($0)" } ?? "Sent")
                         .font(neon.mono(11).weight(.semibold))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -3693,13 +3716,14 @@ private struct ConduitPendingInputCard: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous).fill(neon.claude.opacity(0.10))
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill((submitted ? neon.border : neon.claude).opacity(submitted ? 0.18 : 0.10))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(neon.claude, lineWidth: 1.5)
+                .stroke(submitted ? neon.border : neon.claude, lineWidth: 1.5)
         )
-        .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.claude) : nil)
+        .neonGlowBox(neon.glow && !submitted ? neon.glowBox?.tinted(neon.claude) : nil)
     }
 
     @ViewBuilder
@@ -3707,9 +3731,16 @@ private struct ConduitPendingInputCard: View {
         question qIdx: Int, option: String, index oIdx: Int,
         needsSend: Bool, multiSelect: Bool
     ) -> some View {
-        let selected = multiSelect
+        let localSelected = multiSelect
             ? (multiSelections[qIdx]?.contains(option) ?? false)
             : selections[qIdx] == option
+        // After a reopen the local selection state is gone but the card is
+        // still locked (alreadyAnswered). Recover the highlight from the
+        // persisted answer text so the chosen row keeps its checkmark.
+        let hasLocalSelection = !selections.isEmpty || !multiSelections.isEmpty
+        let recovered = submitted && !hasLocalSelection
+            && (answeredText.map { answerContains($0, option: option) } ?? false)
+        let selected = localSelected || recovered
         let dimmed = submitted && !selected
         Button {
             guard !submitted else { return }
@@ -3761,6 +3792,18 @@ private struct ConduitPendingInputCard: View {
         .accessibilityHint(needsSend ? "Select this option" : "Send this reply")
     }
 
+    /// Whether a persisted answer string (newline-joined across questions,
+    /// ", "-joined within a multi-select) names this exact option. Matches on
+    /// delimited tokens so "Yes" doesn't spuriously match "Yes, all".
+    private func answerContains(_ answer: String, option: String) -> Bool {
+        let target = option.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else { return false }
+        let tokens = answer
+            .split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return tokens.contains(target)
+    }
+
     /// One question's answer string: multi-select joins the chosen labels
     /// (in option order) with ", "; single-select is the chosen label.
     private func answer(for qIdx: Int, question: ConduitUI.PendingQuestion) -> String? {
@@ -3805,7 +3848,7 @@ private struct ConduitPendingInputCard: View {
         // card visibly settles the instant the user taps.
         localSubmitted = true
         sentAnswer = joined
-        onAnswered()
+        onAnswered(joined)
         onQuickReply(joined)
     }
 }
