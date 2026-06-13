@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.152
+
+Per-box credential auto-propagate — the fix for "Claude says signed in but a session on another box returns 401". Broker PR #563 (redeployed v0.0.152, endpoints live), iOS PR #565, Android PR #564. The broker also gained a per-box credential CLEAR endpoint (`POST /api/agent/credentials/clear`) used by the upcoming Stage-2 sign-out UI. Stage-2 accounts UI (per-box status + sign-out) is a separate follow-up.
+
+- **1 · Credentials auto-propagate to every box you connect** — the app now pushes your stored Claude/ChatGPT credential to a box on connect via the new broker `POST /api/agent/credentials`, so a box added after sign-in (e.g. an SSH box) gets the credential instead of returning `API Error: 401`. Verify: with Claude signed in on the phone, connect a box that never had Claude set up → start a Claude session → it works (no 401). [iOS+Android+broker, on-device]
+- **2 · 401 safety net** — if an agent auth 401 still occurs mid-session, the app re-pushes the credential to that session's box and shows a "Sign in on this box" affordance instead of a dead error. Verify: force a 401 (box with no/expired cred) → app recovers or shows the sign-in CTA, not a bare error. [iOS+Android, on-device]
+- **3 · Readiness reflects pushed credentials (broker)** — `/api/capabilities` `agents.<name>.signed_in` is now true when the box holds an app-pushed credential, not only when a host-login file exists. Verify: a box that only has an app-pushed cred shows the agent as signed-in/ready. [broker, on-device]
+
+---
+
 ## v0.0.151
 
 Quick fixes for issues found device-testing v0.0.150. iOS PR #561, Android PR #560. No broker change (no redeploy).
