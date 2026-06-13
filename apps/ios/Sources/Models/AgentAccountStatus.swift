@@ -134,3 +134,30 @@ struct AgentAccountStatus: Identifiable, Equatable {
         return plan
     }
 }
+
+// MARK: - AgentBoxStatus
+//
+// Stage-2 per-box readiness line (the SECOND line of each agent-account row):
+// whether the CONNECTED box already holds this agent's credential, derived from
+// `brokerReadiness.agents[<agent>].signedIn`. View-agnostic (no SwiftUI Color)
+// so both ConduitAgentLoginSheet and ConduitSettingsView render it identically;
+// each view maps `tone` to its own theme color.
+struct AgentBoxStatus: Equatable {
+    enum Tone { case ready, absent }
+    let text: String
+    let tone: Tone
+
+    /// Build line 2 for the given agent against a connected box.
+    /// Returns nil when there is no connected box OR readiness is unknown
+    /// (old broker / not yet fetched) -- in those cases line 2 is HIDDEN so we
+    /// never assert a false per-box state.
+    ///   - boxName: the connected box's display name (nil = no box connected).
+    ///   - signedIn: `brokerReadiness.agents[agent].signedIn` (nil = unknown).
+    static func make(agent: String, boxName: String?, signedIn: Bool?) -> AgentBoxStatus? {
+        guard let boxName, let signedIn else { return nil }
+        if signedIn {
+            return AgentBoxStatus(text: "Ready on \(boxName)", tone: .ready)
+        }
+        return AgentBoxStatus(text: "Not on \(boxName) - auto-pushes on connect", tone: .absent)
+    }
+}
