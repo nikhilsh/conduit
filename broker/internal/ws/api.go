@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nikhilsh/conduit/broker/internal/credentials"
 	"github.com/nikhilsh/conduit/broker/internal/hostmetrics"
 	"github.com/nikhilsh/conduit/broker/internal/push"
 	"github.com/nikhilsh/conduit/broker/internal/session"
@@ -171,7 +172,14 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.NtfyURL = s.NtfyURL
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
-	resp.Readiness = buildReadiness(s.Sessions, s.Sessions.Registry())
+	// Pass the pushed-credential store as a nil INTERFACE when unset:
+	// handing a typed-nil *credentials.Store through the credStore
+	// interface would make `creds != nil` true and nil-deref on Has().
+	var creds credStore
+	if s.Credentials != nil {
+		creds = s.Credentials
+	}
+	resp.Readiness = buildReadiness(s.Sessions, s.Sessions.Registry(), creds)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -550,6 +558,122 @@ func (s *Server) servePushTest(w http.ResponseWriter, r *http.Request) {
 		"sent":        true,
 		"token_count": len(tokens),
 	})
+}
+
+// agentCredentialsRequest is the body for POST /api/agent/credentials and
+// POST /api/agent/credentials/clear. `credential` is unused (empty) for the
+// clear endpoint.
+type agentCredentialsRequest struct {
+	Provider   string          `json:"provider"`
+	Kind       string          `json:"kind"`
+	Credential json.RawMessage `json:"credential"`
+}
+
+// serveAgentCredentials handles POST /api/agent/credentials — the
+// session-less twin of the in-session WS `set_agent_credentials` control
+// message. Auto-propagate-on-connect needs to push a credential to a box
+// the instant it connects, before any session exists; the WS control path
+// only runs on a session-bound socket, so this HTTP endpoint is the seam.
+//
+// Identity = the request bearer (requireAuth), which is exactly the bearer
+// the credentials.Store keys its per-identity subdir on, so the blob lands
+// in the same place the in-session push would have written it. Encryption
+// at rest is unchanged: this calls Store.Set, which seals with AES-256-GCM.
+//
+// Wire contract:
+//
+//	POST /api/agent/credentials
+//	Authorization: Bearer <token>   (or ?token=<token>)
+//	{"provider":"anthropic"|"openai","kind":"oauth","credential":{…}}
+//
+//	200 {"stored":true,"provider":"…"}
+//	400 {"error:invalid_request|unknown_provider|unsupported_kind|empty_credential}
+//	401 {"error:…}                 — missing/bad token
+//	503 {"error:credentials_unavailable} — broker started without a store
+func (s *Server) serveAgentCredentials(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	if s.Credentials == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "credentials_unavailable", "broker has no credentials store configured")
+		return
+	}
+	var req agentCredentialsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	provider := strings.TrimSpace(req.Provider)
+	if !credentials.ValidProvider(provider) {
+		writeAPIError(w, http.StatusBadRequest, "unknown_provider", "unknown provider "+provider)
+		return
+	}
+	// Stage 1 only ships the oauth kind — mirror the WS guard so the wire
+	// schema fails loudly when the protocol extends to api_key/signed_jwt.
+	if strings.TrimSpace(req.Kind) != "oauth" {
+		writeAPIError(w, http.StatusBadRequest, "unsupported_kind", "unsupported kind "+req.Kind)
+		return
+	}
+	if len(req.Credential) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "empty_credential", "empty credential payload")
+		return
+	}
+	if err := s.Credentials.Set(provider, req.Credential); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "credentials_store_failed", err.Error())
+		return
+	}
+	log.Printf("credentials: stored pushed %s blob via HTTP (session-less)", provider)
+	writeJSON(w, http.StatusOK, map[string]any{"stored": true, "provider": provider})
+}
+
+// serveAgentCredentialsClear handles POST /api/agent/credentials/clear —
+// per-box sign-out. Removes ONLY the app-pushed `<provider>.enc` blob for
+// the request identity; it never touches the box owner's host-HOME login
+// files (Store.Delete enforces this). Idempotent: clearing a provider with
+// nothing stored is a 200.
+//
+// Wire contract:
+//
+//	POST /api/agent/credentials/clear
+//	Authorization: Bearer <token>   (or ?token=<token>)
+//	{"provider":"anthropic"|"openai"}
+//
+//	200 {"cleared":true,"provider":"…"}
+//	400 {"error:invalid_request|unknown_provider}
+//	401 {"error:…}
+//	503 {"error:credentials_unavailable}
+func (s *Server) serveAgentCredentialsClear(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	if s.Credentials == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "credentials_unavailable", "broker has no credentials store configured")
+		return
+	}
+	var req agentCredentialsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	provider := strings.TrimSpace(req.Provider)
+	if !credentials.ValidProvider(provider) {
+		writeAPIError(w, http.StatusBadRequest, "unknown_provider", "unknown provider "+provider)
+		return
+	}
+	if err := s.Credentials.Delete(provider); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "credentials_clear_failed", err.Error())
+		return
+	}
+	log.Printf("credentials: cleared pushed %s blob via HTTP (per-box sign-out)", provider)
+	writeJSON(w, http.StatusOK, map[string]any{"cleared": true, "provider": provider})
 }
 
 // approvalResolveRequest is the body for POST /api/session/approval.

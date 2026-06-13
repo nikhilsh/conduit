@@ -170,6 +170,30 @@ func (s *Store) Has(provider string) bool {
 	return err == nil
 }
 
+// Delete removes the app-pushed encrypted credential for `provider` from
+// this identity's store. It removes ONLY the `<provider>.enc` blob the app
+// pushed via Set — it never touches the box owner's host-HOME login files
+// (~/.claude/.credentials.json, ~/.codex/auth.json). Those are the box
+// owner's own CLI login and are not the app's to revoke; the per-box
+// sign-out the app surfaces is honestly scoped to "remove the pushed
+// credential from this box".
+//
+// Returns nil when nothing was stored (idempotent: a double sign-out is a
+// no-op success) and a wrapped error only on an unexpected filesystem
+// failure. Unknown providers are rejected up front, matching Set/Get.
+func (s *Store) Delete(provider string) error {
+	if !ValidProvider(provider) {
+		return fmt.Errorf("credentials: unknown provider %q", provider)
+	}
+	if err := os.Remove(s.providerPath(provider)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("credentials: delete %s: %w", provider, err)
+	}
+	return nil
+}
+
 // Materialize decrypts the stored credential for `provider` and writes
 // it into a per-session ephemeral HOME at the provider-native path:
 //

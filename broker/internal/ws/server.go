@@ -242,6 +242,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/push/register", s.servePushRegister)
 	mux.HandleFunc("/api/push/unregister", s.servePushUnregister)
 	mux.HandleFunc("/api/push/test", s.servePushTest)
+	// Auto-propagate: session-less agent-credential push + per-box revoke.
+	// Lets the app store/clear a pushed OAuth blob for a just-connected box
+	// that has no live session yet (the in-session WS set_agent_credentials
+	// path stays unchanged). store = POST, revoke = POST .../clear.
+	mux.HandleFunc("/api/agent/credentials", s.serveAgentCredentials)
+	mux.HandleFunc("/api/agent/credentials/clear", s.serveAgentCredentialsClear)
 	// Actionable approval resolution — resolves a pending codex/claude approval
 	// from a push notification action without opening the app (Round-3 fix #9).
 	// Exact match: wins over the `/api/session/` prefix (serveSessionDelete).
@@ -820,6 +826,12 @@ func (c *client) handleText(payload []byte) {
 		// the broker has nowhere to put the blob, so we surface a
 		// chat error instead of silently dropping it.
 		c.handleSetAgentCredentials(env.Provider, env.Kind, env.Credential)
+	case "clear_agent_credentials":
+		// Per-box sign-out from an in-session socket. Removes ONLY the
+		// app-pushed <provider>.enc for this identity; the box owner's
+		// host-HOME login files are untouched (Store.Delete enforces this).
+		// The session-less twin lives at POST /api/agent/credentials/clear.
+		c.handleClearAgentCredentials(env.Provider)
 	case "start_agent_login":
 		// v2 agent-login entry point (PLAN-AGENT-OAUTH.md "Approach
 		// v2 — upstream-faithful"). Spawns the CLI's own login
@@ -913,6 +925,27 @@ func (c *client) handleSetAgentCredentials(provider, kind string, credential jso
 	c.broadcastCredentialsRefreshed(provider)
 }
 
+// handleClearAgentCredentials revokes the app-pushed credential for
+// `provider` (per-box sign-out). Removes only the <provider>.enc blob;
+// host-HOME login files are never touched. On success, broadcasts a
+// view_event so every viewer learns the credential was cleared.
+func (c *client) handleClearAgentCredentials(provider string) {
+	server := c.serverRef()
+	if server == nil || server.Credentials == nil {
+		c.emitCredentialsToolEvent("clear_agent_credentials rejected: broker has no credentials store configured")
+		return
+	}
+	if !credentials.ValidProvider(provider) {
+		c.emitCredentialsToolEvent("clear_agent_credentials rejected: unknown provider " + provider)
+		return
+	}
+	if err := server.Credentials.Delete(provider); err != nil {
+		c.emitCredentialsToolEvent("clear_agent_credentials failed: " + err.Error())
+		return
+	}
+	c.broadcastCredentialsCleared(provider)
+}
+
 // serverRef walks back to the parent Server. Right now the client
 // struct doesn't hold a server pointer, so we stash it on the session
 // manager via a package-level accessor — simpler than rewiring every
@@ -961,6 +994,28 @@ func (c *client) broadcastCredentialsRefreshed(provider string) {
 		"view":    "status",
 		"event": map[string]any{
 			"agent_credentials_refreshed": map[string]any{
+				"provider": provider,
+			},
+		},
+		"ts": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+	c.sess.PublishText(payload)
+}
+
+// broadcastCredentialsCleared emits the view_event mirroring a per-box
+// sign-out so every viewer learns the pushed credential was removed. Shape
+// mirrors broadcastCredentialsRefreshed with a `agent_credentials_cleared`
+// payload.
+func (c *client) broadcastCredentialsCleared(provider string) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "view_event",
+		"session": c.sess.ID,
+		"view":    "status",
+		"event": map[string]any{
+			"agent_credentials_cleared": map[string]any{
 				"provider": provider,
 			},
 		},
