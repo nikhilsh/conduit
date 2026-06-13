@@ -508,7 +508,11 @@ extension ConduitUI {
                             .offset(x: 6, y: 6)
                     }
                 VStack(spacing: 8) {
-                    eyebrow("PAIRED", tint: neon.green)
+                    Text("PAIRED")
+                        .font(neon.mono(12).weight(.bold))
+                        .tracking(2)
+                        .foregroundStyle(neon.green)
+                        .frame(maxWidth: .infinity, alignment: .center)
                     Text("You're in.")
                         .font(neon.sans(28).weight(.semibold))
                         .foregroundStyle(neon.text)
