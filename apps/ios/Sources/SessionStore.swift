@@ -747,6 +747,19 @@ final class SessionStore {
     var savedServers: [SavedServer] = []
     var recentDirectories: [String] = []
 
+    /// Display name of the currently-connected box, or nil when none is
+    /// paired. Used by the agent-account rows to label per-box readiness
+    /// ("Ready on <box>"). Prefers the SavedServer name (the real identity,
+    /// e.g. "root@host" for SSH-tunneled boxes whose endpoint is a loopback),
+    /// falling back to the endpoint's display host for token-only pairings.
+    var connectedBoxName: String? {
+        guard endpoint.isComplete else { return nil }
+        if let matched = savedServers.first(where: { $0.endpoint == endpoint }) {
+            return matched.name
+        }
+        return endpoint.displayHost
+    }
+
     /// SSH-bootstrap progress. Observed by the SSH login sheet.
     var sshBootstrapState: SshBootstrapState = .idle
 
@@ -3436,6 +3449,64 @@ final class SessionStore {
                     "status": "\(http.statusCode)",
                 ])
             }
+        }
+    }
+
+    /// Remove a single app-pushed agent credential from a specific box over
+    /// HTTP (`POST /api/agent/credentials/clear`), independent of any live
+    /// session. This is the per-box counterpart of
+    /// `propagateStoredAgentCredentials(to:)`: it deletes the credential the
+    /// app pushed to the broker's encrypted store so the box stops using the
+    /// app account. It does NOT touch the box owner's own shell login
+    /// (`~/.claude` / `~/.codex` created by `claude`/`codex` on the host) --
+    /// see docs/PLAN-credential-propagate.md section C.
+    ///
+    /// Same request shape as the propagate POST, different path; the body is
+    /// just `{"provider": <anthropic|openai>}` (no `credential`). Best-effort
+    /// and idempotent: the broker answers 200 even when nothing was stored,
+    /// and a 503 (old broker without the credential store) just breadcrumbs.
+    /// Never throws -- callers fire it from menus and must not have a clear
+    /// failure surface as an error.
+    func clearAgentCredential(provider: OAuthProvider, on endpoint: StoredEndpoint) async {
+        guard let base = endpoint.httpBaseURL else { return }
+        let body: [String: Any] = ["provider": provider.rawValue]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
+
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/agent/credentials/clear"
+        guard let url = components?.url else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = bodyData
+
+        Telemetry.breadcrumb("agent_creds", "clear", data: [
+            "host": endpoint.displayHost,
+            "provider": provider.rawValue,
+        ])
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse
+        else {
+            Telemetry.breadcrumb("agent_creds", "clear network error", data: [
+                "host": endpoint.displayHost,
+                "provider": provider.rawValue,
+            ])
+            return
+        }
+        if (200..<300).contains(http.statusCode) {
+            Telemetry.breadcrumb("agent_creds", "cleared", data: [
+                "host": endpoint.displayHost,
+                "provider": provider.rawValue,
+                "status": "\(http.statusCode)",
+            ])
+        } else {
+            Telemetry.breadcrumb("agent_creds", "clear non-2xx", data: [
+                "host": endpoint.displayHost,
+                "provider": provider.rawValue,
+                "status": "\(http.statusCode)",
+            ])
         }
     }
 

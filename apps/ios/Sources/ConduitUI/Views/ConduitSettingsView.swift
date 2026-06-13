@@ -55,8 +55,6 @@ extension ConduitUI {
         /// Per-agent signed-in + plan snapshot for the Connection group.
         /// Refreshed on appear and whenever the login sheet closes.
         @State private var agentAccounts: [AgentAccountStatus] = []
-        /// Account whose Manage dialog (re-auth / sign out) is open.
-        @State private var manageTarget: AgentAccountStatus?
         // Fix 1: onboarding entry intents from Settings.
         // Presented via .fullScreenCover(item:) so the entry binds atomically
         // and never snapshots a stale default (which routed already-paired
@@ -119,30 +117,6 @@ extension ConduitUI {
                     agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
                 }) {
                     ConduitUI.AgentLoginSheet()
-                }
-                .confirmationDialog(
-                    manageTarget.map { "\($0.displayName) account" } ?? "Account",
-                    isPresented: Binding(
-                        get: { manageTarget != nil },
-                        set: { if !$0 { manageTarget = nil } }
-                    ),
-                    titleVisibility: .visible,
-                    presenting: manageTarget
-                ) { account in
-                    Button("Sign in again") {
-                        manageTarget = nil
-                        showAgentLogin = true
-                    }
-                    Button("Sign out", role: .destructive) {
-                        OAuthCredentialStore.clear(provider: account.provider)
-                        agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
-                        manageTarget = nil
-                    }
-                    Button("Cancel", role: .cancel) { manageTarget = nil }
-                } message: { account in
-                    Text(account.signedIn
-                        ? "Signing out clears the \(account.displayName) credential on this device. Sessions already running keep their credentials."
-                        : "Sign in to use \(account.displayName) through Conduit.")
                 }
             }
             // Re-bind \.colorScheme to the AppearanceStore so a runtime
@@ -340,94 +314,128 @@ extension ConduitUI {
             .buttonStyle(.plain)
         }
 
-        /// One agent's row: tinted daemon avatar, name + plan badge, status
-        /// dot, and the Manage / Sign in affordance (the latter tinted to
-        /// pull attention when the credential needs the user).
-        /// Fix 3: uses brokerReadiness.agents[agent].cliPresent to distinguish
-        /// "not installed on this box" from "signed out". A breadcrumb notes
-        /// the inference source.
+        /// One agent's account row (Stage-2 two-line design): tinted avatar,
+        /// name + plan badge, LINE 1 phone (device-local) sign-in status, LINE 2
+        /// connected-box readiness, and a trailing ... menu (re-authenticate /
+        /// remove from phone / remove pushed credential from this box).
+        /// Uses brokerReadiness.agents[agent] for the box line; cliPresent ==
+        /// false surfaces "not installed on this box" on line 2.
         private func agentAccountRow(_ account: AgentAccountStatus) -> some View {
             let tint = neon.agentTint(forAgent: account.agent)
-            // Derive per-agent installed state from the broker readiness block.
-            // nil readiness = old broker or not yet fetched; treat as unknown (don't nag).
+            // Per-agent readiness from the broker block. nil = old broker or not
+            // yet fetched; treat as unknown (don't nag, hide line 2).
             let agentReadiness = store.brokerReadiness?.agents[account.agent]
-            let installed: Bool? = agentReadiness.map { $0.cliPresent }
-            // If the broker says the agent is not installed, override the status label
-            // regardless of the local credential state.
-            let notInstalled = installed == false
-            return Button {
-                if notInstalled {
-                    // Nothing to manage for an uninstalled agent.
-                } else if account.usable {
-                    manageTarget = account
-                } else {
+            let notInstalled = agentReadiness?.cliPresent == false
+            // LINE 1 -- phone (device-local Keychain) status.
+            let (phoneText, phoneColor): (String, Color) =
+                account.expired ? ("Signed in - expired", neon.yellow)
+                : account.signedIn ? ("Signed in", neon.green)
+                : ("Not signed in", neon.textFaint)
+            // LINE 2 -- connected-box readiness. "Not installed" pre-empts it.
+            let boxLine = notInstalled
+                ? nil
+                : AgentBoxStatus.make(
+                    agent: account.agent,
+                    boxName: store.connectedBoxName,
+                    signedIn: agentReadiness?.signedIn
+                )
+            return HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tint.opacity(neon.dark ? 0.14 : 0.10))
+                    .frame(width: 38, height: 38)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(tint.opacity(0.35), lineWidth: 1)
+                    )
+                    .overlay(ConduitUI.ConduitMark(size: 22, color: tint, glow: neon.glow))
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
+                        Text(account.displayName)
+                            .font(neon.sans(15).weight(.bold))
+                            .foregroundStyle(neon.text)
+                        if let plan = account.planLabel, !notInstalled {
+                            Text(plan)
+                                .font(neon.mono(9).weight(.bold))
+                                .tracking(0.6)
+                                .foregroundStyle(tint)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(tint.opacity(0.14)))
+                                .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
+                        }
+                    }
+                    // LINE 1 -- phone status
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(phoneColor)
+                            .frame(width: 5, height: 5)
+                        Text(phoneText)
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(phoneColor)
+                    }
+                    // LINE 2 -- connected-box readiness (or "not installed")
+                    if notInstalled {
+                        Text("Not installed on this box")
+                            .font(neon.mono(10))
+                            .foregroundStyle(neon.yellow)
+                    } else if let boxLine {
+                        Text(boxLine.text)
+                            .font(neon.mono(10))
+                            .foregroundStyle(boxLine.tone == .ready ? neon.green : neon.textFaint)
+                    }
+                }
+                Spacer(minLength: 8)
+                agentAccountMenu(account)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+
+        /// Trailing ... menu for a Settings agent row -- replaces the old
+        /// "Manage" speech-bubble confirmationDialog. Re-authenticate routes to
+        /// the login sheet; the two destructive removes are scoped phone vs box.
+        @ViewBuilder
+        private func agentAccountMenu(_ account: AgentAccountStatus) -> some View {
+            Menu {
+                Button {
                     showAgentLogin = true
+                } label: {
+                    Label(account.signedIn ? "Re-authenticate" : "Sign in", systemImage: "arrow.clockwise")
+                }
+                if account.signedIn {
+                    Button(role: .destructive) {
+                        OAuthCredentialStore.clear(provider: account.provider)
+                        agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
+                        Telemetry.breadcrumb("agent_creds", "removed from phone",
+                            data: ["provider": account.provider.rawValue])
+                    } label: {
+                        Label("Remove from phone", systemImage: "iphone.slash")
+                    }
+                }
+                // Only when a connected box exists. Removes the app-pushed
+                // credential from the broker store, NOT the box owner's shell
+                // login.
+                if store.connectedBoxName != nil {
+                    Button(role: .destructive) {
+                        let provider = account.provider
+                        let endpoint = store.endpoint
+                        Task {
+                            await store.clearAgentCredential(provider: provider, on: endpoint)
+                            await store.refreshModelCatalog()
+                        }
+                    } label: {
+                        Label("Remove pushed credential from this box", systemImage: "externaldrive.badge.minus")
+                    }
                 }
             } label: {
-                HStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(tint.opacity(neon.dark ? 0.14 : 0.10))
-                        .frame(width: 38, height: 38)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(tint.opacity(0.35), lineWidth: 1)
-                        )
-                        .overlay(ConduitUI.ConduitMark(size: 22, color: tint, glow: neon.glow))
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 7) {
-                            Text(account.displayName)
-                                .font(neon.sans(15).weight(.bold))
-                                .foregroundStyle(neon.text)
-                            if let plan = account.planLabel, !notInstalled {
-                                Text(plan)
-                                    .font(neon.mono(9).weight(.bold))
-                                    .tracking(0.6)
-                                    .foregroundStyle(tint)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(tint.opacity(0.14)))
-                                    .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
-                            }
-                        }
-                        HStack(spacing: 5) {
-                            let (statusText, statusColor): (String, Color) = {
-                                if notInstalled {
-                                    return ("not installed on this box", neon.yellow)
-                                } else if account.usable && agentReadiness?.signedIn == true {
-                                    return ("ready", neon.green)
-                                } else if account.usable {
-                                    return ("signed in", neon.green)
-                                } else if account.expired {
-                                    return ("sign-in expired", neon.yellow)
-                                } else {
-                                    return ("signed out", neon.textFaint)
-                                }
-                            }()
-                            Circle()
-                                .fill(statusColor)
-                                .frame(width: 5, height: 5)
-                            Text(statusText)
-                                .font(neon.mono(10.5))
-                                .foregroundStyle(statusColor)
-                        }
-                    }
-                    Spacer(minLength: 8)
-                    if !notInstalled {
-                        HStack(spacing: 4) {
-                            Text(account.usable ? "Manage" : "Sign in")
-                                .font(neon.sans(13).weight(.semibold))
-                                .foregroundStyle(account.usable ? neon.textDim : neon.green)
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .contentShape(Rectangle())
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(neon.textDim)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .accessibilityLabel("\(account.displayName) account options")
         }
 
         // MARK: Usage & limits (account-wide, BOTH agents)

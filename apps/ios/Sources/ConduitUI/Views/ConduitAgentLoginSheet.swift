@@ -222,8 +222,10 @@ extension ConduitUI {
             )
         }
 
-        /// One structured agent row per the Fix-2 spec:
-        /// tinted avatar | name + plan badge | status dot | Manage/Sign in trailing.
+        /// Stage-2 two-line account row:
+        /// tinted avatar | name + plan badge + LINE 1 phone status + LINE 2
+        /// connected-box readiness | trailing ... menu (re-auth / remove from
+        /// phone / remove pushed credential from this box).
         private func agentRow(
             status: AgentAccountStatus,
             signedIn: Bool,
@@ -231,72 +233,124 @@ extension ConduitUI {
             action: @escaping () -> Void
         ) -> some View {
             let tint = neon.agentTint(forAgent: status.agent)
-            let (statusText, statusColor): (String, Color) =
-                signedIn ? ("signed in", neon.green)
-                : status.expired ? ("sign-in expired", neon.yellow)
-                : ("not signed in", ConduitUI.Palette.textMuted.color)
-            return Button(action: action) {
-                HStack(spacing: 12) {
-                    // Tinted avatar tile
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(tint.opacity(0.14))
-                        .frame(width: 38, height: 38)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(tint.opacity(0.35), lineWidth: 1)
-                        )
-                        .overlay(ConduitUI.ConduitMark(size: 22, color: tint, glow: neon.glow))
-                    VStack(alignment: .leading, spacing: 3) {
-                        // Name + optional plan badge
-                        HStack(spacing: 7) {
-                            Text(status.displayName)
-                                .font(neon.sans(15).weight(.bold))
-                                .foregroundStyle(enabled ? ConduitUI.Palette.textPrimary.color : ConduitUI.Palette.textMuted.color)
-                            if let plan = status.planLabel {
-                                Text(plan)
-                                    .font(neon.mono(9).weight(.bold))
-                                    .tracking(0.6)
-                                    .foregroundStyle(tint)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(tint.opacity(0.14)))
-                                    .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
-                            }
-                        }
-                        // Status dot + text
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(statusColor)
-                                .frame(width: 5, height: 5)
-                            Text(statusText)
-                                .font(neon.mono(10.5))
-                                .foregroundStyle(statusColor)
+            // LINE 1 -- phone (device-local Keychain) sign-in status.
+            let phoneText: String = !signedIn ? "Not signed in"
+                : status.expired ? "Signed in - expired" : "Signed in"
+            let phoneColor: Color = !signedIn ? ConduitUI.Palette.textMuted.color
+                : status.expired ? neon.yellow : neon.green
+            // LINE 2 -- connected-box readiness for THIS agent.
+            let boxLine = AgentBoxStatus.make(
+                agent: status.agent,
+                boxName: store.connectedBoxName,
+                signedIn: store.brokerReadiness?.agents[status.agent]?.signedIn
+            )
+            return HStack(spacing: 12) {
+                // Tinted avatar tile
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tint.opacity(0.14))
+                    .frame(width: 38, height: 38)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(tint.opacity(0.35), lineWidth: 1)
+                    )
+                    .overlay(ConduitUI.ConduitMark(size: 22, color: tint, glow: neon.glow))
+                VStack(alignment: .leading, spacing: 3) {
+                    // Name + optional plan badge
+                    HStack(spacing: 7) {
+                        Text(status.displayName)
+                            .font(neon.sans(15).weight(.bold))
+                            .foregroundStyle(enabled ? ConduitUI.Palette.textPrimary.color : ConduitUI.Palette.textMuted.color)
+                        if let plan = status.planLabel {
+                            Text(plan)
+                                .font(neon.mono(9).weight(.bold))
+                                .tracking(0.6)
+                                .foregroundStyle(tint)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(tint.opacity(0.14)))
+                                .overlay(Capsule().strokeBorder(tint.opacity(0.4), lineWidth: 1))
                         }
                     }
-                    Spacer(minLength: 8)
-                    // Trailing Manage / Sign in
-                    HStack(spacing: 4) {
-                        Text(signedIn ? "Manage" : "Sign in")
-                            .font(neon.sans(13).weight(.semibold))
-                            .foregroundStyle(signedIn ? ConduitUI.Palette.textMuted.color : neon.green)
-                        if isWorking && enabled {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(tint)
-                                .frame(width: 16, height: 16)
-                        } else {
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(ConduitUI.Palette.textMuted.color)
-                        }
+                    // LINE 1 -- phone status dot + text
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(phoneColor)
+                            .frame(width: 5, height: 5)
+                        Text(phoneText)
+                            .font(neon.mono(10.5))
+                            .foregroundStyle(phoneColor)
+                    }
+                    // LINE 2 -- connected-box readiness (hidden when unknown)
+                    if let boxLine {
+                        Text(boxLine.text)
+                            .font(neon.mono(10))
+                            .foregroundStyle(boxLine.tone == .ready ? neon.green : ConduitUI.Palette.textMuted.color)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
+                Spacer(minLength: 8)
+                // Trailing ... menu
+                if isWorking && enabled {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(tint)
+                        .frame(width: 24, height: 24)
+                } else {
+                    accountMenu(status: status, signedIn: signedIn, action: action)
+                        .disabled(!enabled)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(!enabled)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+
+        /// The trailing ... menu shared by both rows. Re-authenticate always
+        /// shown; the two destructive removes are scoped to phone vs box.
+        @ViewBuilder
+        private func accountMenu(
+            status: AgentAccountStatus,
+            signedIn: Bool,
+            action: @escaping () -> Void
+        ) -> some View {
+            Menu {
+                Button {
+                    action()
+                } label: {
+                    Label(signedIn ? "Re-authenticate" : "Sign in", systemImage: "arrow.clockwise")
+                }
+                if signedIn {
+                    Button(role: .destructive) {
+                        OAuthCredentialStore.clear(provider: status.provider)
+                        signedInProviders.remove(status.provider)
+                        Telemetry.breadcrumb("agent_creds", "removed from phone",
+                            data: ["provider": status.provider.rawValue])
+                    } label: {
+                        Label("Remove from phone", systemImage: "iphone.slash")
+                    }
+                }
+                // Only when a connected box exists -- removes the app-pushed
+                // credential from the broker store, NOT the box owner's shell
+                // login.
+                if store.connectedBoxName != nil {
+                    Button(role: .destructive) {
+                        let provider = status.provider
+                        let endpoint = store.endpoint
+                        Task {
+                            await store.clearAgentCredential(provider: provider, on: endpoint)
+                            await store.refreshModelCatalog()
+                        }
+                    } label: {
+                        Label("Remove pushed credential from this box", systemImage: "externaldrive.badge.minus")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(ConduitUI.Palette.textMuted.color)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("\(status.displayName) account options")
         }
 
         /// Claude's code-display flow: after the browser shows a code, the
@@ -438,6 +492,9 @@ extension ConduitUI {
                 try await store.sendAgentCredentials(provider: provider, credential: credential)
                 statusMessage = "Signed in. The broker now has your \(provider.rawValue) credentials for future sessions."
                 errorMessage = nil
+                // Refresh readiness so the per-box LINE 2 ("Ready on <box>")
+                // flips after the broker accepts the pushed credential.
+                await store.refreshModelCatalog()
                 // Standalone visible event for every terminal outcome (a
                 // breadcrumb alone is invisible unless a later event fires).
                 Telemetry.debug("oauth_result", "shipped \(provider.rawValue)", data: ["provider": provider.rawValue])
