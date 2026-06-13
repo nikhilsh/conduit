@@ -63,14 +63,19 @@ struct TurnLiveActivity: Widget {
                             .foregroundStyle(.white)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        HStack(spacing: 5) {
-                            StatusDot(card: card, tint: tint)
-                            Text(TurnPresentation.statusWord(for: card))
-                                .font(.system(.caption2, design: .monospaced).weight(.semibold))
-                                .foregroundStyle(tint)
-                            Text("· \(context.attributes.agentName.lowercased())")
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                        // Same redundancy as the lock banner: for needs-you, the
+                        // bottom NeedsBody already says "CLAUDE IS ASKING", so drop
+                        // this status sub-line here too. Keep it for running/done.
+                        if !card.isNeedsYou {
+                            HStack(spacing: 5) {
+                                StatusDot(card: card, tint: tint)
+                                Text(TurnPresentation.statusWord(for: card))
+                                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                                    .foregroundStyle(tint)
+                                Text("· \(context.attributes.agentName.lowercased())")
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -271,14 +276,19 @@ private struct TurnLockScreenView: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    HStack(spacing: 5) {
-                        StatusDot(card: card, tint: tint)
-                        Text(TurnPresentation.statusWord(for: card))
-                            .font(.system(.caption2, design: .monospaced).weight(.semibold))
-                            .foregroundStyle(tint)
-                        Text("· \(attributes.agentName.lowercased())")
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                    // Suppress the status sub-line for needs-you cards: NeedsBody
+                    // below already announces the same state ("CLAUDE IS ASKING"),
+                    // so this line is redundant clutter. Keep it for running/done.
+                    if !card.isNeedsYou {
+                        HStack(spacing: 5) {
+                            StatusDot(card: card, tint: tint)
+                            Text(TurnPresentation.statusWord(for: card))
+                                .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                                .foregroundStyle(tint)
+                            Text("· \(attributes.agentName.lowercased())")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Spacer(minLength: 8)
