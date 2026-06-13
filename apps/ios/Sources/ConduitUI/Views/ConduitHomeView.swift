@@ -315,9 +315,11 @@ extension ConduitUI {
         private func boxRow(_ server: SavedServer) -> some View {
             let isActive = store.endpoint == server.endpoint
             let connected = isActive && store.harness.canIssueCommands
-            // Sessions live on the currently-connected endpoint, so the
-            // connected box's count is simply the store's session list.
-            let sessionCount = connected ? store.sessions.count : 0
+            // store.sessions is a MIXED list (it retains other-box rows as
+            // dimmed history), so a plain .count over-counts. Count only THIS
+            // box's live sessions via the per-box stamp — correct for the
+            // active box AND for non-active boxes (their stamps persist).
+            let sessionCount = store.liveSessionCount(forBox: server.id)
             let (statusText, statusColor): (String, Color) = {
                 guard isActive else { return ("tap to connect", neon.textFaint) }
                 switch store.harness {
@@ -398,6 +400,9 @@ extension ConduitUI {
                 case .failed(let reason): return .failed(reason)
                 }
             }()
+            // Only badge session rows with their box name when more than one
+            // box is configured — a single box has nothing to disambiguate.
+            let hasMultipleBoxes = store.savedServers.count > 1
             let sessions = store.sessions.map { s in
                 let status = store.statusBySession[s.id]
                 // Last-ACTIVITY timestamp for the relative stamp + row sort.
@@ -433,7 +438,12 @@ extension ConduitUI {
                     // is interactive (~30s cold-boot window).
                     isConfirmedLive: store.isConfirmedLive(sessionID: s.id),
                     isCurrentBox: isCurrentBox,
-                    boxName: isCurrentBox ? nil : store.boxDisplayName(for: s.id)
+                    // Badge EVERY row with its box name when more than one box
+                    // exists, so attribution is always visible (the previous
+                    // `isCurrentBox ? nil` suppression hid the current box's
+                    // name and made multi-box lists ambiguous). With a single
+                    // box there's nothing to disambiguate, so stay nil.
+                    boxName: hasMultipleBoxes ? store.boxDisplayName(for: s.id) : nil
                 )
             }
             return ConduitUI.HomeSnapshot(
@@ -998,9 +1008,10 @@ private struct HomeRowView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                // Cross-box badge: shows which box owns this session when
-                // it is NOT from the currently-connected box.
-                if !row.isCurrentBox, let boxName = row.boxName {
+                // Box badge: shows which box owns this session. Set on EVERY
+                // row (including the current box) when more than one box exists
+                // so attribution is always unambiguous; nil for single-box.
+                if let boxName = row.boxName {
                     Spacer(minLength: 0)
                     Text(boxName)
                         .font(neon.mono(HomeRowMetrics.subtitlePointSize - 0.5).weight(.semibold))

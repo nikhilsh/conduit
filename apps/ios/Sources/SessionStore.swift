@@ -4545,9 +4545,15 @@ final class SessionStore {
         let messageCount = (conversationLog[sessionID]?.count)
             ?? (chatLog[sessionID]?.count)
             ?? 0
+        // Owner stability: the SavedSession key is (id, serverID). Prefer the
+        // session's EXISTING box stamp so a status frame arriving while a
+        // DIFFERENT box is the active endpoint can't re-key the history row to
+        // the wrong owner (the duplicate/mislabeled David/Hostinger rows).
+        // Fall back to the active endpoint only when the session is unstamped.
+        let ownerID = sessionBox[sessionID] ?? savedHistoryServerID
         SavedSessionsStore.shared.upsert(
             session: session,
-            serverID: savedHistoryServerID,
+            serverID: ownerID,
             status: status,
             firstUserMessage: firstUserMessage(in: sessionID),
             messageCount: messageCount,
@@ -4722,6 +4728,24 @@ final class SessionStore {
     func isSessionOnCurrentBox(_ sessionID: String) -> Bool {
         guard let stamped = sessionBox[sessionID] else { return true }
         return stamped == savedHistoryServerID
+    }
+
+    /// Count of LIVE (not exited/failed) sessions stamped to `serverID`.
+    /// `store.sessions` deliberately retains other-box rows as dimmed history,
+    /// so a plain `sessions.count` over-counts the mixed list. This filters to
+    /// the box's own sessions and excludes terminal ones, so each box row shows
+    /// its real live count (works for non-active boxes too — their stamps +
+    /// lifecycle persist even when they aren't the connected endpoint).
+    func liveSessionCount(forBox serverID: String) -> Int {
+        sessions.reduce(into: 0) { acc, s in
+            guard sessionBox[s.id] == serverID else { return }
+            switch sessionLifecycle[s.id] {
+            case .exited, .failed:
+                return
+            default:
+                acc += 1
+            }
+        }
     }
 
     /// Display name for the box a session belongs to. Used in the home
