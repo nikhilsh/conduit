@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -357,18 +358,38 @@ func catalogProbeFor(reg *agents.Registry, assistant string) func(context.Contex
 	}
 }
 
+// binFingerprint returns a stable string identifying a CLI binary. It resolves
+// symlinks (so ~/.local/bin/claude → .../versions/2.1.177/claude) and folds in
+// file size + modtime so an in-place upgrade — same resolved path, different
+// content — also forces a re-probe. Any stat/resolve error falls back to the
+// raw bin path so a temporarily-missing CLI doesn't crash the cache.
+func binFingerprint(bin string) string {
+	resolved, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		return bin
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil {
+		return resolved
+	}
+	return fmt.Sprintf("%s|%d|%d", resolved, fi.Size(), fi.ModTime().UnixNano())
+}
+
 // --- manager-side cache ---
 
 // modelCatalogCache is the Manager-owned cache of discovered catalogs.
 type modelCatalogCache struct {
-	mu        sync.Mutex
-	enabled   bool
-	models    map[string][]ModelInfo
-	attempted map[string]time.Time // last probe start (success or not)
-	fetched   map[string]time.Time // last probe success
-	busy      map[string]bool
+	mu           sync.Mutex
+	enabled      bool
+	models       map[string][]ModelInfo
+	attempted    map[string]time.Time // last probe start (success or not)
+	fetched      map[string]time.Time // last probe success
+	busy         map[string]bool
+	fingerprints map[string]string // per-assistant binary fingerprint at last successful probe
 	// probe is a test seam; nil = catalogProbeFor.
 	probe func(ctx context.Context, assistant, bin string) ([]ModelInfo, error)
+	// fingerprintFn is a test seam; nil = binFingerprint.
+	fingerprintFn func(bin string) string
 }
 
 func (c *modelCatalogCache) init() {
@@ -377,6 +398,7 @@ func (c *modelCatalogCache) init() {
 		c.attempted = map[string]time.Time{}
 		c.fetched = map[string]time.Time{}
 		c.busy = map[string]bool{}
+		c.fingerprints = map[string]string{}
 	}
 }
 
@@ -431,8 +453,10 @@ func (m *Manager) ModelCatalog() map[string][]ModelInfo {
 
 // maybeRefreshCatalog starts a background probe for the assistant when the
 // cached entry is stale (or has never been fetched) and no probe is already
-// running. Failures keep the previous catalog and are retried no sooner
-// than catalogRetry.
+// running. A fingerprint change (e.g. the CLI symlink was upgraded in place)
+// also forces an immediate re-probe even within the TTL, so stale models from
+// a previous CLI version are evicted immediately. Failures keep the previous
+// catalog and are retried no sooner than catalogRetry.
 func (m *Manager) maybeRefreshCatalog(assistant string) {
 	probe := m.catalog.probe
 	if probe == nil {
@@ -450,11 +474,33 @@ func (m *Manager) maybeRefreshCatalog(assistant string) {
 	}
 	bin := adapter.Command[0]
 
+	// Resolve the current binary fingerprint before taking the lock so the
+	// stat syscalls don't extend the critical section.
+	fpFn := m.catalog.fingerprintFn
+	if fpFn == nil {
+		fpFn = binFingerprint
+	}
+	currentFP := fpFn(bin)
+
 	m.catalog.mu.Lock()
 	m.catalog.init()
-	if !m.catalog.enabled || m.catalog.busy[assistant] ||
-		time.Since(m.catalog.fetched[assistant]) < catalogTTL ||
-		time.Since(m.catalog.attempted[assistant]) < catalogRetry {
+	if !m.catalog.enabled || m.catalog.busy[assistant] {
+		m.catalog.mu.Unlock()
+		return
+	}
+	// A fingerprint change means the CLI binary was upgraded: force a re-probe
+	// even if the TTL hasn't expired yet.
+	fpChanged := currentFP != m.catalog.fingerprints[assistant]
+	withinTTL := time.Since(m.catalog.fetched[assistant]) < catalogTTL
+	// catalogRetry floors re-probe attempts after a FAILURE (fetched is zero
+	// or behind attempted), preventing hot-loops on a broken/flapping binary.
+	// After a successful probe the retry floor is skipped so a fingerprint
+	// change (CLI upgrade) fires promptly rather than waiting up to 5 minutes.
+	lastAttempt := m.catalog.attempted[assistant]
+	lastFetch := m.catalog.fetched[assistant]
+	withinRetryAfterFailure := !lastAttempt.IsZero() && lastFetch.Before(lastAttempt) &&
+		time.Since(lastAttempt) < catalogRetry
+	if (!fpChanged && withinTTL) || withinRetryAfterFailure {
 		m.catalog.mu.Unlock()
 		return
 	}
@@ -471,6 +517,7 @@ func (m *Manager) maybeRefreshCatalog(assistant string) {
 		if err == nil && len(models) > 0 {
 			m.catalog.models[assistant] = models
 			m.catalog.fetched[assistant] = time.Now()
+			m.catalog.fingerprints[assistant] = currentFP
 		}
 		m.catalog.mu.Unlock()
 		if err != nil {
