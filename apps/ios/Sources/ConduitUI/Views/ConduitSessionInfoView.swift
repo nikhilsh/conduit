@@ -608,7 +608,11 @@ extension ConduitUI {
         /// the stack, so the design's "· 8ms" is intentionally omitted
         /// rather than faked.
         private var boxLine: String {
-            store.endpoint.isComplete ? "\(store.endpoint.displayHost) · broker" : "—"
+            guard store.endpoint.isComplete else { return "—" }
+            let host = store.endpoint.displayHost
+            let name = store.savedServers.first(where: { $0.endpoint.displayHost == host })?.name
+            if let name, !name.isEmpty, name != host { return "\(name) (\(host))" }
+            return "\(host) · broker"
         }
 
         private var startedLabel: String {
