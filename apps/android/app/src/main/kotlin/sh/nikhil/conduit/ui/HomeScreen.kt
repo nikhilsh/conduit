@@ -147,6 +147,11 @@ fun HomeScreen(
     LaunchedEffect(savedServers) {
         savedServers.forEach { server ->
             if (server.endpoint == endpoint_) return@forEach // active box uses harness state
+            // v151 ITEM C: SSH boxes persist a loopback ws://127.0.0.1:<port> that
+            // only listens while THAT box's russh tunnel is up. Probing it at rest
+            // always fails -> misleading "offline". Skip the probe; the row renders
+            // a neutral "SSH - tap Connect" instead.
+            if (server.ssh != null) return@forEach
             if (reachabilityMap.containsKey(server.id)) return@forEach // already probed
             scope.launch(Dispatchers.IO) {
                 val reachable = withTimeoutOrNull(4_000L) {
@@ -892,6 +897,10 @@ private fun HomeBoxRow(
         isActive && harness is HarnessState.Connecting -> "connecting…" to neon.yellow
         isActive && harness is HarnessState.Reconnecting -> "reconnecting…" to neon.yellow
         isActive -> "offline" to neon.textFaint
+        // v151 ITEM C: SSH/tunnel boxes have no at-rest reachability (loopback
+        // listens only while connected). Show a neutral cue + keep Connect rather
+        // than a misleading "offline".
+        server.ssh != null -> "SSH · tap Connect" to neon.textFaint
         reachable == null -> "probing…" to neon.textFaint
         reachable == true -> "reachable" to neon.green
         else -> "offline" to neon.textFaint
