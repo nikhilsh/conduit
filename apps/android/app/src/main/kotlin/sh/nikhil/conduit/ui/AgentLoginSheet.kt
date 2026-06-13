@@ -93,6 +93,12 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     // "Signed in" state on each row (the transient status pill alone
     // left the rows looking logged-out after a successful login).
     var signedInProviders by remember { mutableStateOf<Set<OAuthProvider>>(emptySet()) }
+    // Prefer the connected box's actual readiness over a device-local
+    // OAuthStore credential: a credential saved on THIS device does not mean
+    // the currently-connected box has it. brokerReadiness is keyed by agent
+    // id ("claude"/"codex"). null (old broker / not yet fetched) → fall back
+    // to the local store so the row is not blanked out.
+    val brokerReadiness by store.brokerReadiness.collectAsState()
     LaunchedEffect(Unit) {
         signedInProviders = withContext(Dispatchers.IO) {
             OAuthProvider.values()
@@ -257,7 +263,8 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                     ProviderRow(
                         agentId = "claude",
                         title = "Claude",
-                        signedIn = OAuthProvider.ANTHROPIC in signedInProviders,
+                        signedIn = brokerReadiness?.agents?.get("claude")?.signedIn
+                            ?: (OAuthProvider.ANTHROPIC in signedInProviders),
                         enabled = !isWorking,
                         onClick = { beginClaude() },
                     )
@@ -266,7 +273,8 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                     ProviderRow(
                         agentId = "codex",
                         title = "ChatGPT",
-                        signedIn = OAuthProvider.OPENAI in signedInProviders,
+                        signedIn = brokerReadiness?.agents?.get("codex")?.signedIn
+                            ?: (OAuthProvider.OPENAI in signedInProviders),
                         enabled = !isWorking,
                         onClick = { loginChatGPT() },
                     )
