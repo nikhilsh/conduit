@@ -1129,6 +1129,10 @@ final class SessionStore {
                 // reconnect() and selectSavedServer(), which both route here.
                 let connectedEndpoint = self.endpoint
                 Task { await self.propagateStoredAgentCredentials(to: connectedEndpoint) }
+                // Refresh capabilities so we have the broker's reported version
+                // post-connect; refreshModelCatalog() runs the stale-broker
+                // auto-update check (Fix: broker auto-update on reconnect).
+                Task { await self.refreshModelCatalog() }
                 self.refreshSessions()
                 // Connection is live again — re-deliver any messages queued
                 // while we were disconnected (reconnect window / backgrounded
@@ -1676,6 +1680,17 @@ final class SessionStore {
     /// omit the block — every WS-H.2/H.3 consumer treats nil as "unknown".
     private(set) var brokerReadiness: BrokerReadiness?
 
+    /// Single-flight + at-most-once-per-(box,version) guard for the
+    /// post-connect broker auto-update (Fix: broker auto-update on reconnect).
+    /// `reconnect()`/`selectSavedServer()` short-circuit to a WS-only bounce
+    /// when the SSH tunnel is still alive, so the bootstrap script's
+    /// `_update_broker_if_stale` never re-runs. We detect a stale broker from
+    /// the reported `broker_version` and trigger ONE re-bootstrap. The set of
+    /// already-attempted "boxID@version" keys stops it from looping (after the
+    /// update the broker reports the app version -> compare equal -> no-op).
+    private var brokerUpdateAttempted: Set<String> = []
+    private var brokerUpdateInFlight = false
+
     /// The app's compile-time minimum broker version. Bumped when new broker
     /// features the app depends on require a newer server. "dev" / hand-built
     /// brokers are never nagged (see `brokerVersionStatus`).
@@ -1739,11 +1754,76 @@ final class SessionStore {
                     "git": r.gitPresent ? "1" : "0",
                     "agents": r.agents.keys.sorted().joined(separator: ","),
                 ])
+            // Fix: broker auto-update on reconnect. The WS-only reconnect
+            // fast-path never re-runs the bootstrap script, so a box left on
+            // an old broker stays stale. Now that we have the broker's
+            // reported version, trigger a one-shot re-bootstrap when it's
+            // behind the app (single-flight + at-most-once per box@version).
+            updateBrokerIfStale(brokerVersion: r.brokerVersion)
         } else {
             Telemetry.breadcrumb(
                 "broker_readiness", "no readiness block (old broker)",
                 data: ["host": endpoint.displayHost])
         }
+    }
+
+    /// Fix: broker auto-update on reconnect.
+    ///
+    /// When the connected box is an SSH box whose broker reports a version
+    /// OLDER than the app, trigger a single one-shot re-bootstrap. The
+    /// bootstrap script's reuse path runs `_update_broker_if_stale` (atomic
+    /// replace + `systemctl --user restart`), after which the broker reports
+    /// the app version and this is a no-op.
+    ///
+    /// Gating (so it never loops):
+    ///   - only SSH boxes (token-paired boxes have no bootstrap path);
+    ///   - `brokerVersion` must parse as semver and be strictly < the app's;
+    ///   - at-most-once per (boxID, brokerVersion) per launch;
+    ///   - single-flight while a re-bootstrap is in flight.
+    func updateBrokerIfStale(brokerVersion: String) {
+        let appVersion = BuildInfo.marketingVersion
+        // Only SSH-paired boxes have a re-bootstrap path; token boxes don't.
+        guard let server = savedServers.first(where: { $0.endpoint == endpoint }),
+              server.ssh != nil else { return }
+        let boxID = server.id
+
+        // Parse both as vMAJOR.MINOR.PATCH; bail on "dev"/empty/unparseable so
+        // hand-built or newer brokers are never churned.
+        func parse(_ v: String) -> (Int, Int, Int)? {
+            let s = v.hasPrefix("v") ? String(v.dropFirst()) : v
+            let parts = s.split(separator: ".").compactMap { Int($0) }
+            guard parts.count == 3 else { return nil }
+            return (parts[0], parts[1], parts[2])
+        }
+        guard !brokerVersion.isEmpty, brokerVersion != "dev",
+              let bv = parse(brokerVersion), let av = parse(appVersion) else { return }
+        // Only act when the broker is genuinely BEHIND the app.
+        guard bv < av else { return }
+
+        let key = "\(boxID)@\(brokerVersion)"
+        guard !brokerUpdateInFlight, !brokerUpdateAttempted.contains(key) else {
+            Telemetry.breadcrumb("broker_update", "skip (already attempted or in flight)", data: [
+                "box": boxID, "installed": brokerVersion, "expected": appVersion,
+                "in_flight": "\(brokerUpdateInFlight)",
+            ])
+            return
+        }
+        brokerUpdateAttempted.insert(key)
+        brokerUpdateInFlight = true
+
+        Telemetry.breadcrumb("broker_update", "stale detected", data: [
+            "box": boxID, "installed": brokerVersion, "expected": appVersion,
+        ])
+        Telemetry.breadcrumb("broker_update", "triggered", data: [
+            "box": boxID, "installed": brokerVersion, "expected": appVersion,
+        ])
+        // Re-run the full SSH bootstrap (reuse path) which compares
+        // CONDUIT_VERSION and atomically replaces + restarts a stale broker.
+        // attemptSshSelfHeal owns its own isReconnecting single-flight guard;
+        // clear our in-flight flag once it returns control (it kicks a Task and
+        // returns synchronously, but the at-most-once key already protects us).
+        attemptSshSelfHeal()
+        brokerUpdateInFlight = false
     }
 
     /// Probe `GET /api/capabilities` on a specific saved endpoint (works
@@ -4465,9 +4545,15 @@ final class SessionStore {
         let messageCount = (conversationLog[sessionID]?.count)
             ?? (chatLog[sessionID]?.count)
             ?? 0
+        // Owner stability: the SavedSession key is (id, serverID). Prefer the
+        // session's EXISTING box stamp so a status frame arriving while a
+        // DIFFERENT box is the active endpoint can't re-key the history row to
+        // the wrong owner (the duplicate/mislabeled David/Hostinger rows).
+        // Fall back to the active endpoint only when the session is unstamped.
+        let ownerID = sessionBox[sessionID] ?? savedHistoryServerID
         SavedSessionsStore.shared.upsert(
             session: session,
-            serverID: savedHistoryServerID,
+            serverID: ownerID,
             status: status,
             firstUserMessage: firstUserMessage(in: sessionID),
             messageCount: messageCount,
@@ -4642,6 +4728,24 @@ final class SessionStore {
     func isSessionOnCurrentBox(_ sessionID: String) -> Bool {
         guard let stamped = sessionBox[sessionID] else { return true }
         return stamped == savedHistoryServerID
+    }
+
+    /// Count of LIVE (not exited/failed) sessions stamped to `serverID`.
+    /// `store.sessions` deliberately retains other-box rows as dimmed history,
+    /// so a plain `sessions.count` over-counts the mixed list. This filters to
+    /// the box's own sessions and excludes terminal ones, so each box row shows
+    /// its real live count (works for non-active boxes too — their stamps +
+    /// lifecycle persist even when they aren't the connected endpoint).
+    func liveSessionCount(forBox serverID: String) -> Int {
+        sessions.reduce(into: 0) { acc, s in
+            guard sessionBox[s.id] == serverID else { return }
+            switch sessionLifecycle[s.id] {
+            case .exited, .failed:
+                return
+            default:
+                acc += 1
+            }
+        }
     }
 
     /// Display name for the box a session belongs to. Used in the home
