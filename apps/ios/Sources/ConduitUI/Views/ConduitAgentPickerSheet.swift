@@ -38,6 +38,9 @@ extension ConduitUI {
         /// WS-H.3: show the agent-login sheet when the user taps "Sign in"
         /// on a not-signed-in readiness row.
         @State private var showAgentLogin = false
+        /// Provider to auto-start the OAuth flow for when the readiness
+        /// "Sign in" CTA is tapped. nil = open the plain accounts list.
+        @State private var loginAutoStartProvider: OAuthProvider?
         /// Single-flight guard for the Continue bar. Set true on the FIRST tap
         /// so subsequent taps during the navigation-push animation are dropped
         /// (and the button shows a spinner so the user sees the tap registered).
@@ -139,8 +142,18 @@ extension ConduitUI {
                                 )
                                 if !items.isEmpty {
                                     sectionLabel("Box readiness")
-                                    ConduitUI.ReadinessChecklist(items: items) { _ in
-                                        // "Sign in" deep-links the existing agent-login flow.
+                                    ConduitUI.ReadinessChecklist(items: items) { provider in
+                                        // Per-box "Sign in": run the REAL OAuth
+                                        // flow for the tapped provider and ship
+                                        // the credential to the connected box,
+                                        // rather than opening an already
+                                        // "signed in" accounts list (the old
+                                        // dead-end). Unknown provider falls back
+                                        // to the plain accounts list.
+                                        loginAutoStartProvider = OAuthProvider(loginProvider: provider)
+                                        Telemetry.breadcrumb("agent_login", "readiness sign-in tapped",
+                                            data: ["provider": provider,
+                                                   "host": store.endpoint.displayHost])
                                         showAgentLogin = true
                                     }
                                 }
@@ -223,7 +236,7 @@ extension ConduitUI {
             // WS-H.3: agent-login sheet launched from "Sign in" on a
             // not-signed-in readiness row (informational, never blocking).
             .sheet(isPresented: $showAgentLogin) {
-                ConduitUI.AgentLoginSheet()
+                ConduitUI.AgentLoginSheet(autoStartProvider: loginAutoStartProvider)
             }
             .onAppear {
                 // Funnel: agent picker opened (new-session flow or post-pair deep link).

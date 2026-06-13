@@ -214,16 +214,39 @@ extension ConduitUI {
         /// equals, or is fully contained in, a pending-input body. The
         /// length floor avoids matching trivial strings.
         static func dropPendingInputEchoes(_ items: [ConversationItem]) -> [ConversationItem] {
-            let pending = items
+            // First collapse duplicate pending_input cards (#R4-4): the same
+            // AskUserQuestion can arrive twice (typed log + raw chatLog, or a
+            // re-emit) and render as two identical "NEEDS YOUR INPUT" cards.
+            // Two pending_input items with the same prompt text AND the same
+            // options are one logical prompt; keep the first, drop the rest.
+            // Different prompt text or different options stays distinct so two
+            // legitimately different questions are never merged.
+            let deduped = dedupePendingInputCards(items)
+            let pending = deduped
                 .filter { $0.kind == "pending_input" }
                 .map { $0.content.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.count >= 8 }
-            guard !pending.isEmpty else { return items }
-            return items.filter { item in
+            guard !pending.isEmpty else { return deduped }
+            return deduped.filter { item in
                 if item.kind == "pending_input" { return true }
                 let c = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard c.count >= 8 else { return true }
                 return !pending.contains { $0 == c || $0.contains(c) }
+            }
+        }
+
+        /// Collapse consecutive-or-not duplicate `pending_input` items that
+        /// share the same prompt text + options to a single card. Order is
+        /// preserved and the first occurrence wins.
+        static func dedupePendingInputCards(_ items: [ConversationItem]) -> [ConversationItem] {
+            var seen: Set<String> = []
+            return items.filter { item in
+                guard item.kind == "pending_input" else { return true }
+                let prompt = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = prompt + "\u{1f}" + item.pendingOptions.joined(separator: "\u{1f}")
+                if seen.contains(key) { return false }
+                seen.insert(key)
+                return true
             }
         }
 
