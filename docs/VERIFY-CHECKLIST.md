@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.154
+
+Multi-box correctness: broker auto-update on reconnect (finally working) + session/box attribution + counts. iOS PR #570, Android PR #571. App-only (no broker redeploy — the broker already reports its version).
+
+- **1 · Broker auto-updates on reconnect (for real this time)** — the v0.0.148 auto-update was dead code: a normal reconnect with a live SSH tunnel only bounced the WebSocket and never re-ran the bootstrap that does the version check. Now, after connecting to an SSH box, the app compares the broker's reported version (`/api/capabilities`) against the app version and triggers a one-shot in-place update when the broker is older — no forget+re-add needed. Verify: with a box on an older broker, reconnect from a newer app build → the broker silently updates (check About/readiness shows the new broker version) without forgetting the box. [iOS+Android, on-device]
+- **2 · Per-box session count is correct** — the Home BOXES rows were counting the whole mixed session list (so a box could claim sessions that live on another box). Each box row now counts only the sessions actually on that box, and non-active boxes show their real count. Verify: with two boxes each running a session, each box row shows its own count (not the total). [iOS+Android, on-device]
+- **3 · Every active-session row shows which box it's on** — the Active Sessions list mixed boxes but only badged the non-active ones. Now every row is badged with its box name (when more than one box exists), so attribution is unambiguous. Verify: with sessions on two boxes, each Active Sessions row shows its box badge. [iOS+Android, on-device]
+- **4 · History rows have a stable box label** — saved-session history was tagged with whichever box was active when the last status arrived, causing duplicate/mislabeled rows. History now uses each session's stable owning-box stamp. Verify: a session shows under one box in History with the correct label (no duplicate rows under two boxes). [iOS+Android, on-device]
+
+---
+
 ## v0.0.153
 
 Stage-2 of the accounts work: per-box account status + honest per-box sign-out, replacing the confusing "Manage" affordances. iOS PR #567, Android PR #568. App-only (no broker redeploy).
