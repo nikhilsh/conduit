@@ -67,6 +67,46 @@ func TestStoreSetGetRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStoreDelete covers per-box sign-out: Delete removes the pushed
+// <provider>.enc, is idempotent (deleting nothing is a nil-error no-op),
+// rejects unknown providers, and leaves OTHER providers' blobs intact.
+func TestStoreDelete(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir, []byte("bearer-token-fixture-32-chars--"))
+
+	// Delete on an empty store is a no-op success (idempotent sign-out).
+	if err := s.Delete(ProviderAnthropic); err != nil {
+		t.Fatalf("Delete on empty store: %v", err)
+	}
+
+	// Store two providers, delete one, the other survives.
+	if err := s.Set(ProviderAnthropic, json.RawMessage(`{"claudeAiOauth":{"accessToken":"a"}}`)); err != nil {
+		t.Fatalf("Set anthropic: %v", err)
+	}
+	if err := s.Set(ProviderOpenAI, json.RawMessage(`{"tokens":{"access_token":"b"}}`)); err != nil {
+		t.Fatalf("Set openai: %v", err)
+	}
+	if err := s.Delete(ProviderAnthropic); err != nil {
+		t.Fatalf("Delete anthropic: %v", err)
+	}
+	if s.Has(ProviderAnthropic) {
+		t.Errorf("Has(anthropic) = true after Delete")
+	}
+	if !s.Has(ProviderOpenAI) {
+		t.Errorf("Has(openai) = false after deleting anthropic — Delete clobbered the wrong blob")
+	}
+
+	// Second delete of the same provider is still a no-op success.
+	if err := s.Delete(ProviderAnthropic); err != nil {
+		t.Fatalf("double Delete: %v", err)
+	}
+
+	// Unknown provider rejected up front, same as Set/Get.
+	if err := s.Delete("../etc/passwd"); err == nil {
+		t.Errorf("Delete unknown provider: expected error")
+	}
+}
+
 // TestStoreGetMissing returns a not-exist error rather than a decrypt
 // failure when nothing has been stored yet. Materialize relies on this
 // to decide whether to fall back to the host-mirror behaviour.
