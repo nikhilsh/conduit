@@ -9,6 +9,61 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.150
+
+Fixes for bugs the owner found while device-testing the v0.0.149 (R3) build.
+iOS PR #558, Android PR #557, broker PR #556. The broker fix is LIVE (redeployed
+v0.0.150, verified: `/api/capabilities` reports v0.0.150 and the claude catalog
+no longer lists the dismissed `claude-fable-5` model).
+
+- **1 · Onboarding can now be exited** — the walkthrough had NO dismiss control,
+  so Settings → "Replay walkthrough" / "Add a machine" trapped the user (only
+  escape was re-pairing; "I know my way" just toggled verbosity). Added a Close
+  (X) in the top bar that finishes/dismisses. iOS: shown for replay/addMachine
+  entries. Android: `onFinish` was never even wired — Close now calls it at every
+  step. Verify: Settings → Replay walkthrough → X returns to the app without
+  re-pairing; first-run gate unchanged. [iOS+Android, on-device]
+- **2 · Session Info "Box" row shows the renamed box name + IP** — was the raw
+  `host:port · broker`; now renders `Name (host:port)` when the box is renamed
+  (owner wanted both name and IP). Verify: rename a box → Session Info → Details
+  → Box shows `MyName (1.2.3.4:1977)`. [iOS+Android, on-device]
+- **3 · Model picker drops dismissed models after a CLI upgrade** — the broker
+  model-catalog cache only re-probed on a 6h timer and never invalidated when the
+  agent binary changed, so an upgraded `claude` kept serving a dismissed model
+  (Fable). Cache is now binary/version-aware (fingerprint = resolved symlink +
+  size/mtime) and re-probes immediately on a CLI change. LIVE + verified on the
+  box (Fable gone). Verify on device: model picker lists only models the box's
+  current claude actually serves. [broker, on-device]
+- **4 · Per-box "Sign in" actually signs into that box (iOS)** — the readiness
+  "Sign in" CTA opened the global accounts sheet (already "signed in"), a
+  dead-end; it now launches the real claude/codex OAuth flow targeting the
+  connected box, and the per-provider dot reflects the connected box's readiness.
+  (Android already routed correctly; its dot now also reads box readiness.)
+  Verify: on a box where claude isn't signed in, tap Sign in → real login →
+  credential lands on that box → session starts. [iOS+Android, on-device]
+- **5 · Duplicate choice cards de-duplicated** — a claude AskUserQuestion card
+  rendered twice. iOS now collapses duplicate `pending_input` cards (same prompt
+  + options); Android additionally drops the plain-text echo of the question
+  (the iOS `dropPendingInputEchoes` pass it was missing). Verify: trigger an
+  AskUserQuestion → exactly one card. [iOS+Android, on-device]
+- **6 · Answered choice card shows the selection (iOS)** — after picking an
+  option the card stayed in the urgent "NEEDS YOUR INPUT" state; it now flips to
+  ANSWERED, checks the chosen row, shows "Sent · <answer>", and persists the
+  answered state across reopen. (Android already did this.) Verify: answer a
+  card → it shows your choice, not a pending prompt; reopen → still answered.
+  [iOS, on-device]
+- **7 · Usage strip expand/collapse animates (iOS)** — the strip lives in a List
+  row where `.transition` is dropped; the expand is now an animatable
+  clip-height + opacity under a 0.28s ease so the detail reveals smoothly and the
+  chevron rotates. Verify: tap the usage strip → smooth eased expand/collapse.
+  [iOS, on-device]
+
+> Deferred (NOT in this build): codex auto-mode "can't do interactive prompt"
+> (needs exact error/repro), broker auto-update-on-reconnect (needs focused
+> root-cause), Live-Activity visual polish (needs a target mock).
+
+---
+
 ## v0.0.149
 
 Round-3 design handoff: ten UI/IA + behavior fixes (iOS PR #550, Android PR
