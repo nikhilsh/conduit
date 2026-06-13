@@ -19,6 +19,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import sh.nikhil.conduit.auth.OAuthCredential
+import sh.nikhil.conduit.auth.OAuthProvider
+import sh.nikhil.conduit.auth.OAuthStore
 import sh.nikhil.conduit.auth.OAuthRequest
 import sh.nikhil.conduit.state.NetworkReachabilityObserver
 import sh.nikhil.conduit.state.ReachabilityEvent
@@ -870,6 +872,74 @@ class SessionStore : ViewModel(), ConduitDelegate {
         c.setAgentCredentials(credential.provider.raw, credential.toJson())
     }
 
+    /**
+     * Push every stored agent credential to a box over HTTP
+     * (POST /api/agent/credentials), independent of any live session.
+     *
+     * This is the auto-propagate seam: a box connected AFTER sign-in
+     * (classically an SSH box) never received the in-session push, so a
+     * claude/codex session there 401s. We POST each device-stored
+     * credential, keyed by the box bearer the same way the broker store
+     * keys it. Best-effort: 503 (old broker, no store) and any non-2xx
+     * are swallowed after a breadcrumb; never fails the connect.
+     *
+     * The `credential` field is a NESTED JSON OBJECT (the native blob),
+     * not a stringified blob — a quoted string re-breaks auth.
+     */
+    suspend fun propagateStoredAgentCredentials(endpoint: Endpoint) = withContext(Dispatchers.IO) {
+        val base = endpoint.httpBaseUrl ?: return@withContext
+        val ctx = appContext ?: return@withContext
+        for (provider in listOf(OAuthProvider.OPENAI, OAuthProvider.ANTHROPIC)) {
+            val cred = runCatching { OAuthStore.load(ctx, provider) }.getOrNull() ?: continue
+            Telemetry.breadcrumb(
+                "agent-credentials",
+                "propagate start",
+                mapOf("provider" to provider.raw, "host" to endpoint.displayHost),
+            )
+            runCatching {
+                val body = JSONObject().apply {
+                    put("provider", provider.raw)
+                    put("kind", "oauth")
+                    // Nest the native blob as a JSON object, not a string.
+                    put("credential", JSONObject(cred.toJson()))
+                }.toString()
+                val conn = (URL("$base/api/agent/credentials").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                    setRequestProperty("Content-Type", "application/json")
+                    connectTimeout = 7_000
+                    readTimeout = 10_000
+                }
+                try {
+                    conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        Telemetry.breadcrumb(
+                            "agent-credentials",
+                            "propagate ok",
+                            mapOf("provider" to provider.raw),
+                        )
+                    } else {
+                        Telemetry.breadcrumb(
+                            "agent-credentials",
+                            "propagate non-2xx",
+                            mapOf("provider" to provider.raw, "code" to code.toString()),
+                        )
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            }.onFailure { e ->
+                Telemetry.breadcrumb(
+                    "agent-credentials",
+                    "propagate failed",
+                    mapOf("provider" to provider.raw, "error" to (e.message ?: e.javaClass.simpleName)),
+                )
+            }
+        }
+    }
+
     // Agent OAuth login v2 (outbound) — forward the three control frames
     // through the Rust client. Identity-scoped, carried over any live
     // session WS. Throw if no client is connected so the coordinator
@@ -1073,6 +1143,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     private var client: ConduitClient? = null
     private var prefs: android.content.SharedPreferences? = null
+    /** Application context cached at hydrate() for OAuthStore credential reads. */
+    private var appContext: Context? = null
+    /** Sessions we've already fired a 401 auto-recover propagate for, so a
+     *  burst of auth-error assistant frames doesn't re-POST every frame. */
+    private val agentAuthRecoveredSessions = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var reachability: NetworkReachabilityObserver? = null
 
     /// Directory holding per-session terminal scrollback for cold-launch
@@ -1135,6 +1210,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
             }
+            appContext = ctx.applicationContext
             scrollbackDir = java.io.File(ctx.applicationContext.cacheDir, "terminal-scrollback")
             installNetworkAndLifecycleHooks(ctx.applicationContext)
             hostKeyTrustStore = SshHostKeyTrustStore.forContext(ctx.applicationContext)
@@ -1374,6 +1450,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 Telemetry.breadcrumb("onboarding", "endpoint_connected",
                     mapOf("host" to _endpoint.value.displayHost,
                           "first_server" to (_savedServers.value.size == 1).toString()))
+                // Auto-propagate stored agent credentials to this box. Boxes
+                // connected after sign-in (esp. SSH boxes) never received the
+                // in-session push, so a claude/codex session there 401s. This
+                // is the single chokepoint: connect()/reconnect()/
+                // selectSavedServer()/connectViaSSH()/attemptSshSelfHeal() all
+                // land here. Fire-and-forget; never fails the connect.
+                viewModelScope.launch { propagateStoredAgentCredentials(e) }
                 refreshSessions()
                 // Connection is live again — re-deliver any messages queued
                 // while disconnected (reconnect window / backgrounded
@@ -2136,6 +2219,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode, fastMode) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
+                // Belt-and-suspenders parity with iOS: also propagate stored
+                // agent credentials to this box on session create, so a box
+                // that became ready without flowing through connect()'s push
+                // still gets them. Fire-and-forget; never fails session create.
+                viewModelScope.launch { propagateStoredAgentCredentials(_endpoint.value) }
                 // Funnel: first-ever session creation (no prior sessions on any launch).
                 if (_sessions.value.isEmpty()) {
                     Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_SESSION_CREATED,
@@ -3610,10 +3698,66 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
         }
+        // Section D: best-effort recover from an agent auth 401 surfaced as
+        // assistant text (string-match fallback; typed view_event deferred).
+        if (event.role == "assistant") {
+            maybeRecoverAgentAuth401(sessionId, event.content)
+        }
         // A fresh turn invalidates the previous turn's AI chips (task
         // #233); the broker emits a new set after this turn completes.
         clearQuickReplies(sessionId)
         refreshConversation(sessionId)
+    }
+
+    /**
+     * Section D: if an assistant message looks like an agent auth 401
+     * ("API Error: 401" / "Invalid authentication credentials" / "Failed to
+     * authenticate"), best-effort auto-propagate this box's stored credential
+     * for the session's provider, then continue. The broker stores creds
+     * per-box, so a box that never received the push 401s on its first turn;
+     * re-pushing the device-stored blob typically lets the user retry the turn
+     * and succeed. String-match only (a typed event is a deferred follow-up);
+     * de-duped per session so a burst doesn't re-POST every frame.
+     */
+    private fun maybeRecoverAgentAuth401(sessionId: String, content: String) {
+        val lower = content.lowercase()
+        val looksLike401 = lower.contains("api error: 401") ||
+            lower.contains("invalid authentication credentials") ||
+            lower.contains("failed to authenticate")
+        if (!looksLike401) return
+        if (!agentAuthRecoveredSessions.add(sessionId)) return
+        val assistant = _sessions.value.firstOrNull { it.id == sessionId }?.assistant
+        val provider = when (assistant) {
+            "claude" -> OAuthProvider.ANTHROPIC
+            "codex" -> OAuthProvider.OPENAI
+            else -> null
+        }
+        Telemetry.breadcrumb(
+            "agent-credentials",
+            "401 detected in chat",
+            mapOf("session" to sessionId, "assistant" to (assistant ?: "unknown")),
+        )
+        val ctx = appContext
+        val endpoint = _endpoint.value
+        // Only re-push if we actually hold a stored credential for the
+        // provider; otherwise there is nothing to recover with (the UI's
+        // sign-in affordance is the path then).
+        val haveStored = provider != null && ctx != null &&
+            runCatching { OAuthStore.load(ctx, provider) }.getOrNull() != null
+        if (!haveStored) {
+            Telemetry.breadcrumb(
+                "agent-credentials",
+                "401 no stored credential to replay",
+                mapOf("session" to sessionId, "provider" to (provider?.raw ?: "unknown")),
+            )
+            return
+        }
+        Telemetry.breadcrumb(
+            "agent-credentials",
+            "401 auto-recover propagating",
+            mapOf("session" to sessionId, "provider" to (provider?.raw ?: "unknown")),
+        )
+        viewModelScope.launch { propagateStoredAgentCredentials(endpoint) }
     }
 
     override fun onViewEvent(sessionId: String, kind: String, payload: Map<String, String>) {
