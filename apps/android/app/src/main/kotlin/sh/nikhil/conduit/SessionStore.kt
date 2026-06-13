@@ -1145,6 +1145,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private var prefs: android.content.SharedPreferences? = null
     /** Application context cached at hydrate() for OAuthStore credential reads. */
     private var appContext: Context? = null
+    /** Sessions we've already fired a 401 auto-recover propagate for, so a
+     *  burst of auth-error assistant frames doesn't re-POST every frame. */
+    private val agentAuthRecoveredSessions = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var reachability: NetworkReachabilityObserver? = null
 
     /// Directory holding per-session terminal scrollback for cold-launch
@@ -3695,10 +3698,66 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _chatLog.value = _chatLog.value.toMutableMap().also { m ->
             m[sessionId] = (m[sessionId] ?: emptyList()) + event
         }
+        // Section D: best-effort recover from an agent auth 401 surfaced as
+        // assistant text (string-match fallback; typed view_event deferred).
+        if (event.role == "assistant") {
+            maybeRecoverAgentAuth401(sessionId, event.content)
+        }
         // A fresh turn invalidates the previous turn's AI chips (task
         // #233); the broker emits a new set after this turn completes.
         clearQuickReplies(sessionId)
         refreshConversation(sessionId)
+    }
+
+    /**
+     * Section D: if an assistant message looks like an agent auth 401
+     * ("API Error: 401" / "Invalid authentication credentials" / "Failed to
+     * authenticate"), best-effort auto-propagate this box's stored credential
+     * for the session's provider, then continue. The broker stores creds
+     * per-box, so a box that never received the push 401s on its first turn;
+     * re-pushing the device-stored blob typically lets the user retry the turn
+     * and succeed. String-match only (a typed event is a deferred follow-up);
+     * de-duped per session so a burst doesn't re-POST every frame.
+     */
+    private fun maybeRecoverAgentAuth401(sessionId: String, content: String) {
+        val lower = content.lowercase()
+        val looksLike401 = lower.contains("api error: 401") ||
+            lower.contains("invalid authentication credentials") ||
+            lower.contains("failed to authenticate")
+        if (!looksLike401) return
+        if (!agentAuthRecoveredSessions.add(sessionId)) return
+        val assistant = _sessions.value.firstOrNull { it.id == sessionId }?.assistant
+        val provider = when (assistant) {
+            "claude" -> OAuthProvider.ANTHROPIC
+            "codex" -> OAuthProvider.OPENAI
+            else -> null
+        }
+        Telemetry.breadcrumb(
+            "agent-credentials",
+            "401 detected in chat",
+            mapOf("session" to sessionId, "assistant" to (assistant ?: "unknown")),
+        )
+        val ctx = appContext
+        val endpoint = _endpoint.value
+        // Only re-push if we actually hold a stored credential for the
+        // provider; otherwise there is nothing to recover with (the UI's
+        // sign-in affordance is the path then).
+        val haveStored = provider != null && ctx != null &&
+            runCatching { OAuthStore.load(ctx, provider) }.getOrNull() != null
+        if (!haveStored) {
+            Telemetry.breadcrumb(
+                "agent-credentials",
+                "401 no stored credential to replay",
+                mapOf("session" to sessionId, "provider" to (provider?.raw ?: "unknown")),
+            )
+            return
+        }
+        Telemetry.breadcrumb(
+            "agent-credentials",
+            "401 auto-recover propagating",
+            mapOf("session" to sessionId, "provider" to (provider?.raw ?: "unknown")),
+        )
+        viewModelScope.launch { propagateStoredAgentCredentials(endpoint) }
     }
 
     override fun onViewEvent(sessionId: String, kind: String, payload: Map<String, String>) {
