@@ -174,6 +174,90 @@ sleep 5
 	}
 }
 
+// TestMaybeRefreshCatalogFingerprintInvalidation verifies that a fingerprint
+// change forces a re-probe even when the TTL has not expired, but the same
+// fingerprint within TTL does NOT trigger a re-probe.
+func TestMaybeRefreshCatalogFingerprintInvalidation(t *testing.T) {
+	resetDynamicEfforts()
+	defer resetDynamicEfforts()
+
+	root := testRoot(t)
+
+	setA := []ModelInfo{{ID: "model-a", DisplayName: "Model A"}}
+	setB := []ModelInfo{{ID: "model-b", DisplayName: "Model B"}}
+
+	calls := 0
+	reg := testRegistry(t, root, map[string]string{"claude": idleScript("fp-test")})
+	m := NewManager(reg)
+	t.Cleanup(m.Close)
+
+	// Inject the test seams before enabling discovery.
+	fpValue := "fingerprint-v1"
+	m.catalog.fingerprintFn = func(_ string) string { return fpValue }
+	m.catalog.probe = func(_ context.Context, _ string, _ string) ([]ModelInfo, error) {
+		calls++
+		if calls == 1 {
+			return setA, nil
+		}
+		return setB, nil
+	}
+
+	m.catalog.mu.Lock()
+	m.catalog.init()
+	m.catalog.enabled = true
+	m.catalog.mu.Unlock()
+
+	// First probe: no catalog yet, triggers probe → set A.
+	m.maybeRefreshCatalog("claude")
+	// Wait for the goroutine to complete.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m.catalog.mu.Lock()
+		done := len(m.catalog.models["claude"]) > 0
+		m.catalog.mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if calls != 1 {
+		t.Fatalf("expected 1 probe after initial call, got %d", calls)
+	}
+	snap := m.ModelCatalog()
+	if len(snap["claude"]) == 0 || snap["claude"][0].ID != "model-a" {
+		t.Fatalf("expected set A after first probe, got %v", snap["claude"])
+	}
+
+	// Second call with same fingerprint, within TTL — must NOT re-probe.
+	m.maybeRefreshCatalog("claude")
+	time.Sleep(50 * time.Millisecond) // no goroutine should be running
+	if calls != 1 {
+		t.Fatalf("expected no additional probe within TTL with same fingerprint, got %d calls", calls)
+	}
+
+	// Change fingerprint to simulate a CLI upgrade — must force re-probe even
+	// though the TTL has not expired.
+	fpValue = "fingerprint-v2"
+	m.maybeRefreshCatalog("claude")
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m.catalog.mu.Lock()
+		fp := m.catalog.fingerprints["claude"]
+		m.catalog.mu.Unlock()
+		if fp == "fingerprint-v2" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2nd probe after fingerprint change, got %d calls", calls)
+	}
+	snap = m.ModelCatalog()
+	if len(snap["claude"]) == 0 || snap["claude"][0].ID != "model-b" {
+		t.Fatalf("expected set B after fingerprint-triggered re-probe, got %v", snap["claude"])
+	}
+}
+
 func TestManagerModelCatalogSnapshotAndInjection(t *testing.T) {
 	resetDynamicEfforts()
 	defer resetDynamicEfforts()
