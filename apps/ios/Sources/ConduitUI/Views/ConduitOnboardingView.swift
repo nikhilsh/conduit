@@ -173,7 +173,26 @@ extension ConduitUI {
                     guideSwitch
                 }
                 Spacer()
-                Color.clear.frame(width: 34, height: 34)
+                // .replay / .addMachine are entered from Settings and must be
+                // escapable without re-pairing; .firstRun keeps no X (the gate
+                // intends completion). Keep the clear placeholder otherwise so
+                // the top bar stays symmetric.
+                if (entry == .replay || entry == .addMachine) && step < Step.done.rawValue {
+                    Button {
+                        Telemetry.breadcrumb("onboarding", "dismissed")
+                        onFinish()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(neon.textDim)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(neon.surface))
+                            .overlay(Circle().strokeBorder(neon.border, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Color.clear.frame(width: 34, height: 34)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
