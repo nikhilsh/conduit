@@ -31,6 +31,14 @@ extension ConduitUI {
         @Environment(\.dismiss) private var dismiss
         @Environment(\.neonTheme) private var neon
 
+        /// When set (e.g. the picker's per-box readiness "Sign in" CTA), the
+        /// sheet auto-launches the REAL OAuth flow for that provider on appear
+        /// instead of just listing accounts — so a fresh box can be signed into
+        /// even when the device already has a global credential. nil = the
+        /// normal accounts-list behaviour.
+        var autoStartProvider: OAuthProvider? = nil
+
+        @State private var didAutoStart = false
         @State private var isWorking = false
         @State private var statusMessage: String?
         @State private var errorMessage: String?
@@ -132,6 +140,21 @@ extension ConduitUI {
                         OAuthCredentialStore.load(provider: $0) != nil
                     }
                 )
+                // Per-box readiness "Sign in": launch the real OAuth flow for
+                // the requested provider straight away (the credential ships to
+                // the connected box via sendAgentCredentials). Guarded so it
+                // fires once even if onAppear re-runs.
+                if let provider = autoStartProvider, !didAutoStart {
+                    didAutoStart = true
+                    Telemetry.breadcrumb("agent_login", "auto-start from readiness",
+                        data: ["provider": provider.rawValue])
+                    Task {
+                        switch provider {
+                        case .openai:    await loginChatGPT()
+                        case .anthropic: await beginClaude()
+                        }
+                    }
+                }
             }
             .sheet(isPresented: Binding(
                 get: { claudeAuthURL != nil },
