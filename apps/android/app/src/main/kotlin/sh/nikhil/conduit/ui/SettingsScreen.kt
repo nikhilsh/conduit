@@ -2,9 +2,11 @@ package sh.nikhil.conduit.ui
 
 
 import sh.nikhil.conduit.BuildConfig
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -21,6 +23,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Science
@@ -30,6 +33,8 @@ import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +58,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -168,12 +175,9 @@ fun SettingsScreen(
     // Re-read whenever the login sheet closes so a fresh sign-in flips the
     // rows to `● signed in` immediately.
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var agentAccounts by remember {
         mutableStateOf(sh.nikhil.conduit.auth.AgentAccountStatus.current(context))
-    }
-    // Account whose Manage dialog (re-auth / sign out) is open.
-    var manageTarget by remember {
-        mutableStateOf<sh.nikhil.conduit.auth.AgentAccountStatus?>(null)
     }
     // Saved-server pending deletion (drives the Forget confirmation alert).
     var pendingForget by remember { mutableStateOf<SavedServer?>(null) }
@@ -203,7 +207,19 @@ fun SettingsScreen(
                 accounts = agentAccounts,
                 brokerReadiness = brokerReadiness,
                 onSwitchServer = { showServerSwitcher = true },
-                onManage = { manageTarget = it },
+                onReauthenticate = { showAgentLogin = true },
+                onRemoveFromPhone = { account ->
+                    sh.nikhil.conduit.auth.OAuthStore.clear(context, account.provider)
+                    agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
+                },
+                onClearFromBox = { account ->
+                    if (endpoint.isComplete) {
+                        scope.launch {
+                            store.clearAgentCredential(account.provider.raw, endpoint)
+                            runCatching { store.refreshModelCatalog() }
+                        }
+                    }
+                },
                 onSignIn = { showAgentLogin = true },
                 onAddAccount = { showAgentLogin = true },
                 onAddServer = { showAddServer = true },
@@ -586,40 +602,6 @@ fun SettingsScreen(
             agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
         })
     }
-    // Per-agent Manage dialog (fix 3): re-auth or sign out for ONE agent.
-    manageTarget?.let { account ->
-        AlertDialog(
-            onDismissRequest = { manageTarget = null },
-            title = { Text("${account.displayName} account") },
-            text = {
-                Text(
-                    if (account.signedIn) {
-                        "Signing out clears the ${account.displayName} credential on this device. Sessions already running keep their credentials."
-                    } else {
-                        "Sign in to use ${account.displayName} through Conduit."
-                    },
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    manageTarget = null
-                    showAgentLogin = true
-                }) { Text("Sign in again") }
-            },
-            dismissButton = {
-                Row {
-                    if (account.signedIn) {
-                        TextButton(onClick = {
-                            sh.nikhil.conduit.auth.OAuthStore.clear(context, account.provider)
-                            agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
-                            manageTarget = null
-                        }) { Text("Sign out", color = LocalNeonTheme.current.red) }
-                    }
-                    TextButton(onClick = { manageTarget = null }) { Text("Cancel") }
-                }
-            },
-        )
-    }
     pendingForget?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingForget = null },
@@ -658,7 +640,9 @@ private fun ConnectionSection(
     accounts: List<sh.nikhil.conduit.auth.AgentAccountStatus>,
     brokerReadiness: BrokerReadiness?,
     onSwitchServer: () -> Unit,
-    onManage: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
+    onReauthenticate: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
+    onRemoveFromPhone: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
+    onClearFromBox: (sh.nikhil.conduit.auth.AgentAccountStatus) -> Unit,
     onSignIn: () -> Unit,
     onAddAccount: () -> Unit,
     onAddServer: () -> Unit,
@@ -721,16 +705,19 @@ private fun ConnectionSection(
                 modifier = Modifier.padding(start = 16.dp, top = 11.dp, bottom = 2.dp),
             )
 
+            // Connected-box display name for the per-box status line (line 2).
+            // null when no box is paired → line 2 hidden.
+            val boxName: String? = if (endpoint.isComplete) primaryLabel else null
             accounts.forEach { account ->
+                val agentReadiness = brokerReadiness?.agents?.get(account.agent)
                 AgentAccountRow(
                     account = account,
-                    agentReadiness = brokerReadiness?.agents?.get(account.agent),
-                    onClick = {
-                        val notInstalled = brokerReadiness?.agents?.get(account.agent)?.cliPresent == false
-                        if (!notInstalled) {
-                            if (account.signedIn) onManage(account) else onSignIn()
-                        }
-                    },
+                    agentReadiness = agentReadiness,
+                    boxName = boxName,
+                    onSignIn = onSignIn,
+                    onReauthenticate = { onReauthenticate(account) },
+                    onRemoveFromPhone = { onRemoveFromPhone(account) },
+                    onClearFromBox = { onClearFromBox(account) },
                 )
                 HorizontalDivider(modifier = Modifier.padding(start = 60.dp), color = neon.border)
             }
@@ -1048,35 +1035,54 @@ private fun SectionEyebrow(title: String) {
 }
 
 /**
- * One agent's account row inside [ConnectionSection].
- * Fix 3: uses [agentReadiness].cliPresent to distinguish "not installed on
- * this box" from "signed out". Inferred from readiness.agents[key] in
- * /api/capabilities. A null agentReadiness means the broker is old or the
- * fetch has not completed — no warning shown.
+ * One agent's account row inside [ConnectionSection]. Two-line status —
+ * line 1 = phone (device-local OAuthStore via [phoneAuthState]), line 2 =
+ * connected box readiness ([agentReadiness].signedIn). An overflow (⋮) menu
+ * replaces the old "Manage" dialog: Re-authenticate / Remove from phone /
+ * Remove pushed credential from this box.
+ *
+ * [agentReadiness].cliPresent still distinguishes "not installed on this box"
+ * (null = old broker / fetch pending → no warning).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AgentAccountRow(
     account: sh.nikhil.conduit.auth.AgentAccountStatus,
     agentReadiness: sh.nikhil.conduit.AgentReadiness?,
-    onClick: () -> Unit,
+    /** Connected box display name for line 2; null = no box → line 2 hidden. */
+    boxName: String?,
+    onSignIn: () -> Unit,
+    onReauthenticate: () -> Unit,
+    onRemoveFromPhone: () -> Unit,
+    onClearFromBox: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
+    val ctx = LocalContext.current
     val tint = neonAgentColor(account.agent, neon)
-    // Derive installed/ready state from broker readiness. null = unknown (old broker).
+    var menuOpen by remember { mutableStateOf(false) }
+    // Phone-local auth (line 1). Reuses the AgentLoginSheet classifier so the
+    // two surfaces agree on "Signed in / expired / Not signed in".
+    val phone = remember(account.provider, account.signedIn) { phoneAuthState(ctx, account.provider) }
+    // Box readiness (line 2). null = unknown (old broker / no box).
     val notInstalled = agentReadiness?.cliPresent == false
-    val ready = !notInstalled && account.signedIn && agentReadiness?.signedIn == true
-    val (statusText, statusColor) = when {
-        notInstalled -> "not installed on this box" to neon.yellow
-        ready -> "ready" to neon.green
-        account.signedIn -> "signed in" to neon.green
-        else -> "signed out" to neon.textFaint
+    val boxSignedIn: Boolean? = agentReadiness?.signedIn
+
+    val (phoneText, phoneColor) = when (phone) {
+        PhoneAuthState.SIGNED_IN -> "Signed in" to neon.green
+        PhoneAuthState.EXPIRED -> "Signed in · expired" to neon.yellow
+        PhoneAuthState.NOT_SIGNED_IN -> "Not signed in" to neon.textFaint
     }
+    val hasMenu = phone != PhoneAuthState.NOT_SIGNED_IN || boxSignedIn == true
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = { if (hasMenu) menuOpen = true else if (!notInstalled) onSignIn() },
+                onLongClick = { if (hasMenu) menuOpen = true },
+            )
             .padding(horizontal = 14.dp, vertical = 11.dp),
     ) {
         Box(
@@ -1115,23 +1121,69 @@ private fun AgentAccountRow(
                     }
                 }
             }
+            // Line 1 — phone status.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Box(Modifier.size(5.dp).background(statusColor, CircleShape))
+                Box(Modifier.size(5.dp).background(phoneColor, CircleShape))
                 Text(
-                    statusText,
+                    phoneText,
                     fontFamily = neon.mono,
                     fontSize = 10.5.sp,
-                    color = statusColor,
+                    color = phoneColor,
+                )
+            }
+            // Line 2 — connected box status (or not-installed note).
+            if (notInstalled) {
+                Text(
+                    "Not installed on this box",
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = neon.yellow,
+                )
+            } else if (boxSignedIn != null && boxName != null) {
+                val (boxText, boxColor) = if (boxSignedIn) {
+                    "Ready on $boxName" to neon.green
+                } else {
+                    "Not on $boxName · auto-pushes on connect" to neon.textDim
+                }
+                Text(
+                    boxText,
+                    fontFamily = neon.mono,
+                    fontSize = 10.5.sp,
+                    color = boxColor,
                 )
             }
         }
-        if (!notInstalled) {
+        if (hasMenu) {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Account options", tint = neon.textDim, modifier = Modifier.size(18.dp))
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Re-authenticate") },
+                        onClick = { menuOpen = false; onReauthenticate() },
+                    )
+                    if (phone != PhoneAuthState.NOT_SIGNED_IN) {
+                        DropdownMenuItem(
+                            text = { Text("Remove from phone", color = neon.red) },
+                            onClick = { menuOpen = false; onRemoveFromPhone() },
+                        )
+                    }
+                    if (boxSignedIn != null && boxName != null) {
+                        DropdownMenuItem(
+                            text = { Text("Remove pushed credential from this box", color = neon.red) },
+                            onClick = { menuOpen = false; onClearFromBox() },
+                        )
+                    }
+                }
+            }
+        } else if (!notInstalled) {
             Text(
-                if (account.signedIn) "Manage" else "Sign in",
+                "Sign in",
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 13.sp,
-                color = if (account.signedIn) neon.textDim else neon.accent,
+                color = neon.accent,
             )
             Icon(
                 Icons.Filled.ChevronRight,

@@ -940,6 +940,57 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
     }
 
+    /**
+     * Per-box sign-out: POST `/api/agent/credentials/clear` to the given
+     * endpoint with `{"provider": <anthropic|openai>}`. Removes the pushed
+     * agent credential from THAT box only (idempotent, 200). Does NOT touch
+     * the device-local [OAuthStore] and does NOT revoke the box owner's shell
+     * login. Best-effort + breadcrumbs; never throws. Mirror of the Stage-1
+     * [propagateStoredAgentCredentials] HTTP shape, sans `credential`.
+     *
+     * [provider] must be the wire provider value ("anthropic" / "openai").
+     */
+    suspend fun clearAgentCredential(provider: String, endpoint: Endpoint) = withContext(Dispatchers.IO) {
+        val base = endpoint.httpBaseUrl ?: return@withContext
+        Telemetry.breadcrumb(
+            "agent-credentials",
+            "clear start",
+            mapOf("provider" to provider, "host" to endpoint.displayHost),
+        )
+        runCatching {
+            val body = JSONObject().apply { put("provider", provider) }.toString()
+            val conn = (URL("$base/api/agent/credentials/clear").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 7_000
+                readTimeout = 10_000
+            }
+            try {
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    Telemetry.breadcrumb("agent-credentials", "clear ok", mapOf("provider" to provider))
+                } else {
+                    Telemetry.breadcrumb(
+                        "agent-credentials",
+                        "clear non-2xx",
+                        mapOf("provider" to provider, "code" to code.toString()),
+                    )
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }.onFailure { e ->
+            Telemetry.breadcrumb(
+                "agent-credentials",
+                "clear failed",
+                mapOf("provider" to provider, "error" to (e.message ?: e.javaClass.simpleName)),
+            )
+        }
+    }
+
     // Agent OAuth login v2 (outbound) — forward the three control frames
     // through the Rust client. Identity-scoped, carried over any live
     // session WS. Throw if no client is connected so the coordinator
