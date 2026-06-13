@@ -2198,6 +2198,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
      * but is genuinely on its way live — the create round-trip owns that
      * state. A confirmed-exited phase (raced ahead) still wins.
      */
+    /**
+     * Count of live sessions attributed to [boxId] (a SavedServer.id).
+     *
+     * Fix: the Home BOXES row count previously used the whole mixed session
+     * list ([sessions].size) for EVERY box, so a non-active box showed the
+     * active box's count. This restricts to sessions whose stable per-session
+     * box stamp ([sessionBox]) equals [boxId] AND that are confirmed-live, so
+     * each row shows its own real count (including non-active boxes).
+     */
+    fun liveSessionCount(boxId: String): Int =
+        _sessions.value.count { s ->
+            _sessionBox.value[s.id] == boxId && isConfirmedLive(s.id)
+        }
+
     fun isConfirmedLive(sessionID: String): Boolean {
         return when (_sessionLifecycle.value[sessionID]) {
             is SessionLifecycle.Exited,
@@ -2581,10 +2595,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
             ?: 0
         val nowIso = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.ISO_INSTANT)
+        // Box label must come from the session's STABLE box stamp, not the
+        // active endpoint at write time. Otherwise a session created on box A
+        // gets re-stamped to box B when a status frame lands while box B is
+        // active -> the same session shows up as duplicate history rows under
+        // two boxes. Fall back to the active endpoint only when unstamped.
+        val stableBoxId = _sessionBox.value[sessionId] ?: savedHistoryServerId()
         val next = SavedSessionsReducer.upsert(
             current = _savedSessions.value,
             session = session,
-            serverId = savedHistoryServerId(),
+            serverId = stableBoxId,
             status = _statusBySession.value[sessionId],
             firstUserMessage = firstUserMessageOf(_conversationLog.value[sessionId]),
             messageCount = messageCount,
