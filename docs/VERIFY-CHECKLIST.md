@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.151
+
+Quick fixes for issues found device-testing v0.0.150. iOS PR #561, Android PR #560. No broker change (no redeploy).
+
+- **1 · Onboarding "PAIRED" eyebrow centered (iOS)** — on the Done/"You're in" screen the green PAIRED label was flush to the left screen edge while the rest was centered; now centered. (Android has no Done screen — N/A.) Verify: finish onboarding → "PAIRED" sits centered above "You're in." [iOS, on-device]
+- **2 · "Replay walkthrough" opens at Welcome, not the last step (iOS)** — Settings → Replay walkthrough was landing on the Done step for an already-paired user (a stale-presentation race); now presented via `.fullScreenCover(item:)` so it reliably opens at Welcome (and "Add a machine" at Install). Android was already correct. Verify: Settings → Replay walkthrough → opens on Welcome; Add a machine → opens on Install. [iOS, on-device]
+- **3 · SSH boxes no longer show a misleading "offline" at rest (iOS+Android)** — an SSH/tunnelled box's address is a localhost tunnel port that only listens while connected, so the at-rest reachability probe always failed → "offline". Now loopback boxes skip the probe and show a neutral "SSH · tap Connect" + the real SSH host instead of 127.0.0.1:<ephemeral port>. Verify: with an SSH box not connected, its row shows "SSH · tap Connect" (not "offline") and its real host. [iOS+Android, on-device]
+
+---
+
 ## v0.0.150
 
 Fixes for bugs the owner found while device-testing the v0.0.149 (R3) build.
