@@ -39,10 +39,12 @@ enum OnboardingStep {
 //   firstRun   -- automatic gate in RootView; may resolve to Done when already paired.
 //   replay     -- Settings "Replay walkthrough"; always starts at Welcome.
 //   addMachine -- Settings "Add a machine"; always starts at Install.
-enum OnboardingEntry {
+enum OnboardingEntry: Identifiable {
     case firstRun
     case replay
     case addMachine
+
+    var id: String { String(describing: self) }
 }
 
 extension ConduitUI {
@@ -508,7 +510,11 @@ extension ConduitUI {
                             .offset(x: 6, y: 6)
                     }
                 VStack(spacing: 8) {
-                    eyebrow("PAIRED", tint: neon.green)
+                    Text("PAIRED")
+                        .font(neon.mono(12).weight(.bold))
+                        .tracking(2)
+                        .foregroundStyle(neon.green)
+                        .frame(maxWidth: .infinity, alignment: .center)
                     Text("You're in.")
                         .font(neon.sans(28).weight(.semibold))
                         .foregroundStyle(neon.text)

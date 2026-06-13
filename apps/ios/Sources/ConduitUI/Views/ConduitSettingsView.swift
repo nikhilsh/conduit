@@ -58,8 +58,10 @@ extension ConduitUI {
         /// Account whose Manage dialog (re-auth / sign out) is open.
         @State private var manageTarget: AgentAccountStatus?
         // Fix 1: onboarding entry intents from Settings.
-        @State private var onboardingEntry: OnboardingEntry = .firstRun
-        @State private var showOnboarding = false
+        // Presented via .fullScreenCover(item:) so the entry binds atomically
+        // and never snapshots a stale default (which routed already-paired
+        // users straight to Done).
+        @State private var onboardingEntry: OnboardingEntry?
 
         // WS-P.3: push notification settings state — observed from the
         // shared PushNotificationManager so the row updates live when the
@@ -103,8 +105,8 @@ extension ConduitUI {
                         }
                     }
                 }
-                .fullScreenCover(isPresented: $showOnboarding) {
-                    ConduitUI.OnboardingView(onFinish: { showOnboarding = false }, entry: onboardingEntry)
+                .fullScreenCover(item: $onboardingEntry) { entry in
+                    ConduitUI.OnboardingView(onFinish: { onboardingEntry = nil }, entry: entry)
                         .environment(store)
                         .environment(flags)
                 }
@@ -209,7 +211,6 @@ extension ConduitUI {
                     Button {
                         Telemetry.breadcrumb("onboarding", "settings: replay walkthrough tapped")
                         onboardingEntry = .replay
-                        showOnboarding = true
                     } label: {
                         ConduitUI.ListRow(
                             icon: "arrow.counterclockwise",
@@ -229,7 +230,6 @@ extension ConduitUI {
                     Button {
                         Telemetry.breadcrumb("onboarding", "settings: add a machine tapped")
                         onboardingEntry = .addMachine
-                        showOnboarding = true
                     } label: {
                         ConduitUI.ListRow(
                             icon: "plus.rectangle.on.rectangle",
@@ -1383,9 +1383,14 @@ extension ConduitUI {
             let isActive = server.endpoint == store.endpoint
             // boxReachability[id] is Bool?? (outer = key presence, inner = probed value)
             let probed: Bool? = boxReachability[server.id] ?? nil
+            // SSH/tunneled boxes can't be probed at rest (loopback endpoint) --
+            // show a neutral hint instead of a misleading "offline".
+            let isLoopback = isLoopbackEndpoint(server.endpoint)
             let dotColor: Color = isActive ? neon.green : (probed == true ? neon.green : neon.textFaint)
             let statusText: String = isActive ? "connected"
-                : (probed == true ? "reachable" : (probed == false ? "offline" : ""))
+                : (probed == true ? "reachable"
+                    : (probed == false ? "offline"
+                        : (isLoopback ? "SSH - tap Connect" : "")))
             Button {
                 if !isActive {
                     Telemetry.breadcrumb("boxes", "switch box", data: ["id": server.id, "name": server.name])
@@ -1420,10 +1425,10 @@ extension ConduitUI {
                                     .font(neon.mono(10.5).weight(.medium))
                                     .foregroundStyle(dotColor)
                             }
-                            if !statusText.isEmpty && !server.endpoint.displayHost.isEmpty {
+                            if !statusText.isEmpty && !boxDisplayHost(server).isEmpty {
                                 Text("·").font(neon.mono(10)).foregroundStyle(neon.textFaint)
                             }
-                            Text(server.endpoint.displayHost)
+                            Text(boxDisplayHost(server))
                                 .font(neon.mono(10.5))
                                 .foregroundStyle(neon.textDim)
                                 .lineLimit(1)
@@ -1453,6 +1458,24 @@ extension ConduitUI {
 
         // MARK: - Reachability probe
 
+        /// True when the endpoint points at the local loopback (an SSH tunnel's
+        /// 127.0.0.1:<ephemeral port>). Such an endpoint only listens while the
+        /// tunnel is connected, so it can't be probed for reachability at rest.
+        private func isLoopbackEndpoint(_ endpoint: StoredEndpoint) -> Bool {
+            let host = URLComponents(string: endpoint.url)?.host?.lowercased()
+            return host == "127.0.0.1" || host == "localhost" || host == "::1"
+        }
+
+        /// Subtitle host for a box row: prefer the real SSH host:port when the
+        /// stored endpoint is a loopback tunnel address (so the row shows the
+        /// machine, not 127.0.0.1:<ephemeral port>).
+        private func boxDisplayHost(_ server: SavedServer) -> String {
+            if isLoopbackEndpoint(server.endpoint), let ssh = server.ssh, !ssh.host.isEmpty {
+                return "\(ssh.host):\(ssh.port)"
+            }
+            return server.endpoint.displayHost
+        }
+
         private func probeInactiveBoxes() async {
             for server in store.savedServers {
                 let isActive = server.endpoint == store.endpoint
@@ -1461,6 +1484,21 @@ extension ConduitUI {
                     continue
                 }
                 let serverID = server.id
+                // SSH/tunneled boxes expose a 127.0.0.1:<ephemeral port>
+                // endpoint that only listens while the tunnel is up, so an
+                // HTTP probe always fails at rest -> a misleading "offline".
+                // Leave reachability UNKNOWN (nil) for these; the row shows a
+                // neutral "SSH - tap Connect" instead.
+                if isLoopbackEndpoint(server.endpoint) {
+                    Telemetry.breadcrumb("boxes", "probe skipped: loopback/tunnel endpoint",
+                        data: ["id": serverID, "name": server.name])
+                    // Mark the key present but the probed value unknown (nil)
+                    // so the row treats it as neutral, never "offline".
+                    // updateValue stores a present key with a nil value;
+                    // `dict[key] = nil` would instead REMOVE the key.
+                    await MainActor.run { boxReachability.updateValue(nil, forKey: serverID) }
+                    continue
+                }
                 guard let base = server.endpoint.httpBaseURL,
                       let url = URL(string: "/api/capabilities", relativeTo: base) else {
                     await MainActor.run { boxReachability[serverID] = .some(false) }
