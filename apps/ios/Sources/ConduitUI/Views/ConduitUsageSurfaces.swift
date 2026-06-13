@@ -103,33 +103,50 @@ extension ConduitUI {
                     // The old rows showed only the reset caption, so the
                     // expanded view had LESS information than the collapsed
                     // glance. Two rows per agent (5h + weekly), agent-tinted.
-                    if expanded {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
-                                if idx > 0 {
-                                    Divider().background(neon.border)
-                                }
-                                let tint = neon.agentTint(forAgent: a.agent)
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack(spacing: 5) {
-                                        Circle().fill(tint).frame(width: 5, height: 5)
-                                        Text(a.agent)
-                                            .font(neon.mono(10.5).weight(.semibold))
-                                            .foregroundStyle(tint)
-                                    }
-                                    windowRow("5h", pct: a.fivePct, resetsAt: a.fiveResetsAt, tint: tint)
-                                    windowRow("weekly", pct: a.weekPct, resetsAt: a.weekResetsAt, tint: tint)
-                                }
-                            }
-                        }
+                    //
+                    // R4 fix 6: this strip lives inside a `List` row, and a
+                    // `List` drops a SwiftUI `.transition` on an `if`-inserted
+                    // subview (the cell snaps instead of easing). Keep the
+                    // detail ALWAYS BUILT and reveal it with an animatable
+                    // clip-height + opacity so the row eases open/closed.
+                    expandedDetail(agents: agents)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
+                        .frame(height: expanded ? nil : 0, alignment: .top)
+                        .opacity(expanded ? 1 : 0)
+                        .clipped()
+                        .accessibilityHidden(!expanded)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12)
+                .animation(.easeInOut(duration: 0.28), value: expanded)
             }
+        }
+
+        /// Always-built expanded detail (two windows per agent). Revealed via
+        /// an animatable clip-height in `body` (see the R4 fix 6 note) so the
+        /// `List` row eases open/closed instead of snapping.
+        @ViewBuilder
+        private func expandedDetail(agents: [SessionStore.AgentUsageSnapshot]) -> some View {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
+                    if idx > 0 {
+                        Divider().background(neon.border)
+                    }
+                    let tint = neon.agentTint(forAgent: a.agent)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 5) {
+                            Circle().fill(tint).frame(width: 5, height: 5)
+                            Text(a.agent)
+                                .font(neon.mono(10.5).weight(.semibold))
+                                .foregroundStyle(tint)
+                        }
+                        windowRow("5h", pct: a.fivePct, resetsAt: a.fiveResetsAt, tint: tint)
+                        windowRow("weekly", pct: a.weekPct, resetsAt: a.weekResetsAt, tint: tint)
+                    }
+                }
+            }
+            .padding(.top, 2)
         }
 
         /// One agent's collapsed glance: a tinted dot, the agent label, a mini
