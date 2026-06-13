@@ -1,8 +1,10 @@
 package sh.nikhil.conduit.ui
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,9 +20,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -94,17 +99,40 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     // "Signed in" state on each row (the transient status pill alone
     // left the rows looking logged-out after a successful login).
     var signedInProviders by remember { mutableStateOf<Set<OAuthProvider>>(emptySet()) }
-    // Prefer the connected box's actual readiness over a device-local
-    // OAuthStore credential: a credential saved on THIS device does not mean
-    // the currently-connected box has it. brokerReadiness is keyed by agent
-    // id ("claude"/"codex"). null (old broker / not yet fetched) → fall back
-    // to the local store so the row is not blanked out.
+    // Phone-local auth state per provider (line 1 of each row). Distinct from
+    // the connected-box readiness (line 2): a credential on THIS device says
+    // nothing about whether the connected box has it.
+    var phoneAuth by remember { mutableStateOf<Map<OAuthProvider, PhoneAuthState>>(emptyMap()) }
+    // Connected-box readiness, keyed by agent id ("claude"/"codex"). null
+    // (old broker / not yet fetched) → hide line 2 entirely.
     val brokerReadiness by store.brokerReadiness.collectAsState()
-    LaunchedEffect(Unit) {
-        signedInProviders = withContext(Dispatchers.IO) {
-            OAuthProvider.values()
-                .filter { runCatching { OAuthStore.load(ctx, it) }.getOrNull() != null }
-                .toSet()
+    val endpoint by store.endpoint.collectAsState()
+    val savedServers by store.savedServers.collectAsState()
+    // Friendly connected-box name (SavedServer.name) when a box is connected.
+    val boxName: String? = if (endpoint.isComplete) {
+        savedServers.firstOrNull { it.endpoint == endpoint }?.name ?: endpoint.displayHost
+    } else null
+
+    fun refreshPhoneAuth() {
+        scope.launch {
+            phoneAuth = withContext(Dispatchers.IO) {
+                OAuthProvider.values().associateWith { phoneAuthState(ctx, it) }
+            }
+            signedInProviders = phoneAuth.filterValues { it != PhoneAuthState.NOT_SIGNED_IN }.keys
+        }
+    }
+    LaunchedEffect(Unit) { refreshPhoneAuth() }
+
+    // Per-box clear: remove the pushed agent credential from the connected
+    // box (best-effort), then refresh readiness so line 2 updates. Device-
+    // local OAuthStore is untouched here. Only meaningful with a live box.
+    fun clearFromBox(provider: OAuthProvider) {
+        val ep = endpoint
+        if (!ep.isComplete) return
+        Telemetry.breadcrumb("agent-credentials", "clear from box tapped", mapOf("provider" to provider.raw, "host" to ep.displayHost))
+        scope.launch {
+            store.clearAgentCredential(provider.raw, ep)
+            runCatching { store.refreshModelCatalog() }
         }
     }
 
@@ -120,9 +148,13 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     suspend fun deliver(cred: OAuthCredential) {
         runCatching { OAuthStore.save(ctx, cred) }
         signedInProviders = signedInProviders + cred.provider
+        refreshPhoneAuth()
         Telemetry.breadcrumb("agent_login", "shipping credential to broker", mapOf("provider" to cred.provider.raw))
         try {
             store.sendAgentCredentials(cred)
+            // Pushed creds change the box's readiness; refresh so line 2 flips
+            // to "Ready on <box>" without waiting for the next capabilities poll.
+            runCatching { store.refreshModelCatalog() }
             statusMessage = "Signed in. The broker now has your ${cred.provider.raw} credentials for future sessions."
             errorMessage = null
             // Standalone visible event for every terminal outcome (a
@@ -264,20 +296,34 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
                     ProviderRow(
                         agentId = "claude",
                         title = "Claude",
-                        signedIn = brokerReadiness?.agents?.get("claude")?.signedIn
-                            ?: (OAuthProvider.ANTHROPIC in signedInProviders),
+                        provider = OAuthProvider.ANTHROPIC,
+                        phone = phoneAuth[OAuthProvider.ANTHROPIC] ?: PhoneAuthState.NOT_SIGNED_IN,
+                        boxSignedIn = brokerReadiness?.agents?.get("claude")?.signedIn,
+                        boxName = boxName,
                         enabled = !isWorking,
-                        onClick = { beginClaude() },
+                        onReauthenticate = { beginClaude() },
+                        onRemoveFromPhone = {
+                            OAuthStore.clear(ctx, OAuthProvider.ANTHROPIC)
+                            refreshPhoneAuth()
+                        },
+                        onClearFromBox = { clearFromBox(OAuthProvider.ANTHROPIC) },
                     )
                     HorizontalDivider(color = neon.border)
                     // ChatGPT / Codex row
                     ProviderRow(
                         agentId = "codex",
                         title = "ChatGPT",
-                        signedIn = brokerReadiness?.agents?.get("codex")?.signedIn
-                            ?: (OAuthProvider.OPENAI in signedInProviders),
+                        provider = OAuthProvider.OPENAI,
+                        phone = phoneAuth[OAuthProvider.OPENAI] ?: PhoneAuthState.NOT_SIGNED_IN,
+                        boxSignedIn = brokerReadiness?.agents?.get("codex")?.signedIn,
+                        boxName = boxName,
                         enabled = !isWorking,
-                        onClick = { loginChatGPT() },
+                        onReauthenticate = { loginChatGPT() },
+                        onRemoveFromPhone = {
+                            OAuthStore.clear(ctx, OAuthProvider.OPENAI)
+                            refreshPhoneAuth()
+                        },
+                        onClearFromBox = { clearFromBox(OAuthProvider.OPENAI) },
                     )
                 }
             }
@@ -325,24 +371,70 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
 }
 
 /**
- * Fix 2: per-provider row with agent-tinted avatar, name, signed-in status dot,
- * and a Manage / Sign in trailing chevron. Plan badge omitted — no plan source
- * exists today; never invent it.
+ * Phone-local auth state for a provider (line 1 of [ProviderRow]). Derived
+ * from the device-local [OAuthStore] only — independent of any box.
  */
+internal enum class PhoneAuthState { NOT_SIGNED_IN, SIGNED_IN, EXPIRED }
+
+/**
+ * Read the device-local credential and classify it. EXPIRED is only inferred
+ * for Anthropic (its blob carries an `expiresAt` ms timestamp); OpenAI's
+ * on-device blob has no reliable wall-clock expiry, so a stored OpenAI
+ * credential is reported SIGNED_IN rather than fabricating an expiry.
+ */
+internal fun phoneAuthState(ctx: android.content.Context, provider: OAuthProvider): PhoneAuthState {
+    val cred = runCatching { OAuthStore.load(ctx, provider) }.getOrNull()
+        ?: return PhoneAuthState.NOT_SIGNED_IN
+    return when (cred) {
+        is OAuthCredential.Anthropic -> {
+            val exp = cred.blob.claudeAiOauth.expiresAt
+            if (exp in 1 until System.currentTimeMillis()) PhoneAuthState.EXPIRED
+            else PhoneAuthState.SIGNED_IN
+        }
+        is OAuthCredential.OpenAi -> PhoneAuthState.SIGNED_IN
+    }
+}
+
+/**
+ * Per-provider row: two-line status (line 1 = phone, line 2 = connected box)
+ * plus an overflow menu for re-authenticate / remove-from-phone / remove-from-
+ * box. Replaces the old single "Manage / Sign in" chevron. Plan badge omitted
+ * — no plan source exists here; never invent it.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ProviderRow(
     agentId: String,
     title: String,
-    signedIn: Boolean,
+    provider: OAuthProvider,
+    phone: PhoneAuthState,
+    /** Connected box readiness for this agent; null = no/old box → hide line 2. */
+    boxSignedIn: Boolean?,
+    /** Connected box display name (for line 2 wording); null when no box. */
+    boxName: String?,
     enabled: Boolean,
-    onClick: () -> Unit,
+    onReauthenticate: () -> Unit,
+    onRemoveFromPhone: () -> Unit,
+    onClearFromBox: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     val tint = neonAgentColor(agentId, neon)
+    var menuOpen by remember { mutableStateOf(false) }
+
+    val (phoneText, phoneColor) = when (phone) {
+        PhoneAuthState.SIGNED_IN -> "Signed in" to neon.green
+        PhoneAuthState.EXPIRED -> "Signed in · expired" to neon.yellow
+        PhoneAuthState.NOT_SIGNED_IN -> "Not signed in" to neon.textDim
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
+            .combinedClickable(
+                enabled = enabled,
+                onClick = { if (phone == PhoneAuthState.NOT_SIGNED_IN) onReauthenticate() else menuOpen = true },
+                onLongClick = { menuOpen = true },
+            )
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -356,41 +448,42 @@ private fun ProviderRow(
                 fontWeight = FontWeight.SemiBold,
                 color = neon.text,
             )
+            // Line 1 — phone status.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                if (signedIn) {
+                if (phone != PhoneAuthState.NOT_SIGNED_IN) {
                     androidx.compose.foundation.Canvas(Modifier.size(6.dp)) {
-                        drawCircle(color = tint.copy(alpha = 0.9f))
+                        drawCircle(color = phoneColor.copy(alpha = 0.9f))
                     }
-                    Text(
-                        "signed in",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        color = neon.green,
-                    )
-                } else {
-                    Text(
-                        "not signed in",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = neon.mono,
-                        color = neon.textDim,
-                    )
                 }
+                Text(
+                    phoneText,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = phoneColor,
+                )
+            }
+            // Line 2 — connected-box status. Hidden when readiness is null.
+            if (boxSignedIn != null && boxName != null) {
+                val (boxText, boxColor) = if (boxSignedIn) {
+                    "Ready on $boxName" to neon.green
+                } else {
+                    "Not on $boxName · auto-pushes on connect" to neon.textDim
+                }
+                Text(
+                    boxText,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = boxColor,
+                )
             }
         }
         if (!enabled) {
             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-        } else if (signedIn) {
-            Text(
-                "Manage",
-                style = MaterialTheme.typography.labelMedium,
-                fontFamily = neon.sans,
-                color = neon.textDim,
-            )
-            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint, modifier = Modifier.size(18.dp))
-        } else {
+        } else if (phone == PhoneAuthState.NOT_SIGNED_IN && boxSignedIn != true) {
+            // Nothing to manage yet — show a plain Sign in affordance.
             Text(
                 "Sign in",
                 style = MaterialTheme.typography.labelMedium,
@@ -398,6 +491,30 @@ private fun ProviderRow(
                 color = tint,
             )
             Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        } else {
+            Box {
+                IconButton(onClick = { menuOpen = true }, enabled = enabled) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Account options", tint = neon.textDim)
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Re-authenticate") },
+                        onClick = { menuOpen = false; onReauthenticate() },
+                    )
+                    if (phone != PhoneAuthState.NOT_SIGNED_IN) {
+                        DropdownMenuItem(
+                            text = { Text("Remove from phone", color = neon.red) },
+                            onClick = { menuOpen = false; onRemoveFromPhone() },
+                        )
+                    }
+                    if (boxSignedIn != null && boxName != null) {
+                        DropdownMenuItem(
+                            text = { Text("Remove pushed credential from this box", color = neon.red) },
+                            onClick = { menuOpen = false; onClearFromBox() },
+                        )
+                    }
+                }
+            }
         }
     }
 }
