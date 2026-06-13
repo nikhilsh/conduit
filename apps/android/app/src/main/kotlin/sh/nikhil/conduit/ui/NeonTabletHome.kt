@@ -122,7 +122,10 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
                     harness is HarnessState.Connecting || harness is HarnessState.Reconnecting -> neon.yellow
                     else -> neon.textFaint
                 }
-                BoxCard(neon, server.name, server.endpoint.displayHost, isActive, color) {
+                // v151 ITEM C: SSH boxes persist a loopback endpoint; show the real
+                // ssh host:port instead of 127.0.0.1:<ephemeral port>.
+                val sub = server.ssh?.let { "${it.host}:${it.port}" } ?: server.endpoint.displayHost
+                BoxCard(neon, server.name, sub, isActive, color) {
                     store.selectSavedServer(server.id, autoConnect = true)
                 }
             }
