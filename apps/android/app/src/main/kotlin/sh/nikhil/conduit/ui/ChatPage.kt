@@ -1006,7 +1006,7 @@ internal fun mergedConversation(
     chatLog: List<ChatEvent>,
 ): List<ConversationItem> {
     // Fast path: nothing raw to fold in.
-    if (chatLog.isEmpty()) return conversation
+    if (chatLog.isEmpty()) return dropPendingInputEchoes(conversation)
 
     val typedFingerprints = conversation
         .map { "${it.role.lowercase()}|${it.content}" }
@@ -1043,14 +1043,46 @@ internal fun mergedConversation(
             )
         }
     }
-    if (synthetic.isEmpty()) return conversation
+    if (synthetic.isEmpty()) return dropPendingInputEchoes(conversation)
     // Interleave the synthesized chat-event items into the typed log in true
     // chronological order. Carry-forward sort (see [sortedByConversationTs]):
     // a chat event whose `ts` we can't parse keeps its arrival position
     // instead of collapsing to 0L and jumping above the user turn that
     // preceded it (device bug: agent reply / command card rendered before
     // the user's own prompt).
-    return (conversation + synthetic).sortedByConversationTs { it.ts }
+    return dropPendingInputEchoes((conversation + synthetic).sortedByConversationTs { it.ts })
+}
+
+/**
+ * Mirror of iOS `dropPendingInputEchoes`. A `pending_input` choice card and a
+ * plain bubble that merely echoes the same question can both reach the merged
+ * log (the synthesized chatLog item and the typed card differ enough to dodge
+ * the role+content fingerprint). Two passes:
+ *  (a) drop any non-`pending_input` item whose trimmed content is contained in
+ *      a `pending_input` body (length floor of 8 chars so short replies like
+ *      "yes"/"ok" are never nuked);
+ *  (b) collapse duplicate `pending_input` items sharing the same trimmed
+ *      prompt+options body down to the first occurrence. Distinct prompts are
+ *      preserved.
+ */
+internal fun dropPendingInputEchoes(items: List<ConversationItem>): List<ConversationItem> {
+    val pendingBodies = items
+        .filter { it.kind == "pending_input" }
+        .map { it.content.trim() }
+        .filter { it.length >= 8 }
+    if (pendingBodies.isEmpty()) return items
+
+    val seenPending = HashSet<String>()
+    return items.filter { item ->
+        if (item.kind == "pending_input") {
+            // Collapse exact-duplicate choice cards (same prompt+options body).
+            seenPending.add(item.content.trim())
+        } else {
+            val c = item.content.trim()
+            if (c.length < 8) true
+            else pendingBodies.none { it == c || it.contains(c) }
+        }
+    }
 }
 
 /**
