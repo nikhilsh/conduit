@@ -19,6 +19,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import sh.nikhil.conduit.auth.OAuthCredential
+import sh.nikhil.conduit.auth.OAuthProvider
+import sh.nikhil.conduit.auth.OAuthStore
 import sh.nikhil.conduit.auth.OAuthRequest
 import sh.nikhil.conduit.state.NetworkReachabilityObserver
 import sh.nikhil.conduit.state.ReachabilityEvent
@@ -870,6 +872,74 @@ class SessionStore : ViewModel(), ConduitDelegate {
         c.setAgentCredentials(credential.provider.raw, credential.toJson())
     }
 
+    /**
+     * Push every stored agent credential to a box over HTTP
+     * (POST /api/agent/credentials), independent of any live session.
+     *
+     * This is the auto-propagate seam: a box connected AFTER sign-in
+     * (classically an SSH box) never received the in-session push, so a
+     * claude/codex session there 401s. We POST each device-stored
+     * credential, keyed by the box bearer the same way the broker store
+     * keys it. Best-effort: 503 (old broker, no store) and any non-2xx
+     * are swallowed after a breadcrumb; never fails the connect.
+     *
+     * The `credential` field is a NESTED JSON OBJECT (the native blob),
+     * not a stringified blob — a quoted string re-breaks auth.
+     */
+    suspend fun propagateStoredAgentCredentials(endpoint: Endpoint) = withContext(Dispatchers.IO) {
+        val base = endpoint.httpBaseUrl ?: return@withContext
+        val ctx = appContext ?: return@withContext
+        for (provider in listOf(OAuthProvider.OPENAI, OAuthProvider.ANTHROPIC)) {
+            val cred = runCatching { OAuthStore.load(ctx, provider) }.getOrNull() ?: continue
+            Telemetry.breadcrumb(
+                "agent-credentials",
+                "propagate start",
+                mapOf("provider" to provider.raw, "host" to endpoint.displayHost),
+            )
+            runCatching {
+                val body = JSONObject().apply {
+                    put("provider", provider.raw)
+                    put("kind", "oauth")
+                    // Nest the native blob as a JSON object, not a string.
+                    put("credential", JSONObject(cred.toJson()))
+                }.toString()
+                val conn = (URL("$base/api/agent/credentials").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                    setRequestProperty("Content-Type", "application/json")
+                    connectTimeout = 7_000
+                    readTimeout = 10_000
+                }
+                try {
+                    conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        Telemetry.breadcrumb(
+                            "agent-credentials",
+                            "propagate ok",
+                            mapOf("provider" to provider.raw),
+                        )
+                    } else {
+                        Telemetry.breadcrumb(
+                            "agent-credentials",
+                            "propagate non-2xx",
+                            mapOf("provider" to provider.raw, "code" to code.toString()),
+                        )
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            }.onFailure { e ->
+                Telemetry.breadcrumb(
+                    "agent-credentials",
+                    "propagate failed",
+                    mapOf("provider" to provider.raw, "error" to (e.message ?: e.javaClass.simpleName)),
+                )
+            }
+        }
+    }
+
     // Agent OAuth login v2 (outbound) — forward the three control frames
     // through the Rust client. Identity-scoped, carried over any live
     // session WS. Throw if no client is connected so the coordinator
@@ -1073,6 +1143,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     private var client: ConduitClient? = null
     private var prefs: android.content.SharedPreferences? = null
+    /** Application context cached at hydrate() for OAuthStore credential reads. */
+    private var appContext: Context? = null
     private var reachability: NetworkReachabilityObserver? = null
 
     /// Directory holding per-session terminal scrollback for cold-launch
@@ -1135,6 +1207,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
             }
+            appContext = ctx.applicationContext
             scrollbackDir = java.io.File(ctx.applicationContext.cacheDir, "terminal-scrollback")
             installNetworkAndLifecycleHooks(ctx.applicationContext)
             hostKeyTrustStore = SshHostKeyTrustStore.forContext(ctx.applicationContext)
