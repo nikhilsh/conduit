@@ -95,10 +95,6 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
     // opening the browser and the user pasting the code.
     var pasteClient by remember { mutableStateOf<OAuthClient?>(null) }
     var pasteRequest by remember { mutableStateOf<OAuthRequest?>(null) }
-    // Providers with a stored credential — drives the persistent
-    // "Signed in" state on each row (the transient status pill alone
-    // left the rows looking logged-out after a successful login).
-    var signedInProviders by remember { mutableStateOf<Set<OAuthProvider>>(emptySet()) }
     // Phone-local auth state per provider (line 1 of each row). Distinct from
     // the connected-box readiness (line 2): a credential on THIS device says
     // nothing about whether the connected box has it.
@@ -118,7 +114,6 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
             phoneAuth = withContext(Dispatchers.IO) {
                 OAuthProvider.values().associateWith { phoneAuthState(ctx, it) }
             }
-            signedInProviders = phoneAuth.filterValues { it != PhoneAuthState.NOT_SIGNED_IN }.keys
         }
     }
     LaunchedEffect(Unit) { refreshPhoneAuth() }
@@ -147,7 +142,6 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
 
     suspend fun deliver(cred: OAuthCredential) {
         runCatching { OAuthStore.save(ctx, cred) }
-        signedInProviders = signedInProviders + cred.provider
         refreshPhoneAuth()
         Telemetry.breadcrumb("agent_login", "shipping credential to broker", mapOf("provider" to cred.provider.raw))
         try {
