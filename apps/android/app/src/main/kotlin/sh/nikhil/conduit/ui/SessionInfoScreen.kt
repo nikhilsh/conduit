@@ -98,6 +98,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     val conversationLog by store.conversationLog.collectAsState()
     val displayNames by store.displayNames.collectAsState()
     val endpoint by store.endpoint.collectAsState()
+    val savedServers by store.savedServers.collectAsState()
     val status = statuses[session.id]
     val events = conversationLog[session.id].orEmpty()
     val stats = remember(events) { SessionStats.compute(events) }
@@ -442,7 +443,10 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                         Hairline(neon)
                         InfoDetailRow(
                             "Box",
-                            endpoint.displayHost.takeIf { it.isNotBlank() }?.let { "$it · broker" } ?: "—",
+                            endpoint.displayHost.takeIf { it.isNotBlank() }?.let { host ->
+                                val name = savedServers.firstOrNull { it.endpoint == endpoint }?.name?.takeIf { it.isNotBlank() }
+                                if (name != null) "$name ($host)" else "$host · broker"
+                            } ?: "—",
                             neon,
                         )
                         Hairline(neon)

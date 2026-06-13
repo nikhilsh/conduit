@@ -137,7 +137,12 @@ fun OnboardingScreen(
         Column(modifier = Modifier.fillMaxSize()) {
             OnbTopBar(neon = neon, step = step, guide = guide,
                 onBack = { if (step in 1..2) go(step - 1) },
-                onGuide = { appearance.setOnboardingGuide(it) })
+                onGuide = { appearance.setOnboardingGuide(it) },
+                onClose = {
+                    Telemetry.breadcrumb("onboarding", "dismissed",
+                        mapOf("step" to step.toString(), "entry" to entry.name))
+                    onFinish()
+                })
             if (step < FeatureFlags.Step.DONE) OnbProgress(neon, step)
 
             when (step) {
@@ -166,7 +171,7 @@ private val onbGrad: @Composable (NeonTheme) -> Brush = { neon ->
 }
 
 @Composable
-private fun OnbTopBar(neon: NeonTheme, step: Int, guide: Boolean, onBack: () -> Unit, onGuide: (Boolean) -> Unit) {
+private fun OnbTopBar(neon: NeonTheme, step: Int, guide: Boolean, onBack: () -> Unit, onGuide: (Boolean) -> Unit, onClose: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -203,7 +208,12 @@ private fun OnbTopBar(neon: NeonTheme, step: Int, guide: Boolean, onBack: () -> 
             }
         }
         Spacer(Modifier.weight(1f))
-        Spacer(Modifier.size(34.dp))
+        Box(
+            modifier = Modifier.size(34.dp).clip(CircleShape)
+                .background(neon.surface).border(1.dp, neon.border, CircleShape)
+                .clickable(onClick = onClose),
+            contentAlignment = Alignment.Center,
+        ) { Text("×", color = neon.textDim, fontFamily = neon.mono, fontSize = 18.sp) }
     }
 }
 
