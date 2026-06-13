@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.153
+
+Stage-2 of the accounts work: per-box account status + honest per-box sign-out, replacing the confusing "Manage" affordances. iOS PR #567, Android PR #568. App-only (no broker redeploy).
+
+- **1 · Per-box account status (two-line rows)** — each provider row in the Agent-accounts sheet (and the Settings account rows) now shows your phone sign-in status on line 1 and the CONNECTED box's status on line 2 ("Ready on <box>" / "Not on <box> · auto-pushes on connect"). The misleading device-global "signed in" label is gone. Verify: connect a box without Claude → the row shows "Not on <box>"; after auto-propagate/sign-in it flips to "Ready on <box>". [iOS+Android, on-device]
+- **2 · ⋯ menu replaces the "Manage" popover** — the per-provider trailing is now a single ⋯ / overflow menu (Re-authenticate · Remove from phone · Remove pushed credential from this box). The old speech-bubble "Manage" popover in Settings is gone. Verify: tap ⋯ on a provider → the three actions appear and read clearly. [iOS+Android, on-device]
+- **3 · Per-box sign-out (honest wording)** — "Remove pushed credential from this box" calls the broker clear endpoint and removes ONLY the app-pushed credential; it deliberately does NOT revoke the box owner's own shell login (~/.claude/.credentials.json). Verify: on a box with a pushed cred, use "Remove pushed credential from this box" → line 2 flips to "Not on <box>"; the box owner's own CLI login is untouched. [iOS+Android+broker, on-device]
+
+---
+
 ## v0.0.152
 
 Per-box credential auto-propagate — the fix for "Claude says signed in but a session on another box returns 401". Broker PR #563 (redeployed v0.0.152, endpoints live), iOS PR #565, Android PR #564. The broker also gained a per-box credential CLEAR endpoint (`POST /api/agent/credentials/clear`) used by the upcoming Stage-2 sign-out UI. Stage-2 accounts UI (per-box status + sign-out) is a separate follow-up.
