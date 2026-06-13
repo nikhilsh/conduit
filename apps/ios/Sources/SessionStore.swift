@@ -863,6 +863,17 @@ final class SessionStore {
     /// of the aggregated harness state.
     var connectionHealthBySession: [String: ConnectionHealth] = [:]
 
+    /// Per-session agent-auth-failure flag, keyed by session id. Set when a
+    /// session's chat surfaces the claude/codex 401 ("API Error: 401" /
+    /// "Invalid authentication credentials" / "Failed to authenticate") as
+    /// plain assistant/result text — the broker emits no typed signal this
+    /// round (docs/PLAN-credential-propagate.md §D; the typed
+    /// `agent_auth_required` view_event is a deferred follow-up). The value
+    /// is the provider attributed to the session so the chat banner can
+    /// offer "Sign in on this box". Cleared when a fresh user turn is sent
+    /// (see `sendChat`) so a successful retry drops the affordance.
+    var agentAuthFailure: [String: OAuthProvider] = [:]
+
     /// Set when a fresh pairing (deep link, QR scan, etc.) completes;
     /// drives the `AgentPickerSheet` so the user lands directly on
     /// "pick Claude or Codex" instead of an empty session list. UI
@@ -1096,6 +1107,15 @@ final class SessionStore {
                 Telemetry.breadcrumb("onboarding", "endpoint_connected",
                     data: ["host": self.endpoint.displayHost,
                            "first_server": "\(self.savedServers.count == 1)"])
+                // Auto-propagate device-stored agent credentials to THIS box
+                // over HTTP so a box added after sign-in (or one that lost its
+                // `.enc`) gets the credential before its first session — the
+                // "signed in but 401 on another box" fix
+                // (docs/PLAN-credential-propagate.md §A). Best-effort; the
+                // helper never throws. This single-box path also covers
+                // reconnect() and selectSavedServer(), which both route here.
+                let connectedEndpoint = self.endpoint
+                Task { await self.propagateStoredAgentCredentials(to: connectedEndpoint) }
                 self.refreshSessions()
                 // Connection is live again — re-deliver any messages queued
                 // while we were disconnected (reconnect window / backgrounded
@@ -1224,6 +1244,12 @@ final class SessionStore {
             do {
                 try await newClient.connect(delegate: newDelegate)
                 conn.harness = .linked
+                // Auto-propagate device-stored agent credentials to THIS box
+                // (using its own endpoint/token) so a freshly-connected box
+                // gets the credential before its first session — §A of
+                // docs/PLAN-credential-propagate.md. Best-effort; never blocks
+                // or fails the connect.
+                await self.propagateStoredAgentCredentials(to: server.endpoint)
                 self.refreshSessions()
                 // Reattach this box's genuinely-running sessions so they stream
                 // live (the broker only replays over the WS on join).
@@ -2870,6 +2896,10 @@ final class SessionStore {
     }
 
     func sendChat(sessionID: String, message: String) {
+        // §D: a fresh user turn is the retry — drop any standing agent-auth
+        // failure flag so the "Sign in on this box" banner clears. If the
+        // retry 401s again, the next assistant/result line re-sets it.
+        if agentAuthFailure[sessionID] != nil { agentAuthFailure[sessionID] = nil }
         // Slash-command routing: intercept recognised `/`-commands before
         // they reach the agent. Pass-through commands (Claude only) fall
         // through to the normal send below; app-handled ones are handled
@@ -3324,6 +3354,91 @@ final class SessionStore {
         )
     }
 
+    /// Push every locally-stored agent credential to a specific box over
+    /// HTTP (`POST /api/agent/credentials`), independent of any live
+    /// session. This is the session-less analogue of
+    /// `replayStoredAgentCredentials()` (which rides the live WS via
+    /// `sendAgentCredentials`): the connect paths call it so a box that was
+    /// added AFTER sign-in still receives the device-global credential
+    /// before its first session — the "signed in but 401 on another box"
+    /// bug (docs/PLAN-credential-propagate.md §A).
+    ///
+    /// Best-effort per provider: a missing local credential, an encode
+    /// failure, a network error, or a non-2xx (notably `503` from an old
+    /// broker without the credential store) just breadcrumbs and moves on.
+    /// Never throws — callers fire it from connect closures and must not
+    /// have a propagate failure break the connect.
+    ///
+    /// The broker stores the `credential` bytes verbatim, so the body's
+    /// `credential` field MUST be a real JSON OBJECT (the native blob),
+    /// NOT a stringified blob — a quoted string would re-break auth. We
+    /// reuse `encodeCredentialAsJSONString` (the canonical blob encoder)
+    /// and re-parse its output via `JSONSerialization` to inject it as a
+    /// JSON value.
+    func propagateStoredAgentCredentials(to endpoint: StoredEndpoint) async {
+        guard let base = endpoint.httpBaseURL else { return }
+        for provider in [OAuthProvider.openai, .anthropic] {
+            guard let credential = OAuthCredentialStore.load(provider: provider) else { continue }
+            guard let jsonString = try? Self.encodeCredentialAsJSONString(credential),
+                  let blobData = jsonString.data(using: .utf8),
+                  // Re-parse so `credential` lands as a nested JSON object,
+                  // not a quoted string (the load-bearing correctness point).
+                  let blobObject = try? JSONSerialization.jsonObject(with: blobData)
+            else {
+                Telemetry.breadcrumb("agent_creds", "propagate encode skipped", data: [
+                    "host": endpoint.displayHost,
+                    "provider": provider.rawValue,
+                ])
+                continue
+            }
+            let body: [String: Any] = [
+                "provider": provider.rawValue,
+                "kind": "oauth",
+                "credential": blobObject,
+            ]
+            guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { continue }
+
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/agent/credentials"
+            guard let url = components?.url else { continue }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = bodyData
+
+            Telemetry.breadcrumb("agent_creds", "propagate", data: [
+                "host": endpoint.displayHost,
+                "provider": provider.rawValue,
+            ])
+            guard let (_, resp) = try? await URLSession.shared.data(for: req),
+                  let http = resp as? HTTPURLResponse
+            else {
+                Telemetry.breadcrumb("agent_creds", "propagate network error", data: [
+                    "host": endpoint.displayHost,
+                    "provider": provider.rawValue,
+                ])
+                continue
+            }
+            if (200..<300).contains(http.statusCode) {
+                Telemetry.breadcrumb("agent_creds", "propagate stored", data: [
+                    "host": endpoint.displayHost,
+                    "provider": provider.rawValue,
+                    "status": "\(http.statusCode)",
+                ])
+            } else {
+                // 503 = old broker (no credential store); any other non-2xx is
+                // a best-effort miss. Breadcrumb + continue, never surface.
+                Telemetry.breadcrumb("agent_creds", "propagate non-2xx", data: [
+                    "host": endpoint.displayHost,
+                    "provider": provider.rawValue,
+                    "status": "\(http.statusCode)",
+                ])
+            }
+        }
+    }
+
     // MARK: - Agent OAuth login v2 (outbound)
     //
     // Forward the three v2 login control frames through the Rust core's
@@ -3653,6 +3768,17 @@ final class SessionStore {
             }
         }
         chatLog[sessionID, default: []].append(event)
+        // §D 401 handling (string-match fallback): the claude/codex auth
+        // failure currently arrives as plain assistant/result chat text with
+        // no typed signal (broker claudechat.go; the typed
+        // `agent_auth_required` view_event is a deferred follow-up — see
+        // docs/PLAN-credential-propagate.md §D + "Follow-up"). Detect it here
+        // and auto-recover by re-propagating the device credential to this
+        // session's box, plus flagging the session so the chat surfaces a
+        // "Sign in on this box" affordance instead of a bare error.
+        if event.role == "assistant" || event.role == "result" {
+            detectAgentAuthFailure(sessionID: sessionID, text: event.content)
+        }
         // A fresh user/assistant turn invalidates the previous turn's AI
         // chips — clear them so stale suggestions don't linger. The
         // broker emits the new set after the assistant turn completes.
@@ -3680,6 +3806,85 @@ final class SessionStore {
                 .id ?? "chat-\(sessionID)-\(event.ts)"
             coordinator.update(itemID: id, content: event.content, isComplete: true)
         }
+    }
+
+    /// §D string-match 401 detection. Narrow + provider-attributed to avoid
+    /// false positives on benign chat text that merely mentions "401". On a
+    /// hit we (1) flag the session so the chat shows a "Sign in on this box"
+    /// affordance, and (2) best-effort re-propagate the device credential to
+    /// the session's box over HTTP (the box may simply be missing the
+    /// credential — re-pushing it lets a retry succeed without user action).
+    /// If no device credential exists, the flag stands and the banner routes
+    /// the user to sign in. The typed-event version is a deferred follow-up.
+    private func detectAgentAuthFailure(sessionID: String, text: String) {
+        // Require BOTH a 401/auth marker AND the live "authenticate" framing so
+        // a stray "HTTP 401" in legit chat content doesn't trip it. The broker
+        // surfaces the claude failure as e.g.
+        // "Failed to authenticate. API Error: 401 ... Invalid authentication credentials".
+        let lower = text.lowercased()
+        let hasAuthFailure =
+            (lower.contains("api error: 401") && lower.contains("authenticat"))
+            || lower.contains("invalid authentication credentials")
+            || lower.contains("failed to authenticate")
+        guard hasAuthFailure else { return }
+
+        let provider = agentProvider(forSessionID: sessionID)
+        // Idempotent: don't re-fire propagate/telemetry every time the same
+        // failing transcript line re-ingests (e.g. on a conversation refresh).
+        if agentAuthFailure[sessionID] == provider { return }
+        agentAuthFailure[sessionID] = provider
+
+        let endpoint = endpointForSession(sessionID)
+        Telemetry.breadcrumb("agent_creds", "401 detected in chat", data: [
+            "session": sessionID,
+            "provider": provider.rawValue,
+            "host": endpoint.displayHost,
+        ])
+        Telemetry.capture(
+            error: NSError(
+                domain: "Conduit",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "agent auth 401 surfaced in chat"]
+            ),
+            message: "iOS agent auth 401 (string-match)",
+            tags: ["surface": "ios", "phase": "agent_auth_401", "provider": provider.rawValue],
+            extras: ["session": sessionID, "host": endpoint.displayHost]
+        )
+        // Auto-recover: re-push the device credential to this session's box.
+        // Best-effort — if there's no local credential, the flagged banner
+        // sends the user to sign in instead.
+        if OAuthCredentialStore.load(provider: provider) != nil {
+            Task { await self.propagateStoredAgentCredentials(to: endpoint) }
+        }
+    }
+
+    /// Best-effort provider attribution for a session, used by §D 401
+    /// handling. Prefers the broker descriptor's `loginProvider`; falls back
+    /// to the assistant name (claude -> anthropic, codex -> openai), and
+    /// defaults to anthropic when the assistant is unknown.
+    private func agentProvider(forSessionID sessionID: String) -> OAuthProvider {
+        let assistant = (sessions.first(where: { $0.id == sessionID })?.assistant ?? "").lowercased()
+        if let raw = agentDescriptors[assistant]?.loginProvider,
+           let provider = OAuthProvider(loginProvider: raw) {
+            return provider
+        }
+        switch assistant {
+        case "codex": return .openai
+        case "claude": return .anthropic
+        default: return .anthropic
+        }
+    }
+
+    /// The endpoint that OWNS a session: the stamped box's endpoint on the
+    /// multi-box path, else the single global `endpoint`. Mirrors the routing
+    /// invariant in `clientForSession`.
+    private func endpointForSession(_ sessionID: String) -> StoredEndpoint {
+        if multiBoxEnabled,
+           let boxID = sessionBox[sessionID],
+           let conn = boxConnections[boxID] {
+            return conn.endpoint
+        }
+        return endpoint
     }
 
     /// Synchronous refresh — used where the caller reads `conversationLog`

@@ -86,6 +86,9 @@ extension ConduitUI {
 
         @State private var draft: String = ""
         @State private var showVoiceDictation = false
+        /// §D 401 handling: present the agent login sheet when the user taps
+        /// "Sign in on this box" on the agent-auth-failure banner.
+        @State private var showAgentLogin = false
         /// How many of the most-recent transcript rows to render. Long chats
         /// were laggy because every row (markdown / tool parse) was laid out
         /// each render; we cap to the tail and let "Load earlier" widen it.
@@ -202,6 +205,14 @@ extension ConduitUI {
                         showVoiceDictation = false
                         composerFocused = true
                     }, agent: session.assistant, sessionName: store.displayName(for: session))
+                }
+                // §D 401 handling: agent sign-in sheet, opened from the
+                // agent-auth-failure banner. Preselect the session's provider
+                // so the user lands on the right login flow.
+                .sheet(isPresented: $showAgentLogin) {
+                    ConduitUI.AgentLoginSheet(
+                        autoStartProvider: store.agentAuthFailure[session.id]
+                    )
                 }
                 // chat-shell-v2 (§2): resolve the arm once at the shell and
                 // inject it for the row tree to read. Log the exposure event
@@ -627,6 +638,14 @@ extension ConduitUI {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if !isReadOnly {
                         VStack(spacing: 0) {
+                            // §D 401 handling: when this session's chat surfaced
+                            // an agent auth failure, show a clear "sign in on
+                            // this box" affordance above the composer instead of
+                            // leaving the bare 401 error as the last word. The
+                            // store has already best-effort re-propagated any
+                            // device credential; this banner covers the case
+                            // where the box genuinely needs a sign-in.
+                            agentAuthBanner
                             // Device feedback v0.0.49 (round 2) #1: the
                             // quick-reply chips float as translucent glass
                             // capsules over the chat (overlay-style, like the
@@ -1063,6 +1082,47 @@ extension ConduitUI {
                 // opaque-looking row because the inset cluster painted an
                 // opaque surface behind it; that backing now lives on the
                 // composer alone.
+            }
+        }
+
+        /// §D 401 handling: a clear "sign in on this box" affordance shown
+        /// above the composer when this session's chat surfaced an agent auth
+        /// failure (the store's `agentAuthFailure` flag). Tapping it opens the
+        /// AgentLoginSheet preselected to the failing provider. The store has
+        /// already best-effort re-pushed any device-stored credential, so a
+        /// plain retry may already work — this covers the case where the box
+        /// genuinely has no credential.
+        @ViewBuilder
+        private var agentAuthBanner: some View {
+            if let provider = store.agentAuthFailure[session.id] {
+                let providerLabel = provider == .anthropic ? "Claude" : "Codex"
+                Button {
+                    showAgentLogin = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.shield")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Sign in to \(providerLabel) on this box")
+                                .font(neon.sans(13).weight(.semibold))
+                            Text("This box rejected the agent credential (401). Tap to sign in.")
+                                .font(neon.sans(11))
+                                .foregroundStyle(neon.textDim)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(neon.sans(11).weight(.semibold))
+                            .foregroundStyle(neon.textDim)
+                    }
+                    .foregroundStyle(neon.accent)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .conduitGlassCapsule()
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Sign in to the agent on this box")
             }
         }
 
