@@ -21,14 +21,16 @@ package ws
 //	  }
 //	}
 //
-// Identity decision: signed_in is box-global ("any creds available for
-// this provider on the box") rather than per-bearer. Rationale: the
-// broker today is single-operator; a separate per-bearer credential
-// store path does exist (credentials.Store) but most deployments don't
-// use it, and the host-login credential files are the primary source of
-// truth. For multi-tenant support this would need to become per-bearer
-// via the credentials.Store.Has path — the comment in agentReadiness
-// marks the extension point.
+// Identity decision: signed_in is true when EITHER the box-global host-login
+// credential file exists OR the per-identity pushed-credential store has the
+// provider (credentials.Store.Has). The store is consulted so an
+// auto-propagated box — one the app pushed a credential to over
+// POST /api/agent/credentials with no host login — correctly reports
+// signed_in=true instead of the misleading false that caused a 401 when a
+// session was started there. The store is keyed by the broker bearer
+// (single-operator); for true multi-tenant support it would key per-request
+// bearer, but the wiring point (the credStore passed into buildReadiness) is
+// already here.
 
 import (
 	"encoding/base64"
@@ -87,10 +89,25 @@ type AgentReadiness struct {
 	AuthExpiresInS *int64 `json:"auth_expires_in_s"` // null = API-key or no-expiry
 }
 
+// credStore is the subset of *credentials.Store readiness consults: a
+// presence check for an app-pushed credential. Narrow interface so tests
+// can inject a stub without a real on-disk store. A nil credStore is
+// treated as "no pushed credentials" (readiness falls back to host-login
+// detection only).
+type credStore interface {
+	Has(provider string) bool
+}
+
 // buildReadiness constructs the readiness block for the current request.
 // Box-global bits (node/tmux/cli) are served from a ~30s cache; per-agent
-// sign-in state is always computed fresh (cheap file reads).
-func buildReadiness(mgr *session.Manager, reg registryLister) ReadinessBlock {
+// sign-in state is always computed fresh (cheap file reads + a store stat).
+//
+// `creds` is the per-identity pushed-credential store (nil-safe). When a
+// provider has an app-pushed credential, signed_in is reported true even
+// when no host-login file exists — this is what makes an auto-propagated
+// box (e.g. a freshly-connected SSH box) correctly show signed-in instead
+// of the misleading signed_in:false that bit the Hostinger 401 case.
+func buildReadiness(mgr *session.Manager, reg registryLister, creds credStore) ReadinessBlock {
 	now := time.Now()
 
 	readinessCache.Lock()
@@ -131,7 +148,7 @@ func buildReadiness(mgr *session.Manager, reg registryLister) ReadinessBlock {
 			continue
 		}
 		ar := AgentReadiness{CLIPresent: cliSnap[name]}
-		ar.SignedIn, ar.AuthExpiresInS = agentSignInState(a)
+		ar.SignedIn, ar.AuthExpiresInS = agentSignInState(a, creds)
 		agentMap[name] = ar
 	}
 
@@ -162,10 +179,14 @@ type registryLister interface {
 //     Expired (or no expiry field) → signedIn=true, expiresInS=0.
 //  3. No file → signedIn=false, expiresInS=nil.
 //
-// Identity: box-global (host-HOME credential file). Per-bearer credential
-// store (credentials.Store) is NOT checked here — extension point for
-// future multi-tenant support.
-func agentSignInState(a agents.Adapter) (signedIn bool, expiresInS *int64) {
+// Identity: the host-HOME credential file is box-global; the pushed-cred
+// store (`creds`) is per-bearer-identity. Both count as signed-in.
+//
+// Priority is host-file first (it carries a parseable expiry) and pushed
+// store second: a box that received an auto-propagated credential but has
+// no host login still reports signed_in=true (expiresInS=nil — we don't
+// decrypt the blob here just to surface an expiry). `creds` may be nil.
+func agentSignInState(a agents.Adapter, creds credStore) (signedIn bool, expiresInS *int64) {
 	// 1. API-key env var → always signed-in, no expiry.
 	for _, env := range a.EnvPassthrough {
 		if env == "ANTHROPIC_API_KEY" || env == "OPENAI_API_KEY" {
@@ -179,6 +200,14 @@ func agentSignInState(a agents.Adapter) (signedIn bool, expiresInS *int64) {
 	provider := a.LoginProvider
 	if provider == "" {
 		return false, nil
+	}
+	// 2a. App-pushed credential present for this identity → signed-in.
+	//     Checked before the host-file read so an auto-propagated box with
+	//     no host login still reports signed_in=true. Only providers the
+	//     store knows (openai/anthropic) can be Has()-true; opencode and
+	//     any other LoginProvider fall through to the host-file path.
+	if creds != nil && creds.Has(provider) {
+		return true, nil
 	}
 	path := hostCredFile(provider)
 	if path == "" {

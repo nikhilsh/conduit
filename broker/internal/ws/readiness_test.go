@@ -180,7 +180,7 @@ func TestAgentSignInState(t *testing.T) {
 			}
 			a := fakeAdapter("test-agent", tc.provider, envPT...)
 
-			gotSignedIn, gotExpiry := agentSignInState(a)
+			gotSignedIn, gotExpiry := agentSignInState(a, nil)
 			if gotSignedIn != tc.wantSignedIn {
 				t.Errorf("signed_in = %v, want %v", gotSignedIn, tc.wantSignedIn)
 			}
@@ -201,6 +201,47 @@ func TestAgentSignInState(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// stubCredStore is a credStore that reports presence for a fixed set of
+// providers. Lets readiness tests exercise the pushed-credential path
+// without a real on-disk store.
+type stubCredStore struct{ has map[string]bool }
+
+func (s stubCredStore) Has(provider string) bool { return s.has[provider] }
+
+// TestAgentSignInStatePushedCred verifies that an app-pushed credential
+// (credStore.Has==true) reports signed_in=true even with NO host login
+// file present, and that a nil store falls back to host-file detection.
+// This is the readiness half of the Hostinger 401 fix: an auto-propagated
+// box must stop reporting signed_in=false.
+func TestAgentSignInStatePushedCred(t *testing.T) {
+	// Isolate host HOME to an empty dir so there's no host login file.
+	t.Setenv("CONDUIT_HOST_HOME", t.TempDir())
+
+	a := fakeAdapter("claude", "anthropic")
+
+	// No store, no host file → signed_in=false.
+	if got, _ := agentSignInState(a, nil); got {
+		t.Errorf("nil store + no host file: signed_in=true, want false")
+	}
+
+	// Store reports the pushed cred → signed_in=true, expiry nil
+	// (we don't decrypt the blob to surface expiry here).
+	store := stubCredStore{has: map[string]bool{"anthropic": true}}
+	signedIn, exp := agentSignInState(a, store)
+	if !signedIn {
+		t.Errorf("pushed cred present: signed_in=false, want true")
+	}
+	if exp != nil {
+		t.Errorf("pushed cred present: auth_expires_in_s=%v, want nil", *exp)
+	}
+
+	// Store reports a DIFFERENT provider → no effect for anthropic.
+	other := stubCredStore{has: map[string]bool{"openai": true}}
+	if got, _ := agentSignInState(a, other); got {
+		t.Errorf("only openai pushed: anthropic signed_in=true, want false")
 	}
 }
 
