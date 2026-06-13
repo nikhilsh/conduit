@@ -1447,6 +1447,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 Telemetry.breadcrumb("onboarding", "endpoint_connected",
                     mapOf("host" to _endpoint.value.displayHost,
                           "first_server" to (_savedServers.value.size == 1).toString()))
+                // Auto-propagate stored agent credentials to this box. Boxes
+                // connected after sign-in (esp. SSH boxes) never received the
+                // in-session push, so a claude/codex session there 401s. This
+                // is the single chokepoint: connect()/reconnect()/
+                // selectSavedServer()/connectViaSSH()/attemptSshSelfHeal() all
+                // land here. Fire-and-forget; never fails the connect.
+                viewModelScope.launch { propagateStoredAgentCredentials(e) }
                 refreshSessions()
                 // Connection is live again — re-deliver any messages queued
                 // while disconnected (reconnect window / backgrounded
@@ -2209,6 +2216,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
                 val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode, fastMode) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
+                // Belt-and-suspenders parity with iOS: also propagate stored
+                // agent credentials to this box on session create, so a box
+                // that became ready without flowing through connect()'s push
+                // still gets them. Fire-and-forget; never fails session create.
+                viewModelScope.launch { propagateStoredAgentCredentials(_endpoint.value) }
                 // Funnel: first-ever session creation (no prior sessions on any launch).
                 if (_sessions.value.isEmpty()) {
                     Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_SESSION_CREATED,
