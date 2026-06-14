@@ -313,6 +313,7 @@ struct ConduitApp: App {
         let options = pending?.pendingOptions ?? []
         let reply = Self.permissionReply(decision: decision, options: options)
         store.sendChat(sessionID: sessionID, message: reply)
+        store.resolvePendingInput(sessionID: sessionID)
         Telemetry.breadcrumb(
             "live_activity", "permission sent",
             data: ["session": sessionID, "decision": decision.rawValue, "reply": reply]

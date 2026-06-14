@@ -538,7 +538,8 @@ extension ConduitUI {
                                         isContinuation: continuation(in: rows, at: idx, role: event.role),
                                         sessionID: session.id,
                                         pendingAnswered: answeredPendingIDs.contains(event.id)
-                                            || answeredPendingFingerprints.contains(pendingFingerprint(event)),
+                                            || answeredPendingFingerprints.contains(pendingFingerprint(event))
+                                            || store.resolvedPendingInputIDs.contains(event.id),
                                         answeredText: answeredPendingText[pendingFingerprint(event)],
                                         streamRevision: streamRevision(for: event.id),
                                         appearanceRevision: appearanceRevision,

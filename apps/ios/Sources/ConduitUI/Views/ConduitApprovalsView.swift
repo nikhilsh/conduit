@@ -541,6 +541,7 @@ extension ConduitUI {
                             Telemetry.breadcrumb("approvals", "resolve: resolved",
                                 data: ["session": sessionID, "decision": decision,
                                        "auto": "\(autoApproved)"])
+                            store.resolvePendingInput(sessionID: sessionID)
                             cardState[sessionID] = .resolved(msg)
                         case 404:
                             Telemetry.breadcrumb("approvals", "resolve: 404 nothing pending",

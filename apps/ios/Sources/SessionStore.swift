@@ -856,6 +856,14 @@ final class SessionStore {
     /// sends or a fresh assistant turn arrives.
     var quickReplies: [String: AIQuickReplies] = [:]
 
+    /// IDs of `pending_input` conversation items that have been resolved via
+    /// an out-of-band path (ConduitApprovalsView, lock-screen intent) and
+    /// should render as ANSWERED in the inline chat card immediately —
+    /// without waiting for a broker echo that may arrive seconds later.
+    /// The ChatView merges this into its local `answeredPendingIDs` check.
+    /// Cleared lazily when a WS echo replaces the item with status "done".
+    var resolvedPendingInputIDs: Set<String> = []
+
     /// Live subagent roster per session. Populated by `view:"agents"` view_events
     /// emitted by the broker on every task_started/task_progress/task_notification
     /// frame. Full snapshot — newest arrived last. Displayed in the Information
@@ -943,6 +951,14 @@ final class SessionStore {
 
     private var client: ConduitClient?
     private var delegate: StoreDelegate?
+
+    /// Monotonic counter incremented each time a new ConduitClient is created
+    /// in `connect()`. StoreDelegate stamps itself with the value at creation
+    /// time; any callback whose stamp no longer matches the live counter is from
+    /// a stale old client and is silently dropped. This prevents the old client's
+    /// queued `onDisconnected` (fired AFTER `connect()` created a new client and
+    /// reached `.linked`) from clobbering the new harness state with `.failed`.
+    private var clientGeneration: UInt64 = 0
 
     // MARK: - Concurrent multi-box registry (flag `concurrentMultiBox`, OFF)
 
@@ -1109,8 +1125,10 @@ final class SessionStore {
             return
         }
         harness = .connecting
+        clientGeneration &+= 1
+        let generation = clientGeneration
         let newClient = ConduitClient(endpoint: endpoint.url, bearerToken: endpoint.token)
-        let newDelegate = StoreDelegate(store: self)
+        let newDelegate = StoreDelegate(store: self, generation: generation)
         self.client = newClient
         self.delegate = newDelegate
         Task {
@@ -2922,6 +2940,22 @@ final class SessionStore {
         let items = conversationLog[sessionID] ?? []
         guard let last = items.last(where: { $0.role.lowercased() != "user" }) else { return false }
         return last.kind.lowercased() == "pending_input"
+    }
+
+    /// Optimistically mark the last unanswered `pending_input` item for a
+    /// session as resolved so the inline chat card flips to "ANSWERED" immediately
+    /// on decision success, without waiting for the broker's WS echo. Called from
+    /// every out-of-band decision path (ConduitApprovalsView, lock-screen intent).
+    /// Idempotent; no-op when no unresolved pending item exists.
+    func resolvePendingInput(sessionID: String) {
+        let items = conversationLog[sessionID] ?? []
+        guard let item = items.last(where: {
+            $0.kind.lowercased() == "pending_input"
+                && !resolvedPendingInputIDs.contains($0.id)
+        }) else { return }
+        resolvedPendingInputIDs.insert(item.id)
+        Telemetry.breadcrumb("approvals", "pending_input optimistically resolved",
+            data: ["session": sessionID, "item_id": item.id])
     }
 
     /// Deliver an elicitation answer DIRECTLY, bypassing the `isTurnActive`
@@ -5632,51 +5666,96 @@ final class StoreDelegate: ConduitDelegate {
     /// box-scoped `onDisconnected` updates only that box's
     /// `BoxConnection.harness` instead of clobbering the global harness.
     private let boxID: String?
-    init(store: SessionStore, boxID: String? = nil) {
+    /// Generation counter stamped at creation time. Any callback whose
+    /// generation no longer matches `store.clientGeneration` belongs to a
+    /// stale old ConduitClient (e.g. the one being torn down by `disconnect()`
+    /// during a box switch) and is dropped so it cannot clobber state that the
+    /// new client has already set (e.g. `.linked` → `.failed` flicker).
+    private let generation: UInt64
+    init(store: SessionStore, boxID: String? = nil, generation: UInt64 = 0) {
         self.store = store
         self.boxID = boxID
+        self.generation = generation
+    }
+
+    /// Returns true when this delegate's callbacks should still be delivered.
+    /// False means a new client has already been created and we are a ghost.
+    private func isCurrent(store: SessionStore) -> Bool {
+        // boxID delegates are scoped to their box, not the global generation.
+        guard boxID == nil else { return true }
+        return store.clientGeneration == generation
     }
 
     func onPtyData(sessionId: String, data: Data) {
-        Task { @MainActor in self.store?.ingestPtyData(sessionId, data) }
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestPtyData(sessionId, data)
+        }
     }
     func onChatEvent(sessionId: String, event: ChatEvent) {
-        Task { @MainActor in self.store?.ingestChat(sessionId, event) }
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestChat(sessionId, event)
+        }
     }
     func onPreviewReady(sessionId: String, preview: PreviewInfo) {
-        Task { @MainActor in self.store?.ingestPreview(sessionId, preview) }
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestPreview(sessionId, preview)
+        }
     }
     func onStatus(status: SessionStatus) {
-        Task { @MainActor in self.store?.ingestStatus(status) }
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestStatus(status)
+        }
     }
     func onSnapshot(sessionId: String, gunzipped: Data) {
-        Task { @MainActor in self.store?.ingestSnapshot(sessionId, gunzipped) }
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestSnapshot(sessionId, gunzipped)
+        }
     }
     func onExit(sessionId: String, code: Int32) {
-        Task { @MainActor in self.store?.ingestExit(sessionId, code) }
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestExit(sessionId, code)
+        }
     }
     func onDisconnected(reason: String) {
         Task { @MainActor in
+            guard let s = self.store else { return }
             if let boxID = self.boxID {
-                self.store?.ingestBoxDisconnected(boxID: boxID, reason: reason)
+                s.ingestBoxDisconnected(boxID: boxID, reason: reason)
             } else {
-                self.store?.ingestDisconnected(reason)
+                guard self.isCurrent(store: s) else {
+                    Telemetry.breadcrumb("connect", "stale client onDisconnected dropped",
+                        data: ["generation": "\(self.generation)",
+                               "current": "\(s.clientGeneration)",
+                               "reason": reason])
+                    return
+                }
+                s.ingestDisconnected(reason)
             }
         }
     }
     func onConnectionHealth(sessionId: String, health: ConnectionHealth) {
-        Task { @MainActor in self.store?.ingestConnectionHealth(sessionId, health) }
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestConnectionHealth(sessionId, health)
+        }
     }
     func onViewEvent(sessionId: String, kind: String, payload: [String: String]) {
         Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
             if kind == "quick_replies" {
-                self.store?.ingestQuickReplies(sessionId, payload: payload)
+                s.ingestQuickReplies(sessionId, payload: payload)
             } else if kind == "session_title" {
-                self.store?.ingestSessionTitle(sessionId, payload: payload)
+                s.ingestSessionTitle(sessionId, payload: payload)
             } else if kind == "agents" {
-                self.store?.ingestAgents(sessionId, payload: payload)
+                s.ingestAgents(sessionId, payload: payload)
             } else {
-                self.store?.routeAgentLoginViewEvent(kind: kind, payload: payload)
+                s.routeAgentLoginViewEvent(kind: kind, payload: payload)
             }
         }
     }
