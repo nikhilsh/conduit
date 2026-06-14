@@ -429,6 +429,11 @@ fun ChatPage(
     // reconnect) still renders locked / "Sent" rather than showing a duplicate
     // interactive card. Mirror of iOS `answeredPendingFingerprints`.
     var answeredPendingFingerprints by remember { mutableStateOf(setOf<String>()) }
+    // IDs resolved via out-of-band approval paths (ApprovalsScreen, push
+    // notification action). Folds in immediately so the inline card flips
+    // to answered without waiting for the broker echo. Mirror of iOS
+    // `SessionStore.resolvedPendingInputIDs`.
+    val resolvedPendingInputIDs by store.resolvedPendingInputIDs.collectAsState()
     val listState = rememberLazyListState()
     val pinnedContextsMap by store.pinnedContexts.collectAsState()
     val pinnedContexts = pinnedContextsMap[session.id] ?: emptyList()
@@ -738,7 +743,8 @@ fun ChatPage(
                                     agentAccent = agentAccent,
                                     isContinuation = previousRole?.lowercase() == ev.role.lowercase(),
                                     pendingAnswered = ev.id in answeredPendingIds
-                                        || pendingContentFingerprint(ev) in answeredPendingFingerprints,
+                                        || pendingContentFingerprint(ev) in answeredPendingFingerprints
+                                        || ev.id in resolvedPendingInputIDs,
                                     // A pending-input answer is delivered as the user's
                                     // next chat message — the broker matches it to the
                                     // blocked AskUserQuestion control request. Mirror of
