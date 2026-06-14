@@ -55,6 +55,17 @@ public final class TurnLiveActivityController {
     /// so the controller always has the current base URL + bearer token.
     var registrationEndpoint: StoredEndpoint?
 
+    // MARK: - Push-to-start state (§1.1, PLAN-push-to-start-la.md)
+
+    /// The last push-to-start token hex received from ActivityKit. Stored
+    /// so `PushNotificationManager` can re-register it when the endpoint
+    /// set changes (box switch, box add).
+    private(set) var lastPushToStartTokenHex: String?
+
+    /// Lifetime task that drains `Activity<TurnActivityAttributes>.pushToStartTokenUpdates`.
+    /// Cancelled and restarted by `startObservingPushToStartToken()`.
+    private var pushToStartTask: Task<Void, Never>?
+
     private init() {}
 
     /// Drive the controller from a `SessionStore` snapshot. Idempotent —
@@ -334,6 +345,12 @@ public final class TurnLiveActivityController {
     /// activities from the previous run are ORPHANS — nothing will ever
     /// update or end them, and they pile up on the lock screen showing
     /// hours-old "running"/"done" states (device feedback, round 4).
+    ///
+    /// Launch sequencing (§1.6, PLAN-push-to-start-la.md):
+    ///   `adoptPushStartedActivities()` → `reapOrphanActivities()` → `bridge.start()`
+    /// Adoption must run first so push-started activities populate
+    /// `activeActivityIDs` before reap kills them.
+    ///
     /// Called at launch and from `refreshAll()` (every scene change);
     /// live turns re-request their activity as events flow, so reaping
     /// is always safe.
@@ -350,7 +367,169 @@ public final class TurnLiveActivityController {
         #endif
     }
 
+    // MARK: - Push-to-start (§1.1–§1.7, PLAN-push-to-start-la.md)
+
+    /// Observe the ActivityKit push-to-start token for the app's lifetime.
+    ///
+    /// The token is attributes-TYPE-scoped (one per `Activity` type per device),
+    /// not session-scoped — so we observe it once at launch, not per session.
+    /// Each emitted token is hex-encoded and fanned out to all broker endpoints
+    /// via `PushNotificationManager.registerPushToStartToken(hex:)` so any box
+    /// can start a Live Activity while the app is backgrounded or closed.
+    ///
+    /// The sequence yields immediately on first launch (if Live Activities are
+    /// enabled) and again on every OS token rotation.
+    public func startObservingPushToStartToken() {
+        #if canImport(ActivityKit)
+        guard #available(iOS 17.2, *) else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            Telemetry.breadcrumb("push_la", "startObservingPushToStartToken: activities disabled")
+            return
+        }
+        pushToStartTask?.cancel()
+        pushToStartTask = Task { @MainActor in
+            for await tokenData in Activity<TurnActivityAttributes>.pushToStartTokenUpdates {
+                let hex = tokenData.apnsTokenHex
+                Telemetry.breadcrumb("push_la", "push-to-start token received",
+                    data: ["hexLen": "\(hex.count)"])
+                lastPushToStartTokenHex = hex
+                PushNotificationManager.shared.registerPushToStartToken(hex: hex)
+            }
+        }
+        #endif
+    }
+
+    /// Adopt any `Activity<TurnActivityAttributes>` the OS already started
+    /// via a push-to-start push (§1.6).
+    ///
+    /// Must be called BEFORE `reapOrphanActivities()` and before
+    /// `bridge.start()` so that:
+    ///   - reap never kills a push-started card (it would see it in `owned`
+    ///     once we populate `activeActivityIDs`),
+    ///   - the bridge's first `evaluate()` takes the UPDATE branch, not
+    ///     `.start` (which would open a second card).
+    ///
+    /// Idempotent: sessions already in `activeActivityIDs` are skipped.
+    public func adoptPushStartedActivities() {
+        #if canImport(ActivityKit)
+        guard #available(iOS 17.2, *) else { return }
+        for activity in Activity<TurnActivityAttributes>.activities {
+            let sid = activity.attributes.sessionID
+            guard activeActivityIDs[sid] == nil else { continue }
+
+            // Register the id first: this is the dedup invariant.
+            // `activeActivityIDs[sid] != nil ⟺ a card exists`.
+            activeActivityIDs[sid] = activity.id
+
+            // Seed the per-session model so the bridge's next evaluate()
+            // takes the UPDATE branch (model.isActive == true) rather than
+            // emitting a .start, which would request a duplicate card.
+            seedModelFromActivity(activity)
+
+            // Start observing the activity's UPDATE token so the broker can
+            // push update/end to this card. This is the riskiest seam (§4.5):
+            // if the update-token registration never fires, the card freezes.
+            observeUpdateTokenForAdoptedActivity(activity, sessionID: sid)
+
+            Telemetry.breadcrumb("push_la", "adopted push-started activity",
+                data: ["session": sid, "activityID": activity.id])
+        }
+        #endif
+    }
+
     #if canImport(ActivityKit)
+    /// Seed the per-session model from an already-running Activity so the
+    /// state machine reports `isActive == true` and the bridge won't emit
+    /// a `.start` for this session on its next evaluate.
+    private func seedModelFromActivity(
+        _ activity: Activity<TurnActivityAttributes>
+    ) {
+        let sid = activity.attributes.sessionID
+        var model = models[sid, default: TurnActivityModel()]
+        guard !model.isActive else { return }
+
+        // Build a minimal active content state from the activity's current
+        // content. We use the current content-state's startedAt if decodable;
+        // otherwise use now so the elapsed timer is honest.
+        let cs = activity.content.state
+        let contentState = TurnActivityContentState(
+            currentTool: cs.currentTool,
+            currentCommand: cs.currentCommand,
+            startedAt: cs.startedAt,
+            tokensIn: cs.tokensIn,
+            tokensOut: cs.tokensOut,
+            status: cs.status,
+            syncedAt: cs.syncedAt,
+            summary: cs.summary,
+            interruptKind: cs.interruptKind,
+            prompt: cs.prompt,
+            optionCount: cs.optionCount
+        )
+        let attrs = TurnActivityAttributesData(
+            agentName: activity.attributes.agentName,
+            sessionID: activity.attributes.sessionID,
+            sessionName: activity.attributes.sessionName
+        )
+        // Directly inject active state into the model. The model doesn't
+        // expose a public seeding API, so we use the apply path with a
+        // synthetic item that matches the current status. The critical
+        // outcome is model.isActive == true so the bridge takes the UPDATE
+        // branch; the exact item content doesn't matter here.
+        //
+        // We bypass `model.apply` (which would emit .start → duplicate card)
+        // by writing the attributes + contentState directly.
+        model = TurnActivityModel(seededAttributes: attrs, contentState: contentState)
+        models[sid] = model
+    }
+
+    /// Observe the per-activity update token for a push-STARTED activity.
+    /// Mirrors the update-token loop in `startActivity` (lines 251-265) —
+    /// the exact same `registerLAToken` path, so update/end pushes route
+    /// to this card after adoption.
+    ///
+    /// §4.5 mitigation: captures a Sentry error if the update-token never
+    /// arrives within 30 seconds of adoption.
+    private func observeUpdateTokenForAdoptedActivity(
+        _ activity: Activity<TurnActivityAttributes>,
+        sessionID: String
+    ) {
+        let endpoint = registrationEndpoint
+        Task { @MainActor in
+            var receivedToken = false
+            // Deadline check: fire an error event if no token within 30s.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                if !receivedToken {
+                    Telemetry.capture(
+                        error: NSError(
+                            domain: "ios.push_la", code: 1,
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "adopted push-started activity: update token never received"]
+                        ),
+                        message: "push-to-start adoption: update token not registered within 30s",
+                        tags: ["flow": "push_la"],
+                        extras: ["session": sessionID, "activityID": activity.id]
+                    )
+                }
+            }
+            for await tokenData in activity.pushTokenUpdates {
+                receivedToken = true
+                let hex = tokenData.apnsTokenHex
+                Telemetry.breadcrumb("push_la", "adopted activity: LA update token received",
+                    data: ["session": sessionID, "hexLen": "\(hex.count)"])
+                guard let ep = endpoint else {
+                    Telemetry.breadcrumb("push_la",
+                        "adopted activity: LA update token: no endpoint, skipping",
+                        data: ["session": sessionID])
+                    continue
+                }
+                PushNotificationManager.shared.registerLAToken(
+                    hex: hex, sessionID: sessionID, endpoint: ep
+                )
+            }
+        }
+    }
+
     private static func terminateActivity(id: String) async {
         for activity in Activity<TurnActivityAttributes>.activities where activity.id == id {
             await activity.end(nil, dismissalPolicy: .immediate)

@@ -131,6 +131,16 @@ public struct TurnActivityAttributes: ActivityAttributes {
         }
     }
 
+    // MARK: - Push-to-start wire contract (DO NOT rename these properties)
+    //
+    // For push-to-start (iOS 17.2+, §1.4 PLAN-push-to-start-la.md), APNs
+    // delivers `aps.attributes` as JSON that ActivityKit decodes into this
+    // struct using synthesized Codable — i.e. the JSON keys MUST equal the
+    // Swift property names below. The broker's `emitLAStart` sends exactly:
+    //   { "agentName": <str>, "sessionID": <str>, "sessionName": <str> }
+    // A mismatch is rejected by the OS with NO client-visible error — the
+    // card silently never appears. Keep this comment and the broker's
+    // `AttributesType`/"TurnActivityAttributes" string in sync if renamed.
     public var agentName: String
     public var sessionID: String
     /// Session display name for the activity title.

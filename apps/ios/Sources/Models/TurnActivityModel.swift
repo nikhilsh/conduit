@@ -203,6 +203,26 @@ public struct TurnActivityModel: Equatable, Sendable {
         self.idleTimeout = idleTimeout
     }
 
+    /// Seeding initializer for push-to-start adoption (§1.6,
+    /// PLAN-push-to-start-la.md). Sets the model to "active" so the
+    /// bridge's next evaluate() takes the UPDATE branch rather than
+    /// emitting a `.start` (which would open a duplicate card).
+    ///
+    /// `lastActivityAt` is intentionally nil — the adopted activity's
+    /// age is unknown, and we don't want the idle-timeout tick to
+    /// immediately close it. The first real item from the bridge
+    /// will set `lastActivityAt` via the normal `apply` path.
+    public init(
+        seededAttributes: TurnActivityAttributesData,
+        contentState: TurnActivityContentState,
+        idleTimeout: TimeInterval = TurnActivityModel.defaultIdleTimeout
+    ) {
+        self.idleTimeout = idleTimeout
+        self.attributes = seededAttributes
+        self.contentState = contentState
+        self.lastActivityAt = nil
+    }
+
     /// Apply a new conversation item to the state machine and return the
     /// effect the controller should perform. `agentName` is captured at
     /// `start` time and not re-read after — the activity carries the

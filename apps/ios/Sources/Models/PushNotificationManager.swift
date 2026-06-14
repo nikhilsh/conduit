@@ -161,12 +161,22 @@ final class PushNotificationManager {
     /// Called when the active endpoint changes (box switch). Re-registers
     /// the existing token with ALL known endpoints so every paired box
     /// stays current (token may have rotated, or a box may have lost its
-    /// registration).
+    /// registration). Also re-registers the push-to-start token so every
+    /// box can start a Live Activity while the app is backgrounded.
     func endpointChanged(to newEndpoint: StoredEndpoint, allEndpoints: [StoredEndpoint]) {
-        guard newEndpoint.isComplete, let hex = deviceTokenHex else { return }
-        Telemetry.breadcrumb("push", "endpoint changed — re-registering with all servers",
-            data: ["host": newEndpoint.displayHost, "count": "\(allEndpoints.count)"])
-        registerWithAllServers(hex: hex, activeEndpoint: newEndpoint, allEndpoints: allEndpoints)
+        if newEndpoint.isComplete, let hex = deviceTokenHex {
+            Telemetry.breadcrumb("push", "endpoint changed — re-registering with all servers",
+                data: ["host": newEndpoint.displayHost, "count": "\(allEndpoints.count)"])
+            registerWithAllServers(hex: hex, activeEndpoint: newEndpoint, allEndpoints: allEndpoints)
+        }
+        // Re-register the push-to-start token so the new endpoint set can
+        // start a Live Activity from push (§1.3, PLAN-push-to-start-la.md).
+        if let startHex = TurnLiveActivityController.shared.lastPushToStartTokenHex {
+            Telemetry.breadcrumb("push_la",
+                "endpoint changed — re-registering push-to-start token",
+                data: ["host": newEndpoint.displayHost])
+            registerPushToStartToken(hex: startHex, allEndpoints: allEndpoints)
+        }
     }
 
     /// Best-effort unregister POST to a single endpoint. Called when a
@@ -333,6 +343,88 @@ final class PushNotificationManager {
             Telemetry.breadcrumb("push_la", "LA token register POST result",
                 data: ["session": sessionID, "host": endpoint.displayHost,
                        "status": "\(http.statusCode)"])
+        }
+    }
+
+    // MARK: - Push-to-start token registration (§1.3, PLAN-push-to-start-la.md)
+
+    /// Register the ActivityKit push-to-start token with ALL broker endpoints.
+    ///
+    /// The push-to-start token is device-scoped (one per `Activity` type),
+    /// NOT session-scoped. It must be registered with EVERY paired box so
+    /// whichever box owns an incoming turn can start the Live Activity while
+    /// the app is backgrounded or closed.
+    ///
+    /// Endpoint: `POST /api/push/register-start`
+    /// Body: `{"platform":"apns-liveactivity-start","token":"<hex>"}`
+    ///
+    /// Re-registration triggers (all handled via call sites):
+    ///   - token rotation: the `pushToStartTokenUpdates` async sequence
+    ///     re-fires → controller calls this again,
+    ///   - endpoint/box change: `endpointChanged` calls this with allEndpoints,
+    ///   - box add: endpointChanged is called when the user selects the new box.
+    ///
+    /// On initial token receipt (no `allEndpoints` supplied) we fan out to
+    /// the controller's current registration endpoint. `endpointChanged` covers
+    /// the full set on any subsequent box change.
+    func registerPushToStartToken(hex: String) {
+        if let ep = TurnLiveActivityController.shared.registrationEndpoint, ep.isComplete {
+            Telemetry.breadcrumb("push_la", "push-to-start token register",
+                data: ["host": ep.displayHost])
+            postRegisterStart(hex: hex, endpoint: ep)
+        } else {
+            Telemetry.breadcrumb("push_la",
+                "registerPushToStartToken: no complete endpoint, deferring")
+        }
+    }
+
+    /// Fan-out variant called from `endpointChanged` with the explicit
+    /// full endpoint list so every paired box stays current.
+    func registerPushToStartToken(hex: String, allEndpoints: [StoredEndpoint]) {
+        let endpoints = allEndpoints.filter { $0.isComplete }
+        Telemetry.breadcrumb("push_la", "push-to-start token fan-out register",
+            data: ["count": "\(endpoints.count)"])
+        for ep in endpoints {
+            postRegisterStart(hex: hex, endpoint: ep)
+        }
+    }
+
+    /// POST the push-to-start token to one broker endpoint.
+    /// Body: `{"platform":"apns-liveactivity-start","token":"<hex>"}`.
+    /// Best-effort: failures are breadcrumbed.
+    private func postRegisterStart(hex: String, endpoint: StoredEndpoint) {
+        guard endpoint.isComplete else { return }
+        Task { @MainActor in
+            guard let base = endpoint.httpBaseURL else { return }
+            var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+            components?.path = "/api/push/register-start"
+            guard let url = components?.url else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15
+            req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            struct StartRegisterPayload: Encodable {
+                let platform: String
+                let token: String
+            }
+            let payload = StartRegisterPayload(
+                platform: "apns-liveactivity-start",
+                token: hex
+            )
+            guard let body = try? JSONEncoder().encode(payload) else { return }
+            req.httpBody = body
+            Telemetry.breadcrumb("push_la", "push-to-start register POST start",
+                data: ["host": endpoint.displayHost])
+            guard let (_, resp) = try? await URLSession.shared.data(for: req),
+                  let http = resp as? HTTPURLResponse
+            else {
+                Telemetry.breadcrumb("push_la", "push-to-start register POST network error",
+                    data: ["host": endpoint.displayHost])
+                return
+            }
+            Telemetry.breadcrumb("push_la", "push-to-start register POST result",
+                data: ["host": endpoint.displayHost, "status": "\(http.statusCode)"])
         }
     }
 
