@@ -14,6 +14,7 @@ import { mkdir, writeFile, copyFile, readFile, readdir, rm } from "node:fs/promi
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { webcrypto as wc } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(__dirname, "out");
@@ -108,6 +109,183 @@ function manifestPlist(ipa, tag) {
 
 const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(1) + " MB" : "");
 
+const b64 = (u8) => Buffer.from(u8).toString("base64");
+
+async function buildGatedPage(plaintext, password) {
+    const enc = new TextEncoder();
+    const salt = wc.getRandomValues(new Uint8Array(16));
+    const iv = wc.getRandomValues(new Uint8Array(12));
+    const baseKey = await wc.subtle.importKey("raw", enc.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]);
+    const key = await wc.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt"],
+    );
+    const ctBuf = await wc.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plaintext));
+
+    const SALT = b64(salt);
+    const IV = b64(iv);
+    const CT = b64(new Uint8Array(ctBuf));
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>conduit · broker field guide</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #0d0d0d;
+    color: #c9d1d9;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    width: 100%;
+    max-width: 420px;
+    padding: 2.5rem 2rem;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+  }
+  h1 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #e6edf3;
+    letter-spacing: 0.02em;
+    margin-bottom: 0.4rem;
+  }
+  .sub {
+    font-size: 0.75rem;
+    color: #6e7681;
+    margin-bottom: 2rem;
+  }
+  label {
+    display: block;
+    font-size: 0.72rem;
+    color: #8b949e;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  input[type="password"] {
+    width: 100%;
+    padding: 0.6rem 0.8rem;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #e6edf3;
+    font-family: inherit;
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.15s;
+    margin-bottom: 1rem;
+  }
+  input[type="password"]:focus { border-color: #58a6ff; }
+  input[type="password"].shake {
+    animation: shake 0.35s ease;
+    border-color: #f85149;
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%       { transform: translateX(-6px); }
+    40%       { transform: translateX(6px); }
+    60%       { transform: translateX(-4px); }
+    80%       { transform: translateX(4px); }
+  }
+  button {
+    width: 100%;
+    padding: 0.6rem 1rem;
+    background: #238636;
+    border: 1px solid #2ea043;
+    border-radius: 6px;
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  button:hover { background: #2ea043; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .err {
+    margin-top: 0.9rem;
+    font-size: 0.78rem;
+    color: #f85149;
+    min-height: 1.1em;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>conduit · broker field guide</h1>
+  <p class="sub">internal documentation — access restricted</p>
+  <label for="pw">password</label>
+  <input type="password" id="pw" autocomplete="current-password" autofocus>
+  <button id="btn">Unlock</button>
+  <p class="err" id="err"></p>
+</div>
+<script>
+const SALT = "${SALT}";
+const IV   = "${IV}";
+const CT   = "${CT}";
+
+const b64d = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function unlock(pw) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey("raw", enc.encode(pw), { name: "PBKDF2" }, false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64d(SALT), iterations: 200000, hash: "SHA-256" },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"],
+  );
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(IV) }, key, b64d(CT));
+  const html = new TextDecoder().decode(pt);
+  document.open(); document.write(html); document.close();
+}
+
+const btn = document.getElementById("btn");
+const pw  = document.getElementById("pw");
+const err = document.getElementById("err");
+
+async function attempt() {
+  const val = pw.value;
+  if (!val) return;
+  btn.disabled = true;
+  err.textContent = "";
+  try {
+    await unlock(val);
+  } catch (_) {
+    pw.classList.remove("shake");
+    void pw.offsetWidth; // reflow to restart animation
+    pw.classList.add("shake");
+    err.textContent = "incorrect password";
+    pw.value = "";
+    pw.focus();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+btn.addEventListener("click", attempt);
+pw.addEventListener("keydown", (e) => { if (e.key === "Enter") attempt(); });
+pw.addEventListener("animationend", () => pw.classList.remove("shake"));
+</script>
+</body>
+</html>`;
+}
+
 async function build() {
     const r = await fetchLatestRelease();
     const version = (r.tagName || "").replace(/^v/, "");
@@ -175,6 +353,17 @@ async function build() {
     await writeFile(path.join(outDir, "privacy.html"), await readFile(privacyPath, "utf8"));
     if (existsSync(deployYaml)) {
         await copyFile(deployYaml, path.join(outDir, ".deploy.yaml"));
+    }
+
+    const brokerSrc = path.join(__dirname, "broker.template.html");
+    if (existsSync(brokerSrc)) {
+        const plaintext = await readFile(brokerSrc, "utf8");
+        const password = process.env.BROKER_PAGE_PASSWORD || "nikhil123";
+        const gate = await buildGatedPage(plaintext, password);
+        await mkdir(path.join(outDir, "broker"), { recursive: true });
+        await writeFile(path.join(outDir, "broker", "index.html"), gate); // serves at /broker
+        await writeFile(path.join(outDir, "broker.html"), gate);          // serves at /broker.html
+        console.log("wrote out/broker/index.html (password-gated)");
     }
 
     console.log(

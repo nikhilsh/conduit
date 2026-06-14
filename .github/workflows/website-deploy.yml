@@ -1,0 +1,56 @@
+name: website-deploy
+run-name: deploy website (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      broker_password:
+        description: 'Override BROKER_PAGE_PASSWORD (leave blank to use code default)'
+        required: false
+        type: string
+        default: ''
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-website:
+    name: deploy website to Fyra
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Fyra CLI
+        run: curl -fsSL https://fyra.sh/install.sh | sh
+
+      - name: Configure Fyra auth
+        env:
+          FYRA_TOKEN: ${{ secrets.FYRA_TOKEN }}
+          FYRA_SERVER: ${{ secrets.FYRA_SERVER }}
+        run: |
+          mkdir -p "$HOME/.fyra"
+          cat > "$HOME/.fyra/config.yaml" <<EOF
+          server_address: ${FYRA_SERVER:-server.fyra.sh:50051}
+          token: ${FYRA_TOKEN}
+          EOF
+
+      - name: Build website
+        working-directory: website
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BROKER_PAGE_PASSWORD: ${{ inputs.broker_password }}
+        run: node build.mjs
+
+      - name: Deploy website to Fyra
+        working-directory: website/out
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          script -q -e -c "fyra push" /dev/null

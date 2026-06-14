@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Conduit Broker — a field guide for iOS devs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0c0f14; --ink2:#11151c; --panel:#151b24; --panel2:#1b222d;
+  --line:#28323f; --line2:#37445400;
+  --fg:#e8edf3; --mut:#94a3b4; --dim:#5e6b7a;
+  --green:#7ee787; --amber:#ffb454; --cyan:#56d4dd; --blue:#7aa2ff; --pink:#ff7eb6; --red:#ff6b6b;
+  --grid:rgba(86,212,221,.05);
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;
+  --disp:'Syne',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--ink); color:var(--fg); font-family:var(--sans);
+  font-size:17px; line-height:1.65; -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+/* blueprint background */
+body::before{
+  content:""; position:fixed; inset:0; z-index:-2;
+  background:
+    radial-gradient(900px 600px at 80% -5%, rgba(122,162,255,.10), transparent 60%),
+    radial-gradient(800px 700px at 5% 20%, rgba(126,231,135,.06), transparent 55%),
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+    var(--ink);
+  background-size:auto,auto,28px 28px,28px 28px;
+}
+body::after{ /* grain */
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.035;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.mono{font-family:var(--mono)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--cyan)}
+.acc-green{color:var(--green)} .acc-amber{color:var(--amber)} .acc-cyan{color:var(--cyan)}
+.acc-blue{color:var(--blue)} .acc-pink{color:var(--pink)}
+
+/* ---------- top bar ---------- */
+.topbar{position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);
+  background:linear-gradient(180deg,rgba(12,15,20,.92),rgba(12,15,20,.6));
+  border-bottom:1px solid var(--line)}
+.topbar .wrap{display:flex;align-items:center;gap:18px;height:58px}
+.brand{font-family:var(--disp);font-weight:800;letter-spacing:-.01em;font-size:18px;display:flex;align-items:center;gap:9px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green);animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.navlinks{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.navlinks a{font-family:var(--mono);font-size:12.5px;color:var(--mut);text-decoration:none;padding:6px 11px;border-radius:7px;transition:.18s}
+.navlinks a:hover{color:var(--fg);background:var(--panel)}
+@media(max-width:760px){.navlinks{display:none}}
+
+/* ---------- hero ---------- */
+.hero{padding:86px 0 54px;position:relative}
+.hero h1{font-family:var(--disp);font-weight:800;font-size:clamp(40px,7vw,76px);line-height:.98;letter-spacing:-.03em}
+.hero h1 .stroke{color:transparent;-webkit-text-stroke:1.5px var(--amber)}
+.hero p.lead{margin-top:24px;max-width:640px;font-size:20px;color:var(--mut)}
+.hero p.lead b{color:var(--fg);font-weight:600}
+.term{margin-top:34px;max-width:560px;background:#0a0d12;border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 30px 70px -30px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.03);overflow:hidden}
+.term .bar{display:flex;align-items:center;gap:7px;padding:11px 14px;border-bottom:1px solid var(--line);background:#0d1117}
+.term .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
+.term .bar .t{margin-left:8px;font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+.term .body{padding:16px 18px;font-family:var(--mono);font-size:13.5px;line-height:1.9;min-height:118px}
+.term .body .p{color:var(--green)} .term .body .c{color:var(--fg)} .term .body .o{color:var(--mut)}
+.cursor{display:inline-block;width:9px;height:17px;background:var(--green);vertical-align:-3px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.reveal{opacity:0;transform:translateY(16px);animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards}
+.r1{animation-delay:.05s}.r2{animation-delay:.18s}.r3{animation-delay:.32s}.r4{animation-delay:.46s}
+@keyframes rise{to{opacity:1;transform:none}}
+
+/* ---------- sections ---------- */
+section{padding:64px 0;border-top:1px solid var(--line)}
+.sec-h{display:flex;align-items:baseline;gap:16px;margin-bottom:10px}
+.sec-h .num{font-family:var(--mono);font-size:13px;color:var(--amber);border:1px solid var(--line);border-radius:6px;padding:3px 8px}
+h2{font-family:var(--disp);font-weight:700;font-size:clamp(28px,4.4vw,42px);letter-spacing:-.02em;line-height:1.05}
+.sec-sub{color:var(--mut);max-width:680px;margin:14px 0 30px;font-size:18px}
+
+/* ---------- architecture diagram ---------- */
+.arch{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;position:relative;align-items:center;margin:8px 0 26px}
+.node{cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 18px;position:relative;
+  transition:.2s;z-index:2}
+.node:hover,.node.active{border-color:var(--accent,var(--cyan));transform:translateY(-3px);
+  box-shadow:0 0 0 1px var(--accent,var(--cyan)),0 18px 50px -24px var(--accent,var(--cyan))}
+.node .ico{font-size:26px}
+.node h4{font-family:var(--disp);font-weight:700;font-size:18px;margin:8px 0 3px}
+.node .sub{font-family:var(--mono);font-size:11.5px;color:var(--dim);letter-spacing:.02em}
+.node .tap{position:absolute;top:12px;right:13px;font-family:var(--mono);font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.15em}
+.arch .conn{height:2px;align-self:center;position:relative;z-index:1;background:linear-gradient(90deg,var(--line),var(--cyan),var(--line));background-size:200% 100%;animation:flow 3s linear infinite;min-width:24px}
+@keyframes flow{to{background-position:-200% 0}}
+.conn .lbl{position:absolute;top:-26px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:10.5px;color:var(--cyan);white-space:nowrap;background:var(--ink);padding:0 6px}
+@media(max-width:760px){.arch{grid-template-columns:1fr}.arch .conn{width:2px;height:30px;min-width:0;justify-self:center;background:linear-gradient(180deg,var(--line),var(--cyan),var(--line))}.conn .lbl{top:50%;left:18px;transform:translateY(-50%)}}
+.detail{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent,var(--cyan));border-radius:12px;padding:22px 24px;min-height:120px}
+.detail .dh{font-family:var(--disp);font-weight:700;font-size:20px;margin-bottom:4px}
+.detail .file{font-family:var(--mono);font-size:11.5px;color:var(--amber);margin-bottom:12px;word-break:break-all}
+.detail p{color:var(--mut);font-size:15.5px}
+.detail .ios{margin-top:14px;padding:11px 14px;background:rgba(122,162,255,.08);border:1px solid rgba(122,162,255,.25);border-radius:9px;font-size:14px}
+.detail .ios b{color:var(--blue);font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:3px}
+
+/* ---------- generic card ---------- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 24px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:760px){.grid2,.grid3{grid-template-columns:1fr}}
+
+/* ---------- two channels toggle ---------- */
+.seg{display:inline-flex;background:var(--ink2);border:1px solid var(--line);border-radius:11px;padding:5px;gap:5px;margin-bottom:22px}
+.seg button{font-family:var(--mono);font-size:13px;color:var(--mut);background:none;border:0;padding:9px 16px;border-radius:8px;cursor:pointer;transition:.18s}
+.seg button.on{background:var(--accent);color:#0a0d12;font-weight:700}
+.chan{display:none} .chan.show{display:block;animation:fade .35s}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}}
+.flowrow{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap}
+.chip{flex:1;min-width:120px;background:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:13px 14px}
+.chip .k{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.08em;text-transform:uppercase}
+.chip .v{font-size:14px;margin-top:4px;color:var(--fg)}
+.arrow{align-self:center;color:var(--dim);font-family:var(--mono);font-size:18px}
+
+/* ---------- send-a-message simulator ---------- */
+.sim{background:linear-gradient(180deg,var(--panel),var(--ink2));border:1px solid var(--line);border-radius:16px;padding:26px;position:relative;overflow:hidden}
+.sim-ctl{display:flex;gap:12px;align-items:center;margin-bottom:24px;flex-wrap:wrap}
+.btn{font-family:var(--mono);font-size:14px;font-weight:700;cursor:pointer;border:0;border-radius:10px;padding:12px 20px;transition:.18s}
+.btn-go{background:var(--green);color:#06210a;box-shadow:0 8px 24px -8px var(--green)}
+.btn-go:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.btn-go:disabled{opacity:.5;cursor:wait;transform:none}
+.btn-ghost{background:var(--ink);color:var(--mut);border:1px solid var(--line)}
+.btn-ghost:hover{color:var(--fg);border-color:var(--mut)}
+.sim-pipe{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:22px}
+@media(max-width:880px){.sim-pipe{grid-template-columns:1fr 1fr}}
+.stage{background:var(--ink2);border:1px solid var(--line);border-radius:11px;padding:13px 12px;position:relative;transition:.25s;opacity:.5}
+.stage .n{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.12em}
+.stage .ttl{font-family:var(--disp);font-weight:700;font-size:14px;margin:5px 0 2px;line-height:1.15}
+.stage .who{font-family:var(--mono);font-size:10.5px;color:var(--mut)}
+.stage.lit{opacity:1;border-color:var(--green);box-shadow:0 0 0 1px var(--green),0 0 26px -6px var(--green);transform:translateY(-2px)}
+.stage.done{opacity:1;border-color:var(--line)}
+.stage.lit .who{color:var(--green)}
+.sim-log{font-family:var(--mono);font-size:13px;background:#080b0f;border:1px solid var(--line);border-radius:11px;padding:16px 18px;min-height:150px;line-height:1.85}
+.sim-log .ln{opacity:0;animation:logln .3s forwards}
+@keyframes logln{to{opacity:1}}
+.sim-log .t{color:var(--dim)} .sim-log .g{color:var(--green)} .sim-log .a{color:var(--amber)} .sim-log .b{color:var(--blue)} .sim-log .c{color:var(--cyan)} .sim-log .m{color:var(--mut)}
+.bubble{display:inline-flex;align-items:center;gap:8px;background:var(--green);color:#06210a;font-weight:600;font-size:13px;padding:7px 13px;border-radius:14px;border:2px solid transparent}
+.bubble.sending{background:transparent;color:var(--green);border:2px dashed var(--green);opacity:.7}
+
+/* ---------- install stepper ---------- */
+.steps{counter-reset:s;display:flex;flex-direction:column;gap:0}
+.step{display:grid;grid-template-columns:46px 1fr;gap:16px;padding:16px 0;border-bottom:1px dashed var(--line);cursor:pointer;transition:.18s}
+.step:last-child{border-bottom:0}
+.step .mk{counter-increment:s;width:46px;height:46px;border-radius:11px;border:1px solid var(--line);display:grid;place-items:center;
+  font-family:var(--mono);font-weight:700;color:var(--mut);background:var(--ink2);transition:.2s}
+.step .mk::before{content:counter(s,decimal-leading-zero)}
+.step:hover .mk,.step.open .mk{border-color:var(--amber);color:var(--amber);box-shadow:0 0 18px -6px var(--amber)}
+.step .st h4{font-family:var(--disp);font-weight:700;font-size:17px}
+.step .st .marker{font-family:var(--mono);font-size:11px;color:var(--green);margin-left:9px}
+.step .st .body{color:var(--mut);font-size:15px;max-height:0;overflow:hidden;transition:max-height .35s ease,margin .3s;margin-top:0}
+.step.open .st .body{max-height:220px;margin-top:9px}
+
+/* ---------- frame inspector ---------- */
+.frames{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.ftag{font-family:var(--mono);font-size:12.5px;cursor:pointer;border:1px solid var(--line);background:var(--ink2);color:var(--mut);padding:8px 13px;border-radius:8px;transition:.16s}
+.ftag:hover{color:var(--fg)}
+.ftag.on{color:#0a0d12;font-weight:700}
+.ftag.dirin.on{background:var(--amber)} .ftag.dirout.on{background:var(--cyan)}
+.ftag .d{font-size:9px;opacity:.6;letter-spacing:.1em;display:block}
+.fview{display:grid;grid-template-columns:1.1fr 1fr;gap:18px}
+@media(max-width:760px){.fview{grid-template-columns:1fr}}
+.codeblk{font-family:var(--mono);font-size:13px;background:#080b0f;border:1px solid var(--line);border-radius:12px;padding:18px;overflow:auto;line-height:1.7}
+.codeblk .key{color:var(--cyan)} .codeblk .str{color:var(--green)} .codeblk .num{color:var(--amber)} .codeblk .pun{color:var(--dim)} .codeblk .cm{color:var(--dim);font-style:italic}
+.fmeta .dir{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;padding:4px 9px;border-radius:6px;display:inline-block;margin-bottom:10px}
+.fmeta .dir.in{background:rgba(255,180,84,.14);color:var(--amber)} .fmeta .dir.out{background:rgba(86,212,221,.14);color:var(--cyan)}
+.fmeta h4{font-family:var(--disp);font-size:20px;margin-bottom:8px}
+.fmeta p{color:var(--mut);font-size:15px}
+.fmeta .file{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:12px;word-break:break-all}
+
+/* ---------- analogy decoder ---------- */
+.decoder{border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.drow{display:grid;grid-template-columns:1fr 44px 1fr;align-items:center;border-bottom:1px solid var(--line);transition:.16s}
+.drow:last-child{border-bottom:0}
+.drow:hover{background:var(--panel)}
+.drow .l{padding:15px 18px;font-family:var(--mono);font-size:14px;color:var(--green)}
+.drow .mid{text-align:center;color:var(--dim);font-family:var(--mono)}
+.drow .r{padding:15px 18px;font-size:15px;color:var(--fg)}
+.drow .r b{color:var(--blue);font-family:var(--mono);font-size:13px}
+.dhead{display:grid;grid-template-columns:1fr 44px 1fr;background:var(--ink2);font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.dhead div{padding:11px 18px}.dhead .mid{text-align:center}
+@media(max-width:640px){.drow,.dhead{grid-template-columns:1fr;gap:0}.drow .mid,.dhead .mid{display:none}.drow .l{padding-bottom:2px}.drow .r{padding-top:4px;border-top:1px dashed var(--line)}}
+
+/* ---------- callouts ---------- */
+.myth{background:rgba(255,107,107,.06);border:1px solid rgba(255,107,107,.28);border-radius:13px;padding:18px 20px;margin-top:16px}
+.myth .tag{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--red);font-weight:700}
+.myth b{color:var(--fg)}
+.truth{color:var(--green);font-weight:600}
+
+/* code map */
+.pkgs{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(max-width:640px){.pkgs{grid-template-columns:1fr}}
+.pkg{background:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+.pkg .p{font-family:var(--mono);font-size:13.5px;color:var(--amber)}
+.pkg .d{font-size:13.5px;color:var(--mut);margin-top:3px}
+
+footer{padding:54px 0 70px;border-top:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:13px}
+footer b{color:var(--mut)}
+.kbd{font-family:var(--mono);font-size:12px;background:var(--ink2);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--mut)}
+::selection{background:var(--amber);color:#0a0d12}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="brand"><span class="dot"></span>conduit&nbsp;<span class="acc-amber">/broker</span></div>
+  <nav class="navlinks">
+    <a href="#big">Big picture</a>
+    <a href="#channels">Two channels</a>
+    <a href="#sim">Send a message</a>
+    <a href="#install">Install</a>
+    <a href="#wire">Wire protocol</a>
+    <a href="#decoder">iOS decoder</a>
+    <a href="#map">Code map</a>
+  </nav>
+</div></div>
+
+<header class="hero"><div class="wrap">
+  <div class="eyebrow reveal r1">Field guide · for the iOS dev who ships the app but never sees the server</div>
+  <h1 class="reveal r2">What <span class="stroke">the broker</span><br>actually does.</h1>
+  <p class="lead reveal r3">You build the app. The <b>broker</b> is the other half — a single Go binary running on a box somewhere, that owns the AI agents, the terminals, and the push notifications. This page takes it apart, piece by piece, in terms you already know.</p>
+
+  <div class="term reveal r4">
+    <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">root@box — conduit-broker</span></div>
+    <div class="body">
+      <div><span class="o">$</span> <span class="p">conduit-broker</span> <span class="c">up --addr :1977 --public-url …</span></div>
+      <div class="o" id="boot"></div>
+    </div>
+  </div>
+</div></header>
+
+<!-- 1 BIG PICTURE -->
+<section id="big"><div class="wrap">
+  <div class="sec-h"><span class="num">01</span><h2>The big picture</h2></div>
+  <p class="sec-sub">Three actors. Your phone, the broker, and the agent CLIs. <b>Tap any box</b> to see what it is and the iOS analogy.</p>
+
+  <div class="arch" id="arch">
+    <div class="node" data-k="phone" style="--accent:var(--blue)">
+      <span class="tap">tap</span><div class="ico">📱</div>
+      <h4>The app</h4><div class="sub">iOS / Android · thin client</div>
+    </div>
+    <div class="conn"><span class="lbl">WebSocket /ws/&lt;id&gt; · over SSH tunnel</span></div>
+    <div class="node active" data-k="broker" style="--accent:var(--green)">
+      <span class="tap">tap</span><div class="ico">🛰️</div>
+      <h4>The broker</h4><div class="sub">Go binary · listens :1977</div>
+    </div>
+    <div class="conn"><span class="lbl">stdin / stdout · JSON</span></div>
+    <div class="node" data-k="agent" style="--accent:var(--amber)">
+      <span class="tap">tap</span><div class="ico">🤖</div>
+      <h4>The agents</h4><div class="sub">claude · codex · gemini CLIs</div>
+    </div>
+  </div>
+
+  <div class="detail" id="archDetail" style="--accent:var(--green)"></div>
+</div></section>
+
+<!-- 2 TWO CHANNELS -->
+<section id="channels"><div class="wrap">
+  <div class="sec-h"><span class="num">02</span><h2>One session, two channels</h2></div>
+  <p class="sec-sub">The #1 thing people get wrong: the AI agent is <b>not</b> a terminal being screen-scraped. Every session runs <b>two independent things at once</b>. Flip between them.</p>
+
+  <div class="seg" id="chanSeg">
+    <button class="on" data-c="chat" style="--accent:var(--amber)">💬 Chat tab — the agent</button>
+    <button data-c="term" style="--accent:var(--cyan)">⌨️ Terminal tab — the shell</button>
+  </div>
+
+  <div class="chan show" id="chan-chat">
+    <div class="card" style="--accent:var(--amber)">
+      <div class="flowrow">
+        <div class="chip" style="--accent:var(--amber)"><div class="k">process</div><div class="v">claude -p --output-format <b>stream-json</b></div></div>
+        <span class="arrow">→</span>
+        <div class="chip" style="--accent:var(--amber)"><div class="k">channel</div><div class="v">stdin / stdout <b>pipes</b> (no TTY)</div></div>
+        <span class="arrow">→</span>
+        <div class="chip" style="--accent:var(--amber)"><div class="k">you get</div><div class="v">structured <b>view_event</b> frames</div></div>
+      </div>
+      <p style="color:var(--mut);margin-top:18px">The agent runs <b style="color:var(--fg)">headless</b>. The broker spawns it with <span class="mono acc-amber">exec.Command</span> + <span class="mono acc-amber">StdinPipe/StdoutPipe</span> — literally a child process exchanging newline-delimited JSON. Your message is encoded as a stream-json <span class="mono">user</span> line and written to its stdin; each <span class="mono">assistant</span>/<span class="mono">result</span> line it prints becomes a typed chat event pushed to your phone. <span class="mono acc-amber">codex</span> is the same idea but JSON-RPC 2.0 over stdio (a long-lived <span class="mono">codex app-server</span>).</p>
+      <div class="detail ios" style="background:rgba(255,180,84,.07);border-color:rgba(255,180,84,.25)">
+        <b style="color:var(--amber)">iOS analogy</b>
+        A <span class="mono">Process</span> (<span class="mono">NSTask</span>) with <span class="mono">standardInput</span>/<span class="mono">standardOutput</span> <span class="mono">Pipe</span>s, talking JSON-RPC to a child — like driving <span class="mono">sourcekit-lsp</span>. Not a terminal in sight.
+      </div>
+    </div>
+  </div>
+
+  <div class="chan" id="chan-term">
+    <div class="card" style="--accent:var(--cyan)">
+      <div class="flowrow">
+        <div class="chip" style="--accent:var(--cyan)"><div class="k">process</div><div class="v"><b>tmux</b> new-session -A -s conduit-&lt;id&gt;</div></div>
+        <span class="arrow">→</span>
+        <div class="chip" style="--accent:var(--cyan)"><div class="k">channel</div><div class="v">a real <b>PTY</b> (pseudo-terminal)</div></div>
+        <span class="arrow">→</span>
+        <div class="chip" style="--accent:var(--cyan)"><div class="k">you get</div><div class="v">raw <b>bytes</b> + reflowable snapshot</div></div>
+      </div>
+      <p style="color:var(--mut);margin-top:18px">Separately, the session opens a <b style="color:var(--fg)">PTY</b> running an interactive login shell inside a per-session <span class="mono acc-cyan">tmux</span>. A read loop (<span class="mono">drain()</span>) streams the raw bytes to the Terminal tab and feeds a headless VT parser so a fresh client gets a <span class="mono">snapshot</span> reflowed to its screen size. Because it's tmux, this shell <b style="color:var(--fg)">survives a broker restart</b>.</p>
+      <div class="detail ios" style="background:rgba(86,212,221,.07);border-color:rgba(86,212,221,.25)">
+        <b style="color:var(--cyan)">iOS analogy</b>
+        The PTY is exactly the pseudo-terminal behind Terminal.app — an <span class="mono">NSTask</span> wired to a <span class="mono">Pipe</span> for a live TTY. tmux ≈ session state that lives <i>outside</i> your process, so relaunching the broker doesn't lose it.
+      </div>
+    </div>
+  </div>
+
+  <div class="myth">
+    <span class="tag">⚠ common misconception</span>
+    <p style="margin-top:7px"><b>"The broker screen-scrapes the AI's terminal output."</b> &nbsp;<span class="truth">It doesn't.</span> The Chat tab is a headless JSON process; the Terminal tab is the only real PTY, and it runs a <i>shell</i>, not the agent. Only a legacy adapter with no protocol backend would ever be scraped — and nothing shipped uses it.</p>
+  </div>
+</div></section>
+
+<!-- 3 SEND A MESSAGE -->
+<section id="sim"><div class="wrap">
+  <div class="sec-h"><span class="num">03</span><h2>Watch a message travel</h2></div>
+  <p class="sec-sub">This traces the <b>exact path</b> we just shipped in v0.0.156 — the durable-send fix. Hit the button and follow the packet from your thumb to the agent and back, including the <span class="mono acc-green">chat_ack</span> that makes the bubble go solid.</p>
+
+  <div class="sim">
+    <div class="sim-ctl">
+      <button class="btn btn-go" id="simGo">▶ Send a message</button>
+      <button class="btn btn-ghost" id="simReset">↺ Reset</button>
+      <span id="bubbleHolder"></span>
+    </div>
+    <div class="sim-pipe" id="simPipe"></div>
+    <div class="sim-log" id="simLog"><span class="m">// idle — press “Send a message”.</span></div>
+  </div>
+</div></section>
+
+<!-- 4 INSTALL -->
+<section id="install"><div class="wrap">
+  <div class="sec-h"><span class="num">04</span><h2>How it gets onto a box</h2></div>
+  <p class="sec-sub">No Docker, no clone — just one SSH command that runs a shell script. The green tags are the <span class="mono acc-green">STEP</span> markers the script prints; that's literally what the install-progress modal you tested reads. <b>Tap a step</b> to expand.</p>
+
+  <div class="steps card" id="steps"></div>
+</div></section>
+
+<!-- 5 WIRE -->
+<section id="wire"><div class="wrap">
+  <div class="sec-h"><span class="num">05</span><h2>The wire protocol</h2></div>
+  <p class="sec-sub">One WebSocket carries everything, both ways. <span class="acc-amber">Amber = app → broker</span>, <span class="acc-cyan">cyan = broker → app</span>. Tap a frame to inspect its shape.</p>
+
+  <div class="frames" id="frames"></div>
+  <div class="fview">
+    <div class="codeblk" id="frameCode"></div>
+    <div class="fmeta" id="frameMeta"></div>
+  </div>
+</div></section>
+
+<!-- 6 DECODER -->
+<section id="decoder"><div class="wrap">
+  <div class="sec-h"><span class="num">06</span><h2>The iOS decoder ring</h2></div>
+  <p class="sec-sub">Every server concept, mapped to something already on your home turf.</p>
+  <div class="decoder" id="decoder">
+    <div class="dhead"><div>broker world</div><div class="mid">≈</div><div>your world</div></div>
+  </div>
+</div></section>
+
+<!-- 7 CODE MAP -->
+<section id="map"><div class="wrap">
+  <div class="sec-h"><span class="num">07</span><h2>Where the code lives</h2></div>
+  <p class="sec-sub">It's a Go monolith under <span class="mono acc-amber">broker/internal/</span>. The two big rooms are <span class="mono">ws</span> (the door) and <span class="mono">session</span> (the brain). The SSH tunnel isn't even here — it's in the <span class="mono acc-pink">Rust core</span> on the app side.</p>
+  <div class="pkgs" id="pkgs"></div>
+
+  <div class="grid2" style="margin-top:18px">
+    <div class="card" style="--accent:var(--pink)">
+      <div class="eyebrow" style="color:var(--pink)">the other half · core/</div>
+      <h4 style="font-family:var(--disp);font-size:19px;margin:8px 0 6px">Rust core (UniFFI)</h4>
+      <p style="color:var(--mut);font-size:15px">The app doesn't open the SSH tunnel in Swift — it calls into a Rust library compiled to an <span class="mono">.xcframework</span>. <span class="mono acc-pink">core/src/ssh/tunnel.rs</span> keeps the SSH session alive and forwards a local port into the box's loopback <span class="mono">:1977</span>. The broker never knows; it just listens on localhost.</p>
+      <div class="detail ios" style="margin-top:13px;background:rgba(255,126,182,.07);border-color:rgba(255,126,182,.25)">
+        <b style="color:var(--pink)">iOS analogy</b>
+        UniFFI ≈ a precompiled binary framework with a generated Swift API. The Rust <span class="mono">SshTunnel</span> is exported like a Swift class; <span class="mono">SshProgressDelegate</span> is a callback ≈ a Swift protocol delegate.
+      </div>
+    </div>
+    <div class="card" style="--accent:var(--green)">
+      <div class="eyebrow" style="color:var(--green)">survival · why Resume works</div>
+      <h4 style="font-family:var(--disp);font-size:19px;margin:8px 0 6px">Restart &amp; recovery</h4>
+      <p style="color:var(--mut);font-size:15px">Sessions persist to <span class="mono">~/.conduit/sessions/&lt;id&gt;/</span> and are recovered <i>lazily</i> — listed on boot, respawned when you reopen them. The <span class="mono acc-cyan">tmux</span> server survives a broker restart (<span class="mono">KillMode=process</span> reaps only the broker). The agent CLIs are children, so they die — but the transcript is on disk, and a failed send self-heals by respawning + resuming the conversation once.</p>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <b>conduit-broker</b> · Go · ~33k LOC in the <span class="mono">session</span> package alone · binds <span class="mono">:1977</span> · auth via <span class="mono">Bearer CONDUIT_TOKEN</span><br>
+  Built for an iOS dev. Tap the <span class="kbd">📱</span> <span class="kbd">🛰️</span> <span class="kbd">🤖</span> boxes, flip the channels, send a message. <span class="acc-green">Everything here is verified against the real source.</span>
+</div></footer>
+
+<script>
+/* ---------- boot typer ---------- */
+(function(){
+  const el=document.getElementById('boot');
+  const lines=[
+    {t:'  ↳ adopting CONDUIT_TOKEN (pinned in systemd)',c:'o'},
+    {t:'  ↳ loaded 5 agent adapters: claude codex gemini opencode shell',c:'o'},
+    {t:'  ↳ recovered 3 sessions from ~/.conduit/sessions/',c:'o'},
+    {t:'  ↳ listening on :1977  ·  pairing: conduit://… ▒',c:'p'}
+  ];
+  let i=0;
+  function next(){
+    if(i>=lines.length){el.innerHTML+='<span class="cursor"></span>';return;}
+    const L=lines[i++];const span=document.createElement('div');
+    span.className=L.c;el.appendChild(span);
+    let j=0;const txt=L.t;
+    (function type(){ if(j<=txt.length){span.textContent=txt.slice(0,j++);setTimeout(type,12);} else setTimeout(next,260);})();
+  }
+  setTimeout(next,900);
+})();
+
+/* ---------- architecture detail ---------- */
+const archData={
+  phone:{accent:'var(--blue)',h:'The app — a thin client',file:'apps/ios · apps/android · talks to ws://…/ws/<session-id>',
+    p:'Your SwiftUI app holds almost no logic about agents. It opens one WebSocket per session and renders whatever frames arrive: chat events, a terminal snapshot, status. Sending a message is just writing a JSON frame. All the "where is the server / how do I reach a VPS" plumbing is handled by the Rust core, not Swift.',
+    ios:'It IS your app. The interesting realization: it’s a renderer over a socket — closer to a websocket-driven SwiftUI view than to a self-contained app with its own backend logic.'},
+  broker:{accent:'var(--green)',h:'The broker — the server you own',file:'broker/cmd/conduit-broker/main.go · runUp() · one http.Server on :1977',
+    p:'A single static Go binary. On boot it adopts a bearer token, loads agent adapters, recovers sessions, and serves both an HTTP API (/api/capabilities, /api/fs/list, /api/push/register …) and the WebSocket. It owns the agent processes, the terminals, file listing, browser-preview proxying, and firing push notifications. On a remote box it binds loopback only.',
+    ios:'Think self-hosted Vapor / Swift-on-server that you also deploy and babysit. It’s “your backend,” except you run it on a $5 VPS and pair to it with a QR code.'},
+  agent:{accent:'var(--amber)',h:'The agents — ordinary CLIs',file:'claude · codex app-server · gemini · opencode (adapter TOMLs)',
+    p:'The actual intelligence is just the vendor CLI (claude, codex, …) installed on the box. The broker spawns it as a child process and speaks its native machine protocol over stdin/stdout — claude’s stream-json, codex’s JSON-RPC app-server. Switching agents mid-session hands off context via a generated HTML doc, so switching back resumes that agent’s own thread.',
+    ios:'Like shelling out to xcrun/sourcekit and parsing structured output — except the child is an AI. The broker is the adapter layer that makes four different CLIs look like one chat API.'}
+};
+const arch=document.getElementById('arch'), archDetail=document.getElementById('archDetail');
+function showArch(k){
+  document.querySelectorAll('.node').forEach(n=>n.classList.toggle('active',n.dataset.k===k));
+  const d=archData[k];
+  archDetail.style.setProperty('--accent',d.accent);
+  archDetail.innerHTML=`<div class="dh" style="color:${d.accent}">${d.h}</div><div class="file">${d.file}</div><p>${d.p}</p><div class="ios"><b>iOS analogy</b>${d.ios}</div>`;
+}
+arch.querySelectorAll('.node').forEach(n=>n.addEventListener('click',()=>showArch(n.dataset.k)));
+showArch('broker');
+
+/* ---------- two channels ---------- */
+const seg=document.getElementById('chanSeg');
+seg.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+  seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  seg.style.setProperty('--accent',getComputedStyle(b).getPropertyValue('--accent'));
+  document.querySelectorAll('.chan').forEach(c=>c.classList.remove('show'));
+  document.getElementById('chan-'+b.dataset.c).classList.add('show');
+}));
+
+/* ---------- send-a-message simulator ---------- */
+const stages=[
+  {n:'01',ttl:'Tap send',who:'📱 app',log:['<span class="t">[app]</span> <span class="m">user hits send. optimistic bubble appears — <span class="g">faded + dotted</span></span>','<span class="t">[app]</span> mint <span class="b">client_msg_id</span>=<span class="a">"m-9f3a"</span>, persist to outbox (UserDefaults)']},
+  {n:'02',ttl:'WS frame',who:'over tunnel',log:['<span class="t">[ws]</span> <span class="a">{ type:"chat", msg:"refactor this", client_msg_id:"m-9f3a" }</span>','<span class="t">[ws]</span> <span class="m">travels through the SSH loopback tunnel → broker :1977</span>']},
+  {n:'03',ttl:'Dedup',who:'🛰️ broker',log:['<span class="t">[broker]</span> server.go <span class="m">case "chat":</span> seen (session, <span class="b">m-9f3a</span>)? <span class="g">no → first time</span>','<span class="t">[broker]</span> <span class="m">record id in chatDedup (10-min TTL), forward on</span>']},
+  {n:'04',ttl:'→ agent stdin',who:'JSON pipe',log:['<span class="t">[broker]</span> SendChat → encode as stream-json <span class="a">{type:"user",…}</span>','<span class="t">[broker]</span> <span class="m">write to claude’s</span> <span class="g">stdin pipe</span> <span class="m">— NOT a terminal</span>']},
+  {n:'05',ttl:'Agent thinks',who:'🤖 claude',log:['<span class="t">[claude]</span> <span class="m">reads stdin line, runs the turn…</span>','<span class="t">[claude]</span> emits stdout JSON: <span class="c">{type:"assistant", …}</span> <span class="c">{type:"result"}</span>']},
+  {n:'06',ttl:'Stream out',who:'🛰️→📱',log:['<span class="t">[broker]</span> parse each line → <span class="c">view_event{ view:"chat" }</span>','<span class="t">[broker]</span> <span class="m">fan out to every attached viewer (streaming tokens)</span>']},
+  {n:'07',ttl:'chat_ack',who:'delivered ✓',log:['<span class="t">[broker]</span> <span class="g">{ type:"chat_ack", client_msg_id:"m-9f3a" }</span> → app','<span class="t">[app]</span> <span class="m">match id → clear outbox → bubble goes</span> <span class="g">SOLID</span>']}
+];
+const pipe=document.getElementById('simPipe'), simLog=document.getElementById('simLog');
+const bubbleHolder=document.getElementById('bubbleHolder');
+stages.forEach(s=>{const d=document.createElement('div');d.className='stage';d.innerHTML=`<div class="n">${s.n}</div><div class="ttl">${s.ttl}</div><div class="who">${s.who}</div>`;pipe.appendChild(d);});
+const stageEls=[...pipe.children];
+let simRunning=false, simTimers=[];
+function clearSim(){simTimers.forEach(clearTimeout);simTimers=[];stageEls.forEach(s=>s.className='stage');}
+function setBubble(state){
+  bubbleHolder.innerHTML = state==='sending'
+    ? '<span class="bubble sending">⟳ refactor this…</span>'
+    : state==='solid' ? '<span class="bubble">✓ refactor this</span>' : '';
+}
+function runSim(){
+  if(simRunning)return; simRunning=true;
+  document.getElementById('simGo').disabled=true;
+  clearSim(); simLog.innerHTML=''; setBubble('sending');
+  let delay=0;
+  stages.forEach((s,i)=>{
+    simTimers.push(setTimeout(()=>{
+      stageEls.forEach((e,j)=>{e.classList.toggle('lit',j===i);if(j<i)e.classList.add('done');});
+      s.log.forEach((line,k)=>{
+        const ln=document.createElement('div');ln.className='ln';ln.style.animationDelay=(k*0.12)+'s';ln.innerHTML=line;simLog.appendChild(ln);
+      });
+      simLog.scrollTop=simLog.scrollHeight;
+      if(i===stages.length-1){
+        simTimers.push(setTimeout(()=>{setBubble('solid');stageEls[i].classList.remove('lit');stageEls[i].classList.add('done');
+          const done=document.createElement('div');done.className='ln';done.innerHTML='<span class="g">▸ delivered. message can survive an app-kill — it stays in the outbox until this ack arrives.</span>';simLog.appendChild(done);simLog.scrollTop=simLog.scrollHeight;
+          simRunning=false;document.getElementById('simGo').disabled=false;},700));
+      }
+    },delay));
+    delay += 950 + s.log.length*120;
+  });
+}
+document.getElementById('simGo').addEventListener('click',runSim);
+document.getElementById('simReset').addEventListener('click',()=>{if(simRunning)return;clearSim();setBubble('');simLog.innerHTML='<span class="m">// idle — press “Send a message”.</span>';});
+
+/* ---------- install steps ---------- */
+const installSteps=[
+  {h:'One SSH exec',marker:'',b:'The app opens an SSH connection (russh, in the Rust core) and runs scripts/remote-bootstrap.sh — a plain POSIX sh script. No Docker, no git clone. The script’s only job: get a healthy broker listening and print one line back: <span class="mono acc-green">OK port=… token=… reused=…</span> or <span class="mono" style="color:var(--red)">ERR &lt;code&gt;</span>.'},
+  {h:'Reuse check',marker:'STEP reuse_check',b:'Is a healthy broker already on the port? If so, reuse it (and read its <i>pinned</i> token so the OK line matches what it accepts). This is why re-adding a box is instant.'},
+  {h:'Download the binary',marker:'STEP download_broker',b:'If <span class="mono">~/.conduit/bin/conduit-broker</span> is missing, curl the release install.sh and drop the binary in. Footgun we hit: every release is a <i>prerelease</i>, so <span class="mono">/latest/</span> 404s — the app passes a versioned URL instead.'},
+  {h:'Write the systemd unit',marker:'',b:'Writes <span class="mono">~/.config/systemd/user/conduit-broker.service</span>: ExecStart binds <span class="mono">127.0.0.1:&lt;port&gt;</span> (loopback only), pins <span class="mono">CONDUIT_TOKEN</span> and a <span class="mono">PATH</span> (so it can find the agent CLIs), <span class="mono">Restart=on-failure</span>. <span class="mono">enable-linger</span> makes it survive reboots.'},
+  {h:'Start the broker',marker:'STEP start_broker',b:'Start (or restart) the unit. systemd is the box’s launchd — it keeps the broker alive and brings it back after a crash or reboot.'},
+  {h:'Wait until ready',marker:'STEP wait_ready',b:'Poll /health until the broker answers, then print the OK line. The app’s install-progress modal turns each STEP into a stage dot; an ERR turns into the readable failure + Retry you saw.'}
+];
+const stepsEl=document.getElementById('steps');
+installSteps.forEach((s,i)=>{
+  const d=document.createElement('div');d.className='step'+(i===0?' open':'');
+  d.innerHTML=`<div class="mk"></div><div class="st"><h4>${s.h}${s.marker?`<span class="marker">${s.marker}</span>`:''}</h4><div class="body">${s.b}</div></div>`;
+  d.addEventListener('click',()=>d.classList.toggle('open'));
+  stepsEl.appendChild(d);
+});
+
+/* ---------- wire frame inspector ---------- */
+const frames={
+  chat:{dir:'in',h:'chat',file:'broker/internal/ws/server.go — case "chat":',
+    p:'Your message in. Carries the text and, since v0.0.156, a client_msg_id so the broker can dedup resends and acknowledge delivery.',
+    code:`{
+  <key>"type"</key><pun>:</pun> <str>"chat"</str><pun>,</pun>
+  <key>"msg"</key><pun>:</pun> <str>"refactor this file"</str><pun>,</pun>
+  <key>"client_msg_id"</key><pun>:</pun> <str>"m-9f3a"</str>  <cm>// dedup key</cm>
+}`},
+  chat_ack:{dir:'out',h:'chat_ack',file:'broker/internal/ws/server.go:838',
+    p:'The durable-send acknowledgement. Means the broker actually received your message — only now does the app clear it from the outbox and flip the bubble solid.',
+    code:`{
+  <key>"type"</key><pun>:</pun> <str>"chat_ack"</str><pun>,</pun>
+  <key>"session_id"</key><pun>:</pun> <str>"a1b2…"</str><pun>,</pun>
+  <key>"client_msg_id"</key><pun>:</pun> <str>"m-9f3a"</str>
+}`},
+  view_event:{dir:'out',h:'view_event',file:'server.go:404 — view:"chat" | "status" | "agents" …',
+    p:'The structured Chat-tab payload. The agent’s stdout JSON, parsed into a typed event: an assistant message, quick replies, a session title, the agent list, a login URL.',
+    code:`{
+  <key>"type"</key><pun>:</pun> <str>"view_event"</str><pun>,</pun>
+  <key>"view"</key><pun>:</pun> <str>"chat"</str><pun>,</pun>
+  <key>"payload"</key><pun>:</pun> {
+    <key>"role"</key><pun>:</pun> <str>"assistant"</str><pun>,</pun>
+    <key>"text"</key><pun>:</pun> <str>"Here’s the refactor…"</str>
+  }
+}`},
+  status:{dir:'out',h:'status',file:'server.go — the authoritative state frame',
+    p:'The single source of truth for session state: which agent, the phase, connection health, cwd, token usage, whether a turn is active, the session name.',
+    code:`{
+  <key>"type"</key><pun>:</pun> <str>"status"</str><pun>,</pun>
+  <key>"assistant"</key><pun>:</pun> <str>"claude"</str><pun>,</pun>
+  <key>"turn_active"</key><pun>:</pun> <num>true</num><pun>,</pun>
+  <key>"health"</key><pun>:</pun> <str>"live"</str><pun>,</pun>
+  <key>"cwd"</key><pun>:</pun> <str>"/root/app"</str>
+}`},
+  snapshot:{dir:'out',h:'snapshot',file:'server.go:383 — terminal grid on connect',
+    p:'When you open the Terminal tab, the broker sends the current screen — the VT grid reflowed to your device’s rows/cols — so you’re not staring at a blank terminal.',
+    code:`<cm>// binary frame, tag byte = snapshot</cm>
+<pun>[</pun><num>0x03</num><pun>]</pun> <str>"…gzip’d terminal grid…"</str>
+<cm>// reflowed by the termgrid VT parser
+// to your screen size</cm>`},
+  pty:{dir:'out',h:'PTY bytes',file:'server.go — binary frames (Terminal tab)',
+    p:'Raw output from the tmux shell, streamed as binary WebSocket frames. This is the only truly terminal-shaped channel.',
+    code:`<cm>// raw bytes, no JSON wrapper</cm>
+<str>"\\x1b[32mroot@box\\x1b[0m:~/app$ ls\\r\\n"</str>`},
+  exit:{dir:'out',h:'exit',file:'server.go:1111',
+    p:'The agent ended — with an exit code and a reason. The app shows it and offers Resume (the transcript is on disk).',
+    code:`{
+  <key>"type"</key><pun>:</pun> <str>"exit"</str><pun>,</pun>
+  <key>"code"</key><pun>:</pun> <num>0</num><pun>,</pun>
+  <key>"reason_code"</key><pun>:</pun> <str>"agent_done"</str>
+}`}
+};
+const frameOrder=['chat','chat_ack','view_event','status','snapshot','pty','exit'];
+const framesEl=document.getElementById('frames'),frameCode=document.getElementById('frameCode'),frameMeta=document.getElementById('frameMeta');
+frameOrder.forEach((k,i)=>{
+  const f=frames[k];const b=document.createElement('button');
+  b.className='ftag '+(f.dir==='in'?'dirin':'dirout');b.dataset.k=k;
+  b.innerHTML=`<span class="d">${f.dir==='in'?'app → broker':'broker → app'}</span>${f.h}`;
+  b.addEventListener('click',()=>showFrame(k));framesEl.appendChild(b);
+});
+function showFrame(k){
+  const f=frames[k];
+  framesEl.querySelectorAll('.ftag').forEach(t=>t.classList.toggle('on',t.dataset.k===k));
+  frameCode.innerHTML=f.code;
+  frameMeta.innerHTML=`<span class="dir ${f.dir}">${f.dir==='in'?'inbound · app → broker':'outbound · broker → app'}</span><h4>${f.h}</h4><p>${f.p}</p><div class="file">${f.file}</div>`;
+}
+showFrame('chat');
+
+/* ---------- decoder ---------- */
+const decoder=[
+  ['conduit-broker (Go binary)','your own backend — a self-hosted <b>Vapor / Swift-on-server</b> you deploy & pair to'],
+  ['systemd conduit-broker.service','<b>launchd</b> — a LaunchDaemon plist with KeepAlive; <span class="mono">enable-linger</span> ≈ keep running after logout'],
+  ['PTY (Terminal tab)','the pseudo-terminal behind <b>Terminal.app</b> — an NSTask wired to a Pipe for a live TTY'],
+  ['headless agent stdin/stdout','a <b>Process / NSTask</b> with stdin/stdout Pipes trading JSON — like driving sourcekit-lsp'],
+  ['WebSocket frames','<b>URLSessionWebSocketTask</b> — text frames are .string, PTY bytes are .data'],
+  ['tmux (survives restart)','session state that lives <b>outside your process</b> — server-side state restoration'],
+  ['Bearer CONDUIT_TOKEN','an <b>Authorization: Bearer</b> header (also accepted as ?token= for the WS handshake)'],
+  ['Rust core (UniFFI)','a precompiled <b>.xcframework</b> with a generated Swift API; SshProgressDelegate ≈ a protocol delegate'],
+  ['relay + APNs','the relay is the <b>provider server</b> in Apple’s push diagram; it holds the .p8, broker just hands it a token'],
+  ['push-to-start token','the ActivityKit <b>pushToStartToken</b> flow — start a Live Activity from a push, app closed']
+];
+const decEl=document.getElementById('decoder');
+decoder.forEach(([l,r])=>{const d=document.createElement('div');d.className='drow';d.innerHTML=`<div class="l">${l}</div><div class="mid">≈</div><div class="r">${r}</div>`;decEl.appendChild(d);});
+
+/* ---------- code map ---------- */
+const pkgs=[
+  ['ws','HTTP + WebSocket front door — routes, auth gate, the inbound message switch, outbound frame senders'],
+  ['session','the brain — per-session agent + PTY, spawn/drive/recover, the claude/codex backends, push triggers'],
+  ['agents','loads adapter TOMLs (claude/codex/gemini/opencode/shell) that describe how to launch each CLI'],
+  ['auth','the bearer-token table + Check(r) — also accepts ?token= for WS handshakes'],
+  ['push','token registries (alert / Live-Activity / push-to-start) + the sender that POSTs to the relay'],
+  ['oauth + credentials','server-side agent login + the encrypted per-box OAuth blob each session gets'],
+  ['replay + termgrid','asciinema-style recording + a headless VT parser for reflowable terminal snapshots'],
+  ['hostmetrics + discovery','box CPU/RAM/disk for /api/host/metrics, and mDNS LAN advertisement (--local)']
+];
+const pkgsEl=document.getElementById('pkgs');
+pkgs.forEach(([p,d])=>{const e=document.createElement('div');e.className='pkg';e.innerHTML=`<div class="p">broker/internal/${p}</div><div class="d">${d}</div>`;pkgsEl.appendChild(e);});
+
+/* ---------- reveal on scroll ---------- */
+const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.style.opacity=1;e.target.style.transform='none';e.target.style.transition='opacity .6s, transform .6s';io.unobserve(e.target);}})},{threshold:.12});
+document.querySelectorAll('section .sec-h, section .sec-sub, .card, .arch, .detail, .sim, .steps, .fview, .frames, .decoder, .pkgs').forEach(el=>{el.style.opacity=0;el.style.transform='translateY(18px)';io.observe(el);});
+</script>
+</body>
+</html>
