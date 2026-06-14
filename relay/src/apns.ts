@@ -56,12 +56,32 @@ async function providerToken(env: ApnsEnv, now: number): Promise<string> {
 function buildBody(payload: PushPayload): string {
   const isLiveActivity = payload.category === "liveactivity";
   if (isLiveActivity) {
-    // Live Activity updates: forward the broker-supplied content_state verbatim
+    const event = payload.event ?? "update";
+    const contentState = payload.content_state ?? { title: payload.title, body: payload.body };
+
+    if (event === "start") {
+      // Push-to-start: APNs requires attributes-type + attributes + alert in aps.
+      // attributes_type MUST be "TurnActivityAttributes" and attributes keys MUST
+      // be "agentName"/"sessionID"/"sessionName" — the OS rejects typos silently.
+      // See: TurnActivityAttributes.swift, broker emitLAStart, PLAN-push-to-start-la.md §2.3.
+      return JSON.stringify({
+        aps: {
+          timestamp: Math.floor(Date.now() / 1000),
+          event: "start",
+          "content-state": contentState,
+          "attributes-type": payload.attributes_type,
+          attributes: payload.attributes,
+          alert: payload.alert ?? { title: payload.title, body: payload.body },
+        },
+        session_id: payload.session_id,
+        box: payload.box,
+      });
+    }
+
+    // Live Activity update/end: forward the broker-supplied content_state verbatim
     // into aps."content-state" so the iOS TurnActivityContentState Codable
     // receives exactly the keys the broker computed. Use the broker's event
     // field ("update"|"end"); fall back to "update" if absent (forward compat).
-    const event = payload.event ?? "update";
-    const contentState = payload.content_state ?? { title: payload.title, body: payload.body };
     return JSON.stringify({
       aps: {
         timestamp: Math.floor(Date.now() / 1000),
@@ -102,9 +122,10 @@ export async function sendApns(
   const host =
     pushEnv === "sandbox" ? "api.sandbox.push.apple.com" : "api.push.apple.com";
 
-  // Live Activity updates use priority 5 (energy-efficient, Apple throttles
-  // priority-10 LA pushes heavily). Alert pushes keep priority 10.
-  const apnsPriority = isLiveActivity ? "5" : "10";
+  // Live Activity update/end use priority 5 (energy-efficient; Apple throttles
+  // priority-10 LA pushes heavily). Push-to-start uses priority 10 — it is a
+  // user-facing alert-equivalent and must land immediately. Alert pushes keep 10.
+  const apnsPriority = isLiveActivity && payload.event !== "start" ? "5" : "10";
 
   const resp = await fetch(`https://${host}/3/device/${token}`, {
     method: "POST",

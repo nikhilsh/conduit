@@ -34,13 +34,21 @@ const (
 	// purist path — no vendor hop). The DeviceToken.Token is the distributor
 	// endpoint URL the app registered.
 	PlatformUnifiedPush Platform = "unifiedpush"
+	// PlatformAPNsLiveActivityStart is the ActivityKit push-to-start token
+	// (iOS 17.2+). Unlike the per-session LA update token (stored in
+	// LARegistry), this is device-scoped (one per Activity type per device),
+	// session-less, and persisted across broker restarts so a backgrounded
+	// approval can start a Live Activity card even after a broker bounce.
+	// Wire value must match the iOS POST /api/push/register-start platform field.
+	PlatformAPNsLiveActivityStart Platform = "apns-liveactivity-start"
 )
 
 // ValidPlatform reports whether p is a transport the broker knows how to
 // route to. Unknown platforms are rejected at registration time so a
 // typo'd client doesn't silently never receive pushes.
 func ValidPlatform(p Platform) bool {
-	return p == PlatformAPNs || p == PlatformFCM || p == PlatformUnifiedPush
+	return p == PlatformAPNs || p == PlatformFCM || p == PlatformUnifiedPush ||
+		p == PlatformAPNsLiveActivityStart
 }
 
 // DeviceToken is one registered device endpoint for an identity.
@@ -69,9 +77,21 @@ type Payload struct {
 	// iOS TurnActivityContentState Codable — see the shared contract in
 	// docs/push-la-spec.md. Nil for alert pushes.
 	ContentState map[string]any
-	// Event is the APNs Live Activity event type: "update" or "end". Only used
-	// when Category="liveactivity".
+	// Event is the APNs Live Activity event type: "update", "end", or "start".
+	// Only used when Category="liveactivity".
 	Event string
+	// AttributesType is the ActivityKit attributes type name for push-to-start.
+	// MUST be exactly "TurnActivityAttributes" — the OS uses this to route the
+	// start push to the correct Activity type. A typo is rejected silently.
+	// Only used when Event="start".
+	AttributesType string
+	// Attributes is the static attributes payload for push-to-start.
+	// Keys MUST be exactly "agentName", "sessionID", "sessionName" to match the
+	// TurnActivityAttributes struct property names. Only used when Event="start".
+	Attributes map[string]any
+	// Alert is the APNs alert block required by Apple for push-to-start.
+	// Contains "title" and "body" keys. Only used when Event="start".
+	Alert map[string]any
 }
 
 // LARegistry is a thread-safe per-(identity,session) Live Activity push-token
@@ -307,6 +327,22 @@ func (r *Registry) TokensFor(identity string) []DeviceToken {
 		return out[i].Token < out[j].Token
 	})
 	return out
+}
+
+// StartTokenFor returns the push-to-start token registered for identity
+// (the PlatformAPNsLiveActivityStart token), or "" if none is registered.
+// The start token is device-scoped (not session-scoped) and is stored in
+// this persisted Registry so it survives broker restarts.
+func (r *Registry) StartTokenFor(identity string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	set := r.byIdentity[identity]
+	for _, t := range set {
+		if t.Platform == PlatformAPNsLiveActivityStart {
+			return t.Token
+		}
+	}
+	return ""
 }
 
 // NoopNotifier is the default Notifier wired into the broker until the

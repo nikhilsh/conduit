@@ -57,12 +57,22 @@ type relayInner struct {
 	Body      string `json:"body"`
 	SessionID string `json:"session_id,omitempty"`
 	Category  string `json:"category,omitempty"`
-	// Event is the APNs Live Activity event type ("update" or "end").
+	// Event is the APNs Live Activity event type ("update", "end", or "start").
 	// Only sent when Category="liveactivity".
 	Event string `json:"event,omitempty"`
 	// ContentState carries the Live Activity aps."content-state" payload.
 	// Only sent when Category="liveactivity". The relay forwards this verbatim.
 	ContentState map[string]any `json:"content_state,omitempty"`
+	// AttributesType is the ActivityKit attributes type name for push-to-start.
+	// MUST be exactly "TurnActivityAttributes". Only sent when Event="start".
+	AttributesType string `json:"attributes_type,omitempty"`
+	// Attributes carries the static activity attributes for push-to-start.
+	// Keys MUST be exactly "agentName", "sessionID", "sessionName". Only sent
+	// when Event="start".
+	Attributes map[string]any `json:"attributes,omitempty"`
+	// Alert is the APNs alert block required for push-to-start.
+	// Only sent when Event="start".
+	Alert map[string]any `json:"alert,omitempty"`
 }
 
 // NewRelaySender builds a relaySender. relayURL is the base URL of the
@@ -96,12 +106,15 @@ func (s *relaySender) Send(ctx context.Context, token DeviceToken, payload Paylo
 		Token:         token.Token,
 		Env:           "production",
 		Payload: relayInner{
-			Title:        payload.Title,
-			Body:         payload.Body,
-			SessionID:    payload.SessionID,
-			Category:     payload.Category,
-			Event:        payload.Event,
-			ContentState: payload.ContentState,
+			Title:          payload.Title,
+			Body:           payload.Body,
+			SessionID:      payload.SessionID,
+			Category:       payload.Category,
+			Event:          payload.Event,
+			ContentState:   payload.ContentState,
+			AttributesType: payload.AttributesType,
+			Attributes:     payload.Attributes,
+			Alert:          payload.Alert,
 		},
 	}
 

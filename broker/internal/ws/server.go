@@ -130,6 +130,9 @@ func (s *Server) WithOAuth(mgr *oauth.Manager) *Server {
 // control messages are ignored.
 func (s *Server) WithPush(reg *push.Registry) *Server {
 	s.Push = reg
+	// Re-wire the alert registry for push-to-start token lookup (G1) whenever
+	// the Push registry changes. rewireLASender no-ops if LA isn't wired yet.
+	s.rewireLASender()
 	return s
 }
 
@@ -157,6 +160,11 @@ func (s *Server) rewireLASender() {
 		return
 	}
 	s.Sessions.SetLASender(s.LATokens, s.LASender, pushIdentity)
+	// Wire the alert registry for push-to-start token lookup (G1). Done here
+	// so it tracks whenever the Push registry is set (WithPush or WithLARegistry).
+	if s.Push != nil {
+		s.Sessions.SetLAAlertRegistry(s.Push)
+	}
 }
 
 // WithDispatcher wires the push Dispatcher into the server. The
@@ -240,6 +248,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/session/", s.serveSessionDelete)
 	// Package 5: push notification registration + test-push endpoint.
 	mux.HandleFunc("/api/push/register", s.servePushRegister)
+	// G1: push-to-start token registration (device-scoped, session-less).
+	mux.HandleFunc("/api/push/register-start", s.servePushRegisterStart)
 	mux.HandleFunc("/api/push/unregister", s.servePushUnregister)
 	mux.HandleFunc("/api/push/test", s.servePushTest)
 	// Auto-propagate: session-less agent-credential push + per-box revoke.

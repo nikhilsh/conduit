@@ -244,4 +244,85 @@ describe("sendApns", () => {
     const r = await sendApns(env(), "tok", payload, "production");
     expect(r).toMatchObject({ ok: false, gone: false });
   });
+
+  // ---- Push-to-start (G1) tests ----
+
+  it("emits start body with attributes-type, attributes, alert inside aps", async () => {
+    let body: any = null;
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      body = JSON.parse(init.body);
+      return new Response(null, { status: 200 });
+    });
+    const attributes = { agentName: "claude", sessionID: "sess-1", sessionName: "My Project" };
+    await sendApns(
+      env(),
+      "start-tok",
+      {
+        ...payload,
+        category: "liveactivity",
+        event: "start",
+        content_state: { status: "running", startedAtMs: 1749600000000, syncedAtMs: 1749600005000 },
+        attributes_type: "TurnActivityAttributes",
+        attributes,
+        alert: { title: "My Project", body: "Needs your input" },
+      },
+      "production",
+    );
+    expect(body.aps.event).toBe("start");
+    expect(body.aps["content-state"].status).toBe("running");
+    expect(body.aps["attributes-type"]).toBe("TurnActivityAttributes");
+    expect(body.aps.attributes).toEqual(attributes);
+    expect(body.aps.alert).toEqual({ title: "My Project", body: "Needs your input" });
+    // No alert.title/body at the aps top level — that's the plain alert shape.
+    expect(body.aps["alert"]).toBeDefined();
+  });
+
+  it("uses apns-priority 10 for start event", async () => {
+    let priority = "";
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      priority = new Headers(init?.headers).get("apns-priority") ?? "";
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(
+      env(),
+      "start-tok",
+      { ...payload, category: "liveactivity", event: "start" },
+      "production",
+    );
+    expect(priority).toBe("10");
+  });
+
+  it("uses the liveactivity topic for start event (same as update/end)", async () => {
+    let topic = "";
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      topic = new Headers(init?.headers).get("apns-topic") ?? "";
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(
+      env(),
+      "start-tok",
+      { ...payload, category: "liveactivity", event: "start" },
+      "production",
+    );
+    expect(topic).toBe("sh.nikhil.conduit.push-type.liveactivity");
+  });
+
+  it("uses apns-priority 5 for update/end (unchanged)", async () => {
+    let priority = "";
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async (_i: any, init: any) => {
+      priority = new Headers(init?.headers).get("apns-priority") ?? "";
+      return new Response(null, { status: 200 });
+    });
+    await sendApns(
+      env(),
+      "tok",
+      { ...payload, category: "liveactivity", event: "update" },
+      "production",
+    );
+    expect(priority).toBe("5");
+  });
 });

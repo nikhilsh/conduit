@@ -37,9 +37,19 @@ function validPayload(p: unknown): p is PushPayload {
     return false;
   }
   // Live Activity optional fields.
-  if (o.event !== undefined && o.event !== "update" && o.event !== "end") return false;
+  if (o.event !== undefined && o.event !== "update" && o.event !== "end" && o.event !== "start") {
+    return false;
+  }
   if (o.content_state !== undefined && (typeof o.content_state !== "object" || o.content_state === null)) {
     return false;
+  }
+  // Push-to-start optional fields (event="start" only, but validated regardless).
+  if (o.attributes_type !== undefined && typeof o.attributes_type !== "string") return false;
+  if (o.attributes !== undefined && (typeof o.attributes !== "object" || o.attributes === null)) return false;
+  if (o.alert !== undefined) {
+    if (typeof o.alert !== "object" || o.alert === null) return false;
+    const alert = o.alert as Record<string, unknown>;
+    if (typeof alert.title !== "string" || typeof alert.body !== "string") return false;
   }
   return true;
 }

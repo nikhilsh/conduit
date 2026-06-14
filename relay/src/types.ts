@@ -11,12 +11,22 @@ export interface PushPayload {
   // already passed through to FCM as a data key. "alert"/absent = plain alert.
   category?: "alert" | "approval" | "input" | "liveactivity";
   // Live Activity fields (category="liveactivity" only).
-  // event is the APNs activity event: "update" or "end".
-  event?: "update" | "end";
+  // event is the APNs activity event: "update", "end", or "start".
+  event?: "update" | "end" | "start";
   // content_state is the broker-supplied TurnActivityContentState object
   // forwarded verbatim into aps."content-state". Keys must match the iOS
   // Codable (epoch-millis Int timestamps, see shared contract).
   content_state?: Record<string, unknown>;
+  // Push-to-start fields (event="start" only).
+  // attributes_type MUST be exactly "TurnActivityAttributes" — the OS uses
+  // this to route the start push to the correct Activity type. A typo is
+  // rejected by the OS with no client-visible error.
+  attributes_type?: string;
+  // attributes keys MUST be exactly "agentName", "sessionID", "sessionName"
+  // to match the TurnActivityAttributes struct property names.
+  attributes?: Record<string, unknown>;
+  // alert is required by Apple for push-to-start: { title, body }.
+  alert?: { title: string; body: string };
 }
 
 export interface SendRequest {

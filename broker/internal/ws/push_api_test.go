@@ -511,6 +511,115 @@ func TestLARegisterMissingSessionID(t *testing.T) {
 	}
 }
 
+// ---- Push-to-start registration tests (/api/push/register-start) ----
+
+// TestPushRegisterStart_HappyPath verifies that POST /api/push/register-start
+// with platform="apns-liveactivity-start" stores the token in the alert Registry
+// under PlatformAPNsLiveActivityStart.
+func TestPushRegisterStart_HappyPath(t *testing.T) {
+	srv, tok, alertReg, _, _ := newTestServerWithPushAndLA(t)
+
+	body := `{"platform":"apns-liveactivity-start","token":"start-tok-xyz"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register-start?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST register-start: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d, want 200", resp.StatusCode)
+	}
+
+	var out struct {
+		Registered bool `json:"registered"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Registered {
+		t.Fatal("registered should be true")
+	}
+
+	// Token must be in the alert Registry under PlatformAPNsLiveActivityStart.
+	if got := alertReg.StartTokenFor(pushIdentity); got != "start-tok-xyz" {
+		t.Errorf("StartTokenFor = %q, want start-tok-xyz", got)
+	}
+}
+
+// TestPushRegisterStart_RequiresAuth verifies that missing auth returns 401.
+func TestPushRegisterStart_RequiresAuth(t *testing.T) {
+	srv, _, _, _, _ := newTestServerWithPushAndLA(t)
+	resp, err := http.Post(srv.URL+"/api/push/register-start", "application/json",
+		strings.NewReader(`{"platform":"apns-liveactivity-start","token":"tok"}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// TestPushRegisterStart_EmptyTokenRejected verifies that an empty token returns 400.
+func TestPushRegisterStart_EmptyTokenRejected(t *testing.T) {
+	srv, tok, _, _, _ := newTestServerWithPushAndLA(t)
+
+	body := `{"platform":"apns-liveactivity-start","token":""}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register-start?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST register-start: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestPushRegisterStart_InvalidPlatformRejected verifies that a wrong platform returns 400.
+func TestPushRegisterStart_InvalidPlatformRejected(t *testing.T) {
+	srv, tok, _, _, _ := newTestServerWithPushAndLA(t)
+
+	body := `{"platform":"apns","token":"tok"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register-start?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST register-start: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestPushRegisterStart_NoPushRegistry_Returns200 verifies forward-compat: when
+// s.Push is nil, the endpoint accepts and discards the token (200 not 503).
+func TestPushRegisterStart_NoPushRegistry_Returns200(t *testing.T) {
+	// Build a server without a Push registry.
+	a := auth.NewStore()
+	tok := a.Mint()
+	reg := newTestRegistry(t)
+	m := session.NewManager(reg)
+	wsSrv := New(a, m) // no WithPush
+	srv := httptest.NewServer(wsSrv.Handler())
+	t.Cleanup(func() { srv.Close(); m.Close() })
+
+	body := `{"platform":"apns-liveactivity-start","token":"tok"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register-start?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST register-start: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 (no registry = forward-compat), got %d", resp.StatusCode)
+	}
+}
+
 // TestLARegisterAlertPathUnchanged verifies that existing alert registrations
 // (platform="apns") continue working when the LA registry is also wired.
 func TestLARegisterAlertPathUnchanged(t *testing.T) {
