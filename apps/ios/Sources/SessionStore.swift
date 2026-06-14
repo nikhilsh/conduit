@@ -958,7 +958,7 @@ final class SessionStore {
     /// a stale old client and is silently dropped. This prevents the old client's
     /// queued `onDisconnected` (fired AFTER `connect()` created a new client and
     /// reached `.linked`) from clobbering the new harness state with `.failed`.
-    private var clientGeneration: UInt64 = 0
+    fileprivate var clientGeneration: UInt64 = 0
 
     // MARK: - Concurrent multi-box registry (flag `concurrentMultiBox`, OFF)
 
