@@ -52,6 +52,9 @@ extension ConduitUI {
 
         @State private var showAddServer = false
         @State private var showAgentLogin = false
+        /// When non-nil, the next agent-login sheet open auto-starts OAuth
+        /// for this provider (one-tap re-auth from the ⋯ menu).
+        @State private var reAuthProvider: OAuthProvider? = nil
         /// Per-agent signed-in + plan snapshot for the Connection group.
         /// Refreshed on appear and whenever the login sheet closes.
         @State private var agentAccounts: [AgentAccountStatus] = []
@@ -115,8 +118,9 @@ extension ConduitUI {
                     // Re-read the Keychain so a fresh sign-in flips the
                     // agent rows to `● signed in` immediately.
                     agentAccounts = AgentAccountStatus.current(descriptors: store.agentDescriptors)
+                    reAuthProvider = nil
                 }) {
-                    ConduitUI.AgentLoginSheet()
+                    ConduitUI.AgentLoginSheet(autoStartProvider: reAuthProvider)
                 }
             }
             // Re-bind \.colorScheme to the AppearanceStore so a runtime
@@ -292,17 +296,18 @@ extension ConduitUI {
             return "\(state) · \(isDefault ? "default server" : "server")"
         }
 
-        /// "Add account" row (dashed plus tile) — opens the agent login flow.
+        /// "Manage" row — opens the agent accounts sheet (full list + sign-in).
         private var addAccountRow: some View {
             Button {
+                reAuthProvider = nil
                 showAgentLogin = true
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "plus.circle")
+                    Image(systemName: "person.2")
                         .font(.body)
                         .frame(width: 20)
                         .foregroundStyle(neon.textDim)
-                    Text("Add account")
+                    Text("Manage")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(neon.textDim)
                     Spacer(minLength: 0)
@@ -393,12 +398,16 @@ extension ConduitUI {
         }
 
         /// Trailing ... menu for a Settings agent row -- replaces the old
-        /// "Manage" speech-bubble confirmationDialog. Re-authenticate routes to
-        /// the login sheet; the two destructive removes are scoped phone vs box.
+        /// "Manage" speech-bubble confirmationDialog. Re-authenticate directly
+        /// launches OAuth for the provider (one tap, no double-hop); the two
+        /// destructive removes are scoped phone vs box.
         @ViewBuilder
         private func agentAccountMenu(_ account: AgentAccountStatus) -> some View {
             Menu {
                 Button {
+                    Telemetry.breadcrumb("agent_reauth", "re-auth triggered from settings menu",
+                        data: ["provider": account.provider.rawValue])
+                    reAuthProvider = account.provider
                     showAgentLogin = true
                 } label: {
                     Label(account.signedIn ? "Re-authenticate" : "Sign in", systemImage: "arrow.clockwise")
