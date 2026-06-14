@@ -3183,7 +3183,10 @@ final class SessionStore {
             data: ["session": sessionID, "local_id": localID])
         Task {
             do {
-                try await client.sendChat(sessionId: sessionID, msg: message)
+                // Carry the localID as client_msg_id for broker dedup/ack
+                // parity (task K). The steer panel card clears on WS-write as
+                // before; the later chat_ack just no-ops (entry already gone).
+                try await client.sendChat(sessionId: sessionID, msg: message, clientMsgId: localID)
                 // Steer ack: the broker injected the message. Clear the panel card.
                 self.pendingChats.markDelivered(sessionID: sessionID, localID: localID)
                 Telemetry.breadcrumb("chat", "steer ack",
@@ -3246,9 +3249,16 @@ final class SessionStore {
             let boxClient = conn.client
             Task {
                 do {
-                    try await boxClient.sendChat(sessionId: sessionID, msg: message)
-                    self.pendingChats.markDelivered(sessionID: sessionID, localID: localID)
-                    self.setEchoStatus(sessionID: sessionID, localID: localID, status: "done")
+                    // Pass the echo's stable localID as client_msg_id so the
+                    // broker can dedup resends and ack THIS message (task K).
+                    try await boxClient.sendChat(sessionId: sessionID, msg: message, clientMsgId: localID)
+                    // WS write returned — NOT yet durably delivered. Keep the
+                    // entry queued and faded; only the broker's chat_ack
+                    // (onChatDelivered) marks it done.
+                    self.pendingChats.markSent(sessionID: sessionID, localID: localID)
+                    self.setEchoStatus(sessionID: sessionID, localID: localID, status: "sent")
+                    Telemetry.breadcrumb("chat", "ws-write ok — awaiting broker ack",
+                        data: ["session": sessionID, "box": stamped])
                 } catch {
                     let gaveUp = self.pendingChats.markAttemptFailed(sessionID: sessionID, localID: localID)
                     if gaveUp {
@@ -3293,10 +3303,17 @@ final class SessionStore {
         }
         Task {
             do {
-                try await client.sendChat(sessionId: sessionID, msg: message)
-                // Ack: drop from the queue and flip the echo to "done".
-                self.pendingChats.markDelivered(sessionID: sessionID, localID: localID)
-                self.setEchoStatus(sessionID: sessionID, localID: localID, status: "done")
+                // Pass the echo's stable localID as client_msg_id so the
+                // broker can dedup resends and ack THIS message (task K).
+                try await client.sendChat(sessionId: sessionID, msg: message, clientMsgId: localID)
+                // WS write returned — NOT yet durably delivered. Keep the
+                // entry queued and faded; only the broker's chat_ack
+                // (onChatDelivered) marks it done. This fixes the "send then
+                // background → message lost but shown as sent" bug.
+                self.pendingChats.markSent(sessionID: sessionID, localID: localID)
+                self.setEchoStatus(sessionID: sessionID, localID: localID, status: "sent")
+                Telemetry.breadcrumb("chat", "ws-write ok — awaiting broker ack",
+                    data: ["session": sessionID])
             } catch {
                 let gaveUp = self.pendingChats.markAttemptFailed(sessionID: sessionID, localID: localID)
                 if gaveUp {
@@ -3939,6 +3956,18 @@ final class SessionStore {
         } else {
             quickReplies[sessionID] = nil
         }
+    }
+
+    /// The broker acked durable receipt of a chat we sent (task K). The
+    /// `clientMsgId` is the optimistic echo's `localID`. Drop the entry from
+    /// the persisted outbox (so it is NOT re-sent) and flip the transcript
+    /// echo to "done" (solid bubble). Idempotent: a duplicate ack (e.g. a
+    /// resend whose first ack we missed) just no-ops once the entry is gone.
+    func ingestChatDelivered(_ sessionID: String, clientMsgId: String) {
+        Telemetry.breadcrumb("chat", "broker ack — delivered",
+            data: ["session": sessionID, "local_id": clientMsgId])
+        pendingChats.markDelivered(sessionID: sessionID, localID: clientMsgId)
+        setEchoStatus(sessionID: sessionID, localID: clientMsgId, status: "done")
     }
 
     func ingestChat(_ sessionID: String, _ event: ChatEvent) {
@@ -5202,7 +5231,10 @@ final class SessionStore {
                 )
                 if let forkBoxID { self.sessionBox[newID] = forkBoxID }
                 let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."
-                try? await client.sendChat(sessionId: newID, msg: seed)
+                // Fire-and-forget seed: not tracked in the outbox, but still
+                // carries a stable client_msg_id so the broker dedups/acks it
+                // (the ack just no-ops — no matching echo). Task K signature.
+                try? await client.sendChat(sessionId: newID, msg: seed, clientMsgId: "local-fork-seed-\(newID)")
                 // Same model record as createSession: an explicit fork-onto
                 // model is the only honest source for the identity header;
                 // a no-override fork inherits the original's record.
@@ -5743,6 +5775,12 @@ final class StoreDelegate: ConduitDelegate {
         Task { @MainActor in
             guard let s = self.store, self.isCurrent(store: s) else { return }
             s.ingestConnectionHealth(sessionId, health)
+        }
+    }
+    func onChatDelivered(sessionId: String, clientMsgId: String) {
+        Task { @MainActor in
+            guard let s = self.store, self.isCurrent(store: s) else { return }
+            s.ingestChatDelivered(sessionId, clientMsgId: clientMsgId)
         }
     }
     func onViewEvent(sessionId: String, kind: String, payload: [String: String]) {

@@ -51,6 +51,60 @@ class PendingChatQueueTest {
         assertTrue(q.bySession.isEmpty())
     }
 
+    // --- Durable delivery / broker ack (task K) ---
+
+    @Test
+    fun markSentKeepsEntryQueued() {
+        // A WS-write success now only marks the entry `sent`; it stays queued
+        // until the broker acks. This is the core of the "send then background
+        // -> lost but shown as sent" fix.
+        val q = PendingChatQueue()
+            .enqueue("s1", "local-1", "a", "t0")
+            .markSent("s1", "local-1")
+        assertTrue(q.isPending("local-1", "s1"))
+        assertTrue(q.entries("s1").first().sent)
+    }
+
+    @Test
+    fun sentEntryStillFlushable() {
+        // An un-acked sent entry is re-attempted on the next flush (resend after
+        // app kill); the broker dedups by client_msg_id so no double reaches the
+        // agent.
+        val q = PendingChatQueue()
+            .enqueue("s1", "local-1", "a", "t0")
+            .markSent("s1", "local-1")
+        assertEquals(listOf("local-1"), q.flushable("s1").map { it.localId })
+    }
+
+    @Test
+    fun brokerAckClearsSentEntry() {
+        val q = PendingChatQueue()
+            .enqueue("s1", "local-1", "a", "t0")
+            .markSent("s1", "local-1")
+            .markDelivered("s1", "local-1")
+        assertFalse(q.isPending("local-1", "s1"))
+        assertTrue(q.bySession.isEmpty())
+    }
+
+    @Test
+    fun retryClearsSentFlag() {
+        var q = PendingChatQueue()
+            .enqueue("s1", "local-1", "a", "t0")
+            .markSent("s1", "local-1")
+        repeat(PendingChatQueue.MAX_ATTEMPTS) { q = q.markAttemptFailed("s1", "local-1") }
+        q = q.retry("s1", "local-1")
+        assertFalse(q.entries("s1").first().sent)
+    }
+
+    @Test
+    fun sentFlagRoundTripsThroughJson() {
+        val q = PendingChatQueue()
+            .enqueue("s1", "local-1", "a", "t0")
+            .markSent("s1", "local-1")
+        val restored = PendingChatQueue.decode(PendingChatQueue.encode(q))
+        assertTrue(restored.entries("s1").first().sent)
+    }
+
     @Test
     fun transientFailureKeepsEntryQueuedAndPending() {
         val q = PendingChatQueue()

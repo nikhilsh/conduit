@@ -686,12 +686,18 @@ internal interface UniffiCallbackInterfaceConduitDelegateMethod7 : com.sun.jna.C
     fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`health`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceConduitDelegateMethod8 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`clientMsgId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceConduitDelegateMethod9 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceSshHostKeyDelegateMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`fingerprint`: RustBuffer.ByValue,`uniffiOutReturn`: ByteByReference,uniffiCallStatus: UniffiRustCallStatus,)
 }
-@Structure.FieldOrder("onPtyData", "onChatEvent", "onPreviewReady", "onStatus", "onSnapshot", "onExit", "onDisconnected", "onConnectionHealth", "onViewEvent", "uniffiFree")
+internal interface UniffiCallbackInterfaceSshProgressDelegateMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`phase`: RustBuffer.ByValue,`detail`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("onPtyData", "onChatEvent", "onPreviewReady", "onStatus", "onSnapshot", "onExit", "onDisconnected", "onConnectionHealth", "onChatDelivered", "onViewEvent", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceConduitDelegate(
     @JvmField internal var `onPtyData`: UniffiCallbackInterfaceConduitDelegateMethod0? = null,
     @JvmField internal var `onChatEvent`: UniffiCallbackInterfaceConduitDelegateMethod1? = null,
@@ -701,7 +707,8 @@ internal open class UniffiVTableCallbackInterfaceConduitDelegate(
     @JvmField internal var `onExit`: UniffiCallbackInterfaceConduitDelegateMethod5? = null,
     @JvmField internal var `onDisconnected`: UniffiCallbackInterfaceConduitDelegateMethod6? = null,
     @JvmField internal var `onConnectionHealth`: UniffiCallbackInterfaceConduitDelegateMethod7? = null,
-    @JvmField internal var `onViewEvent`: UniffiCallbackInterfaceConduitDelegateMethod8? = null,
+    @JvmField internal var `onChatDelivered`: UniffiCallbackInterfaceConduitDelegateMethod8? = null,
+    @JvmField internal var `onViewEvent`: UniffiCallbackInterfaceConduitDelegateMethod9? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
@@ -713,9 +720,10 @@ internal open class UniffiVTableCallbackInterfaceConduitDelegate(
         `onExit`: UniffiCallbackInterfaceConduitDelegateMethod5? = null,
         `onDisconnected`: UniffiCallbackInterfaceConduitDelegateMethod6? = null,
         `onConnectionHealth`: UniffiCallbackInterfaceConduitDelegateMethod7? = null,
-        `onViewEvent`: UniffiCallbackInterfaceConduitDelegateMethod8? = null,
+        `onChatDelivered`: UniffiCallbackInterfaceConduitDelegateMethod8? = null,
+        `onViewEvent`: UniffiCallbackInterfaceConduitDelegateMethod9? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceConduitDelegate(`onPtyData`,`onChatEvent`,`onPreviewReady`,`onStatus`,`onSnapshot`,`onExit`,`onDisconnected`,`onConnectionHealth`,`onViewEvent`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceConduitDelegate(`onPtyData`,`onChatEvent`,`onPreviewReady`,`onStatus`,`onSnapshot`,`onExit`,`onDisconnected`,`onConnectionHealth`,`onChatDelivered`,`onViewEvent`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceConduitDelegate) {
         `onPtyData` = other.`onPtyData`
@@ -726,6 +734,7 @@ internal open class UniffiVTableCallbackInterfaceConduitDelegate(
         `onExit` = other.`onExit`
         `onDisconnected` = other.`onDisconnected`
         `onConnectionHealth` = other.`onConnectionHealth`
+        `onChatDelivered` = other.`onChatDelivered`
         `onViewEvent` = other.`onViewEvent`
         `uniffiFree` = other.`uniffiFree`
     }
@@ -747,6 +756,25 @@ internal open class UniffiVTableCallbackInterfaceSshHostKeyDelegate(
     }
 
 }
+@Structure.FieldOrder("onProgress", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceSshProgressDelegate(
+    @JvmField internal var `onProgress`: UniffiCallbackInterfaceSshProgressDelegateMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onProgress`: UniffiCallbackInterfaceSshProgressDelegateMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceSshProgressDelegate(`onProgress`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceSshProgressDelegate) {
+        `onProgress` = other.`onProgress`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
 
 
 
@@ -917,6 +945,7 @@ internal interface UniffiLib : Library {
                 uniffiCheckApiChecksums(lib)
                 uniffiCallbackInterfaceConduitDelegate.register(lib)
                 uniffiCallbackInterfaceSshHostKeyDelegate.register(lib)
+                uniffiCallbackInterfaceSshProgressDelegate.register(lib)
                 }
         }
         
@@ -938,7 +967,7 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_connect(`ptr`: Pointer,`delegate`: Long,
     ): Long
-    fun uniffi_conduit_core_fn_method_conduitclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`cwd`: RustBuffer.ByValue,`permissionMode`: RustBuffer.ByValue,
+    fun uniffi_conduit_core_fn_method_conduitclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`cwd`: RustBuffer.ByValue,`permissionMode`: RustBuffer.ByValue,`fastMode`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_disconnect(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -958,7 +987,7 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_resize(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`rows`: Short,`cols`: Short,
     ): Long
-    fun uniffi_conduit_core_fn_method_conduitclient_send_chat(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`msg`: RustBuffer.ByValue,
+    fun uniffi_conduit_core_fn_method_conduitclient_send_chat(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`msg`: RustBuffer.ByValue,`clientMsgId`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_send_file(`ptr`: Pointer,`sessionId`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,`mime`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,
     ): Long
@@ -1020,9 +1049,11 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_conduit_core_fn_init_callback_vtable_sshhostkeydelegate(`vtable`: UniffiVTableCallbackInterfaceSshHostKeyDelegate,
     ): Unit
-    fun uniffi_conduit_core_fn_func_ssh_bootstrap(`credentials`: RustBuffer.ByValue,`preAllocatedToken`: RustBuffer.ByValue,`anthropicApiKey`: RustBuffer.ByValue,`openaiApiKey`: RustBuffer.ByValue,`imageRef`: RustBuffer.ByValue,`hostKeyDelegate`: Long,
+    fun uniffi_conduit_core_fn_init_callback_vtable_sshprogressdelegate(`vtable`: UniffiVTableCallbackInterfaceSshProgressDelegate,
+    ): Unit
+    fun uniffi_conduit_core_fn_func_ssh_bootstrap(`credentials`: RustBuffer.ByValue,`preAllocatedToken`: RustBuffer.ByValue,`anthropicApiKey`: RustBuffer.ByValue,`openaiApiKey`: RustBuffer.ByValue,`imageRef`: RustBuffer.ByValue,`appVersion`: RustBuffer.ByValue,`hostKeyDelegate`: Long,`progressDelegate`: RustBuffer.ByValue,
     ): Long
-    fun uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(`credentials`: RustBuffer.ByValue,`preAllocatedToken`: RustBuffer.ByValue,`anthropicApiKey`: RustBuffer.ByValue,`openaiApiKey`: RustBuffer.ByValue,`imageRef`: RustBuffer.ByValue,`hostKeyDelegate`: Long,
+    fun uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(`credentials`: RustBuffer.ByValue,`preAllocatedToken`: RustBuffer.ByValue,`anthropicApiKey`: RustBuffer.ByValue,`openaiApiKey`: RustBuffer.ByValue,`imageRef`: RustBuffer.ByValue,`appVersion`: RustBuffer.ByValue,`hostKeyDelegate`: Long,`progressDelegate`: RustBuffer.ByValue,
     ): Long
     fun ffi_conduit_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1234,9 +1265,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_conduit_core_checksum_method_conduitdelegate_on_connection_health(
     ): Short
+    fun uniffi_conduit_core_checksum_method_conduitdelegate_on_chat_delivered(
+    ): Short
     fun uniffi_conduit_core_checksum_method_conduitdelegate_on_view_event(
     ): Short
     fun uniffi_conduit_core_checksum_method_sshhostkeydelegate_accept_host_key(
+    ): Short
+    fun uniffi_conduit_core_checksum_method_sshprogressdelegate_on_progress(
     ): Short
     fun ffi_conduit_core_uniffi_contract_version(
     ): Int
@@ -1255,10 +1290,10 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_conduit_core_checksum_func_ssh_bootstrap() != 50145.toShort()) {
+    if (lib.uniffi_conduit_core_checksum_func_ssh_bootstrap() != 5914.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled() != 60504.toShort()) {
+    if (lib.uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled() != 26493.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_agent_login_callback() != 4395.toShort()) {
@@ -1270,7 +1305,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_connect() != 37807.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_conduit_core_checksum_method_conduitclient_create_session() != 43260.toShort()) {
+    if (lib.uniffi_conduit_core_checksum_method_conduitclient_create_session() != 48656.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_disconnect() != 13038.toShort()) {
@@ -1300,7 +1335,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_resize() != 29584.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_conduit_core_checksum_method_conduitclient_send_chat() != 26919.toShort()) {
+    if (lib.uniffi_conduit_core_checksum_method_conduitclient_send_chat() != 8352.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_conduitclient_send_file() != 22550.toShort()) {
@@ -1402,10 +1437,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_conduit_core_checksum_method_conduitdelegate_on_connection_health() != 26560.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_conduit_core_checksum_method_conduitdelegate_on_chat_delivered() != 21833.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_conduit_core_checksum_method_conduitdelegate_on_view_event() != 49914.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_conduit_core_checksum_method_sshhostkeydelegate_accept_host_key() != 16407.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_conduit_core_checksum_method_sshprogressdelegate_on_progress() != 11920.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1879,7 +1920,7 @@ public interface ConduitClientInterface {
     
     suspend fun `connect`(`delegate`: ConduitDelegate)
     
-    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?): kotlin.String
+    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?, `fastMode`: kotlin.Boolean?): kotlin.String
     
     fun `disconnect`()
     
@@ -1899,7 +1940,7 @@ public interface ConduitClientInterface {
     
     suspend fun `resize`(`sessionId`: kotlin.String, `rows`: kotlin.UShort, `cols`: kotlin.UShort)
     
-    suspend fun `sendChat`(`sessionId`: kotlin.String, `msg`: kotlin.String)
+    suspend fun `sendChat`(`sessionId`: kotlin.String, `msg`: kotlin.String, `clientMsgId`: kotlin.String)
     
     suspend fun `sendFile`(`sessionId`: kotlin.String, `filename`: kotlin.String, `mime`: kotlin.String, `payload`: kotlin.ByteArray)
     
@@ -2073,12 +2114,12 @@ open class ConduitClient: Disposable, AutoCloseable, ConduitClientInterface {
     
     @Throws(ConduitException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?) : kotlin.String {
+    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?, `fastMode`: kotlin.Boolean?) : kotlin.String {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
             UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_create_session(
                 thisPtr,
-                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),FfiConverterOptionalString.lower(`cwd`),FfiConverterOptionalString.lower(`permissionMode`),
+                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),FfiConverterOptionalString.lower(`cwd`),FfiConverterOptionalString.lower(`permissionMode`),FfiConverterOptionalBoolean.lower(`fastMode`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -2242,12 +2283,12 @@ open class ConduitClient: Disposable, AutoCloseable, ConduitClientInterface {
     
     @Throws(ConduitException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `sendChat`(`sessionId`: kotlin.String, `msg`: kotlin.String) {
+    override suspend fun `sendChat`(`sessionId`: kotlin.String, `msg`: kotlin.String, `clientMsgId`: kotlin.String) {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
             UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_send_chat(
                 thisPtr,
-                FfiConverterString.lower(`sessionId`),FfiConverterString.lower(`msg`),
+                FfiConverterString.lower(`sessionId`),FfiConverterString.lower(`msg`),FfiConverterString.lower(`clientMsgId`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_void(future, callback, continuation) },
@@ -3396,10 +3437,17 @@ data class ProjectSession (
     var `commits`: kotlin.UInt? = null, 
     var `prNumber`: kotlin.UInt? = null, 
     var `prState`: kotlin.String? = null, 
+    var `prUrl`: kotlin.String? = null, 
+    var `prProvider`: kotlin.String? = null, 
     var `account5hPct`: kotlin.Double? = null, 
     var `account5hResetsAt`: kotlin.String? = null, 
     var `account7dPct`: kotlin.Double? = null, 
-    var `account7dResetsAt`: kotlin.String? = null
+    var `account7dResetsAt`: kotlin.String? = null, 
+    var `gitBranch`: kotlin.String? = null, 
+    var `gitDirty`: kotlin.UInt? = null, 
+    var `gitAhead`: kotlin.UInt? = null, 
+    var `gitBehind`: kotlin.UInt? = null, 
+    var `worktreeName`: kotlin.String? = null
 ) {
     
     companion object
@@ -3432,9 +3480,16 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalDouble.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
@@ -3461,10 +3516,17 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalUInt.allocationSize(value.`commits`) +
             FfiConverterOptionalUInt.allocationSize(value.`prNumber`) +
             FfiConverterOptionalString.allocationSize(value.`prState`) +
+            FfiConverterOptionalString.allocationSize(value.`prUrl`) +
+            FfiConverterOptionalString.allocationSize(value.`prProvider`) +
             FfiConverterOptionalDouble.allocationSize(value.`account5hPct`) +
             FfiConverterOptionalString.allocationSize(value.`account5hResetsAt`) +
             FfiConverterOptionalDouble.allocationSize(value.`account7dPct`) +
-            FfiConverterOptionalString.allocationSize(value.`account7dResetsAt`)
+            FfiConverterOptionalString.allocationSize(value.`account7dResetsAt`) +
+            FfiConverterOptionalString.allocationSize(value.`gitBranch`) +
+            FfiConverterOptionalUInt.allocationSize(value.`gitDirty`) +
+            FfiConverterOptionalUInt.allocationSize(value.`gitAhead`) +
+            FfiConverterOptionalUInt.allocationSize(value.`gitBehind`) +
+            FfiConverterOptionalString.allocationSize(value.`worktreeName`)
     )
 
     override fun write(value: ProjectSession, buf: ByteBuffer) {
@@ -3489,10 +3551,17 @@ public object FfiConverterTypeProjectSession: FfiConverterRustBuffer<ProjectSess
             FfiConverterOptionalUInt.write(value.`commits`, buf)
             FfiConverterOptionalUInt.write(value.`prNumber`, buf)
             FfiConverterOptionalString.write(value.`prState`, buf)
+            FfiConverterOptionalString.write(value.`prUrl`, buf)
+            FfiConverterOptionalString.write(value.`prProvider`, buf)
             FfiConverterOptionalDouble.write(value.`account5hPct`, buf)
             FfiConverterOptionalString.write(value.`account5hResetsAt`, buf)
             FfiConverterOptionalDouble.write(value.`account7dPct`, buf)
             FfiConverterOptionalString.write(value.`account7dResetsAt`, buf)
+            FfiConverterOptionalString.write(value.`gitBranch`, buf)
+            FfiConverterOptionalUInt.write(value.`gitDirty`, buf)
+            FfiConverterOptionalUInt.write(value.`gitAhead`, buf)
+            FfiConverterOptionalUInt.write(value.`gitBehind`, buf)
+            FfiConverterOptionalString.write(value.`worktreeName`, buf)
     }
 }
 
@@ -3578,10 +3647,17 @@ data class SessionStatus (
     var `commits`: kotlin.UInt? = null, 
     var `prNumber`: kotlin.UInt? = null, 
     var `prState`: kotlin.String? = null, 
+    var `prUrl`: kotlin.String? = null, 
+    var `prProvider`: kotlin.String? = null, 
     var `account5hPct`: kotlin.Double? = null, 
     var `account5hResetsAt`: kotlin.String? = null, 
     var `account7dPct`: kotlin.Double? = null, 
-    var `account7dResetsAt`: kotlin.String? = null
+    var `account7dResetsAt`: kotlin.String? = null, 
+    var `gitBranch`: kotlin.String? = null, 
+    var `gitDirty`: kotlin.UInt? = null, 
+    var `gitAhead`: kotlin.UInt? = null, 
+    var `gitBehind`: kotlin.UInt? = null, 
+    var `worktreeName`: kotlin.String? = null
 ) {
     
     companion object
@@ -3620,9 +3696,16 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalDouble.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
@@ -3655,10 +3738,17 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.allocationSize(value.`commits`) +
             FfiConverterOptionalUInt.allocationSize(value.`prNumber`) +
             FfiConverterOptionalString.allocationSize(value.`prState`) +
+            FfiConverterOptionalString.allocationSize(value.`prUrl`) +
+            FfiConverterOptionalString.allocationSize(value.`prProvider`) +
             FfiConverterOptionalDouble.allocationSize(value.`account5hPct`) +
             FfiConverterOptionalString.allocationSize(value.`account5hResetsAt`) +
             FfiConverterOptionalDouble.allocationSize(value.`account7dPct`) +
-            FfiConverterOptionalString.allocationSize(value.`account7dResetsAt`)
+            FfiConverterOptionalString.allocationSize(value.`account7dResetsAt`) +
+            FfiConverterOptionalString.allocationSize(value.`gitBranch`) +
+            FfiConverterOptionalUInt.allocationSize(value.`gitDirty`) +
+            FfiConverterOptionalUInt.allocationSize(value.`gitAhead`) +
+            FfiConverterOptionalUInt.allocationSize(value.`gitBehind`) +
+            FfiConverterOptionalString.allocationSize(value.`worktreeName`)
     )
 
     override fun write(value: SessionStatus, buf: ByteBuffer) {
@@ -3689,10 +3779,17 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterOptionalUInt.write(value.`commits`, buf)
             FfiConverterOptionalUInt.write(value.`prNumber`, buf)
             FfiConverterOptionalString.write(value.`prState`, buf)
+            FfiConverterOptionalString.write(value.`prUrl`, buf)
+            FfiConverterOptionalString.write(value.`prProvider`, buf)
             FfiConverterOptionalDouble.write(value.`account5hPct`, buf)
             FfiConverterOptionalString.write(value.`account5hResetsAt`, buf)
             FfiConverterOptionalDouble.write(value.`account7dPct`, buf)
             FfiConverterOptionalString.write(value.`account7dResetsAt`, buf)
+            FfiConverterOptionalString.write(value.`gitBranch`, buf)
+            FfiConverterOptionalUInt.write(value.`gitDirty`, buf)
+            FfiConverterOptionalUInt.write(value.`gitAhead`, buf)
+            FfiConverterOptionalUInt.write(value.`gitBehind`, buf)
+            FfiConverterOptionalString.write(value.`worktreeName`, buf)
     }
 }
 
@@ -4256,6 +4353,16 @@ sealed class SshException(message: String): kotlin.Exception(message) {
         
         class HarnessStartTimeout(message: String) : SshException(message)
         
+        class BrokerInstallFailed(message: String) : SshException(message)
+        
+        class CurlMissing(message: String) : SshException(message)
+        
+        class UnsupportedPlatform(message: String) : SshException(message)
+        
+        class BrokerExecFailed(message: String) : SshException(message)
+        
+        class HomeUnwritable(message: String) : SshException(message)
+        
         class BootstrapExitCode(message: String) : SshException(message)
         
         class BootstrapParse(message: String) : SshException(message)
@@ -4285,10 +4392,15 @@ public object FfiConverterTypeSshError : FfiConverterRustBuffer<SshException> {
             6 -> SshException.DockerPermission(FfiConverterString.read(buf))
             7 -> SshException.PortConflict(FfiConverterString.read(buf))
             8 -> SshException.HarnessStartTimeout(FfiConverterString.read(buf))
-            9 -> SshException.BootstrapExitCode(FfiConverterString.read(buf))
-            10 -> SshException.BootstrapParse(FfiConverterString.read(buf))
-            11 -> SshException.PortForward(FfiConverterString.read(buf))
-            12 -> SshException.Io(FfiConverterString.read(buf))
+            9 -> SshException.BrokerInstallFailed(FfiConverterString.read(buf))
+            10 -> SshException.CurlMissing(FfiConverterString.read(buf))
+            11 -> SshException.UnsupportedPlatform(FfiConverterString.read(buf))
+            12 -> SshException.BrokerExecFailed(FfiConverterString.read(buf))
+            13 -> SshException.HomeUnwritable(FfiConverterString.read(buf))
+            14 -> SshException.BootstrapExitCode(FfiConverterString.read(buf))
+            15 -> SshException.BootstrapParse(FfiConverterString.read(buf))
+            16 -> SshException.PortForward(FfiConverterString.read(buf))
+            17 -> SshException.Io(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -4332,20 +4444,40 @@ public object FfiConverterTypeSshError : FfiConverterRustBuffer<SshException> {
                 buf.putInt(8)
                 Unit
             }
-            is SshException.BootstrapExitCode -> {
+            is SshException.BrokerInstallFailed -> {
                 buf.putInt(9)
                 Unit
             }
-            is SshException.BootstrapParse -> {
+            is SshException.CurlMissing -> {
                 buf.putInt(10)
                 Unit
             }
-            is SshException.PortForward -> {
+            is SshException.UnsupportedPlatform -> {
                 buf.putInt(11)
                 Unit
             }
-            is SshException.Io -> {
+            is SshException.BrokerExecFailed -> {
                 buf.putInt(12)
+                Unit
+            }
+            is SshException.HomeUnwritable -> {
+                buf.putInt(13)
+                Unit
+            }
+            is SshException.BootstrapExitCode -> {
+                buf.putInt(14)
+                Unit
+            }
+            is SshException.BootstrapParse -> {
+                buf.putInt(15)
+                Unit
+            }
+            is SshException.PortForward -> {
+                buf.putInt(16)
+                Unit
+            }
+            is SshException.Io -> {
+                buf.putInt(17)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4374,6 +4506,8 @@ public interface ConduitDelegate {
     fun `onDisconnected`(`reason`: kotlin.String)
     
     fun `onConnectionHealth`(`sessionId`: kotlin.String, `health`: ConnectionHealth)
+    
+    fun `onChatDelivered`(`sessionId`: kotlin.String, `clientMsgId`: kotlin.String)
     
     fun `onViewEvent`(`sessionId`: kotlin.String, `kind`: kotlin.String, `payload`: Map<kotlin.String, kotlin.String>)
     
@@ -4517,7 +4651,20 @@ internal object uniffiCallbackInterfaceConduitDelegate {
             uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
         }
     }
-    internal object `onViewEvent`: UniffiCallbackInterfaceConduitDelegateMethod8 {
+    internal object `onChatDelivered`: UniffiCallbackInterfaceConduitDelegateMethod8 {
+        override fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`clientMsgId`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeConduitDelegate.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onChatDelivered`(
+                    FfiConverterString.lift(`sessionId`),
+                    FfiConverterString.lift(`clientMsgId`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `onViewEvent`: UniffiCallbackInterfaceConduitDelegateMethod9 {
         override fun callback(`uniffiHandle`: Long,`sessionId`: RustBuffer.ByValue,`kind`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeConduitDelegate.handleMap.get(uniffiHandle)
             val makeCall = { ->
@@ -4547,6 +4694,7 @@ internal object uniffiCallbackInterfaceConduitDelegate {
         `onExit`,
         `onDisconnected`,
         `onConnectionHealth`,
+        `onChatDelivered`,
         `onViewEvent`,
         uniffiFree,
     )
@@ -4617,6 +4765,60 @@ internal object uniffiCallbackInterfaceSshHostKeyDelegate {
  * @suppress
  */
 public object FfiConverterTypeSshHostKeyDelegate: FfiConverterCallbackInterface<SshHostKeyDelegate>()
+
+
+
+
+
+public interface SshProgressDelegate {
+    
+    fun `onProgress`(`phase`: kotlin.String, `detail`: kotlin.String?)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceSshProgressDelegate {
+    internal object `onProgress`: UniffiCallbackInterfaceSshProgressDelegateMethod0 {
+        override fun callback(`uniffiHandle`: Long,`phase`: RustBuffer.ByValue,`detail`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSshProgressDelegate.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onProgress`(
+                    FfiConverterString.lift(`phase`),
+                    FfiConverterOptionalString.lift(`detail`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeSshProgressDelegate.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceSshProgressDelegate.UniffiByValue(
+        `onProgress`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_conduit_core_fn_init_callback_vtable_sshprogressdelegate(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeSshProgressDelegate: FfiConverterCallbackInterface<SshProgressDelegate>()
 
 
 
@@ -4944,6 +5146,38 @@ public object FfiConverterOptionalTypeSessionLifecycleCore: FfiConverterRustBuff
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeSshProgressDelegate: FfiConverterRustBuffer<SshProgressDelegate?> {
+    override fun read(buf: ByteBuffer): SshProgressDelegate? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSshProgressDelegate.read(buf)
+    }
+
+    override fun allocationSize(value: SshProgressDelegate?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSshProgressDelegate.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SshProgressDelegate?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSshProgressDelegate.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -5154,9 +5388,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
 
     @Throws(SshException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-     suspend fun `sshBootstrap`(`credentials`: SshCredentials, `preAllocatedToken`: kotlin.String, `anthropicApiKey`: kotlin.String, `openaiApiKey`: kotlin.String, `imageRef`: kotlin.String?, `hostKeyDelegate`: SshHostKeyDelegate) : SshBootstrapResult {
+     suspend fun `sshBootstrap`(`credentials`: SshCredentials, `preAllocatedToken`: kotlin.String, `anthropicApiKey`: kotlin.String, `openaiApiKey`: kotlin.String, `imageRef`: kotlin.String?, `appVersion`: kotlin.String?, `hostKeyDelegate`: SshHostKeyDelegate, `progressDelegate`: SshProgressDelegate?) : SshBootstrapResult {
         return uniffiRustCallAsync(
-        UniffiLib.INSTANCE.uniffi_conduit_core_fn_func_ssh_bootstrap(FfiConverterTypeSshCredentials.lower(`credentials`),FfiConverterString.lower(`preAllocatedToken`),FfiConverterString.lower(`anthropicApiKey`),FfiConverterString.lower(`openaiApiKey`),FfiConverterOptionalString.lower(`imageRef`),FfiConverterTypeSshHostKeyDelegate.lower(`hostKeyDelegate`),),
+        UniffiLib.INSTANCE.uniffi_conduit_core_fn_func_ssh_bootstrap(FfiConverterTypeSshCredentials.lower(`credentials`),FfiConverterString.lower(`preAllocatedToken`),FfiConverterString.lower(`anthropicApiKey`),FfiConverterString.lower(`openaiApiKey`),FfiConverterOptionalString.lower(`imageRef`),FfiConverterOptionalString.lower(`appVersion`),FfiConverterTypeSshHostKeyDelegate.lower(`hostKeyDelegate`),FfiConverterOptionalTypeSshProgressDelegate.lower(`progressDelegate`),),
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_rust_buffer(future, callback, continuation) },
         { future, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_complete_rust_buffer(future, continuation) },
         { future -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_free_rust_buffer(future) },
@@ -5169,9 +5403,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
 
     @Throws(SshException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-     suspend fun `sshBootstrapTunneled`(`credentials`: SshCredentials, `preAllocatedToken`: kotlin.String, `anthropicApiKey`: kotlin.String, `openaiApiKey`: kotlin.String, `imageRef`: kotlin.String?, `hostKeyDelegate`: SshHostKeyDelegate) : SshTunnelBootstrap {
+     suspend fun `sshBootstrapTunneled`(`credentials`: SshCredentials, `preAllocatedToken`: kotlin.String, `anthropicApiKey`: kotlin.String, `openaiApiKey`: kotlin.String, `imageRef`: kotlin.String?, `appVersion`: kotlin.String?, `hostKeyDelegate`: SshHostKeyDelegate, `progressDelegate`: SshProgressDelegate?) : SshTunnelBootstrap {
         return uniffiRustCallAsync(
-        UniffiLib.INSTANCE.uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(FfiConverterTypeSshCredentials.lower(`credentials`),FfiConverterString.lower(`preAllocatedToken`),FfiConverterString.lower(`anthropicApiKey`),FfiConverterString.lower(`openaiApiKey`),FfiConverterOptionalString.lower(`imageRef`),FfiConverterTypeSshHostKeyDelegate.lower(`hostKeyDelegate`),),
+        UniffiLib.INSTANCE.uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(FfiConverterTypeSshCredentials.lower(`credentials`),FfiConverterString.lower(`preAllocatedToken`),FfiConverterString.lower(`anthropicApiKey`),FfiConverterString.lower(`openaiApiKey`),FfiConverterOptionalString.lower(`imageRef`),FfiConverterOptionalString.lower(`appVersion`),FfiConverterTypeSshHostKeyDelegate.lower(`hostKeyDelegate`),FfiConverterOptionalTypeSshProgressDelegate.lower(`progressDelegate`),),
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_rust_buffer(future, callback, continuation) },
         { future, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_complete_rust_buffer(future, continuation) },
         { future -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_free_rust_buffer(future) },

@@ -32,6 +32,14 @@ struct PendingChat: Codable, Equatable {
     /// A failed entry stays in the queue (so the user can retry) but is NOT
     /// auto-flushed again until the user explicitly retries it.
     var failed: Bool = false
+    /// True once the WS write returned success but the BROKER has not yet
+    /// acked receipt (task K). A `sent` entry stays in the queue — only a
+    /// broker `chat_ack` (markDelivered) removes it — so a write that
+    /// "succeeded" locally yet never flushed (app killed mid-send) is still
+    /// re-attempted on the next flush. The broker dedups resends by
+    /// client_msg_id (== localID), so the agent never sees a double. The
+    /// bubble stays faded while `sent` and only goes solid on the ack.
+    var sent: Bool = false
     /// Delivery context for this entry (spec: status enum).
     var kind: EntryKind = .normal
 
@@ -137,8 +145,21 @@ struct PendingChatQueue: Equatable {
         }
     }
 
-    /// The WS write for `localID` succeeded -- drop it from the queue (ack).
-    /// The shell flips the transcript echo to `done`.
+    /// The WS write for `localID` returned success but the broker has NOT yet
+    /// acked (task K). Mark the entry `sent` (bubble stays faded) and KEEP it
+    /// in the queue so an un-acked send is re-attempted on the next flush.
+    /// Idempotent. A no-op if the entry is already gone (acked).
+    mutating func markSent(sessionID: String, localID: String) {
+        guard var list = bySession[sessionID],
+              let idx = list.firstIndex(where: { $0.localID == localID }) else { return }
+        list[idx].sent = true
+        bySession[sessionID] = list
+    }
+
+    /// The BROKER acked receipt of `localID` (chat_ack) -- drop it from the
+    /// queue. The shell flips the transcript echo to `done` (solid bubble).
+    /// This is the ONLY durable-delivery signal; a bare WS-write success goes
+    /// through `markSent` and leaves the entry queued.
     mutating func markDelivered(sessionID: String, localID: String) {
         guard var list = bySession[sessionID] else { return }
         list.removeAll { $0.localID == localID }
@@ -184,6 +205,7 @@ struct PendingChatQueue: Equatable {
               let idx = list.firstIndex(where: { $0.localID == localID }) else { return }
         list[idx].failed = false
         list[idx].attempts = 0
+        list[idx].sent = false
         bySession[sessionID] = list
     }
 

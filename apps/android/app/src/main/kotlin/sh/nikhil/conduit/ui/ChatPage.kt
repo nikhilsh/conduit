@@ -40,7 +40,6 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Terminal
@@ -54,7 +53,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -95,8 +93,11 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import sh.nikhil.conduit.FeatureFlags
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -1893,6 +1894,13 @@ private fun ConversationBubble(
             NeonLabel(roleLabel, labelColor, neon)
         }
         if (role == ConversationRole.User) {
+            // Task K send-state cue (NO text): while a message is sent-but-not-
+            // yet-broker-acked (`pending` = queued/pre-write, `sent` = WS write
+            // ok / awaiting chat_ack, `retrying` = manual retry in-flight), the
+            // bubble renders faded + dotted; it goes solid once the broker acks
+            // (status → done). Reads `ev.status` so a flip rebuilds the row.
+            val sendState = ev.status.lowercase()
+            val inFlight = sendState == "pending" || sendState == "sent" || sendState == "retrying"
             // Right-aligned, content-sized pill. `neon.accent` fill +
             // `neon.accentText` foreground, pill radius — the §2 user
             // bubble. `fillMaxWidth(0.82f)` caps long turns; `wrapContentWidth`
@@ -1901,12 +1909,34 @@ private fun ConversationBubble(
                 modifier = Modifier
                     .fillMaxWidth(0.82f)
                     .wrapContentWidth(Alignment.End)
+                    .graphicsLayer { this.alpha = if (inFlight) 0.55f else 1f }
                     .clip(RoundedCornerShape(18.dp))
                     // Device feedback v0.0.68: fill with `accent`, NOT `accent2`.
                     // `accentText` is the guaranteed-contrast partner of `accent`
                     // (in light mode `accent2` is a bright tint, e.g. Matrix lime,
                     // and `accentText` is white → white-on-lime was unreadable).
-                    .background(neon.accent),
+                    .background(neon.accent)
+                    .then(
+                        if (inFlight) {
+                            val dashColor = neon.accentText.copy(alpha = 0.7f)
+                            Modifier.drawBehind {
+                                val stroke = 1.dp.toPx()
+                                drawRoundRect(
+                                    color = dashColor,
+                                    cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx()),
+                                    style = Stroke(
+                                        width = stroke,
+                                        pathEffect = PathEffect.dashPathEffect(
+                                            floatArrayOf(4.dp.toPx(), 3.dp.toPx()),
+                                            0f,
+                                        ),
+                                    ),
+                                )
+                            }
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1955,46 +1985,10 @@ private fun ConversationBubble(
 private fun SendStatusFooter(ev: ConversationItem) {
     val neon = LocalNeonTheme.current
     when (ev.status.lowercase()) {
-        "pending" -> {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Icon(
-                    Icons.Outlined.Schedule,
-                    contentDescription = null,
-                    tint = neon.textDim,
-                    modifier = Modifier.size(11.dp),
-                )
-                Text(
-                    "sending…",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.mono,
-                    color = neon.textDim,
-                )
-            }
-        }
-
-        "retrying" -> {
-            // Fix 8: transient state while a manual retry's WS write is
-            // in-flight. Flips back to done/failed when attemptDeliver settles.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                CircularProgressIndicator(
-                    strokeWidth = 1.5.dp,
-                    color = neon.textDim,
-                    modifier = Modifier.size(11.dp),
-                )
-                Text(
-                    "retrying…",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.mono,
-                    color = neon.textDim,
-                )
-            }
-        }
+        // Task K: the in-flight states (`pending`/`sent`/`retrying`) carry NO
+        // text — the bubble's faded + dotted treatment (in the user-bubble Box
+        // above) is the only cue, and it clears to solid once the broker acks
+        // (status → done). Only the failed terminus keeps a tappable affordance.
         "failed" -> {
             val store = LocalSessionStore.current
             val sessionId = LocalSessionId.current

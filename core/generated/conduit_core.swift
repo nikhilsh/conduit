@@ -570,7 +570,7 @@ public protocol ConduitClientProtocol : AnyObject {
     
     func connect(delegate: ConduitDelegate) async throws 
     
-    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?) async throws  -> String
+    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?, fastMode: Bool?) async throws  -> String
     
     func disconnect() 
     
@@ -590,7 +590,7 @@ public protocol ConduitClientProtocol : AnyObject {
     
     func resize(sessionId: String, rows: UInt16, cols: UInt16) async throws 
     
-    func sendChat(sessionId: String, msg: String) async throws 
+    func sendChat(sessionId: String, msg: String, clientMsgId: String) async throws 
     
     func sendFile(sessionId: String, filename: String, mime: String, payload: Data) async throws 
     
@@ -716,13 +716,13 @@ open func connect(delegate: ConduitDelegate)async throws  {
         )
 }
     
-open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?)async throws  -> String {
+open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?, fastMode: Bool?)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_conduit_core_fn_method_conduitclient_create_session(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model),FfiConverterOptionString.lower(cwd),FfiConverterOptionString.lower(permissionMode)
+                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model),FfiConverterOptionString.lower(cwd),FfiConverterOptionString.lower(permissionMode),FfiConverterOptionBool.lower(fastMode)
                 )
             },
             pollFunc: ffi_conduit_core_rust_future_poll_rust_buffer,
@@ -836,13 +836,13 @@ open func resize(sessionId: String, rows: UInt16, cols: UInt16)async throws  {
         )
 }
     
-open func sendChat(sessionId: String, msg: String)async throws  {
+open func sendChat(sessionId: String, msg: String, clientMsgId: String)async throws  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_conduit_core_fn_method_conduitclient_send_chat(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(sessionId),FfiConverterString.lower(msg)
+                    FfiConverterString.lower(sessionId),FfiConverterString.lower(msg),FfiConverterString.lower(clientMsgId)
                 )
             },
             pollFunc: ffi_conduit_core_rust_future_poll_void,
@@ -1961,14 +1961,21 @@ public struct ProjectSession {
     public var commits: UInt32?
     public var prNumber: UInt32?
     public var prState: String?
+    public var prUrl: String?
+    public var prProvider: String?
     public var account5hPct: Double?
     public var account5hResetsAt: String?
     public var account7dPct: Double?
     public var account7dResetsAt: String?
+    public var gitBranch: String?
+    public var gitDirty: UInt32?
+    public var gitAhead: UInt32?
+    public var gitBehind: UInt32?
+    public var worktreeName: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil) {
+    public init(id: String, name: String, assistant: String, branch: String?, preview: PreviewInfo?, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, prUrl: String? = nil, prProvider: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil, gitBranch: String? = nil, gitDirty: UInt32? = nil, gitAhead: UInt32? = nil, gitBehind: UInt32? = nil, worktreeName: String? = nil) {
         self.id = id
         self.name = name
         self.assistant = assistant
@@ -1990,10 +1997,17 @@ public struct ProjectSession {
         self.commits = commits
         self.prNumber = prNumber
         self.prState = prState
+        self.prUrl = prUrl
+        self.prProvider = prProvider
         self.account5hPct = account5hPct
         self.account5hResetsAt = account5hResetsAt
         self.account7dPct = account7dPct
         self.account7dResetsAt = account7dResetsAt
+        self.gitBranch = gitBranch
+        self.gitDirty = gitDirty
+        self.gitAhead = gitAhead
+        self.gitBehind = gitBehind
+        self.worktreeName = worktreeName
     }
 }
 
@@ -2064,6 +2078,12 @@ extension ProjectSession: Equatable, Hashable {
         if lhs.prState != rhs.prState {
             return false
         }
+        if lhs.prUrl != rhs.prUrl {
+            return false
+        }
+        if lhs.prProvider != rhs.prProvider {
+            return false
+        }
         if lhs.account5hPct != rhs.account5hPct {
             return false
         }
@@ -2074,6 +2094,21 @@ extension ProjectSession: Equatable, Hashable {
             return false
         }
         if lhs.account7dResetsAt != rhs.account7dResetsAt {
+            return false
+        }
+        if lhs.gitBranch != rhs.gitBranch {
+            return false
+        }
+        if lhs.gitDirty != rhs.gitDirty {
+            return false
+        }
+        if lhs.gitAhead != rhs.gitAhead {
+            return false
+        }
+        if lhs.gitBehind != rhs.gitBehind {
+            return false
+        }
+        if lhs.worktreeName != rhs.worktreeName {
             return false
         }
         return true
@@ -2101,10 +2136,17 @@ extension ProjectSession: Equatable, Hashable {
         hasher.combine(commits)
         hasher.combine(prNumber)
         hasher.combine(prState)
+        hasher.combine(prUrl)
+        hasher.combine(prProvider)
         hasher.combine(account5hPct)
         hasher.combine(account5hResetsAt)
         hasher.combine(account7dPct)
         hasher.combine(account7dResetsAt)
+        hasher.combine(gitBranch)
+        hasher.combine(gitDirty)
+        hasher.combine(gitAhead)
+        hasher.combine(gitBehind)
+        hasher.combine(worktreeName)
     }
 }
 
@@ -2137,10 +2179,17 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
                 commits: FfiConverterOptionUInt32.read(from: &buf), 
                 prNumber: FfiConverterOptionUInt32.read(from: &buf), 
                 prState: FfiConverterOptionString.read(from: &buf), 
+                prUrl: FfiConverterOptionString.read(from: &buf), 
+                prProvider: FfiConverterOptionString.read(from: &buf), 
                 account5hPct: FfiConverterOptionDouble.read(from: &buf), 
                 account5hResetsAt: FfiConverterOptionString.read(from: &buf), 
                 account7dPct: FfiConverterOptionDouble.read(from: &buf), 
-                account7dResetsAt: FfiConverterOptionString.read(from: &buf)
+                account7dResetsAt: FfiConverterOptionString.read(from: &buf), 
+                gitBranch: FfiConverterOptionString.read(from: &buf), 
+                gitDirty: FfiConverterOptionUInt32.read(from: &buf), 
+                gitAhead: FfiConverterOptionUInt32.read(from: &buf), 
+                gitBehind: FfiConverterOptionUInt32.read(from: &buf), 
+                worktreeName: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2166,10 +2215,17 @@ public struct FfiConverterTypeProjectSession: FfiConverterRustBuffer {
         FfiConverterOptionUInt32.write(value.commits, into: &buf)
         FfiConverterOptionUInt32.write(value.prNumber, into: &buf)
         FfiConverterOptionString.write(value.prState, into: &buf)
+        FfiConverterOptionString.write(value.prUrl, into: &buf)
+        FfiConverterOptionString.write(value.prProvider, into: &buf)
         FfiConverterOptionDouble.write(value.account5hPct, into: &buf)
         FfiConverterOptionString.write(value.account5hResetsAt, into: &buf)
         FfiConverterOptionDouble.write(value.account7dPct, into: &buf)
         FfiConverterOptionString.write(value.account7dResetsAt, into: &buf)
+        FfiConverterOptionString.write(value.gitBranch, into: &buf)
+        FfiConverterOptionUInt32.write(value.gitDirty, into: &buf)
+        FfiConverterOptionUInt32.write(value.gitAhead, into: &buf)
+        FfiConverterOptionUInt32.write(value.gitBehind, into: &buf)
+        FfiConverterOptionString.write(value.worktreeName, into: &buf)
     }
 }
 
@@ -2323,14 +2379,21 @@ public struct SessionStatus {
     public var commits: UInt32?
     public var prNumber: UInt32?
     public var prState: String?
+    public var prUrl: String?
+    public var prProvider: String?
     public var account5hPct: Double?
     public var account5hResetsAt: String?
     public var account7dPct: Double?
     public var account7dResetsAt: String?
+    public var gitBranch: String?
+    public var gitDirty: UInt32?
+    public var gitAhead: UInt32?
+    public var gitBehind: UInt32?
+    public var worktreeName: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, turnActive: Bool? = nil, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil) {
+    public init(session: String, assistant: String, phase: String, health: String, rows: UInt16, cols: UInt16, yolo: Bool, preview: PreviewInfo?, sessionName: String?, viewers: UInt32?, turnActive: Bool? = nil, reasoningEffort: String?, cwd: String?, startedAt: String?, lastActivityAt: String?, displayName: String?, totalInputTokens: UInt64? = nil, totalOutputTokens: UInt64? = nil, totalCachedTokens: UInt64? = nil, totalCostUsd: Double? = nil, contextUsedTokens: UInt64? = nil, contextWindowTokens: UInt64? = nil, linesAdded: UInt32? = nil, linesRemoved: UInt32? = nil, commits: UInt32? = nil, prNumber: UInt32? = nil, prState: String? = nil, prUrl: String? = nil, prProvider: String? = nil, account5hPct: Double? = nil, account5hResetsAt: String? = nil, account7dPct: Double? = nil, account7dResetsAt: String? = nil, gitBranch: String? = nil, gitDirty: UInt32? = nil, gitAhead: UInt32? = nil, gitBehind: UInt32? = nil, worktreeName: String? = nil) {
         self.session = session
         self.assistant = assistant
         self.phase = phase
@@ -2358,10 +2421,17 @@ public struct SessionStatus {
         self.commits = commits
         self.prNumber = prNumber
         self.prState = prState
+        self.prUrl = prUrl
+        self.prProvider = prProvider
         self.account5hPct = account5hPct
         self.account5hResetsAt = account5hResetsAt
         self.account7dPct = account7dPct
         self.account7dResetsAt = account7dResetsAt
+        self.gitBranch = gitBranch
+        self.gitDirty = gitDirty
+        self.gitAhead = gitAhead
+        self.gitBehind = gitBehind
+        self.worktreeName = worktreeName
     }
 }
 
@@ -2450,6 +2520,12 @@ extension SessionStatus: Equatable, Hashable {
         if lhs.prState != rhs.prState {
             return false
         }
+        if lhs.prUrl != rhs.prUrl {
+            return false
+        }
+        if lhs.prProvider != rhs.prProvider {
+            return false
+        }
         if lhs.account5hPct != rhs.account5hPct {
             return false
         }
@@ -2460,6 +2536,21 @@ extension SessionStatus: Equatable, Hashable {
             return false
         }
         if lhs.account7dResetsAt != rhs.account7dResetsAt {
+            return false
+        }
+        if lhs.gitBranch != rhs.gitBranch {
+            return false
+        }
+        if lhs.gitDirty != rhs.gitDirty {
+            return false
+        }
+        if lhs.gitAhead != rhs.gitAhead {
+            return false
+        }
+        if lhs.gitBehind != rhs.gitBehind {
+            return false
+        }
+        if lhs.worktreeName != rhs.worktreeName {
             return false
         }
         return true
@@ -2493,10 +2584,17 @@ extension SessionStatus: Equatable, Hashable {
         hasher.combine(commits)
         hasher.combine(prNumber)
         hasher.combine(prState)
+        hasher.combine(prUrl)
+        hasher.combine(prProvider)
         hasher.combine(account5hPct)
         hasher.combine(account5hResetsAt)
         hasher.combine(account7dPct)
         hasher.combine(account7dResetsAt)
+        hasher.combine(gitBranch)
+        hasher.combine(gitDirty)
+        hasher.combine(gitAhead)
+        hasher.combine(gitBehind)
+        hasher.combine(worktreeName)
     }
 }
 
@@ -2535,10 +2633,17 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
                 commits: FfiConverterOptionUInt32.read(from: &buf), 
                 prNumber: FfiConverterOptionUInt32.read(from: &buf), 
                 prState: FfiConverterOptionString.read(from: &buf), 
+                prUrl: FfiConverterOptionString.read(from: &buf), 
+                prProvider: FfiConverterOptionString.read(from: &buf), 
                 account5hPct: FfiConverterOptionDouble.read(from: &buf), 
                 account5hResetsAt: FfiConverterOptionString.read(from: &buf), 
                 account7dPct: FfiConverterOptionDouble.read(from: &buf), 
-                account7dResetsAt: FfiConverterOptionString.read(from: &buf)
+                account7dResetsAt: FfiConverterOptionString.read(from: &buf), 
+                gitBranch: FfiConverterOptionString.read(from: &buf), 
+                gitDirty: FfiConverterOptionUInt32.read(from: &buf), 
+                gitAhead: FfiConverterOptionUInt32.read(from: &buf), 
+                gitBehind: FfiConverterOptionUInt32.read(from: &buf), 
+                worktreeName: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2570,10 +2675,17 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
         FfiConverterOptionUInt32.write(value.commits, into: &buf)
         FfiConverterOptionUInt32.write(value.prNumber, into: &buf)
         FfiConverterOptionString.write(value.prState, into: &buf)
+        FfiConverterOptionString.write(value.prUrl, into: &buf)
+        FfiConverterOptionString.write(value.prProvider, into: &buf)
         FfiConverterOptionDouble.write(value.account5hPct, into: &buf)
         FfiConverterOptionString.write(value.account5hResetsAt, into: &buf)
         FfiConverterOptionDouble.write(value.account7dPct, into: &buf)
         FfiConverterOptionString.write(value.account7dResetsAt, into: &buf)
+        FfiConverterOptionString.write(value.gitBranch, into: &buf)
+        FfiConverterOptionUInt32.write(value.gitDirty, into: &buf)
+        FfiConverterOptionUInt32.write(value.gitAhead, into: &buf)
+        FfiConverterOptionUInt32.write(value.gitBehind, into: &buf)
+        FfiConverterOptionString.write(value.worktreeName, into: &buf)
     }
 }
 
@@ -3310,6 +3422,16 @@ public enum SshError {
     
     case HarnessStartTimeout(message: String)
     
+    case BrokerInstallFailed(message: String)
+    
+    case CurlMissing(message: String)
+    
+    case UnsupportedPlatform(message: String)
+    
+    case BrokerExecFailed(message: String)
+    
+    case HomeUnwritable(message: String)
+    
     case BootstrapExitCode(message: String)
     
     case BootstrapParse(message: String)
@@ -3366,19 +3488,39 @@ public struct FfiConverterTypeSshError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 9: return .BootstrapExitCode(
+        case 9: return .BrokerInstallFailed(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 10: return .BootstrapParse(
+        case 10: return .CurlMissing(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 11: return .PortForward(
+        case 11: return .UnsupportedPlatform(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 12: return .Io(
+        case 12: return .BrokerExecFailed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 13: return .HomeUnwritable(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 14: return .BootstrapExitCode(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 15: return .BootstrapParse(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 16: return .PortForward(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 17: return .Io(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -3409,14 +3551,24 @@ public struct FfiConverterTypeSshError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(7))
         case .HarnessStartTimeout(_ /* message is ignored*/):
             writeInt(&buf, Int32(8))
-        case .BootstrapExitCode(_ /* message is ignored*/):
+        case .BrokerInstallFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(9))
-        case .BootstrapParse(_ /* message is ignored*/):
+        case .CurlMissing(_ /* message is ignored*/):
             writeInt(&buf, Int32(10))
-        case .PortForward(_ /* message is ignored*/):
+        case .UnsupportedPlatform(_ /* message is ignored*/):
             writeInt(&buf, Int32(11))
-        case .Io(_ /* message is ignored*/):
+        case .BrokerExecFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(12))
+        case .HomeUnwritable(_ /* message is ignored*/):
+            writeInt(&buf, Int32(13))
+        case .BootstrapExitCode(_ /* message is ignored*/):
+            writeInt(&buf, Int32(14))
+        case .BootstrapParse(_ /* message is ignored*/):
+            writeInt(&buf, Int32(15))
+        case .PortForward(_ /* message is ignored*/):
+            writeInt(&buf, Int32(16))
+        case .Io(_ /* message is ignored*/):
+            writeInt(&buf, Int32(17))
 
         
         }
@@ -3452,6 +3604,8 @@ public protocol ConduitDelegate : AnyObject {
     func onDisconnected(reason: String) 
     
     func onConnectionHealth(sessionId: String, health: ConnectionHealth) 
+    
+    func onChatDelivered(sessionId: String, clientMsgId: String) 
     
     func onViewEvent(sessionId: String, kind: String, payload: [String: String]) 
     
@@ -3675,6 +3829,32 @@ fileprivate struct UniffiCallbackInterfaceConduitDelegate {
                 writeReturn: writeReturn
             )
         },
+        onChatDelivered: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            clientMsgId: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceConduitDelegate.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onChatDelivered(
+                     sessionId: try FfiConverterString.lift(sessionId),
+                     clientMsgId: try FfiConverterString.lift(clientMsgId)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
         onViewEvent: { (
             uniffiHandle: UInt64,
             sessionId: RustBuffer,
@@ -3828,6 +4008,107 @@ fileprivate struct FfiConverterCallbackInterfaceSshHostKeyDelegate {
 #endif
 extension FfiConverterCallbackInterfaceSshHostKeyDelegate : FfiConverter {
     typealias SwiftType = SshHostKeyDelegate
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+
+
+public protocol SshProgressDelegate : AnyObject {
+    
+    func onProgress(phase: String, detail: String?) 
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceSshProgressDelegate {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceSshProgressDelegate = UniffiVTableCallbackInterfaceSshProgressDelegate(
+        onProgress: { (
+            uniffiHandle: UInt64,
+            phase: RustBuffer,
+            detail: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceSshProgressDelegate.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onProgress(
+                     phase: try FfiConverterString.lift(phase),
+                     detail: try FfiConverterOptionString.lift(detail)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterCallbackInterfaceSshProgressDelegate.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface SshProgressDelegate: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitSshProgressDelegate() {
+    uniffi_conduit_core_fn_init_callback_vtable_sshprogressdelegate(&UniffiCallbackInterfaceSshProgressDelegate.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceSshProgressDelegate {
+    fileprivate static var handleMap = UniffiHandleMap<SshProgressDelegate>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceSshProgressDelegate : FfiConverter {
+    typealias SwiftType = SshProgressDelegate
     typealias FfiType = UInt64
 
 #if swift(>=5.8)
@@ -4103,6 +4384,30 @@ fileprivate struct FfiConverterOptionTypeSessionLifecycleCore: FfiConverterRustB
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionCallbackInterfaceSshProgressDelegate: FfiConverterRustBuffer {
+    typealias SwiftType = SshProgressDelegate?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterCallbackInterfaceSshProgressDelegate.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterCallbackInterfaceSshProgressDelegate.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -4321,11 +4626,11 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
         print("uniffiFutureContinuationCallback invalid handle")
     }
 }
-public func sshBootstrap(credentials: SshCredentials, preAllocatedToken: String, anthropicApiKey: String, openaiApiKey: String, imageRef: String?, hostKeyDelegate: SshHostKeyDelegate)async throws  -> SshBootstrapResult {
+public func sshBootstrap(credentials: SshCredentials, preAllocatedToken: String, anthropicApiKey: String, openaiApiKey: String, imageRef: String?, appVersion: String?, hostKeyDelegate: SshHostKeyDelegate, progressDelegate: SshProgressDelegate?)async throws  -> SshBootstrapResult {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_conduit_core_fn_func_ssh_bootstrap(FfiConverterTypeSshCredentials.lower(credentials),FfiConverterString.lower(preAllocatedToken),FfiConverterString.lower(anthropicApiKey),FfiConverterString.lower(openaiApiKey),FfiConverterOptionString.lower(imageRef),FfiConverterCallbackInterfaceSshHostKeyDelegate.lower(hostKeyDelegate)
+                uniffi_conduit_core_fn_func_ssh_bootstrap(FfiConverterTypeSshCredentials.lower(credentials),FfiConverterString.lower(preAllocatedToken),FfiConverterString.lower(anthropicApiKey),FfiConverterString.lower(openaiApiKey),FfiConverterOptionString.lower(imageRef),FfiConverterOptionString.lower(appVersion),FfiConverterCallbackInterfaceSshHostKeyDelegate.lower(hostKeyDelegate),FfiConverterOptionCallbackInterfaceSshProgressDelegate.lower(progressDelegate)
                 )
             },
             pollFunc: ffi_conduit_core_rust_future_poll_rust_buffer,
@@ -4335,11 +4640,11 @@ public func sshBootstrap(credentials: SshCredentials, preAllocatedToken: String,
             errorHandler: FfiConverterTypeSshError.lift
         )
 }
-public func sshBootstrapTunneled(credentials: SshCredentials, preAllocatedToken: String, anthropicApiKey: String, openaiApiKey: String, imageRef: String?, hostKeyDelegate: SshHostKeyDelegate)async throws  -> SshTunnelBootstrap {
+public func sshBootstrapTunneled(credentials: SshCredentials, preAllocatedToken: String, anthropicApiKey: String, openaiApiKey: String, imageRef: String?, appVersion: String?, hostKeyDelegate: SshHostKeyDelegate, progressDelegate: SshProgressDelegate?)async throws  -> SshTunnelBootstrap {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(FfiConverterTypeSshCredentials.lower(credentials),FfiConverterString.lower(preAllocatedToken),FfiConverterString.lower(anthropicApiKey),FfiConverterString.lower(openaiApiKey),FfiConverterOptionString.lower(imageRef),FfiConverterCallbackInterfaceSshHostKeyDelegate.lower(hostKeyDelegate)
+                uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(FfiConverterTypeSshCredentials.lower(credentials),FfiConverterString.lower(preAllocatedToken),FfiConverterString.lower(anthropicApiKey),FfiConverterString.lower(openaiApiKey),FfiConverterOptionString.lower(imageRef),FfiConverterOptionString.lower(appVersion),FfiConverterCallbackInterfaceSshHostKeyDelegate.lower(hostKeyDelegate),FfiConverterOptionCallbackInterfaceSshProgressDelegate.lower(progressDelegate)
                 )
             },
             pollFunc: ffi_conduit_core_rust_future_poll_rust_buffer,
@@ -4365,10 +4670,10 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_conduit_core_checksum_func_ssh_bootstrap() != 50145) {
+    if (uniffi_conduit_core_checksum_func_ssh_bootstrap() != 5914) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled() != 60504) {
+    if (uniffi_conduit_core_checksum_func_ssh_bootstrap_tunneled() != 26493) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_agent_login_callback() != 4395) {
@@ -4380,7 +4685,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_conduit_core_checksum_method_conduitclient_connect() != 37807) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_conduit_core_checksum_method_conduitclient_create_session() != 43260) {
+    if (uniffi_conduit_core_checksum_method_conduitclient_create_session() != 48656) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_disconnect() != 13038) {
@@ -4410,7 +4715,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_conduit_core_checksum_method_conduitclient_resize() != 29584) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_conduit_core_checksum_method_conduitclient_send_chat() != 26919) {
+    if (uniffi_conduit_core_checksum_method_conduitclient_send_chat() != 8352) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_send_file() != 22550) {
@@ -4512,15 +4817,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_conduit_core_checksum_method_conduitdelegate_on_connection_health() != 26560) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_conduit_core_checksum_method_conduitdelegate_on_chat_delivered() != 21833) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_conduit_core_checksum_method_conduitdelegate_on_view_event() != 49914) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_sshhostkeydelegate_accept_host_key() != 16407) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_conduit_core_checksum_method_sshprogressdelegate_on_progress() != 11920) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
     uniffiCallbackInitConduitDelegate()
     uniffiCallbackInitSshHostKeyDelegate()
+    uniffiCallbackInitSshProgressDelegate()
     return InitializationResult.ok
 }()
 

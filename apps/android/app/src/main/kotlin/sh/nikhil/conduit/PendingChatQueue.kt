@@ -55,6 +55,15 @@ data class PendingChat(
      */
     val failed: Boolean = false,
     /**
+     * True once the WS write returned success but the BROKER has not yet acked
+     * receipt (task K). A `sent` entry stays in the queue — only a broker
+     * `chat_ack` ([markDelivered]) removes it — so a write that "succeeded"
+     * locally yet never flushed (app killed mid-send) is still re-attempted on
+     * the next flush. The broker dedups resends by client_msg_id (== localId),
+     * so the agent never sees a double. The bubble stays faded while `sent`.
+     */
+    val sent: Boolean = false,
+    /**
      * Entry lifecycle kind per the "Queued Next" spec. Defaults to [PendingChatKind.normal]
      * so existing callers are unaffected. Updated by the steer/queue-on-turn-active path.
      */
@@ -191,8 +200,22 @@ data class PendingChatQueue(
     }
 
     /**
-     * The WS write for [localId] succeeded — drop it from the queue (ack). The
-     * shell flips the transcript echo to `done`.
+     * The WS write for [localId] returned success but the broker has NOT yet
+     * acked (task K). Mark the entry [PendingChat.sent] (bubble stays faded)
+     * and KEEP it in the queue so an un-acked send is re-attempted on the next
+     * flush. No-op when the entry is already gone (acked).
+     */
+    fun markSent(sessionId: String, localId: String): PendingChatQueue {
+        val list = bySession[sessionId] ?: return this
+        val next = list.map { if (it.localId == localId) it.copy(sent = true) else it }
+        return copy(bySession = bySession + (sessionId to next))
+    }
+
+    /**
+     * The BROKER acked receipt of [localId] (chat_ack) — drop it from the
+     * queue. The shell flips the transcript echo to `done` (solid bubble).
+     * This is the ONLY durable-delivery signal; a bare WS-write success goes
+     * through [markSent] and leaves the entry queued.
      */
     fun markDelivered(sessionId: String, localId: String): PendingChatQueue {
         val list = bySession[sessionId] ?: return this
@@ -233,7 +256,7 @@ data class PendingChatQueue(
      */
     fun retry(sessionId: String, localId: String): PendingChatQueue {
         val list = bySession[sessionId] ?: return this
-        val next = list.map { if (it.localId == localId) it.copy(failed = false, attempts = 0) else it }
+        val next = list.map { if (it.localId == localId) it.copy(failed = false, attempts = 0, sent = false) else it }
         return copy(bySession = bySession + (sessionId to next))
     }
 
@@ -274,6 +297,7 @@ data class PendingChatQueue(
                             .put("ts", c.ts)
                             .put("attempts", c.attempts)
                             .put("failed", c.failed)
+                            .put("sent", c.sent)
                             .put("kind", c.kind.name),
                     )
                 }
@@ -304,6 +328,7 @@ data class PendingChatQueue(
                                         ts = o.optString("ts", ""),
                                         attempts = o.optInt("attempts", 0),
                                         failed = o.optBoolean("failed", false),
+                                        sent = o.optBoolean("sent", false),
                                         kind = kind,
                                     ),
                                 )
