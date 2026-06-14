@@ -32,6 +32,7 @@ struct RecordingDelegate {
     healths: Mutex<Vec<(String, ConnectionHealth)>>,
     disconnects: Mutex<Vec<String>>,
     view_events: Mutex<Vec<ViewEventRecord>>,
+    delivered: Mutex<Vec<(String, String)>>,
 }
 
 impl ConduitDelegate for RecordingDelegate {
@@ -50,6 +51,12 @@ impl ConduitDelegate for RecordingDelegate {
     }
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
         self.healths.lock().unwrap().push((session_id, health));
+    }
+    fn on_chat_delivered(&self, session_id: String, client_msg_id: String) {
+        self.delivered
+            .lock()
+            .unwrap()
+            .push((session_id, client_msg_id));
     }
     fn on_view_event(&self, session_id: String, kind: String, payload: HashMap<String, String>) {
         self.view_events
@@ -287,6 +294,54 @@ async fn view_event_status_agent_login_round_trips_to_delegate() {
         payload.get("session_token").map(String::as_str),
         Some("tok-abc")
     );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn chat_ack_round_trips_to_delegate() {
+    // The broker confirms receipt of a sent chat with a `chat_ack` frame
+    // carrying the same client_msg_id. The core must surface it via
+    // on_chat_delivered so the app can mark the message durably delivered.
+    let (endpoint, server) = spawn_test_server(|mut ws| async move {
+        let status = serde_json::json!({
+            "type": "status", "session": "s-ack", "assistant": "claude",
+            "phase": "running", "health": "healthy", "rows": 24, "cols": 80, "yolo": false,
+        });
+        ws.send(Message::Text(status.to_string())).await.unwrap();
+
+        let ack = serde_json::json!({
+            "type": "chat_ack",
+            "session_id": "s-ack",
+            "client_msg_id": "local-42",
+        });
+        ws.send(Message::Text(ack.to_string())).await.unwrap();
+        let _ = ws.next().await;
+    })
+    .await;
+
+    let delegate = Arc::new(RecordingDelegate::default());
+    let _handle = transport::connect(
+        endpoint,
+        "s-ack".into(),
+        "claude".into(),
+        "test-token".into(),
+        transport::SpawnOverride::default(),
+        delegate.clone(),
+    )
+    .await
+    .expect("connect");
+
+    let got = wait_until(Duration::from_secs(2), || {
+        !delegate.delivered.lock().unwrap().is_empty()
+    })
+    .await;
+    assert!(got, "delegate never received the chat_ack");
+
+    let delivered = delegate.delivered.lock().unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].0, "s-ack");
+    assert_eq!(delivered[0].1, "local-42");
 
     server.abort();
 }

@@ -309,7 +309,14 @@ typedef void (*UniffiCallbackInterfaceConduitDelegateMethod7)(uint64_t, RustBuff
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CONDUIT_DELEGATE_METHOD8
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CONDUIT_DELEGATE_METHOD8
-typedef void (*UniffiCallbackInterfaceConduitDelegateMethod8)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceConduitDelegateMethod8)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CONDUIT_DELEGATE_METHOD9
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CONDUIT_DELEGATE_METHOD9
+typedef void (*UniffiCallbackInterfaceConduitDelegateMethod9)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -317,6 +324,13 @@ typedef void (*UniffiCallbackInterfaceConduitDelegateMethod8)(uint64_t, RustBuff
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_SSH_HOST_KEY_DELEGATE_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_SSH_HOST_KEY_DELEGATE_METHOD0
 typedef void (*UniffiCallbackInterfaceSshHostKeyDelegateMethod0)(uint64_t, RustBuffer, int8_t* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_SSH_PROGRESS_DELEGATE_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_SSH_PROGRESS_DELEGATE_METHOD0
+typedef void (*UniffiCallbackInterfaceSshProgressDelegateMethod0)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -332,7 +346,8 @@ typedef struct UniffiVTableCallbackInterfaceConduitDelegate {
     UniffiCallbackInterfaceConduitDelegateMethod5 _Nonnull onExit;
     UniffiCallbackInterfaceConduitDelegateMethod6 _Nonnull onDisconnected;
     UniffiCallbackInterfaceConduitDelegateMethod7 _Nonnull onConnectionHealth;
-    UniffiCallbackInterfaceConduitDelegateMethod8 _Nonnull onViewEvent;
+    UniffiCallbackInterfaceConduitDelegateMethod8 _Nonnull onChatDelivered;
+    UniffiCallbackInterfaceConduitDelegateMethod9 _Nonnull onViewEvent;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceConduitDelegate;
 
@@ -343,6 +358,14 @@ typedef struct UniffiVTableCallbackInterfaceSshHostKeyDelegate {
     UniffiCallbackInterfaceSshHostKeyDelegateMethod0 _Nonnull acceptHostKey;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceSshHostKeyDelegate;
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_SSH_PROGRESS_DELEGATE
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_SSH_PROGRESS_DELEGATE
+typedef struct UniffiVTableCallbackInterfaceSshProgressDelegate {
+    UniffiCallbackInterfaceSshProgressDelegateMethod0 _Nonnull onProgress;
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+} UniffiVTableCallbackInterfaceSshProgressDelegate;
 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_CLONE_CONDUITCLIENT
@@ -377,7 +400,7 @@ uint64_t uniffi_conduit_core_fn_method_conduitclient_connect(void*_Nonnull ptr, 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_CREATE_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_CREATE_SESSION
-uint64_t uniffi_conduit_core_fn_method_conduitclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch, RustBuffer reasoning_effort, RustBuffer model, RustBuffer cwd, RustBuffer permission_mode
+uint64_t uniffi_conduit_core_fn_method_conduitclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch, RustBuffer reasoning_effort, RustBuffer model, RustBuffer cwd, RustBuffer permission_mode, RustBuffer fast_mode
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_DISCONNECT
@@ -427,7 +450,7 @@ uint64_t uniffi_conduit_core_fn_method_conduitclient_resize(void*_Nonnull ptr, R
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_SEND_CHAT
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_SEND_CHAT
-uint64_t uniffi_conduit_core_fn_method_conduitclient_send_chat(void*_Nonnull ptr, RustBuffer session_id, RustBuffer msg
+uint64_t uniffi_conduit_core_fn_method_conduitclient_send_chat(void*_Nonnull ptr, RustBuffer session_id, RustBuffer msg, RustBuffer client_msg_id
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_SEND_FILE
@@ -581,14 +604,19 @@ void uniffi_conduit_core_fn_init_callback_vtable_conduitdelegate(UniffiVTableCal
 void uniffi_conduit_core_fn_init_callback_vtable_sshhostkeydelegate(UniffiVTableCallbackInterfaceSshHostKeyDelegate* _Nonnull vtable
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_INIT_CALLBACK_VTABLE_SSHPROGRESSDELEGATE
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_INIT_CALLBACK_VTABLE_SSHPROGRESSDELEGATE
+void uniffi_conduit_core_fn_init_callback_vtable_sshprogressdelegate(UniffiVTableCallbackInterfaceSshProgressDelegate* _Nonnull vtable
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP
-uint64_t uniffi_conduit_core_fn_func_ssh_bootstrap(RustBuffer credentials, RustBuffer pre_allocated_token, RustBuffer anthropic_api_key, RustBuffer openai_api_key, RustBuffer image_ref, uint64_t host_key_delegate
+uint64_t uniffi_conduit_core_fn_func_ssh_bootstrap(RustBuffer credentials, RustBuffer pre_allocated_token, RustBuffer anthropic_api_key, RustBuffer openai_api_key, RustBuffer image_ref, RustBuffer app_version, uint64_t host_key_delegate, RustBuffer progress_delegate
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP_TUNNELED
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_FUNC_SSH_BOOTSTRAP_TUNNELED
-uint64_t uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(RustBuffer credentials, RustBuffer pre_allocated_token, RustBuffer anthropic_api_key, RustBuffer openai_api_key, RustBuffer image_ref, uint64_t host_key_delegate
+uint64_t uniffi_conduit_core_fn_func_ssh_bootstrap_tunneled(RustBuffer credentials, RustBuffer pre_allocated_token, RustBuffer anthropic_api_key, RustBuffer openai_api_key, RustBuffer image_ref, RustBuffer app_version, uint64_t host_key_delegate, RustBuffer progress_delegate
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_CONDUIT_CORE_RUSTBUFFER_ALLOC
@@ -1165,6 +1193,12 @@ uint16_t uniffi_conduit_core_checksum_method_conduitdelegate_on_connection_healt
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITDELEGATE_ON_CHAT_DELIVERED
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITDELEGATE_ON_CHAT_DELIVERED
+uint16_t uniffi_conduit_core_checksum_method_conduitdelegate_on_chat_delivered(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITDELEGATE_ON_VIEW_EVENT
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_CONDUITDELEGATE_ON_VIEW_EVENT
 uint16_t uniffi_conduit_core_checksum_method_conduitdelegate_on_view_event(void
@@ -1174,6 +1208,12 @@ uint16_t uniffi_conduit_core_checksum_method_conduitdelegate_on_view_event(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHHOSTKEYDELEGATE_ACCEPT_HOST_KEY
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHHOSTKEYDELEGATE_ACCEPT_HOST_KEY
 uint16_t uniffi_conduit_core_checksum_method_sshhostkeydelegate_accept_host_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHPROGRESSDELEGATE_ON_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_CHECKSUM_METHOD_SSHPROGRESSDELEGATE_ON_PROGRESS
+uint16_t uniffi_conduit_core_checksum_method_sshprogressdelegate_on_progress(void
     
 );
 #endif

@@ -1820,8 +1820,18 @@ private struct ConduitUserBubble: View {
     @Environment(\.neonTheme) private var neon
     @Environment(SessionStore.self) private var store
 
+    /// True while the message is sent-but-not-yet-broker-acked (task K):
+    /// `pending` (queued, pre-write) or `sent` (WS write ok, awaiting
+    /// chat_ack). Both render faded + dotted; `done` is solid. Reads
+    /// `event.status` so a status flip rebuilds the row.
+    private var inFlight: Bool {
+        let s = event.status.lowercased()
+        return s == "pending" || s == "sent"
+    }
+
     var body: some View {
         let parsed = ConduitUI.splitAttachmentReferences(event.content)
+        let failed = event.status.lowercased() == "failed"
         return VStack(alignment: .trailing, spacing: 8) {
             if !parsed.text.isEmpty {
                 ConduitBlockStack(
@@ -1837,45 +1847,46 @@ private struct ConduitUserBubble: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .fill(neon.accent)
                 )
-                .neonGlowBox(neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
+                // Task K send-state cue (NO text): a faded bubble with a
+                // dotted border while in-flight (sending/awaiting broker ack);
+                // solid once the broker acks (status → done). Failed bubbles
+                // keep full opacity and surface the retry affordance below.
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            neon.accentText.opacity(0.7),
+                            style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                        )
+                        .opacity(inFlight ? 1 : 0)
+                )
+                .opacity(inFlight ? 0.55 : 1)
+                .neonGlowBox(neon.glow && !inFlight ? neon.glowBox?.tinted(neon.accent) : nil)
             }
             ForEach(parsed.attachments, id: \.filename) { ref in
                 ConduitAttachmentChip(ref: ref)
             }
-            sendStatusFooter
+            if failed { sendFailedFooter }
         }
     }
 
-    /// "sending…" clock while the message is queued, or a "failed — retry"
-    /// affordance once delivery gives up. Cleared (collapsed) once the broker
-    /// acks the message (status flips to `done`). Mirrors litter / the Claude
-    /// app's pending-bubble UX. Reads `event.status` so a status flip rebuilds
-    /// the row (status is part of the row's Equatable digest).
+    /// A "failed — retry" affordance once delivery gives up. The in-flight and
+    /// delivered states carry NO text — the bubble's opacity + dotted border
+    /// (in `body`) are the only cue. Only the failed terminus keeps a tappable
+    /// label so the user can re-arm a give-up. Reads `event.status` so a flip
+    /// rebuilds the row (status is part of the row's Equatable digest).
     @ViewBuilder
-    private var sendStatusFooter: some View {
-        switch event.status.lowercased() {
-        case "pending":
+    private var sendFailedFooter: some View {
+        Button {
+            store.retryPendingChat(sessionID: sessionID, localID: event.id)
+        } label: {
             HStack(spacing: 4) {
-                Image(systemName: "clock")
-                Text("sending…")
+                Image(systemName: "exclamationmark.arrow.circlepath")
+                Text("failed — tap to retry")
             }
-            .font(neon.mono(10))
-            .foregroundStyle(neon.textDim)
-        case "failed":
-            Button {
-                store.retryPendingChat(sessionID: sessionID, localID: event.id)
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.arrow.circlepath")
-                    Text("failed — tap to retry")
-                }
-                .font(neon.mono(10).weight(.bold))
-                .foregroundStyle(neon.red)
-            }
-            .buttonStyle(.plain)
-        default:
-            EmptyView()
+            .font(neon.mono(10).weight(.bold))
+            .foregroundStyle(neon.red)
         }
+        .buttonStyle(.plain)
     }
 }
 

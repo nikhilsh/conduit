@@ -105,6 +105,54 @@ final class PendingChatQueueTests: XCTestCase {
         XCTAssertTrue(q.isPending("local-2", in: "s2"))
     }
 
+    // MARK: - Durable delivery / broker ack (task K)
+
+    /// markSent keeps the entry queued (NOT acked) and flags it `sent`, so a
+    /// WS-write success no longer durably delivers — only a broker chat_ack
+    /// (markDelivered) does. This is the core of the "send then background ->
+    /// lost but shown as sent" fix.
+    func testMarkSentKeepsEntryQueued() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-1", message: "a", ts: "t0")
+        q.markSent(sessionID: "s1", localID: "local-1")
+        XCTAssertTrue(q.isPending("local-1", in: "s1"),
+            "a sent-but-unacked entry must stay in the outbox")
+        XCTAssertEqual(q.entries(for: "s1").first?.sent, true)
+    }
+
+    /// A `sent`-but-unacked entry is STILL flushable, so an app killed after a
+    /// local WS-write success re-sends it on reconnect (the broker dedups by
+    /// client_msg_id so the agent never sees a double).
+    func testSentEntryStillFlushable() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-1", message: "a", ts: "t0")
+        q.markSent(sessionID: "s1", localID: "local-1")
+        XCTAssertEqual(q.flushable(for: "s1").map { $0.localID }, ["local-1"],
+            "an un-acked sent entry must be re-attempted on the next flush")
+    }
+
+    /// The broker ack (markDelivered) is what finally clears a sent entry.
+    func testBrokerAckClearsSentEntry() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-1", message: "a", ts: "t0")
+        q.markSent(sessionID: "s1", localID: "local-1")
+        q.markDelivered(sessionID: "s1", localID: "local-1")
+        XCTAssertFalse(q.isPending("local-1", in: "s1"))
+        XCTAssertTrue(q.bySession.isEmpty)
+    }
+
+    /// retry clears the `sent` flag so a re-armed failed entry starts fresh.
+    func testRetryClearsSentFlag() {
+        var q = PendingChatQueue()
+        q.enqueue(sessionID: "s1", localID: "local-1", message: "a", ts: "t0")
+        q.markSent(sessionID: "s1", localID: "local-1")
+        for _ in 0..<PendingChatQueue.maxAttempts {
+            q.markAttemptFailed(sessionID: "s1", localID: "local-1")
+        }
+        q.retry(sessionID: "s1", localID: "local-1")
+        XCTAssertEqual(q.entries(for: "s1").first?.sent, false)
+    }
+
     // MARK: - Queued-Next / Steer extensions (#480 / steer-ui-spec)
 
     /// A `normal` entry (no active turn) still flushes on connect --

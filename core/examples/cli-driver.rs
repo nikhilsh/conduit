@@ -47,6 +47,9 @@ impl ConduitDelegate for StdoutDelegate {
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
         eprintln!("[health:{session_id}] {health:?}");
     }
+    fn on_chat_delivered(&self, session_id: String, client_msg_id: String) {
+        eprintln!("[chat_delivered:{session_id}] {client_msg_id}");
+    }
     fn on_view_event(
         &self,
         session_id: String,

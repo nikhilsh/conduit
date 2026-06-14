@@ -97,10 +97,16 @@ type Server struct {
 	// UnifiedPush without a third-party distributor. Empty means ntfy is
 	// not available on this host.
 	NtfyURL string
+
+	// chatDedup remembers forwarded chat client_msg_ids per session so a
+	// resend (same id, after an app kill/reconnect) is acked but not
+	// re-delivered to the agent. Process-level so it survives a client
+	// reconnect. See chatdedup.go.
+	chatDedup *chatDedup
 }
 
 func New(a *auth.Store, m *session.Manager) *Server {
-	s := &Server{Auth: a, Sessions: m}
+	s := &Server{Auth: a, Sessions: m, chatDedup: newChatDedup()}
 	currentServer = s
 	return s
 }
@@ -362,7 +368,7 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	c := newClient(conn, sess)
+	c := newClient(conn, sess, s)
 	defer c.close()
 
 	if err := c.sendStatus(assistant, created); err != nil {
@@ -513,6 +519,7 @@ func parseDim(v string) uint16 {
 type client struct {
 	conn *websocket.Conn
 	sess *session.Session
+	srv  *Server
 	wmu  sync.Mutex
 	once sync.Once
 
@@ -524,8 +531,8 @@ type client struct {
 	snapshotCols uint16
 }
 
-func newClient(c *websocket.Conn, s *session.Session) *client {
-	cl := &client{conn: c, sess: s}
+func newClient(c *websocket.Conn, s *session.Session, srv *Server) *client {
+	cl := &client{conn: c, sess: s, srv: srv}
 	_ = c.SetReadDeadline(time.Now().Add(pongWait))
 	c.SetPongHandler(func(string) error {
 		return c.SetReadDeadline(time.Now().Add(pongWait))
@@ -687,6 +694,11 @@ func (c *client) handleText(payload []byte) {
 		Assistant string `json:"assistant"`
 		Name      string `json:"name"`
 		Msg       string `json:"msg"`
+		// ClientMsgID is the app's stable local id for a chat send. When
+		// present the broker dedups resends (same id) and acks every copy
+		// with a chat_ack frame so the app can durably mark it delivered.
+		// Empty for old clients: behave exactly as before (no dedup, no ack).
+		ClientMsgID string `json:"client_msg_id"`
 		// set_agent_credentials (docs/PLAN-AGENT-OAUTH.md §D.1). Body
 		// fields are decoded into the same envelope to keep the
 		// switch-on-type contract simple; unrelated control messages
@@ -792,20 +804,42 @@ func (c *client) handleText(payload []byte) {
 		// Mobile-side optimistic local echo (SessionStore.sendChat)
 		// handles the chat-tab visibility for the outgoing message.
 		if env.Msg != "" {
-			// Structured chat channel (chat_mode="stream-json", task
-			// #24): SendChat hands the message to the headless agent and
-			// returns true, so we skip the legacy PTY scrape path.
-			if !c.sess.SendChat(env.Msg) {
-				// Default TUI path. Prime the chat scraper to capture
-				// the agent's reply before the Write — drain may start
-				// producing reply bytes immediately.
-				c.sess.MarkUserChatSent(env.Msg)
-				// TUI agents (Claude, Codex) submit on CR, not LF —
-				// writing "\n" left the typed text in the prompt without
-				// being entered, forcing users to switch to the Terminal
-				// tab and press Return manually. Rewrite upload refs to the
-				// absolute durable path for the agent (see RewriteUploadRefs).
-				_, _ = c.sess.Write([]byte(c.sess.RewriteUploadRefs(env.Msg) + "\r"))
+			// Durable delivery (task K): when the app supplies a stable
+			// client_msg_id, dedup resends so the agent never sees a double
+			// (an app killed mid-send keeps the message in its outbox and
+			// replays it on reconnect with the SAME id), and ack every copy
+			// so the app can flip the bubble from in-flight to delivered.
+			// Empty id = old client: skip dedup/ack, behave as before.
+			duplicate := false
+			if env.ClientMsgID != "" && c.srv != nil && c.srv.chatDedup != nil {
+				duplicate = c.srv.chatDedup.markSeen(c.sess.ID, env.ClientMsgID)
+			}
+			if !duplicate {
+				// Structured chat channel (chat_mode="stream-json", task
+				// #24): SendChat hands the message to the headless agent and
+				// returns true, so we skip the legacy PTY scrape path.
+				if !c.sess.SendChat(env.Msg) {
+					// Default TUI path. Prime the chat scraper to capture
+					// the agent's reply before the Write — drain may start
+					// producing reply bytes immediately.
+					c.sess.MarkUserChatSent(env.Msg)
+					// TUI agents (Claude, Codex) submit on CR, not LF —
+					// writing "\n" left the typed text in the prompt without
+					// being entered, forcing users to switch to the Terminal
+					// tab and press Return manually. Rewrite upload refs to the
+					// absolute durable path for the agent (see RewriteUploadRefs).
+					_, _ = c.sess.Write([]byte(c.sess.RewriteUploadRefs(env.Msg) + "\r"))
+				}
+			}
+			// Always ack (new + duplicate) so a resend whose first ack was
+			// lost still confirms. Only this conn gets the ack — it's the one
+			// holding the matching outbox entry.
+			if env.ClientMsgID != "" {
+				_ = c.writeJSON(map[string]any{
+					"type":          "chat_ack",
+					"session_id":    c.sess.ID,
+					"client_msg_id": env.ClientMsgID,
+				})
 			}
 		}
 	case "account_usage":

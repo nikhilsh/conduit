@@ -75,6 +75,11 @@ pub trait ConduitDelegate: Send + Sync {
     fn on_exit(&self, session_id: String, code: i32);
     fn on_disconnected(&self, reason: String);
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth);
+    /// The broker confirmed receipt of a chat message the app sent with the
+    /// given `client_msg_id`. Only then may the app treat the message as
+    /// durably delivered (remove it from its resend outbox, flip the bubble
+    /// from in-flight to solid). Emitted from the `"chat_ack"` inbound frame.
+    fn on_chat_delivered(&self, session_id: String, client_msg_id: String);
     /// A typed `view_event` the core doesn't model as its own delegate
     /// call — currently the broker's `view:"status"` sub-events
     /// (`agent_login_url` / `_complete` / `_failed`, see
@@ -328,7 +333,12 @@ impl ConduitClient {
         .await
     }
 
-    pub async fn send_chat(&self, session_id: String, msg: String) -> Result<(), ConduitError> {
+    pub async fn send_chat(
+        &self,
+        session_id: String,
+        msg: String,
+        client_msg_id: String,
+    ) -> Result<(), ConduitError> {
         let handle = self.inner.lookup_handle(&session_id)?;
         run_on_core(async move {
             handle
@@ -336,6 +346,7 @@ impl ConduitClient {
                     "type": "chat",
                     "from": "mobile",
                     "msg": msg,
+                    "client_msg_id": client_msg_id,
                 }))
                 .await
         })
@@ -731,6 +742,10 @@ impl ConduitDelegate for ClientDelegate {
 
     fn on_connection_health(&self, session_id: String, health: ConnectionHealth) {
         self.delegate.on_connection_health(session_id, health);
+    }
+
+    fn on_chat_delivered(&self, session_id: String, client_msg_id: String) {
+        self.delegate.on_chat_delivered(session_id, client_msg_id);
     }
 
     fn on_view_event(&self, session_id: String, kind: String, payload: HashMap<String, String>) {

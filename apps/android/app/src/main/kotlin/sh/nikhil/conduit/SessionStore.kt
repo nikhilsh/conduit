@@ -1184,7 +1184,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode, fastMode)
                 }
                 val seed = "Forked from ${original.name} (id $sessionId). Pick up where the previous session left off."
-                runCatching { withContext(Dispatchers.IO) { c.sendChat(newId, seed) } }
+                // Fire-and-forget seed: not outbox-tracked, but still carries a
+                // stable client_msg_id so the broker dedups/acks it (task K).
+                runCatching { withContext(Dispatchers.IO) { c.sendChat(newId, seed, "local-fork-seed-$newId") } }
                 updateLifecycle { it + (newId to SessionLifecycle.Live) }
                 refreshSessions()
                 _selectedId.value = newId
@@ -1275,6 +1277,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
         override fun onConnectionHealth(sessionId: String, health: ConnectionHealth) =
             ifCurrent { this@SessionStore.onConnectionHealth(sessionId, health) }
+
+        override fun onChatDelivered(sessionId: String, clientMsgId: String) =
+            ifCurrent { this@SessionStore.onChatDelivered(sessionId, clientMsgId) }
 
         override fun onViewEvent(sessionId: String, kind: String, payload: Map<String, String>) =
             ifCurrent { this@SessionStore.onViewEvent(sessionId, kind, payload) }
@@ -2968,12 +2973,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
             return
         }
         viewModelScope.launch {
-            val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
+            // Pass the echo's stable localId as client_msg_id so the broker can
+            // dedup resends and ack THIS message (task K).
+            val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg, localId) } }
 
             if (result.isSuccess) {
-                // Ack: drop from the queue and flip the echo to "done".
-                updatePendingChats { it.markDelivered(sessionId, localId) }
-                setEchoStatus(sessionId, localId, "done")
+                // WS write returned — NOT yet durably delivered. Keep the entry
+                // queued and faded; only the broker's chat_ack (onChatDelivered)
+                // marks it done. Fixes "send then background -> lost but shown
+                // as sent".
+                updatePendingChats { it.markSent(sessionId, localId) }
+                setEchoStatus(sessionId, localId, "sent")
+                Telemetry.breadcrumb("chat", "ws-write ok — awaiting broker ack",
+                    mapOf("session" to sessionId, "local_id" to localId))
                 if (manualRetry) {
                     Telemetry.breadcrumb("chat", "retry_result",
                         mapOf("session" to sessionId, "local_id" to localId, "ok" to "true"))
@@ -3021,7 +3033,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
             mapOf("session" to sessionId, "local_id" to localId),
         )
         viewModelScope.launch {
-            val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg) } }
+            // Carry the localId as client_msg_id for broker dedup/ack parity
+            // (task K). The steer panel card clears on WS-write as before; the
+            // later chat_ack just no-ops (entry already gone).
+            val result = runCatching { withContext(Dispatchers.IO) { c.sendChat(sessionId, msg, localId) } }
             if (result.isSuccess) {
                 // Steer acked: remove the panel card and flip echo to done.
                 updatePendingChats { it.markDelivered(sessionId, localId) }
@@ -4266,6 +4281,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 }
             }
         }
+    }
+
+    /**
+     * The broker acked durable receipt of a chat we sent (task K). The
+     * [clientMsgId] is the optimistic echo's `localId`. Drop the entry from the
+     * persisted outbox (so it is NOT re-sent) and flip the transcript echo to
+     * `done` (solid bubble). Idempotent: a duplicate ack (e.g. a resend whose
+     * first ack we missed) just no-ops once the entry is gone.
+     */
+    override fun onChatDelivered(sessionId: String, clientMsgId: String) {
+        Telemetry.breadcrumb("chat", "broker ack — delivered",
+            mapOf("session" to sessionId, "local_id" to clientMsgId))
+        updatePendingChats { it.markDelivered(sessionId, clientMsgId) }
+        setEchoStatus(sessionId, clientMsgId, "done")
     }
 
     private fun describe(t: Throwable): String {

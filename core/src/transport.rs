@@ -827,6 +827,10 @@ async fn handle_text(
         msg: Option<String>,
         #[serde(default)]
         ts: Option<String>,
+        #[serde(default)]
+        client_msg_id: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
     }
     let env: Envelope = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -890,6 +894,15 @@ async fn handle_text(
                         files: Vec::<ViewEventFile>::new(),
                     },
                 );
+            }
+        }
+        "chat_ack" => {
+            // The broker confirmed receipt of a chat we sent. Carry the
+            // client_msg_id back to the app so it can mark the message
+            // durably delivered (drop it from the resend outbox).
+            if let Some(client_msg_id) = env.client_msg_id {
+                let sid = env.session_id.unwrap_or_else(|| session_id.to_string());
+                delegate.on_chat_delivered(sid, client_msg_id);
             }
         }
         "exit" => {
