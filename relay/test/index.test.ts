@@ -136,6 +136,85 @@ describe("handleSend FCM path", () => {
   });
 });
 
+describe("validPayload accepts event=start with new optional fields", () => {
+  it("200 for event=start with attributes_type, attributes, alert", async () => {
+    mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);
+    (globalThis.fetch as any).mockImplementation(async () => new Response(null, { status: 200 }));
+    const startPayload = {
+      ...validBody,
+      payload: {
+        title: "My Project",
+        body: "Needs your input",
+        session_id: "sess-1",
+        category: "liveactivity",
+        event: "start",
+        content_state: { status: "running", startedAtMs: 1, syncedAtMs: 2 },
+        attributes_type: "TurnActivityAttributes",
+        attributes: { agentName: "claude", sessionID: "sess-1", sessionName: "My Project" },
+        alert: { title: "My Project", body: "Needs your input" },
+      },
+    };
+    const r = await handleSend(sendReq(startPayload), env);
+    expect(r.status).toBe(200);
+  });
+
+  it("400 for event=unknown", async () => {
+    const r = await handleSend(
+      sendReq({ ...validBody, payload: { ...validBody.payload, event: "unknown" } }),
+      env,
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it("400 for attributes_type that is not a string", async () => {
+    const r = await handleSend(
+      sendReq({
+        ...validBody,
+        payload: {
+          ...validBody.payload,
+          category: "liveactivity",
+          event: "start",
+          attributes_type: 42,
+        },
+      }),
+      env,
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it("400 for attributes that is not an object", async () => {
+    const r = await handleSend(
+      sendReq({
+        ...validBody,
+        payload: {
+          ...validBody.payload,
+          category: "liveactivity",
+          event: "start",
+          attributes: "not-an-object",
+        },
+      }),
+      env,
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it("400 for alert with missing title", async () => {
+    const r = await handleSend(
+      sendReq({
+        ...validBody,
+        payload: {
+          ...validBody.payload,
+          category: "liveactivity",
+          event: "start",
+          alert: { body: "x" },
+        },
+      }),
+      env,
+    );
+    expect(r.status).toBe(400);
+  });
+});
+
 describe("auth + rate limit through handleSend", () => {
   it("401 on secret mismatch for a pinned id", async () => {
     mockFetch([["push.apple.com", () => new Response(null, { status: 200 })]]);

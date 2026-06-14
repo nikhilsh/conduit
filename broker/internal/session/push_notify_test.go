@@ -430,6 +430,175 @@ func TestLAEmit_TurnEnd_AlertNotAffected(t *testing.T) {
 	}
 }
 
+// ---- Push-to-start (G1) tests ----
+
+// newBareSessionWithLAAndStart builds a bare session wired with an LA registry,
+// sender, and the persisted alert registry so push-to-start can be tested.
+func newBareSessionWithLAAndStart(id string) (*Session, *push.LARegistry, *push.Registry, *recordingSender) {
+	s := bareSession(id)
+	s.Assistant = "claude"
+	reg := push.NewLARegistry()
+	sender := &recordingSender{}
+	alertReg := push.NewRegistry()
+	s.SetLAState(reg, sender, "broker")
+	s.SetLAAlertRegistry(alertReg)
+	return s, reg, alertReg, sender
+}
+
+// TestLAStart_EmittedWhenNoUpdateTokenAndNoSubscribers verifies that a start push
+// is emitted when there is no per-session update token, no subscriber, and a
+// start token is registered.
+func TestLAStart_EmittedWhenNoUpdateTokenAndNoSubscribers(t *testing.T) {
+	s, _, alertReg, sender := newBareSessionWithLAAndStart("sess-start-1")
+
+	// Register a push-to-start token.
+	alertReg.Register("broker", push.DeviceToken{
+		Platform: push.PlatformAPNsLiveActivityStart,
+		Token:    "start-tok-abc",
+	})
+
+	// No LA update token for this session, no subscribers.
+	s.emitLAUpdateImmediate("update")
+
+	if sender.count() != 1 {
+		t.Fatalf("expected 1 send (start), got %d", sender.count())
+	}
+	p := sender.lastPayload()
+	if p.Event != "start" {
+		t.Errorf("event = %q, want start", p.Event)
+	}
+	if p.Category != "liveactivity" {
+		t.Errorf("category = %q, want liveactivity", p.Category)
+	}
+	if p.AttributesType != "TurnActivityAttributes" {
+		t.Errorf("AttributesType = %q, want TurnActivityAttributes", p.AttributesType)
+	}
+	if p.Attributes["agentName"] != "claude" {
+		t.Errorf("Attributes.agentName = %v, want claude", p.Attributes["agentName"])
+	}
+	if p.Attributes["sessionID"] != "sess-start-1" {
+		t.Errorf("Attributes.sessionID = %v, want sess-start-1", p.Attributes["sessionID"])
+	}
+	if p.Alert == nil {
+		t.Fatal("Alert is nil, want non-nil for start push")
+	}
+	// Token must be the start token.
+	if sender.lastToken().Platform != push.PlatformAPNsLiveActivityStart {
+		t.Errorf("token platform = %v, want PlatformAPNsLiveActivityStart", sender.lastToken().Platform)
+	}
+	if sender.lastToken().Token != "start-tok-abc" {
+		t.Errorf("token = %q, want start-tok-abc", sender.lastToken().Token)
+	}
+}
+
+// TestLAStart_NotEmittedForEndEvent verifies that no start push is emitted
+// when event="end" and no update token exists (nothing to end).
+func TestLAStart_NotEmittedForEndEvent(t *testing.T) {
+	s, _, alertReg, sender := newBareSessionWithLAAndStart("sess-start-2")
+
+	alertReg.Register("broker", push.DeviceToken{
+		Platform: push.PlatformAPNsLiveActivityStart,
+		Token:    "start-tok",
+	})
+
+	s.emitLAUpdateImmediate("end")
+
+	if sender.count() != 0 {
+		t.Fatalf("expected 0 sends for end with no update token, got %d", sender.count())
+	}
+}
+
+// TestLAStart_NotEmittedWhenUpdateTokenExists verifies that when an update token
+// exists, the normal update path is used (not start).
+func TestLAStart_NotEmittedWhenUpdateTokenExists(t *testing.T) {
+	s, laReg, alertReg, sender := newBareSessionWithLAAndStart("sess-start-3")
+
+	// Both update token and start token registered.
+	laReg.SetLA("broker", "sess-start-3", "update-tok")
+	alertReg.Register("broker", push.DeviceToken{
+		Platform: push.PlatformAPNsLiveActivityStart,
+		Token:    "start-tok",
+	})
+
+	s.emitLAUpdateImmediate("update")
+
+	if sender.count() != 1 {
+		t.Fatalf("expected 1 send (update), got %d", sender.count())
+	}
+	p := sender.lastPayload()
+	if p.Event != "update" {
+		t.Errorf("event = %q, want update (not start)", p.Event)
+	}
+	// Must have used the update token.
+	if sender.lastToken().Token != "update-tok" {
+		t.Errorf("token = %q, want update-tok", sender.lastToken().Token)
+	}
+}
+
+// TestLAStart_NotEmittedWhenSubscriberAttached verifies that no start push
+// fires when a subscriber (foreground app) is attached — it owns the start.
+func TestLAStart_NotEmittedWhenSubscriberAttached(t *testing.T) {
+	s, _, alertReg, sender := newBareSessionWithLAAndStart("sess-start-4")
+
+	alertReg.Register("broker", push.DeviceToken{
+		Platform: push.PlatformAPNsLiveActivityStart,
+		Token:    "start-tok",
+	})
+
+	// Attach a viewer (simulate foreground app).
+	ch := attachViewer(s)
+	defer detachViewer(s, ch)
+
+	s.emitLAUpdateImmediate("update")
+
+	if sender.count() != 0 {
+		t.Fatalf("expected 0 sends (subscriber attached), got %d", sender.count())
+	}
+}
+
+// TestLAStart_NotEmittedWhenNoStartToken verifies that no start push fires
+// when no push-to-start token is registered for the identity.
+func TestLAStart_NotEmittedWhenNoStartToken(t *testing.T) {
+	s, _, _, sender := newBareSessionWithLAAndStart("sess-start-5")
+	// alertReg wired but no token registered.
+
+	s.emitLAUpdateImmediate("update")
+
+	if sender.count() != 0 {
+		t.Fatalf("expected 0 sends (no start token), got %d", sender.count())
+	}
+}
+
+// TestLAStart_Debounce verifies that two rapid start-needing events within
+// idlePushWindow don't double-start.
+func TestLAStart_Debounce(t *testing.T) {
+	fixed := time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
+	origNow := pushNow
+	pushNow = func() time.Time { return fixed }
+	defer func() { pushNow = origNow }()
+
+	s, _, alertReg, sender := newBareSessionWithLAAndStart("sess-start-6")
+	alertReg.Register("broker", push.DeviceToken{
+		Platform: push.PlatformAPNsLiveActivityStart,
+		Token:    "start-tok",
+	})
+
+	s.emitLAUpdateImmediate("update")
+	s.emitLAUpdateImmediate("update") // within window — should be suppressed
+
+	if sender.count() != 1 {
+		t.Fatalf("expected 1 send (debounce), got %d", sender.count())
+	}
+
+	// After advancing past the window, the next event should fire.
+	pushNow = func() time.Time { return fixed.Add(idlePushWindow + time.Millisecond) }
+	s.emitLAUpdateImmediate("update")
+
+	if sender.count() != 2 {
+		t.Fatalf("expected 2 sends after debounce window, got %d", sender.count())
+	}
+}
+
 // TestLAEmit_ContentStateKeys verifies content_state has all required fields
 // after SetLACurrentTool + notifyLATurnEnd.
 func TestLAEmit_ContentStateKeys(t *testing.T) {

@@ -1490,6 +1490,10 @@ type Manager struct {
 	// for Live Activity push support. nil = LA disabled.
 	laTokens *push.LARegistry
 	laSender push.Sender
+	// laPushAlertReg is the persisted alert Registry that also holds the
+	// push-to-start token (PlatformAPNsLiveActivityStart). Wired via
+	// SetLAAlertRegistry so emitLAStart can call StartTokenFor.
+	laPushAlertReg *push.Registry
 }
 
 // SetCredentialStore wires the per-identity OAuth credential store into
@@ -1534,6 +1538,16 @@ func (m *Manager) SetLASender(reg *push.LARegistry, sender push.Sender, identity
 	m.laTokens = reg
 	m.laSender = sender
 	m.pushIdentity = identity // shared with alert push identity
+	m.mu.Unlock()
+}
+
+// SetLAAlertRegistry wires the persisted alert Registry into the Manager so
+// sessions can look up the push-to-start token (PlatformAPNsLiveActivityStart)
+// via StartTokenFor for the G1 push-to-start feature. Must be called after
+// SetLASender. nil reg disables push-to-start (emitLAStart no-ops).
+func (m *Manager) SetLAAlertRegistry(reg *push.Registry) {
+	m.mu.Lock()
+	m.laPushAlertReg = reg
 	m.mu.Unlock()
 }
 
@@ -1910,6 +1924,9 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	// updates to the iOS lock-screen turn card. nil reg/sender = no-op.
 	if m.laTokens != nil && m.laSender != nil {
 		s.SetLAState(m.laTokens, m.laSender, m.pushIdentity)
+		if m.laPushAlertReg != nil {
+			s.SetLAAlertRegistry(m.laPushAlertReg)
+		}
 	}
 	m.sessions[id] = s
 	m.recordRecentProjectLocked(s.WorkspaceDir(), s.Assistant, s.ID)

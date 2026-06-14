@@ -179,6 +179,10 @@ type laPushState struct {
 	mu sync.Mutex
 	// laTokens is the registry keyed by (identity, session_id).
 	laTokens *push.LARegistry
+	// alertRegistry is the persisted alert token registry that also stores the
+	// push-to-start token (PlatformAPNsLiveActivityStart). Used by emitLAStart
+	// to look up the device-scoped start token via StartTokenFor.
+	alertRegistry *push.Registry
 	// laSender is the push Sender used for LA updates (typically the relay sender
 	// for PlatformAPNs). Set via SetLASender.
 	laSender push.Sender
@@ -186,6 +190,10 @@ type laPushState struct {
 	identity string
 	// lastLA records when the last LA push was emitted, for debounce.
 	lastLA time.Time
+	// lastLAStart records when the last push-to-start emit occurred, for
+	// debouncing double-start within the ~2s window before the device registers
+	// its update token after a start push. Mirrors the lastLA/idlePushWindow pattern.
+	lastLAStart time.Time
 	// currentTool is the tool most recently reported active in this session.
 	currentTool string
 	// currentCommand is the shell command most recently reported active.
@@ -215,6 +223,15 @@ func (s *Session) SetLAState(reg *push.LARegistry, sender push.Sender, identity 
 	s.laState.laSender = sender
 	s.laState.identity = identity
 	s.laState.status = "running"
+	s.laState.mu.Unlock()
+}
+
+// SetLAAlertRegistry wires the persisted alert Registry into the session's LA
+// state so emitLAStart can look up the push-to-start token via StartTokenFor.
+// Called from the Manager after SetLAState. Nil-safe.
+func (s *Session) SetLAAlertRegistry(reg *push.Registry) {
+	s.laState.mu.Lock()
+	s.laState.alertRegistry = reg
 	s.laState.mu.Unlock()
 }
 
@@ -336,7 +353,8 @@ func (s *Session) maybeEmitLAUpdate() {
 }
 
 // emitLAUpdateImmediate sends an LA push unconditionally (no debounce).
-// event is "update" or "end".
+// event is "update" or "end". If no update token exists for the session and
+// event != "end", it attempts a push-to-start via emitLAStart (§G1).
 func (s *Session) emitLAUpdateImmediate(event string) {
 	s.laState.mu.Lock()
 	reg := s.laState.laTokens
@@ -346,13 +364,132 @@ func (s *Session) emitLAUpdateImmediate(event string) {
 		s.laState.mu.Unlock()
 		return
 	}
-	token := reg.GetLA(identity, s.ID)
-	if token == "" {
+	updateToken := reg.GetLA(identity, s.ID)
+	if updateToken != "" {
+		// Existing path: a card is live — send update or end to it.
+		// Build content_state from current LA state.
+		nowMs := pushNow().UnixMilli()
+		cs := map[string]any{
+			"status":     s.laState.status,
+			"syncedAtMs": nowMs,
+		}
+		if !s.laState.turnStartedAt.IsZero() {
+			cs["startedAtMs"] = s.laState.turnStartedAt.UnixMilli()
+		} else {
+			cs["startedAtMs"] = nowMs
+		}
+		if s.laState.currentTool != "" {
+			cs["currentTool"] = s.laState.currentTool
+		}
+		if s.laState.currentCommand != "" {
+			cs["currentCommand"] = s.laState.currentCommand
+		}
+		if s.laState.summary != "" {
+			cs["summary"] = s.laState.summary
+		}
+		if s.laState.interruptKind != "" {
+			cs["interruptKind"] = s.laState.interruptKind
+		}
+		if s.laState.prompt != "" {
+			cs["prompt"] = s.laState.prompt
+		}
+		if s.laState.optionCount > 0 {
+			cs["optionCount"] = s.laState.optionCount
+		}
+
+		if event == "end" {
+			// On end, drop the LA token so we don't send further updates.
+			reg.DropLA(identity, s.ID)
+		}
+
+		name := s.laState.identity // title fallback
+		s.laState.mu.Unlock()
+
+		// Read token counts outside laState.mu (s.mu is a different lock).
+		s.mu.Lock()
+		tokIn := s.totalInputTokens
+		tokOut := s.totalOutputTokens
+		s.mu.Unlock()
+		if tokIn > 0 || tokOut > 0 {
+			cs["tokensIn"] = int64(tokIn)
+			cs["tokensOut"] = int64(tokOut)
+		}
+
+		// Use the display name as the notification title.
+		displayName := s.displayOrAssistant()
+		if displayName == "" {
+			displayName = name
+		}
+
+		dt := push.DeviceToken{Platform: push.PlatformAPNs, Token: updateToken}
+		payload := push.Payload{
+			Title:        displayName,
+			Body:         "Turn in progress",
+			SessionID:    s.ID,
+			Category:     "liveactivity",
+			Event:        event,
+			ContentState: cs,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := sender.Send(ctx, dt, payload); err != nil {
+			fmt.Fprintf(os.Stderr, "push: LA update session=%s event=%s: %v\n", s.ID, event, err)
+		}
+		return
+	}
+
+	// No live card known for this session.
+	if event == "end" {
+		// Nothing to end — no card exists.
 		s.laState.mu.Unlock()
 		return
 	}
 
-	// Build content_state from current LA state.
+	// Attempt push-to-start (G1): only when backgrounded (no subscribers).
+	alertReg := s.laState.alertRegistry
+	// Debounce: if we already emitted a start within idlePushWindow, suppress.
+	now := pushNow()
+	if now.Sub(s.laState.lastLAStart) < idlePushWindow {
+		s.laState.mu.Unlock()
+		return
+	}
+	s.laState.mu.Unlock()
+
+	// SubscriberCount reads s.mu — must be called outside laState.mu to avoid
+	// potential lock-order issues.
+	if s.SubscriberCount() > 0 {
+		// App is foreground/attached — it will call Activity.request itself.
+		// Do NOT emit a start (foreground/start contract: exactly one party starts).
+		return
+	}
+
+	if alertReg == nil {
+		return
+	}
+	startToken := alertReg.StartTokenFor(identity)
+	if startToken == "" {
+		return
+	}
+
+	// Record the debounce latch before sending.
+	s.laState.mu.Lock()
+	// Re-check after re-acquiring the lock (could have been set concurrently).
+	if now.Sub(s.laState.lastLAStart) < idlePushWindow {
+		s.laState.mu.Unlock()
+		return
+	}
+	s.laState.lastLAStart = now
+	s.laState.mu.Unlock()
+
+	s.emitLAStart(startToken, sender)
+}
+
+// emitLAStart sends a push-to-start Live Activity push to the device.
+// Called when no per-session update token exists and the app is backgrounded.
+// startToken is the device-scoped PlatformAPNsLiveActivityStart token.
+func (s *Session) emitLAStart(startToken string, sender push.Sender) {
+	// Build content_state snapshot (same shape as update).
+	s.laState.mu.Lock()
 	nowMs := pushNow().UnixMilli()
 	cs := map[string]any{
 		"status":     s.laState.status,
@@ -381,19 +518,10 @@ func (s *Session) emitLAUpdateImmediate(event string) {
 	if s.laState.optionCount > 0 {
 		cs["optionCount"] = s.laState.optionCount
 	}
-
-	// Grab token counts from the session under s.mu.
-	// Update lastLA time only on successful attempts, not here — we already
-	// set it in maybeEmitLAUpdate.
-	if event == "end" {
-		// On end, drop the LA token so we don't send further updates.
-		reg.DropLA(identity, s.ID)
-	}
-
-	name := s.laState.identity // title fallback
+	identity := s.laState.identity
 	s.laState.mu.Unlock()
 
-	// Read token counts outside laState.mu (s.mu is a different lock).
+	// Read token counts outside laState.mu.
 	s.mu.Lock()
 	tokIn := s.totalInputTokens
 	tokOut := s.totalOutputTokens
@@ -403,24 +531,48 @@ func (s *Session) emitLAUpdateImmediate(event string) {
 		cs["tokensOut"] = int64(tokOut)
 	}
 
-	// Use the display name as the notification title.
 	displayName := s.displayOrAssistant()
 	if displayName == "" {
-		displayName = name
+		displayName = identity
 	}
 
-	dt := push.DeviceToken{Platform: push.PlatformAPNs, Token: token}
+	// Determine a useful alert body: prefer the pending prompt, fall back to
+	// a generic "is working" message.
+	alertBody := "is working"
+	s.laState.mu.Lock()
+	if s.laState.prompt != "" {
+		alertBody = s.laState.prompt
+	} else if s.laState.interruptKind == "permission" {
+		alertBody = "Needs your input"
+	}
+	s.laState.mu.Unlock()
+
+	// AttributesType and Attributes wire contract (critical — silent OS reject on typo):
+	// AttributesType MUST be exactly "TurnActivityAttributes" (the iOS struct name).
+	// Attributes keys MUST be exactly "agentName", "sessionID", "sessionName".
+	// See: TurnActivityAttributes.swift, docs/PLAN-push-to-start-la.md §2.3.
+	dt := push.DeviceToken{Platform: push.PlatformAPNsLiveActivityStart, Token: startToken}
 	payload := push.Payload{
-		Title:        displayName,
-		Body:         "Turn in progress",
-		SessionID:    s.ID,
-		Category:     "liveactivity",
-		Event:        event,
-		ContentState: cs,
+		Title:          displayName,
+		Body:           alertBody,
+		SessionID:      s.ID,
+		Category:       "liveactivity",
+		Event:          "start",
+		ContentState:   cs,
+		AttributesType: "TurnActivityAttributes",
+		Attributes: map[string]any{
+			"agentName":   s.Assistant,
+			"sessionID":   s.ID,
+			"sessionName": displayName,
+		},
+		Alert: map[string]any{
+			"title": displayName,
+			"body":  alertBody,
+		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := sender.Send(ctx, dt, payload); err != nil {
-		fmt.Fprintf(os.Stderr, "push: LA update session=%s event=%s: %v\n", s.ID, event, err)
+		fmt.Fprintf(os.Stderr, "push: LA start session=%s: %v\n", s.ID, err)
 	}
 }

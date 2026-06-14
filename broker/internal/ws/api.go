@@ -482,6 +482,54 @@ func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"registered": true, "platform": string(pp)})
 }
 
+// servePushRegisterStart handles POST /api/push/register-start.
+// Stores the ActivityKit push-to-start token (device-scoped, session-less)
+// in the persisted alert Registry under PlatformAPNsLiveActivityStart.
+//
+// Wire contract:
+//
+//	POST /api/push/register-start
+//	Authorization: Bearer <token>   (or ?token=<token>)
+//	{"platform":"apns-liveactivity-start","token":"<hex>"}
+//	→ 200 {"registered":true}
+//	  400 invalid_platform / invalid_token / invalid_request
+//	  401 auth_expired
+func (s *Server) servePushRegisterStart(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req pushRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	platform := strings.TrimSpace(req.Platform)
+	token := strings.TrimSpace(req.Token)
+
+	if platform != string(push.PlatformAPNsLiveActivityStart) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_platform", "platform must be apns-liveactivity-start")
+		return
+	}
+	if token == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_token", "token is required")
+		return
+	}
+	if s.Push == nil {
+		// Forward-compat: if no registry is wired, accept and discard so old
+		// brokers don't 503 the iOS client (same pattern as the LA no-registry branch).
+		writeJSON(w, http.StatusOK, map[string]any{"registered": true})
+		return
+	}
+	dt := push.DeviceToken{Platform: push.PlatformAPNsLiveActivityStart, Token: token}
+	s.Push.Register(pushIdentity, dt)
+	log.Printf("push: registered apns-liveactivity-start token for %s", pushIdentity)
+	writeJSON(w, http.StatusOK, map[string]any{"registered": true})
+}
+
 // servePushUnregister handles POST /api/push/unregister.
 func (s *Server) servePushUnregister(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {

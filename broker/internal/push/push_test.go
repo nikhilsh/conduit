@@ -176,3 +176,82 @@ func TestNoopNotifierNeverErrors(t *testing.T) {
 		t.Fatalf("NoopNotifier.Notify errored: %v", err)
 	}
 }
+
+// ---- PlatformAPNsLiveActivityStart tests ----
+
+func TestValidPlatform_LiveActivityStart(t *testing.T) {
+	if !ValidPlatform(PlatformAPNsLiveActivityStart) {
+		t.Fatal("PlatformAPNsLiveActivityStart should be valid")
+	}
+}
+
+func TestRegisterStartToken_ValidAndPersisted(t *testing.T) {
+	path := t.TempDir() + "/tokens.json"
+	r := NewRegistryWithPersistence(path)
+
+	// Register a push-to-start token.
+	dt := DeviceToken{Platform: PlatformAPNsLiveActivityStart, Token: "start-tok-abc"}
+	if !r.Register("broker", dt) {
+		t.Fatal("Register apns-liveactivity-start should succeed")
+	}
+
+	// StartTokenFor returns it.
+	got := r.StartTokenFor("broker")
+	if got != "start-tok-abc" {
+		t.Fatalf("StartTokenFor = %q, want start-tok-abc", got)
+	}
+
+	// TokensFor includes it.
+	tokens := r.TokensFor("broker")
+	found := false
+	for _, t2 := range tokens {
+		if t2.Platform == PlatformAPNsLiveActivityStart && t2.Token == "start-tok-abc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("start token not in TokensFor: %+v", tokens)
+	}
+
+	// Reload: token persists.
+	r2 := NewRegistryWithPersistence(path)
+	if got2 := r2.StartTokenFor("broker"); got2 != "start-tok-abc" {
+		t.Fatalf("StartTokenFor after reload = %q, want start-tok-abc", got2)
+	}
+}
+
+func TestStartTokenFor_AbsentWhenNoneRegistered(t *testing.T) {
+	r := NewRegistry()
+	if got := r.StartTokenFor("broker"); got != "" {
+		t.Fatalf("StartTokenFor with no token = %q, want empty", got)
+	}
+}
+
+func TestRegisterStartToken_DoesNotAffectAlertTokens(t *testing.T) {
+	r := NewRegistry()
+	r.Register("broker", tok(PlatformAPNs, "alert-tok"))
+	r.Register("broker", DeviceToken{Platform: PlatformAPNsLiveActivityStart, Token: "start-tok"})
+
+	// Alert token still present.
+	tokens := r.TokensFor("broker")
+	var hasAlert, hasStart bool
+	for _, t2 := range tokens {
+		if t2.Platform == PlatformAPNs {
+			hasAlert = true
+		}
+		if t2.Platform == PlatformAPNsLiveActivityStart {
+			hasStart = true
+		}
+	}
+	if !hasAlert {
+		t.Error("alert token missing after registering start token")
+	}
+	if !hasStart {
+		t.Error("start token missing")
+	}
+
+	// StartTokenFor returns only the start token.
+	if got := r.StartTokenFor("broker"); got != "start-tok" {
+		t.Errorf("StartTokenFor = %q, want start-tok", got)
+	}
+}
