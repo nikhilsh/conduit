@@ -2624,17 +2624,76 @@ private struct ConduitToolBundleCard: View {
 
     var body: some View {
         if arm == .b {
-            // Signature arm: the run reads as a stack of quiet rows, no
-            // grouping chrome — tool output recedes (§2).
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(displayItems, id: \.id) { item in
-                    ConduitSpineToolRow(event: item)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            signatureBody
         } else {
             breatheBody
         }
+    }
+
+    /// Signature arm: collapsible cluster that defaults collapsed.
+    /// The header summarises the run ("N commands · all exit 0" / "M failed");
+    /// when expanded it renders quiet ConduitSpineToolRow items — preserving the
+    /// recessive Signature aesthetic — rather than the louder Breathe bundle rows.
+    private var signatureBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            signatureHeader
+            if expanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(displayItems, id: \.id) { item in
+                        ConduitSpineToolRow(event: item)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                .fill(neon.surface.opacity(0.55))
+                .overlay(
+                    RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                        .stroke(
+                            failCount > 0 ? ConduitBundleTint.fail.opacity(0.40) : neon.border.opacity(0.50),
+                            lineWidth: 1
+                        )
+                )
+        )
+    }
+
+    private var signatureHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: failCount > 0 ? "exclamationmark.triangle" : iconName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(failCount > 0 ? ConduitBundleTint.fail : tint.opacity(0.80))
+            Text(signatureHeaderText)
+                .font(neon.mono(11.5))
+                .foregroundStyle(failCount > 0 ? ConduitBundleTint.fail : neon.textDim)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(neon.textFaint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(minHeight: 36)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(verb), \(items.count) tool runs\(failCount > 0 ? ", \(failCount) failed" : "")")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var signatureHeaderText: String {
+        let n = items.count
+        let countWord = n == 1 ? "1 command" : "\(n) commands"
+        if anyRunning { return "\(countWord) · running" }
+        if failCount > 0 { return "\(countWord) · \(failCount) failed" }
+        return "\(countWord) · all exit 0"
     }
 
     private var breatheBody: some View {
