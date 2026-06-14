@@ -5,11 +5,14 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -17,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -25,8 +29,11 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -34,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -52,6 +60,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -62,6 +72,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import sh.nikhil.conduit.SavedSshCredential
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SshBootstrapState
@@ -101,6 +113,8 @@ fun SSHLoginSheet(
     var openaiKey by remember { mutableStateOf("") }
     // Fix 3: env keys collapsed by default behind a disclosure.
     var envKeysExpanded by remember { mutableStateOf(false) }
+    // Captured when Connect is tapped — used as the title in the install-progress modal.
+    var boxName by remember { mutableStateOf("") }
 
     val saved = remember { credStore.load() }
 
@@ -108,6 +122,44 @@ fun SSHLoginSheet(
         if (bootstrap is SshBootstrapState.Idle && harness.isReachable) {
             onDismiss()
         }
+    }
+
+    // Blocking install-progress modal — shows while bootstrap is running or failed.
+    if (bootstrap !is SshBootstrapState.Idle) {
+        InstallProgressDialog(
+            bootstrap = bootstrap,
+            boxName = boxName,
+            onRetry = {
+                Telemetry.breadcrumb("ssh_install_modal", "retry tapped", mapOf("box" to boxName))
+                // Re-invoke connect with the same credentials still held in state.
+                val portValue = port.toIntOrNull()
+                    ?.takeIf { it in 1..65535 }
+                    ?.toUShort()
+                if (portValue != null) {
+                    val trimmedKey = privateKey.trim()
+                    val auth: SshAuth = when (mode) {
+                        AuthMode.Password -> SshAuth.Password(password)
+                        AuthMode.PrivateKey -> SshAuth.PrivateKey(trimmedKey, passphrase.ifBlank { null })
+                    }
+                    store.connectViaSSH(
+                        credentials = SshCredentials(
+                            host = host.trim(),
+                            port = portValue,
+                            username = username.trim(),
+                            auth = auth,
+                        ),
+                        serverName = "${username.trim()}@${host.trim()}",
+                        anthropicApiKey = anthropicKey,
+                        openaiApiKey = openaiKey,
+                        imageRef = null,
+                    )
+                }
+            },
+            onCancel = {
+                Telemetry.breadcrumb("ssh_install_modal", "cancel tapped after failure", mapOf("box" to boxName))
+                store.clearSshBootstrap()
+            },
+        )
     }
 
     ModalBottomSheet(
@@ -418,28 +470,6 @@ fun SSHLoginSheet(
                 }
             }
 
-            // Progress / error feedback.
-            when (val s = bootstrap) {
-                is SshBootstrapState.Running -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text(s.message, fontFamily = neon.sans, fontSize = 14.sp, color = neon.textDim)
-                    }
-                }
-                is SshBootstrapState.Failed -> {
-                    Text(
-                        s.reason,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = neon.sans,
-                        color = neon.red,
-                    )
-                }
-                is SshBootstrapState.Idle -> Unit
-            }
-
             val reasons = connectDisabledReasons(host, port, username, mode, password, privateKey, bootstrap)
             if (reasons.isNotEmpty() && host.isNotBlank()) {
                 Text(
@@ -473,6 +503,11 @@ fun SSHLoginSheet(
                         ?.toUShort()
                         ?: return@Button
                     val trimmedKey = privateKey.trim()
+                    val trimmedHost = host.trim()
+                    val trimmedUser = username.trim()
+
+                    // Capture box name for the install-progress modal title.
+                    boxName = "$trimmedUser@$trimmedHost"
 
                     if (mode == AuthMode.PrivateKey) {
                         Telemetry.breadcrumb(
@@ -489,7 +524,7 @@ fun SSHLoginSheet(
                     Telemetry.breadcrumb(
                         "ssh_addbox",
                         "connect() entry",
-                        mapOf("host" to host.trim(), "port" to port, "mode" to mode.name),
+                        mapOf("host" to trimmedHost, "port" to port, "mode" to mode.name),
                     )
 
                     val auth: SshAuth = when (mode) {
@@ -497,9 +532,9 @@ fun SSHLoginSheet(
                         AuthMode.PrivateKey -> SshAuth.PrivateKey(trimmedKey, passphrase.ifBlank { null })
                     }
                     val creds = SshCredentials(
-                        host = host.trim(),
+                        host = trimmedHost,
                         port = portValue,
-                        username = username.trim(),
+                        username = trimmedUser,
                         auth = auth,
                     )
                     if (remember_) {
@@ -560,6 +595,232 @@ private fun SshSectionLabel(text: String) {
 private enum class AuthMode(val label: String) {
     Password("Password"),
     PrivateKey("SSH Key"),
+}
+
+/** Stage steps matching remote-bootstrap.sh STEP markers, in order. */
+private val BOOTSTRAP_STAGES = listOf(
+    "Connecting" to "Connecting",
+    "Securing connection" to "Securing",
+    "Authenticating" to "Authenticating",
+    "Opening tunnel" to "Opening",
+    "Checking existing install" to "Checking",
+    "Downloading broker" to "Downloading",
+    "Starting service" to "Starting",
+    "Installing agent" to "Installing",
+    "Verifying readiness" to "Waiting",
+)
+
+private fun bootstrapStageIndex(message: String): Int {
+    for ((i, stage) in BOOTSTRAP_STAGES.withIndex()) {
+        if (message.startsWith(stage.second)) return i
+    }
+    return 0
+}
+
+/**
+ * Blocking install-progress dialog. Shows while SSH bootstrap is running or has
+ * failed. Non-dismissible during running to prevent user confusion; on failure
+ * shows Retry and Cancel buttons with the specific error reason.
+ *
+ * Stages are driven by the STEP markers in remote-bootstrap.sh surfaced via
+ * [SshBootstrapState.Running.message]:
+ *   Connecting → Securing connection → Authenticating → Opening tunnel →
+ *   Checking existing install → Downloading broker → Starting service →
+ *   Installing agent → Verifying readiness
+ *
+ * Failure modes surfaced as clear messages (mapped in SessionStore.describeSsh):
+ *   auth_failed, host_key_rejected, broker_install_failed, harness_start_timeout,
+ *   curl_missing, unsupported_platform, broker_exec_failed, port_conflict, io, etc.
+ */
+@Composable
+private fun InstallProgressDialog(
+    bootstrap: SshBootstrapState,
+    boxName: String,
+    onRetry: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+
+    LaunchedEffect(Unit) {
+        Telemetry.breadcrumb("ssh_install_modal", "dialog shown", mapOf("box" to boxName))
+    }
+
+    Dialog(
+        onDismissRequest = { /* non-dismissible while running */ },
+        properties = DialogProperties(
+            dismissOnBackPress = bootstrap is SshBootstrapState.Failed,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
+        ),
+    ) {
+        // Scrim + centred card
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                modifier = Modifier
+                    .padding(horizontal = 24.dp)
+                    .fillMaxWidth()
+                    .shadow(elevation = 24.dp, shape = RoundedCornerShape(20.dp)),
+                shape = RoundedCornerShape(20.dp),
+                color = neon.surfaceSolid,
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    // Title row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Bolt,
+                            contentDescription = null,
+                            tint = neon.codex,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Column {
+                            Text(
+                                "Setting up ${boxName.ifBlank { "server" }}",
+                                fontFamily = neon.mono,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = neon.text,
+                                maxLines = 1,
+                            )
+                            Text(
+                                "INSTALLING CONDUIT BROKER",
+                                fontFamily = neon.mono,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                color = neon.textFaint,
+                                letterSpacing = 1.2.sp,
+                            )
+                        }
+                    }
+
+                    when (bootstrap) {
+                        is SshBootstrapState.Running -> {
+                            val activeIdx = bootstrapStageIndex(bootstrap.message)
+
+                            // Stage dots
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BOOTSTRAP_STAGES.forEachIndexed { idx, (label, _) ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        Box(modifier = Modifier.size(14.dp), contentAlignment = Alignment.Center) {
+                                            // Outer glow ring for active stage
+                                            if (idx == activeIdx) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(14.dp)
+                                                        .clip(CircleShape)
+                                                        .background(neon.codex.copy(alpha = 0.25f)),
+                                                )
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(
+                                                        when {
+                                                            idx < activeIdx -> neon.green
+                                                            idx == activeIdx -> neon.codex
+                                                            else -> neon.border
+                                                        }
+                                                    ),
+                                            )
+                                        }
+                                        Text(
+                                            label,
+                                            fontFamily = neon.mono,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (idx == activeIdx) FontWeight.SemiBold else FontWeight.Normal,
+                                            color = if (idx <= activeIdx) neon.text else neon.textFaint,
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Current message + spinner
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = neon.codex,
+                                )
+                                Text(
+                                    bootstrap.message,
+                                    fontFamily = neon.mono,
+                                    fontSize = 13.sp,
+                                    color = neon.text,
+                                )
+                            }
+                        }
+
+                        is SshBootstrapState.Failed -> {
+                            // Error message
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = neon.red,
+                                    modifier = Modifier.size(16.dp).padding(top = 2.dp),
+                                )
+                                Text(
+                                    bootstrap.reason,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = neon.sans,
+                                    color = neon.red,
+                                )
+                            }
+
+                            // Retry + Cancel
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Button(
+                                    onClick = onRetry,
+                                    shape = RoundedCornerShape(11.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = neon.codex,
+                                        contentColor = neon.accentText,
+                                    ),
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Retry", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
+                                }
+                                OutlinedButton(
+                                    onClick = onCancel,
+                                    shape = RoundedCornerShape(11.dp),
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("Cancel", fontFamily = neon.sans, color = neon.textDim)
+                                }
+                            }
+                        }
+
+                        is SshBootstrapState.Idle -> Unit
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
