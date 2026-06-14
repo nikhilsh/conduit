@@ -4,14 +4,18 @@ import UIKit
 /// Conduit-styled sheet that drives the SSH-bootstrap flow. The user supplies
 /// host/port + username + password OR PEM key (+ optional passphrase); on
 /// Connect we kick off `SessionStore.connectViaSSH`, which handles the
-/// docker-run + tunnel + endpoint swap. Progress + errors render inline so
-/// the user can correct typos without losing context.
+/// docker-run + tunnel + endpoint swap. A blocking install-progress modal
+/// overlays the form while bootstrap runs so the user is never left staring
+/// at a silent screen.
 /// Fix 3: mono section labels (RECENT/SERVER/AUTHENTICATION), API keys behind
 /// disclosure, X to close, inline validation hint, glowing Connect CTA.
 struct SSHLoginSheet: View {
     @Environment(SessionStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @Environment(\.neonTheme) private var neon
+
+    // Captured when the user taps Connect — used in the progress modal title.
+    @State private var bootstrapBoxName: String = ""
 
     enum AuthMode: String, CaseIterable, Identifiable {
         case password = "Password"
@@ -56,7 +60,6 @@ struct SSHLoginSheet: View {
                             .padding(.horizontal, 4)
                         }
                         apiKeysCard
-                        progressCard
                         connectButton
                     }
                     .padding(.horizontal, 16)
@@ -64,7 +67,15 @@ struct SSHLoginSheet: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
+
+                // Blocking install-progress modal — overlays the form while
+                // bootstrap runs so the user is never staring at a silent screen.
+                if store.sshBootstrapState != .idle {
+                    installProgressOverlay
+                        .zIndex(1)
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: store.sshBootstrapState != .idle)
             .navigationTitle("Add via SSH")
             .navigationBarTitleDisplayMode(.inline)
             .neonAccentTint()
@@ -101,6 +112,200 @@ struct SSHLoginSheet: View {
             }
         }
         .appearanceColorScheme()
+    }
+
+    // MARK: - Install progress overlay
+
+    /// Full-coverage blocking overlay that appears while SSH bootstrap is running
+    /// or has failed. Non-dismissible during running; shows Retry + Cancel on
+    /// failure. The form underneath is left in place but inaccessible.
+    @ViewBuilder
+    private var installProgressOverlay: some View {
+        ZStack {
+            // Dim the form behind the modal.
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                Spacer()
+                installProgressCard
+                    .padding(.horizontal, 24)
+                Spacer()
+            }
+        }
+        .transition(.opacity)
+        .onAppear {
+            Telemetry.breadcrumb("ssh_install_modal", "overlay appeared", data: [
+                "box": bootstrapBoxName,
+            ])
+        }
+    }
+
+    @ViewBuilder
+    private var installProgressCard: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Title row
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.horizontal.circle.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(neon.codex)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Setting up \(bootstrapBoxName.isEmpty ? "server" : bootstrapBoxName)")
+                        .font(neon.mono(14).weight(.bold))
+                        .foregroundStyle(neon.text)
+                        .lineLimit(1)
+                    Text("INSTALLING CONDUIT BROKER")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+
+            switch store.sshBootstrapState {
+            case .idle:
+                EmptyView()
+
+            case .running(let message):
+                // Stage indicators — we receive a single message at a time that
+                // reflects the current STEP from remote-bootstrap.sh. Show it with
+                // a spinner so the user knows work is happening.
+                VStack(alignment: .leading, spacing: 16) {
+                    stageList(currentMessage: message)
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(neon.codex)
+                        Text(message)
+                            .font(neon.mono(13))
+                            .foregroundStyle(neon.text)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+            case .failed(let reason):
+                VStack(alignment: .leading, spacing: 14) {
+                    // Error message with icon
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(neon.red)
+                        Text(reason)
+                            .font(.footnote)
+                            .foregroundStyle(neon.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    // Retry + Cancel buttons
+                    HStack(spacing: 10) {
+                        // Retry: re-run bootstrap with the same credentials.
+                        Button {
+                            Telemetry.breadcrumb("ssh_install_modal", "retry tapped", data: [
+                                "box": bootstrapBoxName,
+                            ])
+                            connect()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("Retry")
+                                    .font(neon.mono(13).weight(.semibold))
+                            }
+                            .foregroundStyle(neon.accentText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .background(
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .fill(neon.codex)
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        // Cancel: clear bootstrap state and leave the form open.
+                        Button {
+                            Telemetry.breadcrumb("ssh_install_modal", "cancel tapped after failure", data: [
+                                "box": bootstrapBoxName,
+                            ])
+                            store.clearSshBootstrap()
+                        } label: {
+                            Text("Cancel")
+                                .font(neon.mono(13).weight(.semibold))
+                                .foregroundStyle(neon.textDim)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                        .fill(neon.surface)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                                .strokeBorder(neon.border, lineWidth: 1)
+                                        )
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(neon.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .strokeBorder(neon.border, lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.3), radius: 30, x: 0, y: 10)
+    }
+
+    /// Stage labels in the order remote-bootstrap.sh emits them.
+    private static let bootstrapStages: [(label: String, prefix: String)] = [
+        ("Connecting", "Connecting"),
+        ("Securing connection", "Securing"),
+        ("Authenticating", "Authenticating"),
+        ("Opening tunnel", "Opening"),
+        ("Checking existing install", "Checking"),
+        ("Downloading broker", "Downloading"),
+        ("Starting service", "Starting"),
+        ("Installing agent", "Installing"),
+        ("Verifying readiness", "Waiting"),
+    ]
+
+    /// Which stage is active for the given progress message.
+    private static func stageIndex(for message: String) -> Int {
+        for (i, stage) in bootstrapStages.enumerated() {
+            if message.hasPrefix(stage.prefix) { return i }
+        }
+        return 0
+    }
+
+    /// Stage progress dots list — completed stages get a green dot,
+    /// active gets a pulsed codex dot, pending dots are dim.
+    private func stageList(currentMessage: String) -> some View {
+        let activeIdx = Self.stageIndex(for: currentMessage)
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Self.bootstrapStages.indices, id: \.self) { idx in
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(idx < activeIdx ? neon.green
+                                  : idx == activeIdx ? neon.codex
+                                  : neon.border)
+                            .frame(width: 8, height: 8)
+                        if idx == activeIdx {
+                            Circle()
+                                .fill(neon.codex.opacity(0.3))
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+                    .frame(width: 14, height: 14)
+                    Text(Self.bootstrapStages[idx].label)
+                        .font(neon.mono(12))
+                        .foregroundStyle(idx <= activeIdx ? neon.text : neon.textFaint)
+                        .fontWeight(idx == activeIdx ? .semibold : .regular)
+                }
+            }
+        }
     }
 
     // MARK: - Sections
@@ -284,31 +489,6 @@ struct SSHLoginSheet: View {
         }
     }
 
-    @ViewBuilder
-    private var progressCard: some View {
-        switch store.sshBootstrapState {
-        case .idle:
-            EmptyView()
-        case .running(let message):
-            SSHCard(title: "Bootstrapping") {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                    Text(message)
-                        .foregroundStyle(ConduitTheme.textBody)
-                    Spacer()
-                }
-                .padding(.vertical, 4)
-            }
-        case .failed(let reason):
-            SSHCard(title: "Failed") {
-                Text(reason)
-                    .font(.footnote)
-                    .foregroundStyle(ConduitTheme.danger)
-            }
-        }
-    }
-
     // Fix 3: glowing "Connect & install broker" CTA.
     private var connectButton: some View {
         VStack(spacing: 6) {
@@ -397,8 +577,14 @@ struct SSHLoginSheet: View {
     }
 
     private func connect() {
+        // Capture box name before the bootstrap starts so the modal title is
+        // populated even on a Retry (where host/username fields are still set).
+        let trimmedHost = host.trimmingCharacters(in: .whitespaces)
+        let trimmedUser = username.trimmingCharacters(in: .whitespaces)
+        bootstrapBoxName = "\(trimmedUser)@\(trimmedHost)"
+
         Telemetry.breadcrumb("ssh_addbox", "connect() entry", data: [
-            "host": host.trimmingCharacters(in: .whitespaces),
+            "host": trimmedHost,
             "port": port,
             "mode": mode.rawValue,
         ])
@@ -430,7 +616,7 @@ struct SSHLoginSheet: View {
 
         Telemetry.breadcrumb("ssh_addbox", "ssh connect attempt", data: [
             "mode": mode.rawValue,
-            "host_nonempty": host.trimmingCharacters(in: .whitespaces).isEmpty ? "false" : "true",
+            "host_nonempty": trimmedHost.isEmpty ? "false" : "true",
             "key_length": mode == .privateKey ? "\(trimmedKey.count)" : "0",
             "looks_pem": looksLikePem ? "true" : "false",
             "looks_encrypted": looksEncrypted ? "true" : "false",
@@ -448,9 +634,9 @@ struct SSHLoginSheet: View {
             )
         }
         let creds = SshCredentials(
-            host: host.trimmingCharacters(in: .whitespaces),
+            host: trimmedHost,
             port: portValue,
-            username: username.trimmingCharacters(in: .whitespaces),
+            username: trimmedUser,
             auth: auth
         )
 
