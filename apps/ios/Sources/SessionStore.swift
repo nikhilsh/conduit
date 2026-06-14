@@ -5680,7 +5680,7 @@ final class StoreDelegate: ConduitDelegate {
 
     /// Returns true when this delegate's callbacks should still be delivered.
     /// False means a new client has already been created and we are a ghost.
-    private func isCurrent(store: SessionStore) -> Bool {
+    @MainActor private func isCurrent(store: SessionStore) -> Bool {
         // boxID delegates are scoped to their box, not the global generation.
         guard boxID == nil else { return true }
         return store.clientGeneration == generation
