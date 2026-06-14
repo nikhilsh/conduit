@@ -181,6 +181,10 @@ targets:
         # surface the active turn on the lock screen / Dynamic Island.
         # See apps/ios/Sources/Models/TurnLiveActivityController.swift.
         NSSupportsLiveActivities: true
+        # Allow high-priority (priority 10) LA pushes. Without this iOS
+        # aggressively throttles priority-5 updates; a push-to-start that
+        # lands minutes late defeats the feature (§1.5, PLAN-push-to-start-la).
+        NSSupportsLiveActivitiesFrequentUpdates: true
         SentryDSN: $(SENTRY_DSN)
     settings:
       base:

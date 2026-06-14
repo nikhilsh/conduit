@@ -92,14 +92,30 @@ struct ConduitApp: App {
                         // see the *selected* session and miss tool
                         // calls in background tabs.
                         if liveActivityBridge == nil {
-                            let bridge = TurnLiveActivityBridge(store: store, controller: liveActivity)
-                            bridge.start()
-                            liveActivityBridge = bridge
+                            // Push-to-start (G1, PLAN-push-to-start-la.md):
+                            // observe the type-scoped push-to-start token for
+                            // the app's lifetime so any box can start the LA
+                            // while the app is backgrounded or closed.
+                            liveActivity.startObservingPushToStartToken()
+
+                            // Adopt any Activity the OS already started from
+                            // a push-to-start push. MUST run before reap
+                            // (populates activeActivityIDs so reap doesn't
+                            // kill push-started cards) and before bridge.start
+                            // (seeds models so the bridge takes the UPDATE
+                            // branch, not .start → no duplicate card).
+                            liveActivity.adoptPushStartedActivities()
+
                             // Fresh launch: any lock-screen activity left
                             // over from the previous run is an orphan
                             // (this process holds no handle to it) — end
                             // them all before new turns request anew.
+                            // Runs after adoption so adopted cards are owned.
                             liveActivity.reapOrphanActivities()
+
+                            let bridge = TurnLiveActivityBridge(store: store, controller: liveActivity)
+                            bridge.start()
+                            liveActivityBridge = bridge
                         }
                         // Lock-screen Approve (LiveActivityIntent) runs in
                         // this process; hand it the store-backed approval.
