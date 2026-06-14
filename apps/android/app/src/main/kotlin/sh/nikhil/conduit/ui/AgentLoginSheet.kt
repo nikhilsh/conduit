@@ -81,7 +81,13 @@ import sh.nikhil.conduit.auth.OAuthStore
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
+fun AgentLoginSheet(
+    store: SessionStore,
+    /** When non-null, auto-start OAuth for this provider on open (one-tap
+     *  re-auth from the ⋮ menu). Mirror of iOS `autoStartProvider`. */
+    autoStartProvider: OAuthProvider? = null,
+    onDismiss: () -> Unit,
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -239,6 +245,18 @@ fun AgentLoginSheet(store: SessionStore, onDismiss: () -> Unit) {
             } finally {
                 isWorking = false
             }
+        }
+    }
+
+    // One-tap re-auth: auto-start the provider's OAuth flow when the sheet
+    // is opened from ⋮ → Re-authenticate, so the user skips the picker and
+    // lands directly in the browser/paste flow. Mirror of iOS
+    // `AgentLoginSheet(autoStartProvider:)`.
+    LaunchedEffect(autoStartProvider) {
+        when (autoStartProvider) {
+            OAuthProvider.ANTHROPIC -> beginClaude()
+            OAuthProvider.OPENAI -> loginChatGPT()
+            null -> Unit
         }
     }
 

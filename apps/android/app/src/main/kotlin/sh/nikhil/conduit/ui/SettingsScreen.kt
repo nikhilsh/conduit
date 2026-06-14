@@ -171,6 +171,10 @@ fun SettingsScreen(
     var showServerSwitcher by remember { mutableStateOf(false) }
     var showTerminalTheme by remember { mutableStateOf(false) }
     var showAgentLogin by remember { mutableStateOf(false) }
+    /// When non-null, the next agent-login sheet open auto-starts OAuth
+    /// for this provider (one-tap re-auth from the ⋮ menu, mirrors iOS
+    /// `reAuthProvider`).
+    var reAuthProvider by remember { mutableStateOf<sh.nikhil.conduit.auth.OAuthProvider?>(null) }
     // Per-agent signed-in + plan snapshot for the Connection group (fix 3).
     // Re-read whenever the login sheet closes so a fresh sign-in flips the
     // rows to `● signed in` immediately.
@@ -207,7 +211,14 @@ fun SettingsScreen(
                 accounts = agentAccounts,
                 brokerReadiness = brokerReadiness,
                 onSwitchServer = { showServerSwitcher = true },
-                onReauthenticate = { showAgentLogin = true },
+                onReauthenticate = { account ->
+                    Telemetry.breadcrumb(
+                        "agent_reauth", "re-auth triggered from settings menu",
+                        mapOf("provider" to account.provider.raw),
+                    )
+                    reAuthProvider = account.provider
+                    showAgentLogin = true
+                },
                 onRemoveFromPhone = { account ->
                     sh.nikhil.conduit.auth.OAuthStore.clear(context, account.provider)
                     agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
@@ -595,8 +606,9 @@ fun SettingsScreen(
         TerminalThemePickerSheet(appearance = appearance, current = terminalTheme, onDismiss = { showTerminalTheme = false })
     }
     if (showAgentLogin) {
-        AgentLoginSheet(store = store, onDismiss = {
+        AgentLoginSheet(store = store, autoStartProvider = reAuthProvider, onDismiss = {
             showAgentLogin = false
+            reAuthProvider = null
             // Re-read the credential store so a fresh sign-in flips the
             // agent rows to `● signed in` immediately.
             agentAccounts = sh.nikhil.conduit.auth.AgentAccountStatus.current(context)
@@ -722,7 +734,7 @@ private fun ConnectionSection(
                 HorizontalDivider(modifier = Modifier.padding(start = 60.dp), color = neon.border)
             }
 
-            // Add account.
+            // "Manage" row — opens the agent accounts sheet (full list + sign-in).
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -737,10 +749,15 @@ private fun ConnectionSection(
                         .border(1.dp, neon.border, RoundedCornerShape(10.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("+", fontFamily = neon.mono, fontSize = 16.sp, color = neon.textDim)
+                    Icon(
+                        Icons.Filled.Person,
+                        contentDescription = null,
+                        tint = neon.textDim,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
                 Text(
-                    "Add account",
+                    "Manage",
                     fontFamily = neon.sans,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,

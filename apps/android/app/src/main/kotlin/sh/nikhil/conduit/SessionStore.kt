@@ -590,9 +590,32 @@ class SessionStore : ViewModel(), ConduitDelegate {
             }
             if (phase == ApprovalResolvePhase.Resolved) {
                 appendAuditedApprovalLine(sessionId, decision, auto = false)
+                resolvePendingInput(sessionId)
             }
             _approvalResolve.value = _approvalResolve.value + (sessionId to phase)
         }
+    }
+
+    /**
+     * Optimistically mark the last unanswered `pending_input` item for
+     * [sessionId] as resolved so the inline chat card flips to answered
+     * immediately on decision success — without waiting for the broker's
+     * WS echo (which may arrive seconds later). Called from every
+     * out-of-band decision path (ApprovalsScreen, notification action).
+     * Idempotent; no-op when no unresolved pending item exists. Mirror of
+     * iOS `SessionStore.resolvePendingInput(sessionID:)`.
+     */
+    fun resolvePendingInput(sessionId: String) {
+        val items = _conversationLog.value[sessionId] ?: return
+        val resolved = _resolvedPendingInputIDs.value
+        val item = items.lastOrNull {
+            it.kind.lowercase() == "pending_input" && it.id !in resolved
+        } ?: return
+        _resolvedPendingInputIDs.value = resolved + item.id
+        Telemetry.breadcrumb(
+            "approvals", "pending_input optimistically resolved",
+            mapOf("session" to sessionId, "item_id" to item.id),
+        )
     }
 
     /**
@@ -1203,6 +1226,70 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private var sshCredentialStore: SshCredentialStore? = null
 
     private var client: ConduitClient? = null
+
+    /**
+     * Monotonic counter incremented each time [connect] creates a new
+     * [ConduitClient]. Captured at connect time and handed to a per-connection
+     * [GenerationGuardedDelegate]; once a newer [connect] bumps the counter the
+     * old client's callbacks (notably a stale `onDisconnected` fired AFTER
+     * [connect] already reached [HarnessState.Linked]) are dropped so they
+     * cannot clobber the new connection's state with [HarnessState.Failed]
+     * (box-switch flicker fix, mirrors iOS `StoreDelegate.clientGeneration`).
+     */
+    @Volatile private var clientGeneration: Long = 0
+
+    /**
+     * Per-connection [ConduitDelegate] that forwards to the live store only
+     * while its [generation] is current. SessionStore implements
+     * [ConduitDelegate] directly, so without this every superseded
+     * [ConduitClient]'s teardown callbacks would reach the store and clobber
+     * the freshly-connected box (box-switch flicker). Gating on the generation
+     * — rather than on harness reachability — means a GENUINE disconnect of the
+     * CURRENT client still matches and is handled normally.
+     */
+    private inner class GenerationGuardedDelegate(private val generation: Long) : ConduitDelegate {
+        private fun ifCurrent(block: () -> Unit) {
+            if (generation == clientGeneration) block()
+        }
+
+        override fun onPtyData(sessionId: String, data: ByteArray) =
+            ifCurrent { this@SessionStore.onPtyData(sessionId, data) }
+
+        override fun onChatEvent(sessionId: String, event: ChatEvent) =
+            ifCurrent { this@SessionStore.onChatEvent(sessionId, event) }
+
+        override fun onPreviewReady(sessionId: String, preview: PreviewInfo) =
+            ifCurrent { this@SessionStore.onPreviewReady(sessionId, preview) }
+
+        override fun onStatus(status: SessionStatus) =
+            ifCurrent { this@SessionStore.onStatus(status) }
+
+        override fun onSnapshot(sessionId: String, gunzipped: ByteArray) =
+            ifCurrent { this@SessionStore.onSnapshot(sessionId, gunzipped) }
+
+        override fun onExit(sessionId: String, code: Int) =
+            ifCurrent { this@SessionStore.onExit(sessionId, code) }
+
+        override fun onDisconnected(reason: String) =
+            ifCurrent { this@SessionStore.onDisconnected(reason) }
+
+        override fun onConnectionHealth(sessionId: String, health: ConnectionHealth) =
+            ifCurrent { this@SessionStore.onConnectionHealth(sessionId, health) }
+
+        override fun onViewEvent(sessionId: String, kind: String, payload: Map<String, String>) =
+            ifCurrent { this@SessionStore.onViewEvent(sessionId, kind, payload) }
+    }
+
+    /**
+     * IDs of `pending_input` conversation items resolved via an
+     * out-of-band path (ApprovalsScreen, notification action) that should
+     * render as ANSWERED in the inline chat card immediately — without
+     * waiting for the broker's WS echo. Mirror of iOS
+     * `SessionStore.resolvedPendingInputIDs`.
+     */
+    private val _resolvedPendingInputIDs = MutableStateFlow<Set<String>>(emptySet())
+    val resolvedPendingInputIDs: StateFlow<Set<String>> = _resolvedPendingInputIDs.asStateFlow()
+
     private var prefs: android.content.SharedPreferences? = null
     /** Application context cached at hydrate() for OAuthStore credential reads. */
     private var appContext: Context? = null
@@ -1502,11 +1589,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
             return
         }
         _harness.value = HarnessState.Connecting
+        clientGeneration++
+        val myGeneration = clientGeneration
         val c = ConduitClient(e.url, e.token)
         client = c
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { c.connect(this@SessionStore) }
+                withContext(Dispatchers.IO) { c.connect(GenerationGuardedDelegate(myGeneration)) }
                 _harness.value = HarnessState.Linked
                 Telemetry.breadcrumb("onboarding", "endpoint_connected",
                     mapOf("host" to _endpoint.value.displayHost,
@@ -1530,6 +1619,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // when stale. Fire-and-forget; never fails the connect.
                 viewModelScope.launch { updateBrokerIfStale() }
             } catch (t: Throwable) {
+                // Drop failures that belong to a superseded connect attempt.
+                if (myGeneration != clientGeneration) return@launch
                 val detail = describe(t)
                 _harness.value = HarnessState.Failed(detail)
                 Telemetry.capture(
@@ -4091,6 +4182,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
             // SSH self-heal triggered from onConnectionHealth; don't clobber.
             return
         }
+        // Box-switch flicker: a superseded old client's onDisconnected is now
+        // dropped upstream by GenerationGuardedDelegate, so callbacks that reach
+        // here belong to the CURRENT client and are genuine — handle them.
         val lower = reason.lowercase()
         val isAuthReason = lower.contains("auth") || lower.contains("401") || lower.contains("unauthorized")
         if (isAuthReason) {
