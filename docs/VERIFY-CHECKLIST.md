@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.156
+
+Device-test round fixes: box-switch connection flicker, approval-card reconcile on a lock-screen decision, Signature-arm tool collapse, and one-tap re-authenticate. iOS PRs #575 + #576, Android PR #577. App-only (no broker redeploy).
+
+- **1 · Box switch no longer flickers connected→disconnected** — switching the active box (especially to an SSH box like Hostinger) briefly showed the shell as connected, then snapped back to a disconnected state before settling. Cause: the superseded old client's queued `onDisconnected` fired AFTER the new client was already linked and clobbered its state. Each connection is now stamped with a generation and a superseded client's callbacks are dropped (iOS: per-`StoreDelegate` generation; Android: a generation-guarded delegate wrapper — gating on the generation, not on harness reachability, so a genuine disconnect of the current client is still handled). Verify: switch David ⇄ Hostinger a few times → the target box goes straight to connected with no disconnected flash. [iOS+Android, on-device]
+- **2 · Approval card reconciles after a lock-screen decision** — denying (or approving) an approval from the lock-screen Live Activity left the in-app "NEEDS YOUR INPUT" card still armed even after the agent had moved on. The decision now optimistically marks the pending-input item answered locally (no wait for the broker's WS echo). Verify: trigger a permission prompt, background the app, Deny from the lock screen → reopen the app and the inline card reads answered/declined, not still armed. [iOS+Android, on-device]
+- **3 · Tool runs collapse under Signature (Conversation style B)** — under arm B a run of tool calls rendered as separate rows instead of one collapsible cluster. Arm B now has a collapsible header ("N commands · all exit 0" / "N commands · M failed" / "running"), default collapsed, expanding to the quiet spine rows; failures auto-expand. Verify: Settings → Labs → Conversation style → B, then run three shell commands one after another → they collapse into a single "3 commands" cluster you can expand. (Android already had this.) [iOS, on-device]
+- **4 · One-tap re-authenticate** — Settings → a provider's ⋯ menu → "Re-authenticate" used to open the Manage sheet (which had its own ⋯), forcing a second tap. It now launches the provider's OAuth directly, and the top-level Settings entry reads "Manage". Verify: ⋯ → Re-authenticate starts sign-in immediately with no intermediate sheet. [iOS+Android, on-device]
+
+---
+
 ## v0.0.155
 
 Live Activity top declutter. iOS PR #573. App-only.
