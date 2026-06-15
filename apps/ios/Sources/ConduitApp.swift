@@ -272,10 +272,12 @@ struct ConduitApp: App {
 
     /// Bool binding used by the host-key TOFU alert. The `set:` path fires
     /// when the user dismisses the alert without choosing a button (e.g. by
-    /// swiping away) — treat that as a rejection so the bridge unblocks.
+    /// swiping away) -- treat that as a rejection so the bridge unblocks.
+    /// When the SSH add-box sheet is active, suppress this root alert so it
+    /// does not dismiss the sheet; the sheet renders an inline verify card.
     private var hostKeyIsPresented: Binding<Bool> {
         Binding(
-            get: { store.pendingHostKey != nil },
+            get: { store.pendingHostKey != nil && !store.sshLoginSheetActive },
             set: { showing in
                 if !showing, store.pendingHostKey != nil {
                     store.resolveHostKeyPrompt(accept: false)
