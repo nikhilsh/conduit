@@ -74,6 +74,10 @@ extension ConduitUI {
         @State private var metrics: SessionStore.HostMetrics?
         @State private var features: SessionStore.BoxFeatures?
 
+        /// Found-sessions entry card state
+        @State private var showFoundSessions = false
+        @State private var foundSessionsSnapshot: ConduitUI.FoundSessionsSnapshot = .empty
+
         /// Hosted inline (e.g. a tablet right-pane tab) rather than a sheet →
         /// drop the "Done" affordance.
         var embedded: Bool = false
@@ -134,6 +138,9 @@ extension ConduitUI {
                             healthSection(metrics)
                         }
                         sessionsSection
+                        if features?.sessionDiscovery == true {
+                            foundSessionsSection
+                        }
                         limitsPointer
                         actionRow
                     }
@@ -147,6 +154,25 @@ extension ConduitUI {
                 if features?.hostMetrics == true {
                     metrics = await store.fetchHostMetrics(endpoint: server.endpoint)
                 }
+                // Probe found sessions if the box supports discovery
+                if features?.sessionDiscovery == true && connected {
+                    foundSessionsSnapshot.boxID = server.id
+                    foundSessionsSnapshot.boxName = server.name
+                    foundSessionsSnapshot.discoveryState = .scanning
+                    let result = await store.fetchDiscoveredSessions(endpoint: server.endpoint)
+                    if let result {
+                        foundSessionsSnapshot.sessions = result.sessions
+                        foundSessionsSnapshot.totalOnDisk = result.totalOnDisk
+                        foundSessionsSnapshot.discoveryState = result.sessions.isEmpty ? .empty : .loaded
+                    } else if !connected {
+                        foundSessionsSnapshot.discoveryState = .offline
+                    } else {
+                        foundSessionsSnapshot.discoveryState = .error("Could not reach box")
+                    }
+                }
+            }
+            .sheet(isPresented: $showFoundSessions) {
+                ConduitUI.FoundSessionsSheet(server: server)
             }
         }
 
@@ -353,6 +379,109 @@ extension ConduitUI {
                 .foregroundStyle(neon.textFaint)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
+        }
+
+        // MARK: Found sessions entry card (screen 01)
+
+        private var foundSessionsSection: some View {
+            let scanning = foundSessionsSnapshot.discoveryState == .scanning
+            let count = foundSessionsSnapshot.sessions.count
+            let offline = !connected
+            let show = scanning || count > 0
+
+            return Group {
+                if show || offline {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("STARTED OUTSIDE CONDUIT")
+                            .font(neon.mono(11).weight(.bold))
+                            .foregroundStyle(neon.textDim)
+                            .textCase(.uppercase)
+                            .tracking(1.2)
+
+                        Button {
+                            if offline {
+                                onReconnect()
+                            } else {
+                                showFoundSessions = true
+                            }
+                        } label: {
+                            HStack(spacing: 11) {
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(neon.accent.opacity(0.12))
+                                    .frame(width: 38, height: 38)
+                                    .overlay(
+                                        Image(systemName: "terminal")
+                                            .font(.system(size: 16))
+                                            .foregroundStyle(neon.accent)
+                                    )
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Continue a session")
+                                        .font(neon.sans(14).weight(.semibold))
+                                        .foregroundStyle(offline ? neon.textFaint : neon.text)
+                                        .lineLimit(1)
+                                    if offline {
+                                        Text("offline — can't scan")
+                                            .font(neon.mono(11))
+                                            .foregroundStyle(neon.textFaint)
+                                    } else if scanning {
+                                        Text("scanning...")
+                                            .font(neon.mono(11))
+                                            .foregroundStyle(neon.textFaint)
+                                    } else {
+                                        Text("\(count) found on this box — pick one up or branch a copy")
+                                            .font(neon.mono(11))
+                                            .foregroundStyle(neon.textFaint)
+                                            .lineLimit(2)
+                                    }
+                                }
+                                Spacer(minLength: 6)
+                                if scanning && !offline {
+                                    ProgressView()
+                                        .tint(neon.accent)
+                                        .controlSize(.small)
+                                } else if !offline && count > 0 {
+                                    Text("\(count)")
+                                        .font(neon.mono(12).weight(.bold))
+                                        .foregroundStyle(neon.bg)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Capsule().fill(neon.accent))
+                                } else if !offline {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(neon.textFaint)
+                                }
+                            }
+                            .padding(13)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .neonCardSurface(
+                            neon,
+                            fill: offline ? neon.surface.opacity(0.4) : neon.accent.opacity(neon.dark ? 0.06 : 0.04),
+                            cornerRadius: 12,
+                            border: offline ? neon.border : neon.accent.opacity(0.3),
+                            glowTint: offline ? nil : neon.accent.opacity(0.1)
+                        )
+                        .opacity(offline ? 0.6 : 1.0)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .neonCardSurface(neon, fill: neon.surface, cornerRadius: 14)
+                }
+            }
+        }
+
+        private var foundSessionsFootnote: some View {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "asterisk")
+                    .font(.system(size: 9))
+                    .foregroundStyle(neon.textFaint)
+                    .padding(.top, 2)
+                Text("Claude & Codex sessions you launched by hand in your terminal. Conduit can pick up where they left off — it doesn't drive a session that's live.")
+                    .font(neon.mono(10))
+                    .foregroundStyle(neon.textFaint)
+            }
         }
 
         // MARK: Account-wide limits pointer (NO per-box quota — data-model rule)
