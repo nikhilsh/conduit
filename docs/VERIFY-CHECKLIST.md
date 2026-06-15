@@ -9,6 +9,15 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.158
+
+SSH add-box flow fix + marketing-site screenshot refresh. iOS PR #595, Android PR #594 (SSH flow), website PR #593 (real app screenshots, already live at conduit.kaopeh.com). App changes are CI-compile-only — need on-device verification.
+
+- **1 · First-connect host-key trust no longer kills the add sheet** — adding a brand-new SSH box used to pop the unknown-host-key (TOFU) prompt as a separate top-level dialog that dismissed the "Add via SSH" sheet; after trusting the host you landed back in Settings with no box added and had to re-add it. The fingerprint-trust step now renders **inline inside the add sheet** ("First time connecting to this server — verify its fingerprint" with Trust & continue / Cancel), and the top-level alert/dialog is suppressed while the sheet is up, so the flow runs continuously: enter creds → trust host → install → connected, in one sheet. Verify on a FRESH box whose host key you've never trusted (clear known-hosts / use a reinstalled VM): add it → the verify card appears in the same sheet, Trust & continue proceeds straight into the install stages and the box comes online without the sheet vanishing. [iOS+Android, on-device]
+- **2 · Failed/incomplete adds persist and are retryable from Settings** — a bootstrap that failed or got interrupted used to leave nothing behind; now it's saved as a box in Settings → Boxes marked "Add failed" with the error reason and a **Retry** button. Retry reopens the Add-via-SSH sheet **prefilled** with the saved host/port/username (you re-enter the secret — no silently-stored credential). Failed boxes can be deleted like any other. Verify: force an add to fail (wrong key / unreachable host) → a red "Add failed" box with the reason appears in Settings; Retry opens the prefilled sheet; a successful retry flips it to a normal connected box; delete also works. [iOS+Android, on-device]
+
+---
+
 ## v0.0.157
 
 Security-hardening batch from a 3-agent broker audit (auth logic was sound; the gaps were deployment posture + supply chain). PRs #587 (credential re-key), #588 (checksum verify + systemd hardening + secrets→EnvironmentFile), #589 (loopback default, token-leak + DoS + origin fixes), #590 (website Security section), #591 (release SHA256SUMS-upload CI fix). Broker REDEPLOYED to the dev box (binary swapped to v0.0.157, `--local` dropped) and verified server-side: public `/health` 200, unauth→401, authed→200, token unchanged (no re-pair), sessions survived, journal shows the redacted token + public-bind warning, 0 cleartext-token leaks. Website Security section live at conduit.kaopeh.com.
