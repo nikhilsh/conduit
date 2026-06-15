@@ -1699,13 +1699,17 @@ final class SessionStore {
     struct BoxFeatures {
         var hostMetrics: Bool
         var shellSessions: Bool
-        /// Broker advertises `session_discovery` — enumerate sessions started
+        /// Broker advertises `session_discovery` -- enumerate sessions started
         /// outside Conduit. Default false so the feature ships dark on older
         /// brokers (mirrors the host_metrics / shell_sessions pattern).
         var sessionDiscovery: Bool
-        /// Broker advertises `session_fork` — fork a session onto a new worktree.
+        /// Broker advertises `session_fork` -- fork a session onto a new worktree.
         /// Kept separate so discovery can ship before fork is ready.
         var sessionFork: Bool
+        /// Broker advertises `session_watch` -- incremental transcript polling
+        /// for a live running session. Default false so Watch ships dark on
+        /// older brokers that do not yet expose this capability.
+        var sessionWatch: Bool
     }
 
     /// Per-assistant model catalogs discovered by the broker live from the
@@ -1884,11 +1888,13 @@ final class SessionStore {
                 let shellSessions: Bool?
                 let sessionDiscovery: Bool?
                 let sessionFork: Bool?
+                let sessionWatch: Bool?
                 enum CodingKeys: String, CodingKey {
                     case hostMetrics = "host_metrics"
                     case shellSessions = "shell_sessions"
                     case sessionDiscovery = "session_discovery"
                     case sessionFork = "session_fork"
+                    case sessionWatch = "session_watch"
                 }
             }
             let features: Features?
@@ -1903,7 +1909,8 @@ final class SessionStore {
             hostMetrics: caps.features?.hostMetrics ?? false,
             shellSessions: caps.features?.shellSessions ?? false,
             sessionDiscovery: caps.features?.sessionDiscovery ?? false,
-            sessionFork: caps.features?.sessionFork ?? false
+            sessionFork: caps.features?.sessionFork ?? false,
+            sessionWatch: caps.features?.sessionWatch ?? false
         )
     }
 
@@ -2052,6 +2059,64 @@ final class SessionStore {
         Telemetry.breadcrumb("found_sessions", "transcript loaded",
             data: ["count": "\(items.count)", "id": externalID])
         return items
+    }
+
+    /// Fetch incremental transcript items newer than `sinceMs` (Unix epoch ms).
+    /// Used by `FoundWatchView` to tail a running session without re-fetching
+    /// the full transcript on every poll tick.
+    /// Returns `(items: [ConversationItem], latestTs: Int64)` on success, nil on failure.
+    func fetchDiscoveredTranscriptSince(
+        endpoint: StoredEndpoint,
+        agent: String,
+        externalID: String,
+        sinceMs: Int64
+    ) async -> (items: [ConversationItem], latestTs: Int64)? {
+        struct Entry: Decodable {
+            let role: String
+            let content: String
+            let ts: String?
+        }
+        struct Response: Decodable {
+            let items: [Entry]
+            let latest_ts: Int64
+        }
+
+        let path = "/api/sessions/discovered/transcript?agent=\(agent)&external_id=\(externalID)&since_ts=\(sinceMs)"
+        guard let data = await getJSON(endpoint: endpoint, path: path),
+              let resp = try? JSONDecoder().decode(Response.self, from: data)
+        else {
+            Telemetry.breadcrumb("found_watch", "incremental fetch failed",
+                data: ["agent": agent, "id": externalID, "since": "\(sinceMs)"])
+            return nil
+        }
+        let items = resp.items.enumerated().map { (idx, entry) -> ConversationItem in
+            let role = entry.role.lowercased()
+            let kind = role == "tool" ? "tool" : "message"
+            return ConversationItem(
+                id: "watch-\(externalID)-\(sinceMs)-\(idx)",
+                role: role,
+                kind: kind,
+                status: "done",
+                content: entry.content,
+                ts: entry.ts ?? "",
+                files: [],
+                toolName: nil,
+                command: nil,
+                exitCode: nil,
+                durationMs: nil,
+                diffSummary: nil,
+                pendingOptions: [],
+                sourceAgent: nil,
+                targetAgent: nil,
+                taskText: nil,
+                resultSummary: nil,
+                planSteps: []
+            )
+        }
+        Telemetry.breadcrumb("found_watch", "incremental fetch ok",
+            data: ["count": "\(items.count)", "id": externalID,
+                   "latest_ts": "\(resp.latest_ts)"])
+        return (items: items, latestTs: resp.latest_ts)
     }
 
     /// Adopt a found session (resume or fork) via `POST /api/sessions/adopt`.
