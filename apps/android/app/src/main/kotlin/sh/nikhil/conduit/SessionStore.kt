@@ -103,6 +103,30 @@ data class HostKeyPrompt(
     val fingerprint: String,
 )
 
+/**
+ * Status of a [SavedServer] that was added via SSH. Null on a token-paired
+ * box (status is not tracked) or an SSH box that has not yet encountered a
+ * failure. Serialised as an optional "status" key in the saved-servers JSON
+ * so older builds that lack the key still decode correctly.
+ */
+sealed class SavedServerStatus {
+    /** Bootstrap completed successfully; box is usable. */
+    data object Ready : SavedServerStatus()
+    /** Bootstrap failed with [reason]; box is not yet usable. */
+    data class Failed(val reason: String) : SavedServerStatus()
+}
+
+/**
+ * Non-secret SSH coordinates to prefill the SSH login sheet on a Retry
+ * (Part B). Carries no password/key -- the user must re-enter credentials.
+ */
+data class SshLoginPrefill(
+    val host: String,
+    val port: UShort,
+    val username: String,
+    val serverName: String,
+)
+
 /** Per-session lifecycle state, kept separately from the overall harness state. */
 sealed class SessionLifecycle {
     data object Creating : SessionLifecycle()
@@ -282,6 +306,12 @@ data class SavedServer(
     val isDefault: Boolean,
     /** Non-null when this server was paired via SSH; null for token-paired boxes. */
     val ssh: SshEndpointRef? = null,
+    /**
+     * Non-null when this is a failed SSH add that has not yet succeeded.
+     * Null means either not-an-SSH-box or the bootstrap completed normally.
+     * Decoded with optString/optBoolean so old JSON (without the key) parses fine.
+     */
+    val status: SavedServerStatus? = null,
 )
 
 data class RemoteDirectoryEntry(
@@ -827,6 +857,37 @@ class SessionStore : ViewModel(), ConduitDelegate {
     /** Outstanding TOFU prompt; MainActivity observes this and shows a dialog. */
     private val _pendingHostKey = MutableStateFlow<HostKeyPrompt?>(null)
     val pendingHostKey: StateFlow<HostKeyPrompt?> = _pendingHostKey.asStateFlow()
+
+    /**
+     * True while the SSH-login sheet (SSHLoginSheet) is composed on screen.
+     * AppRoot uses this to suppress the root-level HostKeyPromptDialog during
+     * an active add-via-SSH flow -- the sheet shows its own inline TOFU panel
+     * instead.
+     */
+    private val _sshLoginSheetActive = MutableStateFlow(false)
+    val sshLoginSheetActive: StateFlow<Boolean> = _sshLoginSheetActive.asStateFlow()
+
+    fun setSshLoginSheetActive(active: Boolean) {
+        _sshLoginSheetActive.value = active
+    }
+
+    /**
+     * Non-null when Settings is requesting that the SSH login sheet reopen
+     * prefilled with saved (non-secret) SSH coordinates for a failed box.
+     * Cleared by the sheet after it reads and applies the prefill.
+     */
+    private val _pendingSshLoginPrefill = MutableStateFlow<SshLoginPrefill?>(null)
+    val pendingSshLoginPrefill: StateFlow<SshLoginPrefill?> = _pendingSshLoginPrefill.asStateFlow()
+
+    fun requestSshLoginPrefill(prefill: SshLoginPrefill) {
+        _pendingSshLoginPrefill.value = prefill
+    }
+
+    fun consumeSshLoginPrefill(): SshLoginPrefill? {
+        val v = _pendingSshLoginPrefill.value
+        _pendingSshLoginPrefill.value = null
+        return v
+    }
 
     /**
      * Set after a fresh pairing (deep link, QR scan). AppRoot observes
@@ -1417,13 +1478,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
         refreshRecentDirectories()
     }
 
-    fun upsertSavedServer(name: String, endpoint: Endpoint, makeDefault: Boolean, sshRef: SshEndpointRef? = null) {
+    fun upsertSavedServer(
+        name: String,
+        endpoint: Endpoint,
+        makeDefault: Boolean,
+        sshRef: SshEndpointRef? = null,
+        status: SavedServerStatus? = null,
+    ) {
         val current = _savedServers.value.toMutableList()
         val existing = current.indexOfFirst { it.endpoint == endpoint }
         if (existing >= 0) {
             val defaultFlag = if (makeDefault) true else current[existing].isDefault
             val updatedSsh = sshRef ?: current[existing].ssh
-            current[existing] = current[existing].copy(name = name, isDefault = defaultFlag, ssh = updatedSsh)
+            val updatedStatus = status ?: current[existing].status
+            current[existing] = current[existing].copy(name = name, isDefault = defaultFlag, ssh = updatedSsh, status = updatedStatus)
         } else {
             current += SavedServer(
                 id = UUID.randomUUID().toString(),
@@ -1431,6 +1499,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 endpoint = endpoint,
                 isDefault = makeDefault || current.isEmpty(),
                 ssh = sshRef,
+                status = status,
             )
         }
         if (makeDefault) {
@@ -2071,7 +2140,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val name = serverName?.takeIf { it.isNotBlank() } ?: "$user@$host"
                 val sshRef = SshEndpointRef(host = host, port = port, username = user)
                 setEndpoint(url, token)
-                upsertSavedServer(name = name, endpoint = endpoint, makeDefault = true, sshRef = sshRef)
+                upsertSavedServer(name = name, endpoint = endpoint, makeDefault = true, sshRef = sshRef, status = SavedServerStatus.Ready)
                 // Unconditionally persist the credential so self-heal always has it —
                 // not gated on the "Remember" checkbox in the login sheet.
                 val credKind = when (credentials.auth) {
@@ -2111,6 +2180,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // Also persist the error outside the sheet so it's visible even
                 // after the user dismissed the SSH login sheet.
                 _sshBootstrapError.value = detail
+                // Part B: persist a failed SavedServer so Settings shows a Retry row.
+                val failedName = serverName?.takeIf { it.isNotBlank() } ?: "$user@$host"
+                val failedSshRef = SshEndpointRef(host = host, port = port, username = user)
+                persistFailedSshBox(failedName, failedSshRef, detail)
+                Telemetry.breadcrumb(
+                    "ssh_addbox",
+                    "failed box persisted",
+                    mapOf("host" to host, "user" to user),
+                )
                 Telemetry.capture(
                     error = e,
                     message = "Android SSH bootstrap failed",
@@ -2121,6 +2199,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val detail = t.message ?: t.toString()
                 _sshBootstrap.value = SshBootstrapState.Failed(detail)
                 _sshBootstrapError.value = detail
+                // Part B: persist a failed SavedServer so Settings shows a Retry row.
+                val failedName = serverName?.takeIf { it.isNotBlank() } ?: "$user@$host"
+                val failedSshRef = SshEndpointRef(host = host, port = port, username = user)
+                persistFailedSshBox(failedName, failedSshRef, detail)
+                Telemetry.breadcrumb(
+                    "ssh_addbox",
+                    "failed box persisted",
+                    mapOf("host" to host, "user" to user),
+                )
                 Telemetry.capture(
                     error = t,
                     message = "Android SSH bootstrap failed",
@@ -2163,6 +2250,39 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     fun clearSshBootstrap() {
         _sshBootstrap.value = SshBootstrapState.Idle
+    }
+
+    /**
+     * Upsert a [SavedServer] with [SavedServerStatus.Failed] so it appears in
+     * Settings as a retryable entry. Keyed by SSH host+port to avoid duplicates
+     * on repeated retries. Uses a synthetic placeholder endpoint so it doesn't
+     * clash with any live pairing (no valid broker URL/token yet).
+     */
+    private fun persistFailedSshBox(name: String, sshRef: SshEndpointRef, reason: String) {
+        val placeholderEndpoint = Endpoint(
+            url = "ssh-pending://" + sshRef.host + ":" + sshRef.port.toInt().toString(),
+            token = "",
+        )
+        val current = _savedServers.value.toMutableList()
+        // De-dup by SSH host+port: if we already have an entry for this host, update it.
+        val existingIdx = current.indexOfFirst { it.ssh?.host == sshRef.host && it.ssh?.port == sshRef.port }
+        if (existingIdx >= 0) {
+            current[existingIdx] = current[existingIdx].copy(
+                name = name,
+                status = SavedServerStatus.Failed(reason),
+            )
+        } else {
+            current += SavedServer(
+                id = UUID.randomUUID().toString(),
+                name = name,
+                endpoint = placeholderEndpoint,
+                isDefault = false,
+                ssh = sshRef,
+                status = SavedServerStatus.Failed(reason),
+            )
+        }
+        _savedServers.value = current
+        persistSavedServers(current)
     }
 
     /** Called by [SshProgressBridge] on the main thread to update bootstrap progress. */
@@ -4442,6 +4562,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 ssh.put("username", ref.username)
                 o.put("ssh", ssh)
             }
+            when (val st = s.status) {
+                is SavedServerStatus.Ready -> o.put("status", "ready")
+                is SavedServerStatus.Failed -> {
+                    val so = JSONObject()
+                    so.put("state", "failed")
+                    so.put("reason", st.reason)
+                    o.put("status", so)
+                }
+                null -> { /* omit key -- backward-compat default */ }
+            }
             arr.put(o)
         }
         p.edit().putString(KEY_SAVED_SERVERS, arr.toString()).apply()
@@ -4462,6 +4592,19 @@ class SessionStore : ViewModel(), ConduitDelegate {
                             username = sshObj.optString("username", ""),
                         )
                     } else null
+                    val decodedStatus: SavedServerStatus? = run {
+                        val st = o.opt("status")
+                        when {
+                            st == null -> null
+                            st is String && st == "ready" -> SavedServerStatus.Ready
+                            st is JSONObject -> {
+                                val state = st.optString("state", "")
+                                if (state == "failed") SavedServerStatus.Failed(st.optString("reason", ""))
+                                else null
+                            }
+                            else -> null
+                        }
+                    }
                     add(
                         SavedServer(
                             id = o.optString("id", UUID.randomUUID().toString()),
@@ -4472,6 +4615,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                             ),
                             isDefault = o.optBoolean("default", false),
                             ssh = sshRef,
+                            status = decodedStatus,
                         )
                     )
                 }

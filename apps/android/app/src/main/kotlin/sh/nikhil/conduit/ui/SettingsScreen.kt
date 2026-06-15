@@ -87,7 +87,9 @@ import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SavedServer
+import sh.nikhil.conduit.SavedServerStatus
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.SshLoginPrefill
 import sh.nikhil.conduit.Endpoint
 import sh.nikhil.conduit.push.PushSettingsSection
 import sh.nikhil.conduit.push.PushStore
@@ -169,6 +171,8 @@ fun SettingsScreen(
 
     var showAddServer by remember { mutableStateOf(false) }
     var showServerSwitcher by remember { mutableStateOf(false) }
+    // Part B: holds prefill data when retrying a failed SSH box from Settings.
+    var sshRetryPrefill by remember { mutableStateOf<SshLoginPrefill?>(null) }
     var showTerminalTheme by remember { mutableStateOf(false) }
     var showAgentLogin by remember { mutableStateOf(false) }
     /// When non-null, the next agent-login sheet open auto-starts OAuth
@@ -592,12 +596,36 @@ fun SettingsScreen(
     if (showAddServer) {
         AddServerSheet(store = store, onDismiss = { showAddServer = false })
     }
+    // Part B: retry a failed SSH box prefilled with saved non-secret SSH coords.
+    sshRetryPrefill?.let { prefill ->
+        SSHLoginSheet(
+            store = store,
+            prefill = prefill,
+            onDismiss = { sshRetryPrefill = null },
+        )
+    }
     if (showServerSwitcher) {
         ServerSwitcherSheet(
             savedServers = savedServers,
             activeEndpoint = endpoint,
             onUse = { store.selectSavedServer(it.id, autoConnect = true); showServerSwitcher = false },
             onForget = { pendingForget = it },
+            onRetry = { server ->
+                val ssh = server.ssh ?: return@ServerSwitcherSheet
+                val prefill = SshLoginPrefill(
+                    host = ssh.host,
+                    port = ssh.port,
+                    username = ssh.username,
+                    serverName = server.name,
+                )
+                Telemetry.breadcrumb(
+                    "ssh_addbox",
+                    "retry tapped from settings",
+                    mapOf("host" to ssh.host, "server" to server.name),
+                )
+                showServerSwitcher = false
+                sshRetryPrefill = prefill
+            },
             onAddServer = { showServerSwitcher = false; showAddServer = true },
             onDismiss = { showServerSwitcher = false },
         )
@@ -857,6 +885,7 @@ private fun ServerSwitcherSheet(
     activeEndpoint: Endpoint,
     onUse: (SavedServer) -> Unit,
     onForget: (SavedServer) -> Unit,
+    onRetry: (SavedServer) -> Unit,
     onAddServer: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -864,24 +893,54 @@ private fun ServerSwitcherSheet(
     PickerSheet(title = "Servers", onDismiss = onDismiss) {
         savedServers.forEach { server ->
             val active = server.endpoint == activeEndpoint
+            val isFailed = server.status is SavedServerStatus.Failed
+            val failReason = (server.status as? SavedServerStatus.Failed)?.reason
             ListItem(
-                modifier = Modifier.clickable { onUse(server) },
+                modifier = Modifier.clickable(enabled = !isFailed) { onUse(server) },
                 leadingContent = {
-                    Icon(Icons.Filled.Apps, contentDescription = null, tint = if (active) neon.green else neon.accent)
-                },
-                headlineContent = { Text(server.name, color = neon.text, fontFamily = neon.sans) },
-                supportingContent = {
-                    Text(
-                        server.endpoint.displayHost,
-                        fontFamily = neon.sans,
-                        color = neon.textDim,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    Icon(
+                        Icons.Filled.Apps,
+                        contentDescription = null,
+                        tint = when {
+                            isFailed -> neon.red
+                            active -> neon.green
+                            else -> neon.accent
+                        },
                     )
+                },
+                headlineContent = { Text(server.name, color = if (isFailed) neon.red else neon.text, fontFamily = neon.sans) },
+                supportingContent = {
+                    Column {
+                        Text(
+                            if (isFailed) "Add failed" else server.endpoint.displayHost,
+                            fontFamily = neon.sans,
+                            color = if (isFailed) neon.red else neon.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (failReason != null) {
+                            Text(
+                                failReason,
+                                fontFamily = neon.sans,
+                                fontSize = 11.sp,
+                                color = neon.red.copy(alpha = 0.75f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (isFailed) {
+                            TextButton(
+                                onClick = { onRetry(server) },
+                                contentPadding = PaddingValues(0.dp),
+                            ) {
+                                Text("Retry", color = neon.accent, fontFamily = neon.sans, fontSize = 13.sp)
+                            }
+                        }
+                    }
                 },
                 trailingContent = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (server.isDefault) {
+                        if (server.isDefault && !isFailed) {
                             Surface(shape = RoundedCornerShape(50), color = neon.accent.copy(alpha = 0.22f)) {
                                 Text(
                                     "Default",

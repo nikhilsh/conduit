@@ -358,9 +358,12 @@ fun AppRoot(
     }
 
     val hostKey by store.pendingHostKey.collectAsState()
-    hostKey?.let { prompt ->
+    val sshLoginSheetActive by store.sshLoginSheetActive.collectAsState()
+    // Part A: suppress root-level TOFU dialog while the SSH add sheet is up --
+    // the sheet shows an inline host-key section instead.
+    if (hostKey != null && !sshLoginSheetActive) {
         HostKeyPromptDialog(
-            prompt = prompt,
+            prompt = hostKey!!,
             onAccept = { store.resolveHostKeyPrompt(true) },
             onReject = { store.resolveHostKeyPrompt(false) },
         )

@@ -52,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -78,6 +79,7 @@ import sh.nikhil.conduit.SavedSshCredential
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SshBootstrapState
 import sh.nikhil.conduit.SshCredentialStore
+import sh.nikhil.conduit.SshLoginPrefill
 import sh.nikhil.conduit.Telemetry
 import uniffi.conduit_core.SshAuth
 import uniffi.conduit_core.SshCredentials
@@ -93,6 +95,7 @@ import uniffi.conduit_core.SshCredentials
 fun SSHLoginSheet(
     store: SessionStore,
     onDismiss: () -> Unit,
+    prefill: SshLoginPrefill? = null,
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -116,19 +119,48 @@ fun SSHLoginSheet(
     // Captured when Connect is tapped — used as the title in the install-progress modal.
     var boxName by remember { mutableStateOf("") }
 
+    val pendingHostKey by store.pendingHostKey.collectAsState()
     val saved = remember { credStore.load() }
 
-    LaunchedEffect(harness, bootstrap) {
+    // Apply prefill from a retry request (Part B). Run once on composition.
+    LaunchedEffect(prefill) {
+        prefill ?: return@LaunchedEffect
+        host = prefill.host
+        port = prefill.port.toInt().toString()
+        username = prefill.username
+        boxName = prefill.serverName
+    }
+
+    // Signal to AppRoot that the SSH login sheet is on screen so it suppresses
+    // the root-level HostKeyPromptDialog in favour of our inline TOFU section.
+    DisposableEffect(Unit) {
+        store.setSshLoginSheetActive(true)
+        onDispose { store.setSshLoginSheetActive(false) }
+    }
+
+    LaunchedEffect(harness, bootstrap, pendingHostKey) {
+        // Do NOT auto-dismiss while a host-key decision is pending -- the
+        // inline TOFU section needs to stay up so the user can respond.
+        if (pendingHostKey != null) return@LaunchedEffect
         if (bootstrap is SshBootstrapState.Idle && harness.isReachable) {
             onDismiss()
         }
     }
 
     // Blocking install-progress modal — shows while bootstrap is running or failed.
-    if (bootstrap !is SshBootstrapState.Idle) {
+    if (bootstrap !is SshBootstrapState.Idle || pendingHostKey != null) {
         InstallProgressDialog(
             bootstrap = bootstrap,
             boxName = boxName,
+            pendingHostKey = pendingHostKey,
+            onTrustHostKey = {
+                Telemetry.breadcrumb("ssh_addbox", "inline host-key trusted", mapOf("box" to boxName))
+                store.resolveHostKeyPrompt(true)
+            },
+            onCancelHostKey = {
+                Telemetry.breadcrumb("ssh_addbox", "inline host-key cancelled", mapOf("box" to boxName))
+                store.resolveHostKeyPrompt(false)
+            },
             onRetry = {
                 Telemetry.breadcrumb("ssh_install_modal", "retry tapped", mapOf("box" to boxName))
                 // Re-invoke connect with the same credentials still held in state.
@@ -636,6 +668,9 @@ private fun bootstrapStageIndex(message: String): Int {
 private fun InstallProgressDialog(
     bootstrap: SshBootstrapState,
     boxName: String,
+    pendingHostKey: sh.nikhil.conduit.HostKeyPrompt?,
+    onTrustHostKey: () -> Unit,
+    onCancelHostKey: () -> Unit,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -648,7 +683,7 @@ private fun InstallProgressDialog(
     Dialog(
         onDismissRequest = { /* non-dismissible while running */ },
         properties = DialogProperties(
-            dismissOnBackPress = bootstrap is SshBootstrapState.Failed,
+            dismissOnBackPress = bootstrap is SshBootstrapState.Failed || pendingHostKey != null,
             dismissOnClickOutside = false,
             usePlatformDefaultWidth = false,
         ),
@@ -700,6 +735,82 @@ private fun InstallProgressDialog(
                                 color = neon.textFaint,
                                 letterSpacing = 1.2.sp,
                             )
+                        }
+                    }
+
+                    // Part A: inline host-key verify section. Shown while the TOFU
+                    // decision is pending so the sheet never needs to be dismissed.
+                    if (pendingHostKey != null) {
+                        LaunchedEffect(Unit) {
+                            Telemetry.breadcrumb(
+                                "ssh_addbox",
+                                "inline host-key shown",
+                                mapOf("host" to (pendingHostKey?.host ?: ""), "box" to boxName),
+                            )
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                "VERIFY HOST KEY",
+                                fontFamily = neon.mono,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                color = neon.yellow,
+                                letterSpacing = 1.2.sp,
+                            )
+                            Text(
+                                "First time connecting to ${pendingHostKey?.host}:${pendingHostKey?.port}",
+                                fontFamily = neon.sans,
+                                fontSize = 13.sp,
+                                color = neon.text,
+                            )
+                            Text(
+                                "SHA-256 Fingerprint",
+                                fontFamily = neon.mono,
+                                fontSize = 10.sp,
+                                color = neon.textFaint,
+                            )
+                            Surface(
+                                color = neon.surface,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    pendingHostKey?.fingerprint ?: "",
+                                    fontFamily = neon.mono,
+                                    fontSize = 11.sp,
+                                    color = neon.text,
+                                    modifier = Modifier.padding(10.dp),
+                                )
+                            }
+                            Text(
+                                "Verify this fingerprint before trusting. If it does not match your server's ssh-keyscan output, something may be intercepting your connection.",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = neon.sans,
+                                color = neon.textDim,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Button(
+                                    onClick = onTrustHostKey,
+                                    shape = RoundedCornerShape(11.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = neon.green,
+                                        contentColor = neon.accentText,
+                                    ),
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("Trust & continue", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold)
+                                }
+                                OutlinedButton(
+                                    onClick = onCancelHostKey,
+                                    shape = RoundedCornerShape(11.dp),
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("Cancel", fontFamily = neon.sans, color = neon.textDim)
+                                }
+                            }
                         }
                     }
 
