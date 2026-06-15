@@ -12,7 +12,7 @@ struct ConduitFoundSessionsModelTests {
 
     // MARK: - Test fixtures
 
-    static func makeSession(
+    func makeSession(
         id: String,
         title: String = "Test session",
         cwd: String = "/root/projects/api",
@@ -32,7 +32,7 @@ struct ConduitFoundSessionsModelTests {
         )
     }
 
-    static func makeSnap(
+    func makeSnap(
         sessions: [SessionStore.FoundSession] = [],
         adoptedIDs: Set<String> = [],
         hiddenIDs: Set<String> = [],
