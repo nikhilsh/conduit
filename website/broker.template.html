@@ -220,8 +220,8 @@ footer b{color:var(--mut)}
     <a href="#channels">Two channels</a>
     <a href="#sim">Send a message</a>
     <a href="#install">Install</a>
+    <a href="#security">Security</a>
     <a href="#wire">Wire protocol</a>
-    <a href="#decoder">iOS decoder</a>
     <a href="#map">Code map</a>
   </nav>
 </div></div>
@@ -243,7 +243,7 @@ footer b{color:var(--mut)}
 <!-- 1 BIG PICTURE -->
 <section id="big"><div class="wrap">
   <div class="sec-h"><span class="num">01</span><h2>The big picture</h2></div>
-  <p class="sec-sub">Three actors. Your phone, the broker, and the agent CLIs. <b>Tap any box</b> to see what it is and the iOS analogy.</p>
+  <p class="sec-sub">Three actors. Your phone, the broker, and the agent CLIs. <b>Tap any box</b> to see what it actually is.</p>
 
   <div class="arch" id="arch">
     <div class="node" data-k="phone" style="--accent:var(--blue)">
@@ -284,11 +284,7 @@ footer b{color:var(--mut)}
         <span class="arrow">→</span>
         <div class="chip" style="--accent:var(--amber)"><div class="k">you get</div><div class="v">structured <b>view_event</b> frames</div></div>
       </div>
-      <p style="color:var(--mut);margin-top:18px">The agent runs <b style="color:var(--fg)">headless</b>. The broker spawns it with <span class="mono acc-amber">exec.Command</span> + <span class="mono acc-amber">StdinPipe/StdoutPipe</span> — literally a child process exchanging newline-delimited JSON. Your message is encoded as a stream-json <span class="mono">user</span> line and written to its stdin; each <span class="mono">assistant</span>/<span class="mono">result</span> line it prints becomes a typed chat event pushed to your phone. <span class="mono acc-amber">codex</span> is the same idea but JSON-RPC 2.0 over stdio (a long-lived <span class="mono">codex app-server</span>).</p>
-      <div class="detail ios" style="background:rgba(255,180,84,.07);border-color:rgba(255,180,84,.25)">
-        <b style="color:var(--amber)">iOS analogy</b>
-        A <span class="mono">Process</span> (<span class="mono">NSTask</span>) with <span class="mono">standardInput</span>/<span class="mono">standardOutput</span> <span class="mono">Pipe</span>s, talking JSON-RPC to a child — like driving <span class="mono">sourcekit-lsp</span>. Not a terminal in sight.
-      </div>
+      <p style="color:var(--mut);margin-top:18px">The agent runs <b style="color:var(--fg)">headless</b>. The broker spawns it with <span class="mono acc-amber">exec.Command</span> + <span class="mono acc-amber">StdinPipe/StdoutPipe</span> — literally a child process exchanging newline-delimited JSON. Your message is encoded as a stream-json <span class="mono">user</span> line and written to its stdin; each <span class="mono">assistant</span>/<span class="mono">result</span> line it prints becomes a typed chat event pushed to your phone. <span class="mono acc-amber">codex</span> is the same idea but JSON-RPC 2.0 over stdio (a long-lived <span class="mono">codex app-server</span>). No terminal, no screen-scraping — a structured machine protocol on a pipe.</p>
     </div>
   </div>
 
@@ -301,11 +297,7 @@ footer b{color:var(--mut)}
         <span class="arrow">→</span>
         <div class="chip" style="--accent:var(--cyan)"><div class="k">you get</div><div class="v">raw <b>bytes</b> + reflowable snapshot</div></div>
       </div>
-      <p style="color:var(--mut);margin-top:18px">Separately, the session opens a <b style="color:var(--fg)">PTY</b> running an interactive login shell inside a per-session <span class="mono acc-cyan">tmux</span>. A read loop (<span class="mono">drain()</span>) streams the raw bytes to the Terminal tab and feeds a headless VT parser so a fresh client gets a <span class="mono">snapshot</span> reflowed to its screen size. Because it's tmux, this shell <b style="color:var(--fg)">survives a broker restart</b>.</p>
-      <div class="detail ios" style="background:rgba(86,212,221,.07);border-color:rgba(86,212,221,.25)">
-        <b style="color:var(--cyan)">iOS analogy</b>
-        The PTY is exactly the pseudo-terminal behind Terminal.app — an <span class="mono">NSTask</span> wired to a <span class="mono">Pipe</span> for a live TTY. tmux ≈ session state that lives <i>outside</i> your process, so relaunching the broker doesn't lose it.
-      </div>
+      <p style="color:var(--mut);margin-top:18px">Separately, the session opens a <b style="color:var(--fg)">PTY</b> running an interactive login shell inside a per-session <span class="mono acc-cyan">tmux</span>. A read loop (<span class="mono">drain()</span>) streams the raw bytes to the Terminal tab and feeds a headless VT parser so a fresh client gets a <span class="mono">snapshot</span> reflowed to its screen size. Because it's tmux, this shell <b style="color:var(--fg)">survives a broker restart</b> — the session state lives <i>outside</i> the broker process, so relaunching it doesn't lose your terminal.</p>
     </div>
   </div>
 
@@ -339,24 +331,53 @@ footer b{color:var(--mut)}
   <div class="steps card" id="steps"></div>
 </div></section>
 
-<!-- 5 WIRE -->
+<!-- 5 SECURITY -->
+<section id="security"><div class="wrap">
+  <div class="sec-h"><span class="num">05</span><h2>Who can actually reach it</h2></div>
+  <p class="sec-sub">“You started a server on a public VPS — isn’t <span class="mono">:1977</span> open to the whole internet?” <b>No.</b> Two independent walls stand in the way, and an attacker has to beat <b>both</b>. Pick who’s knocking on the box:</p>
+
+  <div class="seg" id="secSeg">
+    <button class="on" data-s="net" style="--accent:var(--red)">🌐 A random internet host</button>
+    <button data-s="box" style="--accent:var(--amber)">🧑‍💻 A process already on the box</button>
+    <button data-s="app" style="--accent:var(--green)">📱 Your paired app</button>
+  </div>
+  <div class="detail" id="secVerdict" style="--accent:var(--red)"></div>
+
+  <div class="grid2" style="margin-top:22px">
+    <div class="card" style="--accent:var(--cyan)">
+      <div class="eyebrow" style="color:var(--cyan)">wall 1 · network reachability</div>
+      <h4 style="font-family:var(--disp);font-size:19px;margin:8px 0 6px">Bound to loopback, not the world</h4>
+      <p style="color:var(--mut);font-size:15px">On a remote box the broker starts with <span class="mono acc-cyan">--addr 127.0.0.1:&lt;port&gt;</span>. That single choice is the firewall: <span class="mono">127.0.0.1</span> is the <b style="color:var(--fg)">loopback</b> interface — an address the kernel will <i>only</i> deliver traffic to from the same machine. Bind <span class="mono">0.0.0.0</span> instead and the port answers the whole internet; bind loopback and a packet arriving on the box’s public IP for <span class="mono">:1977</span> is simply never routed to the listener. Port-scan the VPS and <span class="mono">:1977</span> looks closed. The only listening <b style="color:var(--fg)">public</b> port is <span class="mono">22</span> — SSH — and that’s key-authenticated. So “reach the broker” first requires “already be inside the box.”</p>
+    </div>
+    <div class="card" style="--accent:var(--green)">
+      <div class="eyebrow" style="color:var(--green)">wall 2 · application auth</div>
+      <h4 style="font-family:var(--disp);font-size:19px;margin:8px 0 6px">Every call needs the token</h4>
+      <p style="color:var(--mut);font-size:15px">Even something already on the box’s loopback can’t drive your sessions. Every HTTP/WS request must carry <span class="mono acc-green">Authorization: Bearer CONDUIT_TOKEN</span> — a 32-byte URL-safe secret minted at the QR-code pairing and pinned into the systemd unit. The broker compares it in <b style="color:var(--fg)">constant time</b> against its in-memory table; no match → <span class="mono">401</span>. (The handshake also accepts <span class="mono">?token=</span> purely because browsers can’t set headers on a WebSocket upgrade.) This is the defense-in-depth half: loopback keeps the internet out; the token keeps everything <i>else</i> on the box out.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px;--accent:var(--blue)">
+    <div class="eyebrow" style="color:var(--blue)">so how does the app get in?</div>
+    <h4 style="font-family:var(--disp);font-size:19px;margin:8px 0 6px">It rides your existing SSH trust</h4>
+    <p style="color:var(--mut);font-size:15px">The app never dials <span class="mono">:1977</span> across the network — it can’t; nothing can. Instead the Rust core opens an ordinary, authenticated <b style="color:var(--fg)">SSH session</b> to the box (the same login you’d use in a terminal) and sets up a <b style="color:var(--fg)">local port-forward</b>: a loopback <span class="mono">TcpListener</span> on the phone whose every connection is proxied through an encrypted <span class="mono">direct-tcpip</span> SSH channel straight into the box’s <span class="mono">127.0.0.1:&lt;port&gt;</span>. The app dials <span class="mono acc-blue">ws://127.0.0.1:&lt;local&gt;</span> on the <i>phone</i>; it surfaces on the box’s <i>loopback</i>. From the broker’s point of view every connection already arrived from <span class="mono">localhost</span> — it literally cannot be reached any other way. Compromise means first compromising your SSH login, <i>then</i> still needing the conduit token.</p>
+    <p style="color:var(--dim);font-size:13.5px;margin-top:12px"><b style="color:var(--mut)">LAN exception:</b> with <span class="mono">--local</span> the broker binds a routable interface and advertises over mDNS so a phone on the <i>same trusted Wi-Fi</i> can connect without the tunnel — still behind the same bearer token. That’s a deliberate trade (trusted network instead of SSH), not a hole.</p>
+  </div>
+
+  <div class="myth">
+    <span class="tag">⚠ common misconception</span>
+    <p style="margin-top:7px"><b>“It’s a server on a public IP, so the port is exposed.”</b> &nbsp;<span class="truth">It isn’t.</span> The broker isn’t on a public interface at all — it sits on loopback behind your SSH login and a bearer token. The public attack surface is exactly your VPS’s SSH daemon, nothing conduit added.</p>
+  </div>
+</div></section>
+
+<!-- 6 WIRE -->
 <section id="wire"><div class="wrap">
-  <div class="sec-h"><span class="num">05</span><h2>The wire protocol</h2></div>
+  <div class="sec-h"><span class="num">06</span><h2>The wire protocol</h2></div>
   <p class="sec-sub">One WebSocket carries everything, both ways. <span class="acc-amber">Amber = app → broker</span>, <span class="acc-cyan">cyan = broker → app</span>. Tap a frame to inspect its shape.</p>
 
   <div class="frames" id="frames"></div>
   <div class="fview">
     <div class="codeblk" id="frameCode"></div>
     <div class="fmeta" id="frameMeta"></div>
-  </div>
-</div></section>
-
-<!-- 6 DECODER -->
-<section id="decoder"><div class="wrap">
-  <div class="sec-h"><span class="num">06</span><h2>The iOS decoder ring</h2></div>
-  <p class="sec-sub">Every server concept, mapped to something already on your home turf.</p>
-  <div class="decoder" id="decoder">
-    <div class="dhead"><div>broker world</div><div class="mid">≈</div><div>your world</div></div>
   </div>
 </div></section>
 
@@ -369,12 +390,14 @@ footer b{color:var(--mut)}
   <div class="grid2" style="margin-top:18px">
     <div class="card" style="--accent:var(--pink)">
       <div class="eyebrow" style="color:var(--pink)">the other half · core/</div>
-      <h4 style="font-family:var(--disp);font-size:19px;margin:8px 0 6px">Rust core (UniFFI)</h4>
-      <p style="color:var(--mut);font-size:15px">The app doesn't open the SSH tunnel in Swift — it calls into a Rust library compiled to an <span class="mono">.xcframework</span>. <span class="mono acc-pink">core/src/ssh/tunnel.rs</span> keeps the SSH session alive and forwards a local port into the box's loopback <span class="mono">:1977</span>. The broker never knows; it just listens on localhost.</p>
-      <div class="detail ios" style="margin-top:13px;background:rgba(255,126,182,.07);border-color:rgba(255,126,182,.25)">
-        <b style="color:var(--pink)">iOS analogy</b>
-        UniFFI ≈ a precompiled binary framework with a generated Swift API. The Rust <span class="mono">SshTunnel</span> is exported like a Swift class; <span class="mono">SshProgressDelegate</span> is a callback ≈ a Swift protocol delegate.
-      </div>
+      <h4 style="font-family:var(--disp);font-size:19px;margin:8px 0 6px">Rust core (UniFFI) — and why Rust</h4>
+      <p style="color:var(--mut);font-size:15px">The app doesn't open the SSH tunnel in Swift — it calls into a Rust library compiled to an <span class="mono">.xcframework</span> (iOS) and an <span class="mono">.so</span> (Android), with the Swift/Kotlin API <b style="color:var(--fg)">generated</b> by UniFFI. <span class="mono acc-pink">core/src/ssh/tunnel.rs</span> keeps the SSH session alive and forwards a local port into the box's loopback <span class="mono">:1977</span>; the broker just listens on localhost.</p>
+      <p style="color:var(--mut);font-size:15px;margin-top:11px"><b style="color:var(--fg)">Why Rust, not Swift + Kotlin twice?</b></p>
+      <ul style="color:var(--mut);font-size:14.5px;margin:7px 0 0 18px;line-height:1.6">
+        <li><b style="color:var(--fg)">Write the hard part once.</b> SSH handshake, the port-forward proxy loop, WebSocket transport, reconnect + the generation-guard state machine — one implementation feeds <i>both</i> apps, so iOS and Android can't drift apart on the gnarly networking.</li>
+        <li><b style="color:var(--fg)">Pure-Rust SSH (<span class="mono">russh</span>).</b> No dependency on a system OpenSSH that mobile doesn't ship; the whole tunnel is just library code linked into the app.</li>
+        <li><b style="color:var(--fg)">Memory-safe by construction.</b> This is crypto- and network-facing code parsing untrusted bytes — exactly where C/C++ would invite buffer bugs. Rust gives that safety with no GC pauses.</li>
+      </ul>
     </div>
     <div class="card" style="--accent:var(--green)">
       <div class="eyebrow" style="color:var(--green)">survival · why Resume works</div>
@@ -427,7 +450,7 @@ function showArch(k){
   document.querySelectorAll('.node').forEach(n=>n.classList.toggle('active',n.dataset.k===k));
   const d=archData[k];
   archDetail.style.setProperty('--accent',d.accent);
-  archDetail.innerHTML=`<div class="dh" style="color:${d.accent}">${d.h}</div><div class="file">${d.file}</div><p>${d.p}</p><div class="ios"><b>iOS analogy</b>${d.ios}</div>`;
+  archDetail.innerHTML=`<div class="dh" style="color:${d.accent}">${d.h}</div><div class="file">${d.file}</div><p>${d.p}</p>`;
 }
 arch.querySelectorAll('.node').forEach(n=>n.addEventListener('click',()=>showArch(n.dataset.k)));
 showArch('broker');
@@ -572,21 +595,24 @@ function showFrame(k){
 }
 showFrame('chat');
 
-/* ---------- decoder ---------- */
-const decoder=[
-  ['conduit-broker (Go binary)','your own backend — a self-hosted <b>Vapor / Swift-on-server</b> you deploy & pair to'],
-  ['systemd conduit-broker.service','<b>launchd</b> — a LaunchDaemon plist with KeepAlive; <span class="mono">enable-linger</span> ≈ keep running after logout'],
-  ['PTY (Terminal tab)','the pseudo-terminal behind <b>Terminal.app</b> — an NSTask wired to a Pipe for a live TTY'],
-  ['headless agent stdin/stdout','a <b>Process / NSTask</b> with stdin/stdout Pipes trading JSON — like driving sourcekit-lsp'],
-  ['WebSocket frames','<b>URLSessionWebSocketTask</b> — text frames are .string, PTY bytes are .data'],
-  ['tmux (survives restart)','session state that lives <b>outside your process</b> — server-side state restoration'],
-  ['Bearer CONDUIT_TOKEN','an <b>Authorization: Bearer</b> header (also accepted as ?token= for the WS handshake)'],
-  ['Rust core (UniFFI)','a precompiled <b>.xcframework</b> with a generated Swift API; SshProgressDelegate ≈ a protocol delegate'],
-  ['relay + APNs','the relay is the <b>provider server</b> in Apple’s push diagram; it holds the .p8, broker just hands it a token'],
-  ['push-to-start token','the ActivityKit <b>pushToStartToken</b> flow — start a Live Activity from a push, app closed']
-];
-const decEl=document.getElementById('decoder');
-decoder.forEach(([l,r])=>{const d=document.createElement('div');d.className='drow';d.innerHTML=`<div class="l">${l}</div><div class="mid">≈</div><div class="r">${r}</div>`;decEl.appendChild(d);});
+/* ---------- security verdicts ---------- */
+const secData={
+  net:{accent:'var(--red)',h:'🌐 Random internet host — blocked at wall 1',
+    p:'It never opens a socket. The broker is bound to <span class="mono">127.0.0.1</span>, so the kernel won’t route an off-box packet to it; <span class="mono">:1977</span> on the public IP looks closed. The only public port is <span class="mono">22</span> (SSH), and that’s key-authenticated. Verdict: <b style="color:var(--red)">connection refused — never even reaches wall 2.</b>'},
+  box:{accent:'var(--amber)',h:'🧑‍💻 A process already on the box — blocked at wall 2',
+    p:'It shares the loopback, so it <i>can</i> open the port — but every request needs <span class="mono">Authorization: Bearer CONDUIT_TOKEN</span>, a 32-byte secret it doesn’t have. Constant-time compare, no match → <span class="mono">401</span>. Verdict: <b style="color:var(--amber)">reaches the port, can’t drive a session.</b>'},
+  app:{accent:'var(--green)',h:'📱 Your paired app — passes both',
+    p:'It doesn’t cross the network at all: the Rust core holds an authenticated SSH session and forwards a phone-local port through an encrypted <span class="mono">direct-tcpip</span> channel into the box’s loopback <span class="mono">:1977</span>, and every request carries the token from pairing. Verdict: <b style="color:var(--green)">SSH-authenticated + token-authenticated → in.</b>'}
+};
+const secSeg=document.getElementById('secSeg'), secVerdict=document.getElementById('secVerdict');
+function showSec(k){
+  const d=secData[k];
+  secSeg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.s===k));
+  secVerdict.style.setProperty('--accent',d.accent);
+  secVerdict.innerHTML=`<div class="dh" style="color:${d.accent}">${d.h}</div><p>${d.p}</p>`;
+}
+secSeg.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>showSec(b.dataset.s)));
+showSec('net');
 
 /* ---------- code map ---------- */
 const pkgs=[
@@ -604,7 +630,7 @@ pkgs.forEach(([p,d])=>{const e=document.createElement('div');e.className='pkg';e
 
 /* ---------- reveal on scroll ---------- */
 const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.style.opacity=1;e.target.style.transform='none';e.target.style.transition='opacity .6s, transform .6s';io.unobserve(e.target);}})},{threshold:.12});
-document.querySelectorAll('section .sec-h, section .sec-sub, .card, .arch, .detail, .sim, .steps, .fview, .frames, .decoder, .pkgs').forEach(el=>{el.style.opacity=0;el.style.transform='translateY(18px)';io.observe(el);});
+document.querySelectorAll('section .sec-h, section .sec-sub, .card, .arch, .detail, .sim, .steps, .fview, .frames, .pkgs').forEach(el=>{el.style.opacity=0;el.style.transform='translateY(18px)';io.observe(el);});
 </script>
 </body>
 </html>
