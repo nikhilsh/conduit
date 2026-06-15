@@ -137,6 +137,24 @@ internal object SavedSessionsReducer {
     }
 
     /**
+     * Force every row for [id] to [SavedSessionStatus.EXITED], regardless
+     * of the current status. Used by the archive path so that a row that
+     * was upserted as LIVE (from a prior [onStatus] frame) is immediately
+     * marked terminal -- even when the session has already been removed from
+     * [SessionStore._sessions] and [recordSavedSession] would early-return
+     * without touching the index. Returns the input unchanged when no row
+     * matched (idempotent, no spurious write). Mirror of the iOS archive
+     * path that stamps the persisted row with `.exited` unconditionally.
+     */
+    fun markExited(current: List<SavedSession>, id: String): List<SavedSession> {
+        val idx = current.indexOfFirst { it.id == id }
+        if (idx < 0) return current
+        val row = current[idx]
+        if (row.status == SavedSessionStatus.EXITED) return current
+        return current.toMutableList().also { it[idx] = row.copy(status = SavedSessionStatus.EXITED) }
+    }
+
+    /**
      * Latest-first slice clamped to [limit], excluding tombstoned ids
      * (belt-and-braces — a permanently-deleted row is already removed, but
      * filter here too so a race can never leak one into History). Ties

@@ -2696,6 +2696,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
     fun archive(sessionId: String) {
         // Snapshot into History before the live row + status are gone.
         recordSavedSession(sessionId, isExited = true)
+        // Unconditionally stamp the persisted row as EXITED so History shows
+        // "ENDED" (not "RUNNING"). recordSavedSession() guards on the session
+        // being present in _sessions and early-returns when the row was already
+        // removed from the live list; markExited() patches the index directly
+        // and is idempotent when the row was correctly stamped by the call above.
+        markExited(sessionId)
         // Optimistic removal so the row disappears immediately.
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
@@ -2828,6 +2834,21 @@ class SessionStore : ViewModel(), ConduitDelegate {
             deleted = _deletedIds.value.toSet(),
             nowIso = nowIso,
         )
+        if (next !== _savedSessions.value) {
+            _savedSessions.value = next
+            persistSavedSessions(next)
+        }
+    }
+
+    /**
+     * Stamp the persisted History row for [sessionId] as [SavedSessionStatus.EXITED],
+     * regardless of its current status. Called by [archive] unconditionally so the
+     * row always shows ENDED in History -- even when the session was already removed
+     * from [_sessions] and [recordSavedSession] would have early-returned without
+     * touching the index. `internal` for the same testability reason as [tombstone].
+     */
+    internal fun markExited(sessionId: String) {
+        val next = SavedSessionsReducer.markExited(_savedSessions.value, sessionId)
         if (next !== _savedSessions.value) {
             _savedSessions.value = next
             persistSavedSessions(next)
