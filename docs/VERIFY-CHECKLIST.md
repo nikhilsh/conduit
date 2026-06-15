@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.157
+
+Security-hardening batch from a 3-agent broker audit (auth logic was sound; the gaps were deployment posture + supply chain). PRs #587 (credential re-key), #588 (checksum verify + systemd hardening + secrets→EnvironmentFile), #589 (loopback default, token-leak + DoS + origin fixes), #590 (website Security section), #591 (release SHA256SUMS-upload CI fix). Broker REDEPLOYED to the dev box (binary swapped to v0.0.157, `--local` dropped) and verified server-side: public `/health` 200, unauth→401, authed→200, token unchanged (no re-pair), sessions survived, journal shows the redacted token + public-bind warning, 0 cleartext-token leaks. Website Security section live at conduit.kaopeh.com.
+
+- **1 · App still connects after the broker redeploy** — the dev box now runs v0.0.157 with the loopback-default change (it keeps its explicit `--addr :1977`, so it stays publicly reachable) and the credential re-key (existing OAuth blobs lazy-migrate to a keyfile on first read, bearer still in env → no re-pair). Verify on-device: open the app → David box connects straight away, existing agent sessions resume, and a session that uses provider OAuth still works (confirms the credential migration). [iOS+Android+broker, on-device]
+- **2 · Adding a fresh box still bootstraps (checksum + hardened unit)** — installs now verify the broker binary against the published `SHA256SUMS` before `chmod +x` (verify-if-present, hard-fail on mismatch, warn-if-absent), the systemd unit gained sandboxing directives (NoNewPrivileges, PrivateTmp, ProtectSystem=full, RestrictAddressFamilies), and secrets moved from inline `Environment=` to a `0600` EnvironmentFile. Verify on-device: add a brand-new SSH box → it installs and comes online (the install-progress modal completes, no checksum/perms failure), and an agent session runs on it. [iOS+Android+broker bootstrap, on-device]
+- **3 · LAN auto-pair still works on a private network (only if you use it)** — the bearer token is still advertised over mDNS so a phone on the same LAN auto-pairs, but ONLY when the box has a genuine private (RFC1918/link-local) address; a public/VPS box never broadcasts it. Verify (optional, only if you run a broker on your home LAN): a box on your Wi-Fi still shows up for one-tap pair. (The dev box dropped `--local` entirely — it's reached via public IP/QR.) [iOS+Android, on-device, optional]
+- **4 · Send-state / leak hardening is non-disruptive** — WS read-limit + upload cap, HTTP read/idle timeouts, CheckOrigin allowlist (native apps send no Origin → allowed), and the codex `--` arg-terminator should be invisible in normal use. Verify: normal chat, terminal, file upload, and a codex session all behave as before. [iOS+Android+broker, on-device]
+
+---
+
 ## v0.0.156
 
 Device-test round fixes: box-switch connection flicker, approval-card reconcile on a lock-screen decision, Signature-arm tool collapse, one-tap re-authenticate, install-progress modal, push-to-start Live Activity, and durable chat send. iOS PRs #575 + #576 + #581, Android PR #577, broker+relay PRs #580 + #582 + #583. REQUIRES broker+relay redeploy.
