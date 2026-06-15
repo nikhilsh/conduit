@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,21 @@ const (
 	tagSnapshot byte = 0x02
 	tagEscape   byte = 0xFF
 	snapChunk        = 32 * 1024
+
+	// maxMessageBytes caps a single inbound WebSocket message. Without a
+	// read limit, a malicious client can stream an arbitrarily large
+	// frame and force the broker to buffer it all in RAM (OOM DoS).
+	// gorilla closes the connection with 1009 (message too big) when this
+	// is exceeded. 64 MiB comfortably fits the largest legitimate upload
+	// frame (a file plus its length-prefixed metadata) while bounding the
+	// per-connection memory blast radius.
+	maxMessageBytes = 64 << 20 // 64 MiB
+
+	// maxUploadBytes caps the file body inside a single 0x01 upload frame.
+	// Kept just under maxMessageBytes so the framing/metadata overhead
+	// never pushes a legitimate max-size file past the connection read
+	// limit; overflow returns a clean tool-event error, not a panic.
+	maxUploadBytes = 60 << 20 // 60 MiB
 )
 
 // Keep-alive tuning. Vars (not consts) so the keep-alive regression
@@ -49,7 +65,43 @@ var (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     checkOrigin,
+}
+
+// checkOrigin gates the WS handshake against cross-site WebSocket
+// hijacking. The real clients are native apps (iOS NWConnection / Android
+// OkHttp) that send NO Origin header — so an empty/missing Origin is the
+// expected case and is allowed. A request that DOES carry a browser
+// Origin is only allowed when it is same-origin with the Host (the local
+// preview / swe-swe browser UI served from this same broker) or a
+// loopback origin. Any other cross-site Origin is rejected: it can only
+// come from a malicious page in a victim's browser trying to ride the
+// bearer token in a cookie/credentialed request.
+func checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Native clients send no Origin — the common, trusted path.
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Host
+	if host == "" {
+		host = u.Path // tolerate odd origins
+	}
+	// Same-origin with the request Host (preview UI served from here).
+	if strings.EqualFold(host, r.Host) {
+		return true
+	}
+	// Loopback origins (local preview / dev tooling on this machine).
+	hn := u.Hostname()
+	if hn == "localhost" || hn == "127.0.0.1" || hn == "::1" {
+		return true
+	}
+	log.Printf("ws: rejected cross-origin handshake origin=%q host=%q", origin, r.Host)
+	return false
 }
 
 type Server struct {
@@ -368,6 +420,9 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	// Bound per-message memory. A frame larger than this triggers a 1009
+	// close instead of an unbounded RAM allocation (OOM DoS guard).
+	conn.SetReadLimit(maxMessageBytes)
 	c := newClient(conn, sess, s)
 	defer c.close()
 
@@ -666,6 +721,12 @@ func (c *client) handleBinary(payload []byte) {
 		// fall through to a no-op).
 		frame, err := parseUploadFrame(payload[1:])
 		if err != nil {
+			// Security breadcrumb: an oversized frame is a potential
+			// memory-exhaustion attempt; log it (other parse errors are
+			// benign client bugs and only surface as a tool-event).
+			if strings.Contains(err.Error(), "exceeds max size") {
+				log.Printf("ws: rejected oversized upload (session=%s, frame=%d bytes, cap=%d)", c.sess.ID, len(payload)-1, maxUploadBytes)
+			}
 			c.emitUploadToolEvent("upload rejected: " + err.Error())
 			return
 		}

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/mdp/qrterminal/v3"
+	"golang.org/x/term"
 
 	"github.com/nikhilsh/conduit/broker/internal/agents"
 	"github.com/nikhilsh/conduit/broker/internal/auth"
@@ -82,13 +83,29 @@ Run "conduit-broker up --help" for options.`)
 
 func runUp(args []string) int {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
-	addr := fs.String("addr", ":1977", "HTTP listen address")
+	// Default to loopback. A bare ":1977" binds 0.0.0.0 (every
+	// interface), exposing the broker to the whole network with only the
+	// bearer token as a gate. The mobile SSH-bootstrap path always passes
+	// an explicit "127.0.0.1:<port>" (scripts/remote-bootstrap.sh), and a
+	// direct-connect box that *wants* a public bind passes an explicit
+	// "--addr :1977" — both override this default verbatim, so the secure
+	// default never breaks an intentional public bind.
+	addr := fs.String("addr", "127.0.0.1:1977", "HTTP listen address")
 	local := fs.Bool("local", false, "advertise on LAN via mDNS")
 	publicURL := fs.String("public-url", "", "public-facing URL (for QR/UX hints)")
 	agentsDir := fs.String("agents-dir", "", "directory of agent adapter TOMLs (defaults: $XDG_CONFIG_HOME/conduit/agents → ~/.conduit/agents → ./agents → embedded)")
 	replayBase := fs.String("replay-base", defaultReplayBase(), "directory for per-session replay recordings; empty disables recording")
 	credentialsDir := fs.String("credentials-dir", defaultCredentialsDir(), "directory for per-identity OAuth credential blobs (docs/PLAN-AGENT-OAUTH.md); empty disables per-user OAuth materialization")
 	_ = fs.Parse(args)
+
+	// Security: a non-loopback listen address means the broker is
+	// reachable from the network, where the bearer token is the ONLY
+	// access control. Warn loudly so an operator who didn't intend a
+	// public bind notices. Explicit public binds (direct-connect boxes)
+	// are legitimate and keep working — this only logs, never refuses.
+	if isPublicBind(*addr) {
+		log.Printf("WARNING: binding PUBLIC interface %q — the bearer token is the ONLY access control; ensure a firewall or SSH tunnel fronts this broker", *addr)
+	}
 
 	store := auth.NewStore()
 	// CONDUIT_TOKEN lets the mobile-app SSH bootstrap (and any other
@@ -206,19 +223,34 @@ func runUp(args []string) int {
 	// Format: conduit://<host>[:port]?token=<bearer>
 	pairing := pairingURL(replaceScheme(hostURL), token)
 
-	fmt.Printf("conduit-broker up\n  addr:    %s\n  url:     %s\n  token:   %s\n  pairing: %s\n",
-		*addr, hostURL, token, pairing)
-	if mgr.ReplayBaseDir() != "" {
+	// Only print the FULL bearer token / pairing URL / QR when stdout is
+	// an interactive terminal (the `up --local` operator flow). Under
+	// systemd, stdout is routed into the journal, so printing the token
+	// there permanently leaks the only access-control secret to anyone
+	// who can read the journal. In that case emit a redacted fingerprint
+	// only — enough to confirm WHICH token is live without revealing it.
+	interactive := term.IsTerminal(int(os.Stdout.Fd()))
+	if interactive {
+		fmt.Printf("conduit-broker up\n  addr:    %s\n  url:     %s\n  token:   %s\n  pairing: %s\n",
+			*addr, hostURL, token, pairing)
+	} else {
+		fmt.Printf("conduit-broker up\n  addr:    %s\n  url:     %s\n  token:   %s (redacted; stdout is not a TTY)\n",
+			*addr, hostURL, redactToken(token))
+	}
+	if mgr.ReplayBaseDir() != "" && interactive {
 		// Print a templated replay URL so the operator can plug in
-		// any active session id without recomputing the HMAC.
+		// any active session id without recomputing the HMAC. The sample
+		// HMAC is token-derived, so only print it on an interactive TTY.
 		sampleToken := replaySrv.Token("SESSION_ID")
 		fmt.Printf("  replay:  %s/replay/<session-id>?t=<hmac>  (sample hmac for SESSION_ID: %s)\n", hostURL, sampleToken)
 	}
-	fmt.Println()
-	qrterminal.GenerateHalfBlock(pairing, qrterminal.L, os.Stdout)
-	fmt.Printf("\nScan the QR above with the Conduit app, or:\n  wscat -c \"%s/ws/$(uuidgen)?assistant=claude&token=%s\"\n",
-		replaceScheme(hostURL), token)
-	if strings.TrimSpace(*publicURL) == "" {
+	if interactive {
+		fmt.Println()
+		qrterminal.GenerateHalfBlock(pairing, qrterminal.L, os.Stdout)
+		fmt.Printf("\nScan the QR above with the Conduit app, or:\n  wscat -c \"%s/ws/$(uuidgen)?assistant=claude&token=%s\"\n",
+			replaceScheme(hostURL), token)
+	}
+	if interactive && strings.TrimSpace(*publicURL) == "" {
 		// Without --public-url the pairing URL/QR can only encode localhost
 		// or a LAN IP (resolveHostURL never emits a public address). A phone
 		// on cellular scanning that QR saves a server it can never reach —
@@ -237,7 +269,7 @@ func runUp(args []string) int {
 		if err != nil {
 			log.Printf("--local: cannot parse port from %q: %v (skipping mDNS)", *addr, err)
 		} else {
-			shutdown, err := discovery.Advertise(port, token)
+			shutdown, err := discovery.Advertise(port)
 			if err != nil {
 				log.Printf("--local: mDNS advertise failed: %v", err)
 			} else {
@@ -258,9 +290,22 @@ func runUp(args []string) int {
 	rootMux.Handle("/", wsHandler)
 
 	httpSrv := &http.Server{
-		Addr:              *addr,
-		Handler:           rootMux,
+		Addr:    *addr,
+		Handler: rootMux,
+		// Slowloris guards. ReadHeaderTimeout + ReadTimeout bound how
+		// long a client may dribble the request line/headers/body, so a
+		// stalled sender can't pin a connection open indefinitely.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		// WriteTimeout is deliberately left UNSET. This server's primary
+		// surface is long-lived WebSockets (and streaming replay): a
+		// WriteTimeout is an absolute deadline on the whole response, so
+		// it would hard-close every WS the moment it elapsed regardless
+		// of activity. WS liveness is instead enforced by the per-message
+		// pong read-deadline (pongWait, see internal/ws/server.go) plus
+		// the server heartbeat ping — a dead peer is reaped there without
+		// killing healthy long-lived connections.
+		IdleTimeout: 120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
@@ -357,6 +402,48 @@ func pairingURL(wsURL, token string) string {
 	host = strings.TrimPrefix(host, "ws://")
 	host = strings.TrimPrefix(host, "wss://")
 	return "conduit://" + host + "?token=" + token
+}
+
+// isPublicBind reports whether the listen address `addr` exposes the
+// broker beyond loopback. A bare ":port" or "0.0.0.0:port" / "[::]:port"
+// binds every interface; an explicit loopback host (127.0.0.1, ::1,
+// localhost) does not. Anything else (a concrete LAN/public IP or
+// hostname) is treated as public. Used only to decide whether to warn.
+func isPublicBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Unparseable — be conservative and warn.
+		return true
+	}
+	switch host {
+	case "":
+		// Bare ":port" binds all interfaces.
+		return true
+	case "localhost":
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// A non-IP host (e.g. a public hostname) — treat as public.
+		return true
+	}
+	if ip.IsUnspecified() {
+		// 0.0.0.0 / :: bind all interfaces.
+		return true
+	}
+	return !ip.IsLoopback()
+}
+
+// redactToken returns a non-reversible fingerprint of a bearer token
+// safe to print to a non-TTY stdout (the systemd journal). Shows the
+// first 6 chars plus the length so the operator can correlate WHICH
+// token is live (e.g. against a CONDUIT_TOKEN they set) without exposing
+// the secret. Short/empty tokens collapse to "<redacted>".
+func redactToken(token string) string {
+	if len(token) < 8 {
+		return "<redacted>"
+	}
+	return token[:6] + "…(len=" + strconv.Itoa(len(token)) + ")"
 }
 
 func parsePort(addr string) (int, error) {

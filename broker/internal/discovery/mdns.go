@@ -1,8 +1,11 @@
 // Package discovery advertises the harness on the LAN so mobile clients
 // can pick it up without typing the address. Service name is
-// `_conduit._tcp.local`; TXT records carry the bearer token and a
-// short instance id so multiple harnesses on one network are
-// distinguishable in the picker UI.
+// `_conduit._tcp.local`; the TXT record carries only a protocol version
+// and the instance id (host-port) so multiple harnesses on one network
+// are distinguishable in the picker UI. The bearer token is deliberately
+// NOT advertised — mDNS TXT records are broadcast in cleartext to every
+// host on the LAN, so anyone sniffing the segment could read it. Clients
+// pair the token out of band (QR / manual entry).
 package discovery
 
 import (
@@ -19,8 +22,10 @@ const (
 )
 
 // Advertise registers the service and returns a shutdown func. Caller
-// invokes the returned func on harness shutdown.
-func Advertise(port int, token string) (func(), error) {
+// invokes the returned func on harness shutdown. The bearer token is NOT
+// included in the advertisement (see the package doc) — only presence,
+// port, and the instance id are broadcast.
+func Advertise(port int) (func(), error) {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		host = "conduit"
@@ -34,9 +39,10 @@ func Advertise(port int, token string) (func(), error) {
 		port,
 		[]string{
 			"v=1",
-			// Token in a TXT record is fine for LAN discovery — a
-			// device that can read TXT can also reach the harness.
-			"token=" + token,
+			// Presence/port only. The bearer token is intentionally
+			// absent — TXT records are broadcast in cleartext to the
+			// whole LAN segment.
+			"instance=" + instance,
 		},
 		nil, // interfaces — nil means all
 	)

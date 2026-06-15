@@ -94,10 +94,17 @@ func codexTurnArgv(binary, dir, threadID string, extra []string, mode, msg strin
 		argv := []string{binary, "exec", "--json", "--skip-git-repo-check", "-C", dir}
 		argv = applyCodexPermissionMode(argv, mode)
 		argv = append(argv, extra...)
+		// `--` is codex's (clap) end-of-flags terminator: it forces the
+		// trailing message to be parsed as the PROMPT positional, even
+		// when it begins with '-'. Without it, a message like
+		// "--version" or "-h" is consumed as a flag and the turn fails
+		// with "unexpected argument" (verified against codex exec).
+		argv = append(argv, "--")
 		return append(argv, msg)
 	}
 	argv := []string{binary, "exec", "resume", threadID, "--json", "--skip-git-repo-check"}
 	argv = append(argv, extra...)
+	argv = append(argv, "--")
 	return append(argv, msg)
 }
 
