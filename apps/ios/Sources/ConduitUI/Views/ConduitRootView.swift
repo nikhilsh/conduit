@@ -30,6 +30,13 @@ extension ConduitUI {
         /// session doesn't snap back into the wizard on the same launch.
         @State private var onboardingFinished = false
 
+        /// When true the AnimatedSplashView overlay is still covering the window.
+        /// Onboarding is suppressed while the splash is active so the fullScreenCover
+        /// doesn't race the splash and appear behind / over it (window-level cover
+        /// sits above the zIndex-1 splash overlay). Defaults false so existing
+        /// RootView() call sites and previews compile without change.
+        var splashActive: Bool = false
+
         /// Onboarding gate (§5): show the wizard whenever this DEVICE holds no
         /// pairing key for any broker. No accounts / sign-in — trust is the
         /// device↔broker pairing handshake, so `savedServers` (the brokers
@@ -37,6 +44,10 @@ extension ConduitUI {
         /// the route flips to `.none` and the cover dismisses; an unreachable
         /// paired broker is Home + offline banner, never re-onboarding.
         private var needsOnboarding: Bool {
+            // Hold off until the splash finishes — a fullScreenCover presented
+            // while the splash overlay is still visible appears above/behind it
+            // and causes a visible sequencing glitch on fresh install.
+            guard !splashActive else { return false }
             guard !onboardingFinished else { return false }
             let route = FeatureFlags.onboardingRoute(
                 pairedBrokers: store.savedServers.count,

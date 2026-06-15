@@ -202,7 +202,12 @@ extension ConduitUI {
                 }
                 .onAppear {
                     if !store.endpoint.isComplete {
-                        showSettings = true
+                        // Fresh install (no paired brokers): the onboarding fullScreenCover
+                        // owns first-run. Opening Settings here collides with that cover and
+                        // dismisses it, landing the user on Settings instead of onboarding.
+                        // Only auto-open Settings for an already-paired device whose active
+                        // endpoint is somehow incomplete (e.g. corrupted keychain entry).
+                        if !store.savedServers.isEmpty { showSettings = true }
                     } else if store.harness == .disconnected {
                         store.connect()
                     }

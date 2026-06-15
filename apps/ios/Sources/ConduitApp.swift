@@ -60,7 +60,7 @@ struct ConduitApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                ConduitUI.RootView()
+                ConduitUI.RootView(splashActive: showSplash)
                     .environment(store)
                     .environment(appearance)
                     .environment(flags)

@@ -15,6 +15,12 @@ struct AnimatedSplashModel: Equatable {
     /// forever when the harness is unreachable.
     static let defaultDuration: TimeInterval = 1.5
 
+    /// Short timeout used on fresh install (no saved servers). The harness
+    /// will never become reachable with no endpoint, so waiting the full
+    /// 1.5 s would unnecessarily delay the onboarding cover. 0.55 s is
+    /// long enough for the entrance animation to settle.
+    static let freshInstallDuration: TimeInterval = 0.55
+
     /// Pulse duration for one half-cycle (1.0 → 1.05). The animation
     /// repeats forever / autoreverses so the full beat is 2× this.
     static let pulsePeriod: TimeInterval = 0.6
@@ -183,18 +189,33 @@ struct AnimatedSplashView: View {
             entered = true
         }
         // Pulse: ease-in-out, autoreverse, repeat forever. Full beat
-        // is 2 × pulsePeriod = 1.2s, which matches the audit spec.
+        // is 2 x pulsePeriod = 1.2s, which matches the audit spec.
         withAnimation(
             .easeInOut(duration: AnimatedSplashModel.pulsePeriod)
                 .repeatForever(autoreverses: true)
         ) {
             pulsing = true
         }
-        // Hard timeout — fires regardless of broker state so the
+        // Pick the hard timeout based on whether the device has any paired
+        // brokers. On fresh install the harness never becomes reachable (no
+        // endpoint), so the full 1.5 s timeout would add unnecessary delay
+        // before the onboarding cover appears. Use a short timeout instead.
+        let isFreshInstall = store.savedServers.isEmpty
+        let timeout = isFreshInstall
+            ? AnimatedSplashModel.freshInstallDuration
+            : AnimatedSplashModel.defaultDuration
+        Telemetry.breadcrumb(
+            "launch",
+            "splash started",
+            data: [
+                "timeout": "\(timeout)",
+                "savedServers": "\(store.savedServers.count)",
+                "willShowOnboarding": "\(isFreshInstall)",
+            ]
+        )
+        // Hard timeout -- fires regardless of broker state so the
         // splash never lingers when the network is gone.
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + AnimatedSplashModel.defaultDuration
-        ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
             finish()
         }
     }
