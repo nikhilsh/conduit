@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -548,6 +549,54 @@ func ExternalTranscript(agent, externalID string) ([]ConvEntry, error) {
 	}
 }
 
+// TranscriptResult is returned by ExternalTranscriptSince: the filtered items
+// and the maximum timestamp seen across ALL items (not just the filtered ones)
+// so polling clients can advance their cursor even when no new items arrived.
+type TranscriptResult struct {
+	Items    []ConvEntry
+	LatestTs int64 // unix millis of the newest item; 0 if the transcript is empty
+}
+
+// ExternalTranscriptSince returns the transcript for an external session with
+// optional incremental filtering for Flow-B "Watch live" polling.
+//
+//   - sinceMs == 0: full transcript (same as ExternalTranscript)
+//   - sinceMs  > 0: only items whose timestamp is STRICTLY greater than sinceMs
+//
+// LatestTs is always the maximum ts in the full file, even when filtering
+// removes all items, so the client can advance its cursor on each poll.
+func ExternalTranscriptSince(agent, externalID string, sinceMs int64) (TranscriptResult, error) {
+	all, err := ExternalTranscript(agent, externalID)
+	if err != nil {
+		all = nil // return what we have (partial parse)
+	}
+
+	var latestTs int64
+	for _, e := range all {
+		if ts := parseTimestamp(e.Ts); !ts.IsZero() {
+			if ms := ts.UnixMilli(); ms > latestTs {
+				latestTs = ms
+			}
+		}
+	}
+
+	if sinceMs <= 0 {
+		return TranscriptResult{Items: all, LatestTs: latestTs}, err
+	}
+
+	filtered := all[:0:0]
+	for _, e := range all {
+		ts := parseTimestamp(e.Ts)
+		if ts.IsZero() {
+			continue // item with no parseable ts: always include in full mode, skip in since mode
+		}
+		if ts.UnixMilli() > sinceMs {
+			filtered = append(filtered, e)
+		}
+	}
+	return TranscriptResult{Items: filtered, LatestTs: latestTs}, err
+}
+
 func claudeTranscript(sessionID string) ([]ConvEntry, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -733,6 +782,45 @@ func parseCodexTranscript(path string) ([]ConvEntry, error) {
 		out = append(out, ConvEntry{Role: role, Content: sb.String(), Ts: ts})
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Fork worktree helpers
+// ---------------------------------------------------------------------------
+
+// FindGitRepoRoot walks up from dir until it finds a git repo root, or returns
+// "", false when dir is not inside a git working tree.
+func FindGitRepoRoot(dir string) (string, bool) {
+	if dir == "" {
+		return "", false
+	}
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "", false
+	}
+	root := strings.TrimSpace(string(out))
+	return root, root != ""
+}
+
+// CreateForkWorktree creates a git worktree at worktreePath branched off the
+// HEAD of repoRoot. The branch is named conduit/fork-<short> where <short> is
+// the first 8 chars of sessionID. Returns the branch name and any error.
+//
+// On error the caller should fall back to using the original cwd directly
+// (if the session isn't running) or return fork_failed to the client.
+func CreateForkWorktree(repoRoot, worktreePath, sessionID string) (branchName string, err error) {
+	short := sessionID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	branchName = "conduit/fork-" + short
+	// git worktree add -b <branch> <path> HEAD
+	cmd := exec.Command("git", "-C", repoRoot, "worktree", "add", "-b", branchName, worktreePath, "HEAD")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return branchName, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,9 @@ package session
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -371,5 +373,262 @@ func TestTruncate(t *testing.T) {
 	runes := []rune(got)
 	if runes[len(runes)-1] != '…' {
 		t.Errorf("truncate: last rune should be '…'")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExternalTranscriptSince tests (Build B — since_ts watch param)
+// ---------------------------------------------------------------------------
+
+func TestExternalTranscriptSince_FullWhenNoFilter(t *testing.T) {
+	// Build a minimal claude transcript with two turns at different timestamps.
+	sessionID := "watch-0000-1111-2222-333344445555"
+	lines := []map[string]any{
+		{
+			"type": "user", "sessionId": sessionID,
+			"timestamp": "2024-12-14T10:00:00.000Z",
+			"message":   map[string]any{"role": "user", "content": "first message"},
+			"cwd":       "/tmp/proj",
+		},
+		{
+			"type": "assistant", "sessionId": sessionID,
+			"timestamp": "2024-12-14T10:01:00.000Z",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "first reply"},
+				},
+			},
+		},
+		{
+			"type": "user", "sessionId": sessionID,
+			"timestamp": "2024-12-14T10:02:00.000Z",
+			"message":   map[string]any{"role": "user", "content": "second message"},
+		},
+		{
+			"type": "assistant", "sessionId": sessionID,
+			"timestamp": "2024-12-14T10:03:00.000Z",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "second reply"},
+				},
+			},
+		},
+	}
+	var raw string
+	for _, rec := range lines {
+		b, _ := json.Marshal(rec)
+		raw += string(b) + "\n"
+	}
+	// Write to a slug dir so claudeTranscript can find it.
+	home := t.TempDir()
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj")
+	_ = os.MkdirAll(projDir, 0o755)
+	_ = os.WriteFile(filepath.Join(projDir, sessionID+".jsonl"), []byte(raw), 0o644)
+	t.Setenv("HOME", home)
+
+	// sinceMs == 0: full transcript.
+	result, err := ExternalTranscriptSince("claude", sessionID, 0)
+	if err != nil {
+		t.Fatalf("ExternalTranscriptSince full: %v", err)
+	}
+	if len(result.Items) != 4 {
+		t.Errorf("full transcript: got %d items want 4", len(result.Items))
+	}
+	// latest_ts must be the max timestamp (10:03).
+	ts10_03 := time.Date(2024, 12, 14, 10, 3, 0, 0, time.UTC).UnixMilli()
+	if result.LatestTs != ts10_03 {
+		t.Errorf("LatestTs=%d want %d (10:03)", result.LatestTs, ts10_03)
+	}
+}
+
+func TestExternalTranscriptSince_FiltersBySinceTs(t *testing.T) {
+	sessionID := "watch-aaaa-bbbb-cccc-ddddeeee0000"
+	lines := []map[string]any{
+		{
+			"type": "user", "sessionId": sessionID,
+			"timestamp": "2024-12-14T10:00:00.000Z",
+			"message":   map[string]any{"role": "user", "content": "old message"},
+			"cwd":       "/tmp/proj2",
+		},
+		{
+			"type": "assistant", "sessionId": sessionID,
+			"timestamp": "2024-12-14T10:01:00.000Z",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "old reply"},
+				},
+			},
+		},
+		{
+			"type": "user", "sessionId": sessionID,
+			"timestamp": "2024-12-14T11:00:00.000Z",
+			"message":   map[string]any{"role": "user", "content": "new message"},
+		},
+		{
+			"type": "assistant", "sessionId": sessionID,
+			"timestamp": "2024-12-14T11:01:00.000Z",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "new reply"},
+				},
+			},
+		},
+	}
+	var raw string
+	for _, rec := range lines {
+		b, _ := json.Marshal(rec)
+		raw += string(b) + "\n"
+	}
+	home := t.TempDir()
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj2")
+	_ = os.MkdirAll(projDir, 0o755)
+	_ = os.WriteFile(filepath.Join(projDir, sessionID+".jsonl"), []byte(raw), 0o644)
+	t.Setenv("HOME", home)
+
+	// Set since_ts to 10:01 (the old assistant reply's ts).
+	// Only items STRICTLY AFTER 10:01 should be returned (the 11:xx items).
+	ts10_01 := time.Date(2024, 12, 14, 10, 1, 0, 0, time.UTC).UnixMilli()
+	result, err := ExternalTranscriptSince("claude", sessionID, ts10_01)
+	if err != nil {
+		t.Fatalf("ExternalTranscriptSince since: %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Errorf("filtered transcript: got %d items want 2 (only the 11:xx items)", len(result.Items))
+	}
+	for _, item := range result.Items {
+		ts := parseTimestamp(item.Ts)
+		if !ts.IsZero() && ts.UnixMilli() <= ts10_01 {
+			t.Errorf("item at ts=%s should be > since_ts 10:01", item.Ts)
+		}
+	}
+	// LatestTs should be the max ts in the file (11:01), not the filtered set.
+	ts11_01 := time.Date(2024, 12, 14, 11, 1, 0, 0, time.UTC).UnixMilli()
+	if result.LatestTs != ts11_01 {
+		t.Errorf("LatestTs=%d want %d (11:01 — max in file)", result.LatestTs, ts11_01)
+	}
+}
+
+func TestExternalTranscriptSince_NoNewItemsStillReturnsLatestTs(t *testing.T) {
+	// since_ts is past the newest item: no items returned but LatestTs is the max.
+	sessionID := "watch-1111-2222-3333-444455556666"
+	ts := "2024-12-14T10:00:00.000Z"
+	lines := []map[string]any{
+		{
+			"type": "user", "sessionId": sessionID, "timestamp": ts,
+			"message": map[string]any{"role": "user", "content": "only message"},
+			"cwd":     "/tmp/proj3",
+		},
+	}
+	var raw string
+	for _, rec := range lines {
+		b, _ := json.Marshal(rec)
+		raw += string(b) + "\n"
+	}
+	home := t.TempDir()
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-proj3")
+	_ = os.MkdirAll(projDir, 0o755)
+	_ = os.WriteFile(filepath.Join(projDir, sessionID+".jsonl"), []byte(raw), 0o644)
+	t.Setenv("HOME", home)
+
+	futureMs := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	result, _ := ExternalTranscriptSince("claude", sessionID, futureMs)
+	if len(result.Items) != 0 {
+		t.Errorf("expected no items past since_ts, got %d", len(result.Items))
+	}
+	expectedLatest := time.Date(2024, 12, 14, 10, 0, 0, 0, time.UTC).UnixMilli()
+	if result.LatestTs != expectedLatest {
+		t.Errorf("LatestTs=%d want %d even when no new items", result.LatestTs, expectedLatest)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fork worktree helper tests (Build A — FindGitRepoRoot + CreateForkWorktree)
+// ---------------------------------------------------------------------------
+
+func TestFindGitRepoRoot_InsideRepo(t *testing.T) {
+	// This test runs inside the conduit repo itself — it should find a root.
+	// We use the broker directory as the cwd since we know it's inside a git repo.
+	root, ok := FindGitRepoRoot("/root/developer/projects/conduit")
+	if !ok {
+		t.Skip("not running inside a git repo (CI may not have one)")
+	}
+	if root == "" {
+		t.Error("FindGitRepoRoot returned empty root inside a git repo")
+	}
+}
+
+func TestFindGitRepoRoot_OutsideRepo(t *testing.T) {
+	// A freshly created temp dir is NOT a git repo.
+	tmp := t.TempDir()
+	_, ok := FindGitRepoRoot(tmp)
+	if ok {
+		t.Errorf("FindGitRepoRoot(%q) returned ok=true for a non-git dir", tmp)
+	}
+}
+
+func TestCreateForkWorktree_CreatesWorktreeAndLeavesSourceUnchanged(t *testing.T) {
+	// Create a real temporary git repo, add a commit, then fork it.
+	repoDir := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("cmd %v: %v: %s", args, err, out)
+		}
+	}
+	run(repoDir, "git", "init", "-b", "main")
+	run(repoDir, "git", "config", "user.email", "test@test.com")
+	run(repoDir, "git", "config", "user.name", "Test")
+	// Write a file so HEAD exists (git won't add a worktree from an empty repo).
+	_ = os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test\n"), 0o644)
+	run(repoDir, "git", "add", ".")
+	run(repoDir, "git", "commit", "-m", "init")
+
+	// Record the original HEAD commit.
+	origHEAD, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	origHEAD = []byte(strings.TrimSpace(string(origHEAD)))
+
+	// Create the fork worktree.
+	wtDir := filepath.Join(t.TempDir(), "fork-worktree")
+	sessID := "abcdef12-3456-7890-abcd-ef1234567890"
+	branchName, err := CreateForkWorktree(repoDir, wtDir, sessID)
+	if err != nil {
+		t.Fatalf("CreateForkWorktree: %v", err)
+	}
+	if !strings.HasPrefix(branchName, "conduit/fork-") {
+		t.Errorf("branchName=%q want prefix conduit/fork-", branchName)
+	}
+
+	// Worktree must exist and be a git repo.
+	root, ok := FindGitRepoRoot(wtDir)
+	if !ok || root == "" {
+		t.Fatal("forked worktree is not inside a git repo")
+	}
+
+	// Source repo HEAD is unchanged (the fork operation never modifies origin).
+	newHEAD, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD after fork: %v", err)
+	}
+	newHEAD = []byte(strings.TrimSpace(string(newHEAD)))
+	if string(origHEAD) != string(newHEAD) {
+		t.Errorf("source HEAD changed after fork: %s → %s", origHEAD, newHEAD)
+	}
+
+	// The new worktree is on a different branch than the source.
+	wtBranch, err := exec.Command("git", "-C", wtDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git branch in worktree: %v", err)
+	}
+	if strings.TrimSpace(string(wtBranch)) == "main" {
+		t.Error("worktree is on 'main'; expected a conduit/fork-... branch")
 	}
 }

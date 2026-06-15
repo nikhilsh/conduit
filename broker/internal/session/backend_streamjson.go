@@ -73,20 +73,71 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 		logConduitAwarenessInjected(s.ID, adapter.Name, "claude:append-system-prompt")
 	}
 
+	// Subagent registry handle: declared here (before the fork block) so
+	// it can be captured by both the fork respawn and the normal respawn.
+	subagentH := s.subagentHandle()
+
 	argsFor := func(resume string, continueLatest bool) []string {
 		baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsForAdapter(adapter)...)
 		// Apply the chosen permission mode (e.g. plan): for claude this may
 		// drop --dangerously-skip-permissions, so it must wrap the adapter args
 		// before the stream-json flags are appended.
 		baseArgs = applyPermissionModeFromManifest(baseArgs, adapter, s.override.PermissionMode)
-		return claudeStreamCommand(adapter.Command, baseArgs, resume, continueLatest)
+		return claudeStreamCommandFork(adapter.Command, baseArgs, resume, continueLatest, false)
 	}
 
-	// Subagent registry handle: carries s.mu + s.subagents so the stream
-	// pump can update the roster and emit view_event{view:"agents"}. Built
-	// once here and reused for the self-heal respawn so the registry state
-	// (which lives on the Session) persists across process restarts.
-	subagentH := s.subagentHandle()
+	// Fork path: --resume <external_id> --fork-session branches the
+	// conversation into a new claude session id without touching the original.
+	if req.forkChatSessionID != "" {
+		baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsForAdapter(adapter)...)
+		baseArgs = applyPermissionModeFromManifest(baseArgs, adapter, s.override.PermissionMode)
+		forkArgv := claudeStreamCommandFork(adapter.Command, baseArgs, req.forkChatSessionID, false, true)
+		// Seed resumeChatSessionID so latchChatSessionID captures the new
+		// fork's session id and respawns resume it going forward.
+		s.mu.Lock()
+		s.chatSessionID = req.forkChatSessionID // interim; overwritten on init
+		s.mu.Unlock()
+
+		chat, cerr := startChatProcess(
+			context.Background(),
+			forkArgv,
+			s.commandEnv(nil),
+			s.workspaceDir,
+			s.PublishText,
+			newQuickReplyGeneratorWithProvider(s.ID, req.aiGen, s.PublishText),
+			s.titleGen,
+			s.accumulateUsage,
+			s.handleAskControl,
+			s.latchChatSessionID,
+			s.subagentHandle(),
+		)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "session %s: fork startChatProcess: %v (chat disabled)\n", s.ID, cerr)
+			publishChatSystem(s.PublishText, "⚠️ claude: fork failed: "+cerr.Error())
+			return spawnResult{}, cerr
+		}
+		// Respawn after fork resumes normally (the new forked session id,
+		// latched on init, is the one to resume going forward).
+		respawnFork := func() (chatBackend, error) {
+			s.mu.Lock()
+			resume := s.chatSessionID
+			s.mu.Unlock()
+			return startChatProcess(
+				context.Background(),
+				argsFor(resume, false),
+				s.commandEnv(nil),
+				s.workspaceDir,
+				s.PublishText,
+				gen,
+				s.titleGen,
+				s.accumulateUsage,
+				s.handleAskControl,
+				s.latchChatSessionID,
+				subagentH,
+			)
+		}
+		return spawnResult{backend: chat, respawn: respawnFork}, nil
+	}
 
 	// On-demand install: if the claude CLI is missing and the adapter has an
 	// install_cmd, install it now (single-flight, ~300 s timeout) and retry.

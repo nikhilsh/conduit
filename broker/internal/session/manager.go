@@ -536,7 +536,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	if extra := opts.override.extraArgsForAdapter(adapter); len(extra) > 0 {
 		log.Printf("session %s: model override applied (%s): %v", id, adapter.Name, extra)
 	}
-	s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID)
+	s.startChatBackend(adapter, opts.resumeChatSessionID, opts.continueLatestChat, opts.resumeCodexThreadID, opts.forkChatSessionID)
 	// Render the handoff file so on_start hooks (e.g. "conduit memory
 	// render") find their context at CONDUIT_HANDOFF_PATH. Mirrors what
 	// switchToAdapter does before running on_swap. Non-fatal: a write
@@ -588,6 +588,7 @@ func (s *Session) startChatBackend(
 	resumeChatSessionID string,
 	continueLatestChat bool,
 	resumeCodexThreadID string,
+	forkChatSessionID string,
 ) {
 	// AI niceties (titles + quick replies) provider, selected per session:
 	// prefer the session's own agent's provider (anthropicGen for claude,
@@ -633,6 +634,7 @@ func (s *Session) startChatBackend(
 		resumeChatSessionID: resumeChatSessionID,
 		continueLatestChat:  continueLatestChat,
 		resumeCodexThreadID: resumeCodexThreadID,
+		forkChatSessionID:   forkChatSessionID,
 	})
 	if serr != nil {
 		// Spawn already logged + surfaced the failure to chat; chat is
@@ -1578,6 +1580,17 @@ type ExternalResumeOptions struct {
 	ExternalID string // claude session uuid / codex thread id
 }
 
+// ExternalForkOptions configures a Found Sessions fork: a new Conduit session
+// branching the external conversation onto an isolated git worktree without
+// touching the user's running terminal session.
+type ExternalForkOptions struct {
+	Agent      string // "claude" | "codex"
+	ExternalID string // claude session uuid / codex thread id
+	// WorktreeDir is the pre-created git worktree path that the new session
+	// runs in. Created by serveAdoptSession before calling GetOrCreateWithOptions.
+	WorktreeDir string
+}
+
 type CreateOptions struct {
 	CWD string
 	// Override carries the optional reasoning-effort / model override
@@ -1589,6 +1602,11 @@ type CreateOptions struct {
 	// CodexThreadID so the backend resumes via --resume / thread/resume.
 	// Zero value = ordinary new session (no external resume).
 	ExternalResume ExternalResumeOptions
+	// ExternalFork seeds a fork of an external CLI conversation onto a fresh
+	// git worktree (Found Sessions adopt-fork path). Claude gets
+	// --resume <id> --fork-session; codex falls back to plain resume into the
+	// new worktree for isolation. Zero value = no fork.
+	ExternalFork ExternalForkOptions
 }
 
 func NewManager(registry *agents.Registry) *Manager {
@@ -1648,6 +1666,12 @@ func (m *Manager) Health() Health {
 	}
 	h.SidecarHealthy = true
 	return h
+}
+
+// ConduitRoot returns the broker's conduit root directory (~/.conduit by default).
+// Used by API handlers that need to create per-session directories.
+func (m *Manager) ConduitRoot() string {
+	return m.conduitRoot
 }
 
 func (m *Manager) Get(id string) (*Session, bool) {
@@ -1905,18 +1929,33 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	// newSession — allocating after would mean the agent never sees $PORT and
 	// binds a framework default the broker can't predict).
 	previewPort := m.allocatePreviewPortLocked()
-	// Wire external resume IDs (Found Sessions adopt path). When
+	// Wire external resume IDs (Found Sessions adopt-resume path). When
 	// ExternalResume is set, pre-seed the appropriate backend resume field so
 	// the agent launches with --resume / thread/resume pointing at the
 	// external conversation. Uses the same sessionOptions fields that the
 	// recovery path uses, so the backend picks it up identically.
-	var resumeChatID, resumeCodexID string
+	var resumeChatID, resumeCodexID, forkChatID string
 	if er := opts.ExternalResume; er.ExternalID != "" {
 		switch er.Agent {
 		case "claude":
 			resumeChatID = er.ExternalID
 		case "codex":
 			resumeCodexID = er.ExternalID
+		}
+	}
+	// Wire external fork IDs (Found Sessions adopt-fork path). Claude gets
+	// --fork-session via forkChatID; codex has no wire-level fork so it falls
+	// back to resumeCodexID (plain resume into the isolated worktree).
+	if ef := opts.ExternalFork; ef.ExternalID != "" {
+		switch ef.Agent {
+		case "claude":
+			forkChatID = ef.ExternalID
+		case "codex":
+			resumeCodexID = ef.ExternalID
+		}
+		// If the caller pre-created a worktree, use it as the workspace.
+		if ef.WorktreeDir != "" && requestedCWD == "" {
+			requestedCWD = ef.WorktreeDir
 		}
 	}
 	s, err := newSession(id, adapter, sessionOptions{
@@ -1933,6 +1972,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		credentialProviders: credentialProvidersFromRegistry(m.registry),
 		resumeChatSessionID: resumeChatID,
 		resumeCodexThreadID: resumeCodexID,
+		forkChatSessionID:   forkChatID,
 	})
 	if err != nil {
 		return nil, false, err
@@ -2084,6 +2124,11 @@ type sessionOptions struct {
 	// resumeCodexThreadID seeds the codex chat backend's thread id on
 	// recovery so its first post-restart turn runs `exec resume <id>`.
 	resumeCodexThreadID string
+	// forkChatSessionID, when non-empty, resumes + forks the named claude
+	// conversation via --resume <id> --fork-session. This branches the
+	// conversation into a fresh claude session id without touching the
+	// original. Passed through to the streamjson backend's spawnRequest.
+	forkChatSessionID string
 	// modelCatalog returns the Manager's discovered model catalog snapshot,
 	// used to pick the smallest codex model for the AI-niceties codexGen.
 	// Manager fills this in from its own ModelCatalog; tests typically leave

@@ -602,7 +602,8 @@ func TestSessionsEndpointRequiresAuth(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestCapabilitiesIncludesSessionDiscovery asserts that /api/capabilities JSON
-// includes session_discovery=true and session_fork=false as per the contract.
+// includes session_discovery=true, session_fork=true (real worktree fork
+// implemented this PR), and session_watch=true (since_ts polling).
 func TestCapabilitiesIncludesSessionDiscovery(t *testing.T) {
 	srv, tok := newTestServer(t)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
@@ -625,8 +626,11 @@ func TestCapabilitiesIncludesSessionDiscovery(t *testing.T) {
 	if v, ok := features["session_discovery"]; !ok || v != true {
 		t.Errorf("features.session_discovery=%v; want true", v)
 	}
-	if v, ok := features["session_fork"]; !ok || v != false {
-		t.Errorf("features.session_fork=%v; want false (not implemented this PR)", v)
+	if v, ok := features["session_fork"]; !ok || v != true {
+		t.Errorf("features.session_fork=%v; want true (real fork implemented this PR)", v)
+	}
+	if v, ok := features["session_watch"]; !ok || v != true {
+		t.Errorf("features.session_watch=%v; want true (since_ts polling implemented this PR)", v)
 	}
 }
 
@@ -674,10 +678,14 @@ func TestDiscoveredSessionsEndpointOK(t *testing.T) {
 	}
 }
 
-// TestAdoptSessionForkReturns409 asserts that mode=fork returns 409
-// fork_unsupported when session_fork=false.
-func TestAdoptSessionForkReturns409(t *testing.T) {
+// TestAdoptSessionForkSucceeds verifies that mode=fork returns 200 with the
+// correct envelope. When no CWD is provided (no git repo to create a worktree
+// from), the broker falls back to plain cwd isolation but still succeeds —
+// the non-mutation guarantee for the original session holds because no CWD was
+// provided and the fork only creates a new broker session.
+func TestAdoptSessionForkSucceeds(t *testing.T) {
 	srv, tok := newTestServer(t)
+	// No cwd: fork falls back to a fresh broker session with no worktree.
 	body := strings.NewReader(`{"agent":"claude","external_id":"some-uuid","mode":"fork"}`)
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/sessions/adopt?token="+url.QueryEscape(tok), body)
 	req.Header.Set("Content-Type", "application/json")
@@ -686,14 +694,39 @@ func TestAdoptSessionForkReturns409(t *testing.T) {
 		t.Fatalf("POST adopt: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("status=%d want 409", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	var env map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&env)
+	if env["session_id"] == "" || env["session_id"] == nil {
+		t.Error("response missing session_id")
+	}
+	if m, _ := env["mode"].(string); m != "fork" {
+		t.Errorf("mode=%q want fork", m)
+	}
+}
+
+// TestAdoptSessionForkInvalidCWD verifies that mode=fork with an invalid
+// (non-absolute) cwd returns 400 invalid_cwd, not a panic or 500.
+func TestAdoptSessionForkInvalidCWD(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := strings.NewReader(`{"agent":"claude","external_id":"some-uuid","cwd":"relative/path","mode":"fork"}`)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/sessions/adopt?token="+url.QueryEscape(tok), body)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST adopt: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
 	}
 	var env map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&env)
 	errObj, _ := env["error"].(map[string]any)
-	if code, _ := errObj["code"].(string); code != "fork_unsupported" {
-		t.Errorf("error.code=%q want fork_unsupported", code)
+	if code, _ := errObj["code"].(string); code != "invalid_cwd" {
+		t.Errorf("error.code=%q want invalid_cwd", code)
 	}
 }
 

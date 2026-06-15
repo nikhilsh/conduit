@@ -118,6 +118,12 @@ type spawnRequest struct {
 	continueLatestChat bool
 	// resumeCodexThreadID seeds codex's thread/resume. "" = new thread.
 	resumeCodexThreadID string
+	// forkChatSessionID, when non-empty, resumes AND forks the named claude
+	// conversation via --resume <id> --fork-session, branching into a NEW
+	// claude session id. The original is left untouched. For codex, there is
+	// no wire-level fork; the codex backend falls back to plain resume
+	// (resumeCodexThreadID) into the new worktree for isolation.
+	forkChatSessionID string
 }
 
 // spawnResult is what a backend hands back: the live chatBackend and an
