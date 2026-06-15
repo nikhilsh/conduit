@@ -98,6 +98,22 @@ func runUp(args []string) int {
 	credentialsDir := fs.String("credentials-dir", defaultCredentialsDir(), "directory for per-identity OAuth credential blobs (docs/PLAN-AGENT-OAUTH.md); empty disables per-user OAuth materialization")
 	_ = fs.Parse(args)
 
+	// `--local` (no explicit --addr) means "expose me on the LAN so a
+	// phone on the same network can reach me". The secure loopback default
+	// would otherwise advertise a LAN URL the box can't actually serve, so
+	// bind all interfaces in that case. An explicit --addr always wins.
+	addrSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "addr" {
+			addrSet = true
+		}
+	})
+	if *local && !addrSet {
+		if port, err := parsePort(*addr); err == nil {
+			*addr = fmt.Sprintf("0.0.0.0:%d", port)
+		}
+	}
+
 	// Security: a non-loopback listen address means the broker is
 	// reachable from the network, where the bearer token is the ONLY
 	// access control. Warn loudly so an operator who didn't intend a
@@ -266,24 +282,26 @@ func runUp(args []string) int {
 	var mdnsShutdown func()
 	if *local {
 		port, err := parsePort(*addr)
+		lanIP := firstLANIPv4()
 		switch {
 		case err != nil:
 			log.Printf("--local: cannot parse port from %q: %v (skipping mDNS)", *addr, err)
-		case isPublicBind(*addr):
+		case !isPrivateIPv4(lanIP):
 			// The mDNS TXT record carries the bearer token so a phone on
-			// the same LAN can auto-pair. That is only safe on a trusted
-			// (private/loopback) bind — broadcasting the token while the
-			// broker is also reachable on a public interface would let a
-			// hostile same-segment neighbor (e.g. a datacenter co-tenant)
-			// read it and then connect over the public IP. Refuse to shout
-			// the token in that posture; the operator pairs via QR instead.
-			log.Printf("--local with a PUBLIC bind %q: NOT advertising over mDNS (would broadcast the bearer token in cleartext); pair via the QR code / manual token entry", *addr)
+			// the same LAN can auto-pair with zero typing. That is only
+			// safe on a genuine private network: TXT records are cleartext
+			// to the whole segment. If the box has no RFC1918/link-local
+			// address (e.g. a public VPS whose only non-loopback IP is
+			// public), broadcasting the token would hand it to hostile
+			// same-segment neighbors (datacenter co-tenants). Refuse —
+			// pair via QR / manual token entry instead.
+			log.Printf("--local: no private LAN address (found %q) — NOT advertising the bearer token over mDNS; pair via the QR code / manual token entry. Running --local on a public/internet-facing box is unsupported.", lanIP)
 		default:
 			shutdown, err := discovery.Advertise(port, token)
 			if err != nil {
 				log.Printf("--local: mDNS advertise failed: %v", err)
 			} else {
-				log.Printf("--local: advertising %s on %s.local:%d", discovery.ServiceType, hostname(), port)
+				log.Printf("--local: advertising %s on %s.local:%d (private LAN %s)", discovery.ServiceType, hostname(), port, lanIP)
 				mdnsShutdown = shutdown
 			}
 		}
@@ -442,6 +460,18 @@ func isPublicBind(addr string) bool {
 		return true
 	}
 	return !ip.IsLoopback()
+}
+
+// isPrivateIPv4 reports whether `s` parses to a private/trusted LAN IPv4
+// address (RFC1918 10/8, 172.16/12, 192.168/16, or 169.254 link-local).
+// Used to decide whether broadcasting the bearer token over mDNS is safe:
+// only on a genuine private network, never on a public/datacenter wire.
+func isPrivateIPv4(s string) bool {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 // redactToken returns a non-reversible fingerprint of a bearer token

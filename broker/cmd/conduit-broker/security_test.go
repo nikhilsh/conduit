@@ -30,6 +30,29 @@ func TestIsPublicBind(t *testing.T) {
 	}
 }
 
+func TestIsPrivateIPv4(t *testing.T) {
+	// Gates whether the bearer token is broadcast over mDNS: true only on
+	// a genuine private LAN, never on a public/datacenter address.
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"192.168.1.10", true},
+		{"10.0.0.5", true},
+		{"172.16.4.2", true},
+		{"169.254.10.1", true}, // link-local
+		{"203.0.113.5", false}, // public
+		{"8.8.8.8", false},     // public
+		{"", false},            // no LAN address (e.g. VPS w/ only public IP)
+		{"garbage", false},
+	}
+	for _, c := range cases {
+		if got := isPrivateIPv4(c.ip); got != c.want {
+			t.Errorf("isPrivateIPv4(%q) = %v, want %v", c.ip, got, c.want)
+		}
+	}
+}
+
 func TestRedactToken(t *testing.T) {
 	// A real minted token is 43 chars; the fingerprint must not contain
 	// the full secret but must reveal the prefix + length.
