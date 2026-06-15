@@ -304,4 +304,56 @@ struct ConduitFoundSessionsModelTests {
         let snap = makeSnap(sessions: [makeSession(id: "s1"), makeSession(id: "s2")])
         #expect(snap.recentCount == 2)
     }
+
+    // MARK: - Watch-gating (Flow B)
+    //
+    // The Watch action is gated at the View layer on features?.sessionWatch.
+    // At the model layer the invariant is: only RUNNING rows are eligible
+    // for the Watch action. IDLE and ADOPTED rows must never show Watch.
+
+    @Test func onlyRunningRowIsEligibleForWatch() {
+        // Running session -> .running state; Watch is eligible
+        let snap = makeSnap(sessions: [makeSession(id: "s1", isRunning: true)])
+        let rows = ConduitUI.FoundSessionsModel.rows(snap)
+        #expect(rows.count == 1)
+        #expect(rows[0].state == .running)
+    }
+
+    @Test func idleRowIsNotEligibleForWatch() {
+        // IDLE session -> Watch must NOT be shown (checked at View layer)
+        let snap = makeSnap(sessions: [makeSession(id: "s1", isRunning: false)])
+        let rows = ConduitUI.FoundSessionsModel.rows(snap)
+        #expect(rows.count == 1)
+        #expect(rows[0].state == .idle)
+        // Invariant: Watch only offered when state == .running
+        #expect(rows[0].state != .running)
+    }
+
+    @Test func adoptedRowIsNotEligibleForWatch() {
+        // ADOPTED session -> Watch must NOT be shown
+        let snap = makeSnap(
+            sessions: [makeSession(id: "s1", isRunning: true)],
+            adoptedIDs: ["s1"]
+        )
+        let rows = ConduitUI.FoundSessionsModel.rows(snap)
+        #expect(rows.count == 1)
+        #expect(rows[0].state == .adopted)
+        #expect(rows[0].state != .running)
+    }
+
+    @Test func watchEligibilityPreservedAfterSearch() {
+        // Search should not change the state; a running session filtered in
+        // via search is still .running and thus Watch-eligible.
+        let snap = makeSnap(
+            sessions: [
+                makeSession(id: "s1", title: "Migrate payments API", isRunning: true),
+                makeSession(id: "s2", title: "Fix auth flow", isRunning: false),
+            ],
+            query: "migrate"
+        )
+        let rows = ConduitUI.FoundSessionsModel.rows(snap)
+        #expect(rows.count == 1)
+        #expect(rows[0].externalID == "s1")
+        #expect(rows[0].state == .running)
+    }
 }

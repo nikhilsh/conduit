@@ -27,6 +27,7 @@ extension ConduitUI {
         @State private var selectedForBranch: FoundSessionRow?
         @State private var selectedForView: FoundSessionRow?
         @State private var selectedForResume: FoundSessionRow?
+        @State private var selectedForWatch: FoundSessionRow?
         @State private var errorState: FoundSessionsErrorKind?
 
         // Overflow
@@ -101,6 +102,17 @@ extension ConduitUI {
                         errorState = nil
                     },
                     onDismiss: { errorState = nil }
+                )
+            }
+            .sheet(item: $selectedForWatch) { row in
+                FoundWatchView(
+                    server: server,
+                    row: row,
+                    features: features,
+                    onBranch: { r in
+                        selectedForWatch = nil
+                        selectedForBranch = r
+                    }
                 )
             }
             .overlay(undoOverlay, alignment: .bottom)
@@ -308,6 +320,13 @@ extension ConduitUI {
                                 selectedForBranch = row
                                 Telemetry.breadcrumb("found_sessions", "branch tapped",
                                     data: ["id": row.externalID])
+                            }
+                            if features?.sessionWatch == true {
+                                actionButton("Watch", systemImage: "eye.circle", tint: neon.accent) {
+                                    selectedForWatch = row
+                                    Telemetry.breadcrumb("found_sessions", "watch tapped",
+                                        data: ["id": row.externalID])
+                                }
                             }
                             actionButton("View", systemImage: "eye", tint: neon.textDim) {
                                 selectedForView = row
