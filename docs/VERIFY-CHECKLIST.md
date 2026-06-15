@@ -9,6 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.161
+
+**Found Sessions — Branch (fork) enabled + Flow B "Watch live".** Broker fork+watch PR #606, iOS Watch UI #608, Android Watch UI #607. Broker REDEPLOYED (v0.0.161 binary: `session_discovery`+`session_fork`+`session_watch` all live, token unchanged, since_ts endpoint verified). NOTE: because Branch un-gates on the live broker capability, **Branch already works on v0.0.160 too** now that the broker is redeployed — but the Watch live UI is new in v0.0.161.
+
+- **1 · Branch a copy (fork) now works** — on a RUNNING found session, "Branch a copy" forks the conversation from its latest saved point onto a NEW git worktree (branch `conduit/fork-<short>`) and opens it as a Conduit session; the terminal session keeps running, untouched. Verify: on a running hand-started session, Branch a copy → a new Conduit chat opens with the prior context on a fresh worktree; your terminal session is unaffected; nothing on the box is mutated. (Claude uses `--fork-session`; Codex uses thread fork / resume-into-new-worktree.) [iOS+Android, on-device — needs a running hand-started session in a git repo]
+- **2 · Watch live (Flow B) — read-only tail of a running session** — a RUNNING row now offers "Watch live": a read-only mirror that tails the session's transcript (polls the broker every ~2.5s for new turns), with a persistent "You're watching — not driving" banner and a single live pulse dot. You are NEVER driving it. Verify: Watch live on a running session → new turns from the terminal session appear within a few seconds; the banner + pulse are present; there is no composer/input. [iOS+Android, on-device]
+- **3 · Branch from watch** — the Watch screen's only CTA is "Branch a copy to take control" → the Branch flow (#1). Verify: from Watch live, tap Branch a copy → it forks into a drivable Conduit copy; the watched terminal session is untouched. [iOS+Android, on-device]
+- **4 · Watch failure/edge states** — stream stalls / box drops → "stream paused — reconnecting" (last frames kept, keeps retrying, Branch still offered); the watched session ending → "session ended" with View full transcript + Branch from last point. Reduced-motion → the pulse is static. Verify: background the box / kill the watched session mid-watch → the correct paused/ended state appears, never a hang. [iOS+Android, on-device]
+
+---
+
 ## v0.0.160
 
 **Found Sessions** — discover + resume agent sessions started OUTSIDE Conduit (by hand in a terminal). Broker PR #602, iOS #603, Android #604. Per the SWE-Kitty-3 design handoff (Direction A · Calm/Contextual). Broker REDEPLOYED to the dev box (v0.0.160, `session_discovery` live, smoke-tested against 238 real sessions; token unchanged, no re-pair). Fork ships GATED (`session_fork:false`) — Branch CTA shows its unavailable state for now (real fork lands next). Whole feature capability-gated, ships dark on boxes without the broker support.
