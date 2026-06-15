@@ -124,7 +124,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          gh release upload "${RELEASE_TAG}" sums/SHA256SUMS --clobber
+          gh release upload "${RELEASE_TAG}" -R "$GITHUB_REPOSITORY" sums/SHA256SUMS --clobber
 
   upload-installer:
     name: upload install.sh
