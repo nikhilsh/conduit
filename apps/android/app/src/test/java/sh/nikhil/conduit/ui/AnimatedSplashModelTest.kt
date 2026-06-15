@@ -9,7 +9,7 @@ import sh.nikhil.conduit.HarnessState
 /**
  * Android mirror of the iOS `AnimatedSplashModelTests` from PR #45.
  *
- * Pure JUnit — the model has zero Android / Compose dependencies, so we
+ * Pure JUnit -- the model has zero Android / Compose dependencies, so we
  * don't pay for Robolectric here. We defend two things:
  *
  *   1. Timing constants stay in sync with the iOS reference
@@ -30,8 +30,8 @@ class AnimatedSplashModelTest {
     @Test
     fun pulsePeriodMatchesIosReference() {
         // iOS: `AnimatedSplashModel.pulsePeriod = 0.6` (seconds).
-        // Half-cycle: 1.0 → 1.05. Auto-reversing, so the full beat is
-        // 2 × this = 1.2s, which is also what the audit prescribes.
+        // Half-cycle: 1.0 -> 1.05. Auto-reversing, so the full beat is
+        // 2 x this = 1.2s, which is also what the audit prescribes.
         assertEquals(600L, AnimatedSplashModel.pulsePeriodMillis)
     }
 
@@ -50,6 +50,16 @@ class AnimatedSplashModelTest {
     }
 
     @Test
+    fun freshInstallTimeoutIsShorterThanHardTimeout() {
+        // Fresh-install path (no saved servers): the harness will never
+        // reach a decisive state, so we use a short timeout so onboarding
+        // is not delayed. Must be strictly less than hardTimeoutMillis
+        // and long enough for the brand mark to register (~550ms).
+        assertEquals(550L, AnimatedSplashModel.freshInstallTimeoutMillis)
+        assertTrue(AnimatedSplashModel.freshInstallTimeoutMillis < AnimatedSplashModel.hardTimeoutMillis)
+    }
+
+    @Test
     fun pulseScaleMatchesIosReference() {
         // iOS: `AnimatedSplashModel.pulseScale = 1.05`.
         assertEquals(1.05f, AnimatedSplashModel.pulseScale, 0.0001f)
@@ -57,7 +67,7 @@ class AnimatedSplashModelTest {
 
     @Test
     fun wordmarkAndCaptionMatchIosCopy() {
-        // Two clients, same brand surface — the wordmark is the lower-
+        // Two clients, same brand surface -- the wordmark is the lower-
         // case kebab repo name, the caption is the single soft string
         // (no spinner) chosen in the audit.
         assertEquals(">conduit", AnimatedSplashModel.wordmark)
@@ -68,7 +78,7 @@ class AnimatedSplashModelTest {
 
     @Test
     fun disconnectedHoldsTheSplash() {
-        // No signal yet — hold. The splash is also the cold-start
+        // No signal yet -- hold. The splash is also the cold-start
         // affordance, so dismissing on Disconnected would defeat the
         // point.
         assertFalse(AnimatedSplashModel.shouldDismiss(HarnessState.Disconnected))
@@ -76,26 +86,26 @@ class AnimatedSplashModelTest {
 
     @Test
     fun connectingHoldsTheSplash() {
-        // Handshake in flight — still hold. We want to dismiss on the
+        // Handshake in flight -- still hold. We want to dismiss on the
         // *outcome*, not on the in-flight attempt.
         assertFalse(AnimatedSplashModel.shouldDismiss(HarnessState.Connecting))
     }
 
     @Test
     fun linkedDismisses() {
-        // Handshake done — drop the splash so the real UI is visible.
+        // Handshake done -- drop the splash so the real UI is visible.
         assertTrue(AnimatedSplashModel.shouldDismiss(HarnessState.Linked))
     }
 
     @Test
     fun liveDismisses() {
-        // At least one round-trip succeeded — definitely dismiss.
+        // At least one round-trip succeeded -- definitely dismiss.
         assertTrue(AnimatedSplashModel.shouldDismiss(HarnessState.Live))
     }
 
     @Test
     fun reconnectingDismisses() {
-        // Transient drop with the Rust core auto-retrying — the user
+        // Transient drop with the Rust core auto-retrying -- the user
         // already saw the real UI on a prior connect, so dismissing on
         // re-launch + Reconnecting is the right call.
         assertTrue(
@@ -107,7 +117,7 @@ class AnimatedSplashModelTest {
 
     @Test
     fun failedDismisses() {
-        // Broker is unreachable — drop the splash onto RootView, which
+        // Broker is unreachable -- drop the splash onto RootView, which
         // owns its own offline empty-state. Holding the splash for the
         // full 1.5s here would just delay the inevitable.
         assertTrue(
