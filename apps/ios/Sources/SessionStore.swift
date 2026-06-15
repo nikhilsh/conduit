@@ -964,6 +964,13 @@ final class SessionStore {
         didSet { SessionStore.persistPendingChats(pendingChats) }
     }
 
+    /// Per-box set of found-session IDs the user has hidden via the overflow
+    /// menu. Persisted so hidden sessions stay hidden across launches.
+    /// Keyed by SavedServer.id; value is the set of `external_id` strings.
+    var hiddenFoundSessions: [String: Set<String>] = SessionStore.loadHiddenFoundSessions() {
+        didSet { SessionStore.persistHiddenFoundSessions(hiddenFoundSessions) }
+    }
+
     private var client: ConduitClient?
     private var delegate: StoreDelegate?
 
@@ -1692,6 +1699,13 @@ final class SessionStore {
     struct BoxFeatures {
         var hostMetrics: Bool
         var shellSessions: Bool
+        /// Broker advertises `session_discovery` — enumerate sessions started
+        /// outside Conduit. Default false so the feature ships dark on older
+        /// brokers (mirrors the host_metrics / shell_sessions pattern).
+        var sessionDiscovery: Bool
+        /// Broker advertises `session_fork` — fork a session onto a new worktree.
+        /// Kept separate so discovery can ship before fork is ready.
+        var sessionFork: Bool
     }
 
     /// Per-assistant model catalogs discovered by the broker live from the
@@ -1868,9 +1882,13 @@ final class SessionStore {
             struct Features: Decodable {
                 let hostMetrics: Bool?
                 let shellSessions: Bool?
+                let sessionDiscovery: Bool?
+                let sessionFork: Bool?
                 enum CodingKeys: String, CodingKey {
                     case hostMetrics = "host_metrics"
                     case shellSessions = "shell_sessions"
+                    case sessionDiscovery = "session_discovery"
+                    case sessionFork = "session_fork"
                 }
             }
             let features: Features?
@@ -1883,7 +1901,9 @@ final class SessionStore {
         }
         return BoxFeatures(
             hostMetrics: caps.features?.hostMetrics ?? false,
-            shellSessions: caps.features?.shellSessions ?? false
+            shellSessions: caps.features?.shellSessions ?? false,
+            sessionDiscovery: caps.features?.sessionDiscovery ?? false,
+            sessionFork: caps.features?.sessionFork ?? false
         )
     }
 
@@ -1903,6 +1923,234 @@ final class SessionStore {
             "disk": String(format: "%.0f", metrics.diskPct),
         ])
         return metrics
+    }
+
+    // MARK: - Found Sessions (session_discovery capability)
+
+    /// A session found on the box that was NOT started by Conduit.
+    struct FoundSession: Identifiable, Equatable {
+        let id: String          // == externalID, used as Identifiable.id
+        let externalID: String
+        let agent: String
+        let title: String
+        let cwd: String
+        let gitBranch: String?
+        let turnCount: Int
+        let lastActivityAt: Date
+        var isRunning: Bool
+    }
+
+    /// Fetch paged discovered sessions from `GET /api/sessions/discovered`.
+    /// Returns nil on any failure (box offline, capability absent).
+    func fetchDiscoveredSessions(
+        endpoint: StoredEndpoint,
+        q: String = "",
+        agent: String = "",
+        cursor: String = ""
+    ) async -> (sessions: [FoundSession], nextCursor: String, totalOnDisk: Int)? {
+        struct Item: Decodable {
+            let agent: String
+            let external_id: String
+            let title: String
+            let cwd: String
+            let git_branch: String?
+            let turn_count: Int
+            let last_activity_at: Int64
+            let is_running: Bool
+        }
+        struct Response: Decodable {
+            let sessions: [Item]
+            let next_cursor: String
+            let total_on_disk: Int
+        }
+
+        var comps = URLComponents()
+        comps.queryItems = []
+        if !q.isEmpty { comps.queryItems?.append(URLQueryItem(name: "q", value: q)) }
+        if !agent.isEmpty { comps.queryItems?.append(URLQueryItem(name: "agent", value: agent)) }
+        if !cursor.isEmpty { comps.queryItems?.append(URLQueryItem(name: "cursor", value: cursor)) }
+        let query = comps.query.map { "?\($0)" } ?? ""
+
+        Telemetry.breadcrumb("found_sessions", "discover start",
+            data: ["host": endpoint.displayHost, "q": q])
+        guard let data = await getJSON(endpoint: endpoint, path: "/api/sessions/discovered\(query)"),
+              let resp = try? JSONDecoder().decode(Response.self, from: data)
+        else {
+            Telemetry.breadcrumb("found_sessions", "discover failed",
+                data: ["host": endpoint.displayHost])
+            return nil
+        }
+        let sessions = resp.sessions.map { item in
+            FoundSession(
+                id: item.external_id,
+                externalID: item.external_id,
+                agent: item.agent,
+                title: item.title,
+                cwd: item.cwd,
+                gitBranch: item.git_branch,
+                turnCount: item.turn_count,
+                lastActivityAt: Date(timeIntervalSince1970: Double(item.last_activity_at) / 1000.0),
+                isRunning: item.is_running
+            )
+        }
+        Telemetry.breadcrumb("found_sessions", "discover loaded",
+            data: ["host": endpoint.displayHost, "count": "\(sessions.count)",
+                   "total": "\(resp.total_on_disk)"])
+        return (sessions: sessions, nextCursor: resp.next_cursor, totalOnDisk: resp.total_on_disk)
+    }
+
+    /// Fetch read-only transcript for a found session via
+    /// `GET /api/sessions/discovered/transcript`. Returns nil on failure.
+    func fetchDiscoveredTranscript(
+        endpoint: StoredEndpoint,
+        agent: String,
+        externalID: String
+    ) async -> [ConversationItem]? {
+        struct Entry: Decodable {
+            let role: String
+            let content: String
+            let ts: String?
+        }
+        struct Response: Decodable {
+            let items: [Entry]
+        }
+
+        let path = "/api/sessions/discovered/transcript?agent=\(agent)&external_id=\(externalID)"
+        Telemetry.breadcrumb("found_sessions", "transcript fetch",
+            data: ["agent": agent, "id": externalID])
+        guard let data = await getJSON(endpoint: endpoint, path: path),
+              let resp = try? JSONDecoder().decode(Response.self, from: data)
+        else {
+            Telemetry.breadcrumb("found_sessions", "transcript failed",
+                data: ["agent": agent, "id": externalID])
+            return nil
+        }
+        let items = resp.items.enumerated().map { (idx, entry) in
+            let role = entry.role.lowercased()
+            let kind = role == "tool" ? "tool" : "message"
+            return ConversationItem(
+                id: "found-\(externalID)-\(idx)",
+                role: role,
+                kind: kind,
+                status: "done",
+                content: entry.content,
+                ts: entry.ts ?? "",
+                files: [],
+                toolName: nil,
+                command: nil,
+                exitCode: nil,
+                durationMs: nil,
+                diffSummary: nil,
+                pendingOptions: [],
+                sourceAgent: nil,
+                targetAgent: nil,
+                taskText: nil,
+                resultSummary: nil,
+                planSteps: []
+            )
+        }
+        Telemetry.breadcrumb("found_sessions", "transcript loaded",
+            data: ["count": "\(items.count)", "id": externalID])
+        return items
+    }
+
+    /// Adopt a found session (resume or fork) via `POST /api/sessions/adopt`.
+    /// On success, opens the new session via the normal selectedSessionID path.
+    /// Returns the new session_id on success, nil on failure.
+    @discardableResult
+    func adoptFound(
+        endpoint: StoredEndpoint,
+        agent: String,
+        externalID: String,
+        cwd: String,
+        mode: String  // "resume" or "fork"
+    ) async -> String? {
+        guard let base = endpoint.httpBaseURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/sessions/adopt"
+        guard let url = components?.url else { return nil }
+
+        let body: [String: Any] = [
+            "agent": agent,
+            "external_id": externalID,
+            "cwd": cwd,
+            "mode": mode,
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = bodyData
+
+        Telemetry.breadcrumb("found_sessions", "adopt start",
+            data: ["agent": agent, "id": externalID, "mode": mode])
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse
+        else {
+            Telemetry.breadcrumb("found_sessions", "adopt network error",
+                data: ["agent": agent, "id": externalID, "mode": mode])
+            return nil
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            Telemetry.breadcrumb("found_sessions", "adopt non-2xx",
+                data: ["agent": agent, "id": externalID, "mode": mode,
+                       "status": "\(http.statusCode)"])
+            return nil
+        }
+        struct AdoptResponse: Decodable {
+            let session_id: String
+        }
+        guard let adoptResp = try? JSONDecoder().decode(AdoptResponse.self, from: data) else {
+            Telemetry.breadcrumb("found_sessions", "adopt decode error",
+                data: ["agent": agent, "id": externalID])
+            return nil
+        }
+        let newSessionID = adoptResp.session_id
+        Telemetry.breadcrumb("found_sessions", "adopt success",
+            data: ["agent": agent, "id": externalID, "mode": mode,
+                   "new_session_id": newSessionID])
+        // Open the new session via the store's normal selected-session path.
+        DispatchQueue.main.async { [weak self] in
+            self?.selectedSessionID = newSessionID
+        }
+        return newSessionID
+    }
+
+    /// Persist a found session as hidden for a given box.
+    func hide(foundSessionID: String, onBox boxID: String) {
+        var current = hiddenFoundSessions[boxID] ?? []
+        current.insert(foundSessionID)
+        hiddenFoundSessions[boxID] = current
+        Telemetry.breadcrumb("found_sessions", "hide",
+            data: ["id": foundSessionID, "box": boxID])
+    }
+
+    /// Unhide a previously hidden found session.
+    func unhide(foundSessionID: String, onBox boxID: String) {
+        hiddenFoundSessions[boxID]?.remove(foundSessionID)
+        Telemetry.breadcrumb("found_sessions", "unhide",
+            data: ["id": foundSessionID, "box": boxID])
+    }
+
+    // MARK: - HiddenFoundSessions persistence
+
+    private static let hiddenFoundSessionsKey = "conduit.foundSessions.hidden"
+
+    static func loadHiddenFoundSessions() -> [String: Set<String>] {
+        guard let raw = UserDefaults.standard.data(forKey: hiddenFoundSessionsKey),
+              let decoded = try? JSONDecoder().decode([String: [String]].self, from: raw)
+        else { return [:] }
+        return decoded.mapValues { Set($0) }
+    }
+
+    static func persistHiddenFoundSessions(_ map: [String: Set<String>]) {
+        let serializable = map.mapValues { Array($0) }
+        if let data = try? JSONEncoder().encode(serializable) {
+            UserDefaults.standard.set(data, forKey: hiddenFoundSessionsKey)
+        }
     }
 
     /// Shared authed-GET against an arbitrary stored endpoint — the
