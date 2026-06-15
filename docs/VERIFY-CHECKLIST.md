@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.159
+
+App polish round: fresh-install launch sequencing, archived-session status, and full-swipe gestures. iOS PRs #597 (launch) + #599 (archive/swipe), Android PRs #598 (launch) + #600 (archive). App-only — no broker change, CI-compile-only → on-device verification.
+
+- **1 · Fresh-install launch is clean (splash → onboarding, no Settings flash)** — on a brand-new install the launch used to flash onboarding, then the splash for ~1.5s, then land on Settings. Three fixes: Home no longer auto-opens Settings when the device is unpaired (onboarding owns first-run); the onboarding cover now presents only AFTER the splash finishes (it was rendering above the splash); and the splash dismisses quickly (~0.55s) on a fresh install instead of holding the full 1.5s (nothing to connect to). Verify on a FRESH install (delete + reinstall): you see a brief splash → the onboarding wizard, with no onboarding flash-before-splash and no Settings page popping up. Returning/paired launches unchanged. [iOS+Android, on-device]
+- **2 · Archived sessions show "Ended", not "Running"** — archiving a session ends it on the broker (process killed) but the History row kept its last `live` status and rendered "running". The row is now marked exited on archive, so History shows "Ended". (Archive remains end + read-only transcript by design; resume stays a separate effort.) Verify: archive an active session → open History → its chip reads Ended/closed, never Running. [iOS+Android, on-device]
+- **3 · Full-swipe commits swipe actions (iOS)** — swiping a cell only revealed the button; you couldn't drag all the way to commit. Full-swipe is now enabled on the destructive lists: History (full-swipe = Delete, still confirms — it's permanent), Home (full-swipe = Archive), and Settings → Boxes (full-swipe = Forget box). Non-destructive swipes (e.g. Rename) are unchanged. Verify: drag a History/Home/Box cell fully across → the primary action triggers without tapping the button. (Android keeps its long-press-to-confirm pattern — no swipe there.) [iOS, on-device]
+
+---
+
 ## v0.0.158
 
 SSH add-box flow fix + marketing-site screenshot refresh. iOS PR #595, Android PR #594 (SSH flow), website PR #593 (real app screenshots, already live at conduit.kaopeh.com). App changes are CI-compile-only — need on-device verification.
