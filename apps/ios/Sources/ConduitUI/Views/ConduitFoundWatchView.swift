@@ -224,7 +224,7 @@ extension ConduitUI {
                         .frame(maxWidth: .infinity)
                     } else {
                         LazyVStack(spacing: 0) {
-                            ForEach(items) { item in
+                            ForEach(items, id: \.id) { item in
                                 WatchTranscriptRow(item: item, neon: neon)
                                     .id(item.id)
                             }
