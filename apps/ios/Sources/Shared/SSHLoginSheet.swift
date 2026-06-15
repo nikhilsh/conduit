@@ -14,6 +14,16 @@ struct SSHLoginSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.neonTheme) private var neon
 
+    /// Optional pre-fill from Settings Retry flow. Populated when retrying
+    /// a failed box; the secret is NOT pre-filled (user must re-enter it).
+    struct InitialValues {
+        var host: String = ""
+        var port: String = "22"
+        var username: String = "root"
+        var name: String = ""
+    }
+    var initialValues: InitialValues = .init()
+
     // Captured when the user taps Connect — used in the progress modal title.
     @State private var bootstrapBoxName: String = ""
 
@@ -70,12 +80,12 @@ struct SSHLoginSheet: View {
 
                 // Blocking install-progress modal — overlays the form while
                 // bootstrap runs so the user is never staring at a silent screen.
-                if store.sshBootstrapState != .idle {
+                if store.sshBootstrapState != .idle || store.pendingHostKey != nil {
                     installProgressOverlay
                         .zIndex(1)
                 }
             }
-            .animation(.easeInOut(duration: 0.2), value: store.sshBootstrapState != .idle)
+            .animation(.easeInOut(duration: 0.2), value: store.sshBootstrapState != .idle || store.pendingHostKey != nil)
             .navigationTitle("Add via SSH")
             .navigationBarTitleDisplayMode(.inline)
             .neonAccentTint()
@@ -106,11 +116,21 @@ struct SSHLoginSheet: View {
                 // Once the underlying ws connection succeeds, close out -- the
                 // bootstrap path already swapped the endpoint and called connect.
                 if case .running = store.sshBootstrapState { return }
+                // Do not dismiss while a host-key prompt is pending inline.
+                if store.pendingHostKey != nil { return }
                 if next.isReachable, case .idle = store.sshBootstrapState {
                     dismiss()
                 }
             }
         }
+        .onAppear {
+            store.sshLoginSheetActive = true
+            // Pre-fill from Retry flow if values were supplied.
+            if !initialValues.host.isEmpty { host = initialValues.host }
+            if initialValues.port != "22" || !initialValues.host.isEmpty { port = initialValues.port }
+            if !initialValues.username.isEmpty { username = initialValues.username }
+        }
+        .onDisappear { store.sshLoginSheetActive = false }
         .appearanceColorScheme()
     }
 
@@ -161,6 +181,11 @@ struct SSHLoginSheet: View {
                 }
             }
 
+            // Host-key TOFU prompt takes priority over the progress spinner.
+            // Shown inline in the sheet so the sheet is never dismissed.
+            if let prompt = store.pendingHostKey {
+                hostKeyVerifyCard(prompt)
+            } else {
             switch store.sshBootstrapState {
             case .idle:
                 EmptyView()
@@ -245,6 +270,7 @@ struct SSHLoginSheet: View {
                     }
                 }
             }
+            } // end else (no pendingHostKey)
         }
         .padding(20)
         .background(
@@ -256,6 +282,99 @@ struct SSHLoginSheet: View {
                 )
         )
         .shadow(color: .black.opacity(0.3), radius: 30, x: 0, y: 10)
+    }
+
+    /// Inline host-key TOFU card — shown inside the progress overlay when
+    /// the SSH handshake hits an unknown fingerprint. Calls the same
+    /// resolveHostKeyPrompt the root alert used, without dismissing the sheet.
+    @ViewBuilder
+    private func hostKeyVerifyCard(_ prompt: HostKeyPrompt) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock.trianglebadge.exclamationmark.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(neon.yellow)
+                Text("Verify server identity")
+                    .font(neon.mono(13).weight(.bold))
+                    .foregroundStyle(neon.text)
+            }
+
+            Text("First time connecting to this server. Verify its fingerprint out-of-band before trusting.")
+                .font(.footnote)
+                .foregroundStyle(neon.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("HOST")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(1.0)
+                    .foregroundStyle(neon.textFaint)
+                Text("\(prompt.host):\(prompt.port)")
+                    .font(neon.mono(12).weight(.semibold))
+                    .foregroundStyle(neon.text)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("SHA256 FINGERPRINT")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(1.0)
+                    .foregroundStyle(neon.textFaint)
+                Text(prompt.fingerprint)
+                    .font(neon.mono(11))
+                    .foregroundStyle(neon.textDim)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    Telemetry.breadcrumb("ssh_addbox", "host key trust tapped", data: [
+                        "host": prompt.host,
+                        "fp_prefix": String(prompt.fingerprint.prefix(16)),
+                    ])
+                    store.resolveHostKeyPrompt(accept: true)
+                } label: {
+                    Text("Trust & continue")
+                        .font(neon.mono(13).weight(.semibold))
+                        .foregroundStyle(neon.accentText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(neon.codex)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    Telemetry.breadcrumb("ssh_addbox", "host key cancel tapped", data: [
+                        "host": prompt.host,
+                    ])
+                    store.resolveHostKeyPrompt(accept: false)
+                } label: {
+                    Text("Cancel")
+                        .font(neon.mono(13).weight(.semibold))
+                        .foregroundStyle(neon.textDim)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(neon.surface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                        .strokeBorder(neon.border, lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onAppear {
+            Telemetry.breadcrumb("ssh_addbox", "host key verify card shown", data: [
+                "host": prompt.host,
+                "fp_prefix": String(prompt.fingerprint.prefix(16)),
+            ])
+        }
     }
 
     /// Stage labels in the order remote-bootstrap.sh emits them.

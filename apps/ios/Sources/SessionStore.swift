@@ -164,6 +164,13 @@ struct SshEndpointRef: Codable, Equatable {
     var username: String
 }
 
+/// Optional status field on a saved server. nil (absent in older persisted
+/// blobs) decodes as nil and is treated as .ready everywhere.
+enum SavedServerStatus: Codable, Equatable {
+    case ready
+    case failed(reason: String)
+}
+
 struct SavedServer: Codable, Equatable, Identifiable {
     var id: String
     var name: String
@@ -173,6 +180,9 @@ struct SavedServer: Codable, Equatable, Identifiable {
     /// nil for token-paired (conduit://) boxes. Populated by connectViaSSH so
     /// self-heal can rebuild SshCredentials without user input.
     var ssh: SshEndpointRef?
+    /// Bootstrap status. nil means .ready (backward-compatible: old blobs
+    /// that lack this field decode to nil and are treated as ready).
+    var status: SavedServerStatus?
 }
 
 struct RemoteDirectoryEntry: Codable, Equatable, Identifiable {
@@ -803,6 +813,11 @@ final class SessionStore {
     /// can see what went wrong from the main screen. Cleared when a new
     /// bootstrap attempt starts.
     var sshBootstrapError: String?
+
+    /// True while the SSH login / add-box sheet is presented. The root
+    /// TOFU alert in ConduitApp gates on this so the alert is not
+    /// presented over the sheet (which would dismiss the sheet).
+    var sshLoginSheetActive: Bool = false
 
     /// Per-session lifecycle. Sessions whose entry is `.creating` appear
     /// in the list as placeholders even before the server reports them.
@@ -2242,6 +2257,11 @@ final class SessionStore {
                     ? serverName!
                     : "\(user)@\(host)"
                 let sshRef = SshEndpointRef(host: host, port: port, username: user)
+                // Remove any failed-placeholder row for this SSH host that was
+                // persisted by a prior failed attempt (placeholder endpoint is
+                // "ssh-pending://host:port" and will never match the real endpoint).
+                let failedPlaceholderURL = "ssh-pending://\(host):\(port)"
+                self.savedServers.removeAll { $0.endpoint.url == failedPlaceholderURL }
                 self.endpoint = endpoint
                 self.upsertSavedServer(name: name, endpoint: endpoint, sshRef: sshRef, makeDefault: true)
                 // Unconditionally persist credentials so self-heal always has
@@ -2291,6 +2311,16 @@ final class SessionStore {
                 // Also persist the error outside the sheet so the user sees it
                 // even if they dismissed the SSH login sheet before it finished.
                 self.sshBootstrapError = detail
+                // Persist a failed SavedServer so the user can Retry from Settings.
+                let sshRef = SshEndpointRef(host: host, port: port, username: user)
+                self.upsertFailedServer(
+                    name: serverName?.isEmpty == false ? serverName! : "\(user)@\(host)",
+                    sshRef: sshRef,
+                    reason: detail
+                )
+                Telemetry.breadcrumb("ssh_addbox", "add failed — persisted to Settings", data: [
+                    "host": host, "user": user,
+                ])
                 Telemetry.capture(
                     error: err,
                     message: "iOS SSH bootstrap failed",
@@ -2301,6 +2331,16 @@ final class SessionStore {
                 let detail = String(describing: error)
                 self.sshBootstrapState = .failed(reason: detail)
                 self.sshBootstrapError = detail
+                // Persist a failed SavedServer so the user can Retry from Settings.
+                let sshRef = SshEndpointRef(host: host, port: port, username: user)
+                self.upsertFailedServer(
+                    name: serverName?.isEmpty == false ? serverName! : "\(user)@\(host)",
+                    sshRef: sshRef,
+                    reason: detail
+                )
+                Telemetry.breadcrumb("ssh_addbox", "add failed — persisted to Settings", data: [
+                    "host": host, "user": user,
+                ])
                 Telemetry.capture(
                     error: error,
                     message: "iOS SSH bootstrap failed",
@@ -2361,11 +2401,18 @@ final class SessionStore {
         sshBootstrapState = .idle
     }
 
-    func upsertSavedServer(name: String, endpoint: StoredEndpoint, sshRef: SshEndpointRef? = nil, makeDefault: Bool) {
+    func upsertSavedServer(
+        name: String,
+        endpoint: StoredEndpoint,
+        sshRef: SshEndpointRef? = nil,
+        makeDefault: Bool,
+        status: SavedServerStatus? = nil
+    ) {
         var next = savedServers
         if let idx = next.firstIndex(where: { $0.endpoint == endpoint }) {
             next[idx].name = name
             if let ref = sshRef { next[idx].ssh = ref }
+            next[idx].status = status
             if makeDefault {
                 for i in next.indices { next[i].isDefault = false }
                 next[idx].isDefault = true
@@ -2380,12 +2427,30 @@ final class SessionStore {
                     name: name.isEmpty ? endpoint.displayHost : name,
                     endpoint: endpoint,
                     isDefault: makeDefault || next.isEmpty,
-                    ssh: sshRef
+                    ssh: sshRef,
+                    status: status
                 )
             )
         }
         savedServers = next
         Self.persistSavedServers(next)
+    }
+
+    /// Persists a failed SSH add attempt so the box appears in Settings
+    /// with a Retry affordance. Uses a placeholder endpoint keyed by
+    /// host+port so the row is deduplicated correctly on multiple failures.
+    func upsertFailedServer(name: String, sshRef: SshEndpointRef, reason: String) {
+        // Use a stable fake endpoint keyed by the SSH host+port so repeated
+        // failures against the same host deduplicate to the same row.
+        let placeholderURL = "ssh-pending://\(sshRef.host):\(sshRef.port)"
+        let endpoint = StoredEndpoint(url: placeholderURL, token: "")
+        upsertSavedServer(
+            name: name,
+            endpoint: endpoint,
+            sshRef: sshRef,
+            makeDefault: false,
+            status: .failed(reason: reason)
+        )
     }
 
     func selectSavedServer(_ serverID: String, autoConnect: Bool) {

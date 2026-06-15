@@ -1268,6 +1268,8 @@ extension ConduitUI {
         @State private var renameText: String = ""
         // Async reachability probe for inactive boxes: nil=unknown, true=up, false=down.
         @State private var boxReachability: [String: Bool?] = [:]
+        // Server being retried -- opens SSHLoginSheet prefilled with saved SSH coords.
+        @State private var retrySSHServer: SavedServer? = nil
 
         var body: some View {
             ZStack {
@@ -1349,6 +1351,21 @@ extension ConduitUI {
             .sheet(isPresented: $showAddServer) {
                 ConduitUI.AddServerSheet()
             }
+            .sheet(item: $retrySSHServer) { server in
+                let iv: SSHLoginSheet.InitialValues = {
+                    if let ssh = server.ssh {
+                        return SSHLoginSheet.InitialValues(
+                            host: ssh.host,
+                            port: String(ssh.port),
+                            username: ssh.username,
+                            name: server.name
+                        )
+                    }
+                    return SSHLoginSheet.InitialValues()
+                }()
+                SSHLoginSheet(initialValues: iv)
+                    .environment(store)
+            }
             .alert(
                 "Rename box",
                 isPresented: Binding(
@@ -1403,6 +1420,49 @@ extension ConduitUI {
             // SSH/tunneled boxes can't be probed at rest (loopback endpoint) --
             // show a neutral hint instead of a misleading "offline".
             let isLoopback = isLoopbackEndpoint(server.endpoint)
+
+            // Failed boxes: show error inline + Retry button.
+            if case .some(.failed(let reason)) = server.status {
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(neon.red)
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(server.name)
+                            .font(neon.sans(14).weight(.semibold))
+                            .foregroundStyle(neon.text)
+                        Text(reason)
+                            .font(neon.mono(10))
+                            .foregroundStyle(neon.red.opacity(0.85))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        Telemetry.breadcrumb("ssh_addbox", "retry tapped", data: [
+                            "id": server.id, "name": server.name,
+                        ])
+                        retrySSHServer = server
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("Retry")
+                                .font(neon.mono(11).weight(.bold))
+                        }
+                        .foregroundStyle(neon.accentText)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule().fill(neon.codex)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
             let dotColor: Color = isActive ? neon.green : (probed == true ? neon.green : neon.textFaint)
             let statusText: String = isActive ? "connected"
                 : (probed == true ? "reachable"
@@ -1471,6 +1531,7 @@ extension ConduitUI {
             }
             .buttonStyle(.plain)
             .disabled(isActive)
+            } // end else (not .failed)
         }
 
         // MARK: - Reachability probe
