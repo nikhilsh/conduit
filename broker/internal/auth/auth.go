@@ -7,10 +7,17 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 )
+
+// minTokenLen is the floor for an adopted (caller-supplied) bearer token.
+// Minted tokens are 43 chars (32 random bytes, base64url). A floor of 24
+// keeps brute-forcing a network-reachable broker infeasible while still
+// accepting the long pre-allocated tokens the SSH-bootstrap path mints.
+const minTokenLen = 24
 
 type Store struct {
 	mu     sync.RWMutex
@@ -37,7 +44,14 @@ func (s *Store) Mint() string {
 // pre-allocate the bearer so it doesn't have to scrape it back out
 // of the harness's stdout. Empty / overly-short tokens are rejected.
 func (s *Store) Adopt(token string) bool {
-	if len(token) < 16 {
+	if len(token) < minTokenLen {
+		if len(token) > 0 {
+			// Security breadcrumb: a non-empty but too-short adopted
+			// token is almost always a misconfigured CONDUIT_TOKEN; warn
+			// so the operator notices instead of silently falling back to
+			// a freshly minted token (which forces a re-pair).
+			log.Printf("WARNING: rejected low-entropy CONDUIT_TOKEN (len=%d, min=%d); minting a fresh token instead", len(token), minTokenLen)
+		}
 		return false
 	}
 	s.mu.Lock()

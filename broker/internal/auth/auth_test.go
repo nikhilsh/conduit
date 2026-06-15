@@ -37,14 +37,19 @@ func TestAdoptHonoursCallerSuppliedToken(t *testing.T) {
 
 func TestAdoptRejectsShortTokens(t *testing.T) {
 	s := NewStore()
-	for _, tok := range []string{"", "x", "short", "012345678901234"} { // last is 15 chars
+	// All of these are under the 24-char floor (the last is 23 chars).
+	for _, tok := range []string{"", "x", "short", "0123456789012345", "01234567890123456789012"} {
 		if s.Adopt(tok) {
 			t.Fatalf("Adopt accepted too-short token: %q (len=%d)", tok, len(tok))
 		}
 	}
-	// Boundary: 16 chars exactly should be accepted.
-	if !s.Adopt("0123456789012345") {
-		t.Fatal("Adopt rejected a 16-char token; min was 16")
+	// Boundary: 24 chars exactly should be accepted.
+	twentyFour := "012345678901234567890123"
+	if len(twentyFour) != 24 {
+		t.Fatalf("test fixture not 24 chars: len=%d", len(twentyFour))
+	}
+	if !s.Adopt(twentyFour) {
+		t.Fatal("Adopt rejected a 24-char token; min is 24")
 	}
 }
 

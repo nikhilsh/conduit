@@ -161,3 +161,20 @@ func TestUploadFrameTruncated(t *testing.T) {
 		t.Fatal("expected truncation error, got nil")
 	}
 }
+
+// TestUploadFrameRejectsOversizedBody pins the OOM-DoS guard: a body
+// larger than maxUploadBytes is rejected with a clean error (never a
+// panic), while a body at the cap is accepted.
+func TestUploadFrameRejectsOversizedBody(t *testing.T) {
+	over := buildUploadPayload("sess", "big.bin", "application/octet-stream", make([]byte, maxUploadBytes+1))
+	if _, err := parseUploadFrame(over); err == nil {
+		t.Fatal("expected oversized-body rejection, got nil")
+	} else if !strings.Contains(err.Error(), "exceeds max size") {
+		t.Fatalf("unexpected error for oversized body: %v", err)
+	}
+
+	atCap := buildUploadPayload("sess", "ok.bin", "application/octet-stream", make([]byte, maxUploadBytes))
+	if _, err := parseUploadFrame(atCap); err != nil {
+		t.Fatalf("body exactly at cap should be accepted, got: %v", err)
+	}
+}

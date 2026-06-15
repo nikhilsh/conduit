@@ -276,58 +276,58 @@ func TestGoldenCodexTurnArgv(t *testing.T) {
 		// First turn, no override, no mode
 		{
 			name:    "first-turn-no-override",
-			wantStr: "codex exec --json --skip-git-repo-check -C /w msg",
+			wantStr: "codex exec --json --skip-git-repo-check -C /w -- msg",
 		},
 		// First turn, auto mode (unchanged — no sandbox flag)
 		{
 			name:    "first-turn-auto-mode",
 			mode:    "auto",
-			wantStr: "codex exec --json --skip-git-repo-check -C /w msg",
+			wantStr: "codex exec --json --skip-git-repo-check -C /w -- msg",
 		},
 		// First turn, plan mode → adds --sandbox read-only
 		{
 			name:    "first-turn-plan-mode",
 			mode:    "plan",
-			wantStr: "codex exec --json --skip-git-repo-check -C /w --sandbox read-only msg",
+			wantStr: "codex exec --json --skip-git-repo-check -C /w --sandbox read-only -- msg",
 		},
 		// First turn, effort override
 		{
 			name:    "first-turn-effort",
 			extra:   []string{"-c", "model_reasoning_effort=high"},
-			wantStr: "codex exec --json --skip-git-repo-check -C /w -c model_reasoning_effort=high msg",
+			wantStr: "codex exec --json --skip-git-repo-check -C /w -c model_reasoning_effort=high -- msg",
 		},
 		// First turn, effort + model
 		{
 			name:    "first-turn-effort-model",
 			extra:   []string{"-c", "model_reasoning_effort=medium", "--model", "gpt-5-codex"},
-			wantStr: "codex exec --json --skip-git-repo-check -C /w -c model_reasoning_effort=medium --model gpt-5-codex msg",
+			wantStr: "codex exec --json --skip-git-repo-check -C /w -c model_reasoning_effort=medium --model gpt-5-codex -- msg",
 		},
 		// First turn, plan + effort
 		{
 			name:    "first-turn-plan-effort",
 			extra:   []string{"-c", "model_reasoning_effort=low"},
 			mode:    "plan",
-			wantStr: "codex exec --json --skip-git-repo-check -C /w --sandbox read-only -c model_reasoning_effort=low msg",
+			wantStr: "codex exec --json --skip-git-repo-check -C /w --sandbox read-only -c model_reasoning_effort=low -- msg",
 		},
 		// Resume turn (threadID set) — NO -C, NO --sandbox
 		{
 			name:     "resume-no-override",
 			threadID: "t-abc",
-			wantStr:  "codex exec resume t-abc --json --skip-git-repo-check msg",
+			wantStr:  "codex exec resume t-abc --json --skip-git-repo-check -- msg",
 		},
 		// Resume with plan mode — sandbox flag must NOT appear (codex rejects it on resume)
 		{
 			name:     "resume-plan-no-sandbox",
 			threadID: "t-abc",
 			mode:     "plan",
-			wantStr:  "codex exec resume t-abc --json --skip-git-repo-check msg",
+			wantStr:  "codex exec resume t-abc --json --skip-git-repo-check -- msg",
 		},
 		// Resume with effort override
 		{
 			name:     "resume-effort",
 			threadID: "t-abc",
 			extra:    []string{"-c", "model_reasoning_effort=high"},
-			wantStr:  "codex exec resume t-abc --json --skip-git-repo-check -c model_reasoning_effort=high msg",
+			wantStr:  "codex exec resume t-abc --json --skip-git-repo-check -c model_reasoning_effort=high -- msg",
 		},
 	}
 	for _, r := range rows {

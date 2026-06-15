@@ -68,6 +68,15 @@ func parseUploadFrame(payload []byte) (uploadFrame, error) {
 		return f, err
 	}
 
+	// Reject an oversized file body before it is handed downstream. The
+	// connection-level SetReadLimit already bounds the whole frame, but a
+	// frame that is under the message limit can still carry a body larger
+	// than we want to persist; cap it explicitly and surface a clean
+	// error (the caller turns this into a tool-event, never a panic).
+	if len(r) > maxUploadBytes {
+		return f, errors.New("upload: file exceeds max size")
+	}
+
 	f.SessionID = string(sid)
 	f.Filename = string(name)
 	f.MIME = string(mime)

@@ -10,24 +10,32 @@ import (
 )
 
 func TestCodexTurnArgv(t *testing.T) {
+	// `--` precedes the message in every branch so a message that begins
+	// with '-' is parsed as the prompt positional, not a flag.
 	first := strings.Join(codexTurnArgv("codex", "/work", "", nil, "", "hi there"), " ")
-	if first != "codex exec --json --skip-git-repo-check -C /work hi there" {
+	if first != "codex exec --json --skip-git-repo-check -C /work -- hi there" {
 		t.Fatalf("first turn argv = %q", first)
 	}
 	resume := strings.Join(codexTurnArgv("codex", "/work", "t-9", nil, "", "more"), " ")
-	if resume != "codex exec resume t-9 --json --skip-git-repo-check more" {
+	if resume != "codex exec resume t-9 --json --skip-git-repo-check -- more" {
 		t.Fatalf("resume argv = %q", resume)
 	}
 	// With a reasoning-effort override the flags land between the
 	// subcommand and the message on both the first and resume turns.
 	override := SpawnOverride{ReasoningEffort: "high"}.extraArgsFor("codex")
 	withEffort := strings.Join(codexTurnArgv("codex", "/work", "", override, "", "go"), " ")
-	if withEffort != `codex exec --json --skip-git-repo-check -C /work -c model_reasoning_effort=high go` {
+	if withEffort != `codex exec --json --skip-git-repo-check -C /work -c model_reasoning_effort=high -- go` {
 		t.Fatalf("first turn argv with effort = %q", withEffort)
 	}
 	resumeEffort := strings.Join(codexTurnArgv("codex", "/work", "t-9", override, "", "go"), " ")
-	if resumeEffort != `codex exec resume t-9 --json --skip-git-repo-check -c model_reasoning_effort=high go` {
+	if resumeEffort != `codex exec resume t-9 --json --skip-git-repo-check -c model_reasoning_effort=high -- go` {
 		t.Fatalf("resume argv with effort = %q", resumeEffort)
+	}
+	// A dash-leading message must NOT be parsed as a flag: it lands after
+	// the `--` terminator.
+	dashMsg := codexTurnArgv("codex", "/work", "", nil, "", "--help me debug this")
+	if dashMsg[len(dashMsg)-2] != "--" || dashMsg[len(dashMsg)-1] != "--help me debug this" {
+		t.Fatalf("dash-leading message not terminated: %v", dashMsg)
 	}
 }
 
