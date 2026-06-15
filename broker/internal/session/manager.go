@@ -1570,12 +1570,25 @@ func (m *Manager) ReplayBaseDir() string {
 	return m.replayBaseDir
 }
 
+// ExternalResumeOptions seeds a new Conduit session from an external
+// (non-Conduit) Claude or Codex conversation so the agent backend resumes it.
+// Zero value = no external resume (ordinary new session).
+type ExternalResumeOptions struct {
+	Agent      string // "claude" | "codex"
+	ExternalID string // claude session uuid / codex thread id
+}
+
 type CreateOptions struct {
 	CWD string
 	// Override carries the optional reasoning-effort / model override
 	// applied when this session is created (fork-onto-different-model).
 	// Zero value = adapter defaults unchanged. Honored only on create.
 	Override SpawnOverride
+	// ExternalResume seeds the session from an external CLI conversation
+	// (Found Sessions adopt-resume path). Pre-seeds ClaudeChatSessionID or
+	// CodexThreadID so the backend resumes via --resume / thread/resume.
+	// Zero value = ordinary new session (no external resume).
+	ExternalResume ExternalResumeOptions
 }
 
 func NewManager(registry *agents.Registry) *Manager {
@@ -1892,6 +1905,20 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	// newSession — allocating after would mean the agent never sees $PORT and
 	// binds a framework default the broker can't predict).
 	previewPort := m.allocatePreviewPortLocked()
+	// Wire external resume IDs (Found Sessions adopt path). When
+	// ExternalResume is set, pre-seed the appropriate backend resume field so
+	// the agent launches with --resume / thread/resume pointing at the
+	// external conversation. Uses the same sessionOptions fields that the
+	// recovery path uses, so the backend picks it up identically.
+	var resumeChatID, resumeCodexID string
+	if er := opts.ExternalResume; er.ExternalID != "" {
+		switch er.Agent {
+		case "claude":
+			resumeChatID = er.ExternalID
+		case "codex":
+			resumeCodexID = er.ExternalID
+		}
+	}
 	s, err := newSession(id, adapter, sessionOptions{
 		repoRoot:            m.repoRoot,
 		conduitRoot:         m.conduitRoot,
@@ -1904,6 +1931,8 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		modelCatalog:        m.ModelCatalog,
 		codexBinary:         m.codexBinary,
 		credentialProviders: credentialProvidersFromRegistry(m.registry),
+		resumeChatSessionID: resumeChatID,
+		resumeCodexThreadID: resumeCodexID,
 	})
 	if err != nil {
 		return nil, false, err

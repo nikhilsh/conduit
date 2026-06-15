@@ -596,3 +596,148 @@ func TestSessionsEndpointRequiresAuth(t *testing.T) {
 		t.Fatalf("unauthenticated /api/sessions returned 200")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Found Sessions capability tests
+// ---------------------------------------------------------------------------
+
+// TestCapabilitiesIncludesSessionDiscovery asserts that /api/capabilities JSON
+// includes session_discovery=true and session_fork=false as per the contract.
+func TestCapabilitiesIncludesSessionDiscovery(t *testing.T) {
+	srv, tok := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/capabilities?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET capabilities: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	features, _ := body["features"].(map[string]any)
+	if features == nil {
+		t.Fatal("features key missing from capabilities response")
+	}
+	if v, ok := features["session_discovery"]; !ok || v != true {
+		t.Errorf("features.session_discovery=%v; want true", v)
+	}
+	if v, ok := features["session_fork"]; !ok || v != false {
+		t.Errorf("features.session_fork=%v; want false (not implemented this PR)", v)
+	}
+}
+
+// TestDiscoveredSessionsEndpointRequiresAuth ensures the discovered-sessions
+// list is not served without a valid token.
+func TestDiscoveredSessionsEndpointRequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/api/sessions/discovered")
+	if err != nil {
+		t.Fatalf("GET discovered sessions: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("unauthenticated /api/sessions/discovered returned 200")
+	}
+}
+
+// TestDiscoveredSessionsEndpointOK asserts the endpoint returns 200 with the
+// correct JSON envelope shape when authenticated, even when no external CLI
+// session dirs exist (absent dirs → empty sessions array).
+func TestDiscoveredSessionsEndpointOK(t *testing.T) {
+	// Override HOME to an empty temp dir so the claude/codex dirs are absent.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	srv, tok := newTestServer(t)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/sessions/discovered?token="+url.QueryEscape(tok), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET discovered sessions: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := body["sessions"]; !ok {
+		t.Error("response missing 'sessions' key")
+	}
+	if _, ok := body["total_on_disk"]; !ok {
+		t.Error("response missing 'total_on_disk' key")
+	}
+}
+
+// TestAdoptSessionForkReturns409 asserts that mode=fork returns 409
+// fork_unsupported when session_fork=false.
+func TestAdoptSessionForkReturns409(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := strings.NewReader(`{"agent":"claude","external_id":"some-uuid","mode":"fork"}`)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/sessions/adopt?token="+url.QueryEscape(tok), body)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST adopt: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status=%d want 409", resp.StatusCode)
+	}
+	var env map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&env)
+	errObj, _ := env["error"].(map[string]any)
+	if code, _ := errObj["code"].(string); code != "fork_unsupported" {
+		t.Errorf("error.code=%q want fork_unsupported", code)
+	}
+}
+
+// TestDiscoveredTranscriptEndpointRequiresAuth ensures the transcript
+// endpoint is auth-gated.
+func TestDiscoveredTranscriptEndpointRequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/api/sessions/discovered/transcript?agent=claude&external_id=some-id")
+	if err != nil {
+		t.Fatalf("GET transcript: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("unauthenticated /api/sessions/discovered/transcript returned 200")
+	}
+}
+
+// TestAdoptSessionRequiresAuth ensures the adopt endpoint is auth-gated.
+func TestAdoptSessionRequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := strings.NewReader(`{"agent":"claude","external_id":"id","mode":"resume"}`)
+	resp, err := http.Post(srv.URL+"/api/sessions/adopt", "application/json", body)
+	if err != nil {
+		t.Fatalf("POST adopt: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("unauthenticated /api/sessions/adopt returned 200")
+	}
+}
+
+// TestAdoptSessionInvalidAgent tests that an unknown agent returns 400.
+func TestAdoptSessionInvalidAgent(t *testing.T) {
+	srv, tok := newTestServer(t)
+	body := strings.NewReader(`{"agent":"unknown_agent","external_id":"some-uuid","cwd":"/tmp","mode":"resume"}`)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/sessions/adopt?token="+url.QueryEscape(tok), body)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST adopt: %v", err)
+	}
+	defer resp.Body.Close()
+	// Should be a 4xx error for unknown agent.
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("adopt with unknown agent returned 200; want 4xx")
+	}
+}
