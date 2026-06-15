@@ -178,11 +178,12 @@ func TestStoreSetIsAtomic(t *testing.T) {
 	}
 }
 
-// TestStoreDifferentBearerCannotDecrypt — the key is bearer-derived, so
-// a different bearer's Store must NOT decrypt blobs written by another.
-// This is the meaningful at-rest property: simply copying the .enc
-// file to another broker (with a different bearer) yields ciphertext,
-// not the plaintext blob.
+// TestStoreDifferentBearerCannotDecrypt — the per-identity subdir is
+// still bearer-derived, so a different bearer's Store finds nothing at
+// its own path. Post-H1 the at-rest AEAD key is the per-DIRECTORY keyfile
+// (not the bearer), so two stores rooted at the SAME dir share the keyfile
+// by design — the meaningful at-rest property is now keyfile-based, proven
+// by TestStoreKeyfileReaderRequired below.
 func TestStoreDifferentBearerCannotDecrypt(t *testing.T) {
 	dir := t.TempDir()
 	a := NewStore(dir, []byte("alice-bearer-token-fixture-32"))
@@ -191,25 +192,141 @@ func TestStoreDifferentBearerCannotDecrypt(t *testing.T) {
 	}
 
 	// A bearer-mismatched store points at the same root directory but
-	// derives a different identity subdir AND a different key — so it
-	// shouldn't even find the file. Try the lower-level open path
-	// instead by reading the on-disk file with bob's key.
+	// derives a different identity subdir — so it shouldn't even find
+	// the file.
 	bob := NewStore(dir, []byte("bob-bearer-token-fixture-32-x"))
-
-	// Bob's Get over his own subdir is a not-exist:
 	if _, err := bob.Get(ProviderOpenAI); !os.IsNotExist(err) {
 		t.Fatalf("bob Get: want IsNotExist (different identity subdir), got %v", err)
 	}
+}
 
-	// And even if bob steals alice's file from the filesystem and
-	// tries to decrypt it with his key, it must fail.
-	alicePath := a.providerPath(ProviderOpenAI)
-	envelope, err := os.ReadFile(alicePath)
-	if err != nil {
-		t.Fatalf("read alice file: %v", err)
+// TestStoreKeyfileReaderRequired is the real H1 at-rest property: a
+// raw-disk/backup reader who copies the .enc blob but NOT the keyfile
+// cannot decrypt it, and crucially the bearer (which sits in cleartext
+// in the systemd unit) no longer helps — the key is the keyfile, not
+// SHA256(bearer).
+func TestStoreKeyfileReaderRequired(t *testing.T) {
+	dir := t.TempDir()
+	bearer := []byte("bearer-token-fixture-32-chars--")
+	s := NewStore(dir, bearer)
+	if err := s.Set(ProviderOpenAI, json.RawMessage(`{"k":"v"}`)); err != nil {
+		t.Fatalf("Set: %v", err)
 	}
-	if _, err := bob.open(envelope); err == nil {
-		t.Fatal("bob.open(alice envelope) succeeded: expected GCM auth failure")
+	envelope, err := os.ReadFile(s.providerPath(ProviderOpenAI))
+	if err != nil {
+		t.Fatalf("read blob: %v", err)
+	}
+
+	// The bearer-derived key (the OLD scheme) must NOT open the new blob.
+	if _, err := openWith(deriveBearerKey(bearer), envelope); err == nil {
+		t.Fatal("bearer-derived key opened a keyfile-sealed blob: H1 not fixed")
+	}
+
+	// A reader who lacks the keyfile (fresh dir, no keyfile copied) also
+	// fails: a Store rooted elsewhere generates a different random key.
+	other := NewStore(t.TempDir(), bearer)
+	otherKey, err := other.loadKey()
+	if err != nil {
+		t.Fatalf("loadKey: %v", err)
+	}
+	if _, err := openWith(otherKey, envelope); err == nil {
+		t.Fatal("a different keyfile opened the blob: keyfile is not the boundary")
+	}
+}
+
+// TestStoreLazyMigration writes a blob under the LEGACY SHA256(bearer)
+// scheme, then Gets it through a keyfile-backed store: the read must
+// transparently fall back to the bearer key, return the plaintext, AND
+// re-encrypt on disk under the keyfile key. Afterward the on-disk blob
+// must have changed and must NO LONGER be decryptable by the bearer key.
+func TestStoreLazyMigration(t *testing.T) {
+	dir := t.TempDir()
+	bearer := []byte("bearer-token-fixture-32-chars--")
+	s := NewStore(dir, bearer)
+
+	// Hand-craft a legacy blob sealed with the bearer-derived key and
+	// drop it at the provider path the store reads from.
+	plain := []byte(`{"tokens":{"access_token":"legacy"}}`)
+	legacy, err := sealWith(deriveBearerKey(bearer), plain)
+	if err != nil {
+		t.Fatalf("sealWith legacy: %v", err)
+	}
+	path := s.providerPath(ProviderOpenAI)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatalf("write legacy blob: %v", err)
+	}
+
+	// Get transparently decrypts via the bearer fallback.
+	got, err := s.Get(ProviderOpenAI)
+	if err != nil {
+		t.Fatalf("Get legacy blob: %v", err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Fatalf("Get mismatch: want %s, got %s", plain, got)
+	}
+
+	// The on-disk blob must have been rewritten (re-encrypted).
+	migrated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migrated blob: %v", err)
+	}
+	if bytes.Equal(migrated, legacy) {
+		t.Fatal("blob was not rewritten: lazy migration did not re-encrypt")
+	}
+
+	// The migrated blob must NO LONGER open under the bearer-derived key.
+	if _, err := openWith(deriveBearerKey(bearer), migrated); err == nil {
+		t.Fatal("migrated blob still decrypts with the bearer key: not re-keyed")
+	}
+
+	// And it must open cleanly under the keyfile key (a second Get is a
+	// straight keyfile decrypt, no fallback).
+	got2, err := s.Get(ProviderOpenAI)
+	if err != nil {
+		t.Fatalf("Get after migration: %v", err)
+	}
+	if !bytes.Equal(got2, plain) {
+		t.Fatalf("post-migration Get mismatch: want %s, got %s", plain, got2)
+	}
+}
+
+// TestStoreKeyfileMode asserts the keyfile is created mode 0600 — the
+// at-rest boundary depends on it being unreadable to other UIDs.
+func TestStoreKeyfileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file mode bits don't translate on windows")
+	}
+	dir := t.TempDir()
+	s := NewStore(dir, []byte("bearer-token-fixture-32-chars--"))
+	if err := s.Set(ProviderAnthropic, json.RawMessage(`{"x":1}`)); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(dir, keyfileName))
+	if err != nil {
+		t.Fatalf("stat keyfile: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("keyfile mode: want 0600, got %o", mode)
+	}
+}
+
+// TestStoreNoBearerKeyfileOnly — a store with an EMPTY bearer (no legacy
+// fallback available) must still round-trip purely on the keyfile key.
+func TestStoreNoBearerKeyfileOnly(t *testing.T) {
+	s := NewStore(t.TempDir(), nil)
+	blob := json.RawMessage(`{"claudeAiOauth":{"accessToken":"keyfile-only"}}`)
+	if err := s.Set(ProviderAnthropic, blob); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := s.Get(ProviderAnthropic)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, blob) {
+		t.Fatalf("Get mismatch: want %s, got %s", blob, got)
 	}
 }
 
