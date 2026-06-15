@@ -9,6 +9,18 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.160
+
+**Found Sessions** — discover + resume agent sessions started OUTSIDE Conduit (by hand in a terminal). Broker PR #602, iOS #603, Android #604. Per the SWE-Kitty-3 design handoff (Direction A · Calm/Contextual). Broker REDEPLOYED to the dev box (v0.0.160, `session_discovery` live, smoke-tested against 238 real sessions; token unchanged, no re-pair). Fork ships GATED (`session_fork:false`) — Branch CTA shows its unavailable state for now (real fork lands next). Whole feature capability-gated, ships dark on boxes without the broker support.
+
+- **1 · Discover & resume sessions started outside Conduit** — in box detail, under "STARTED OUTSIDE CONDUIT", a "Continue a session" card shows a count when the box has Claude/Codex sessions you started by hand. Tap → a discovery sheet (provenance banner, search, Recent/By folder/All filters, grouped by repo) listing them with agent, repo·branch·turns, and an IDLE/RUNNING/IN-CONDUIT chip. Verify on a box where you've started a `claude`/`codex` session directly over SSH: the card appears with a count; the sheet lists your real sessions with correct repo/branch/running-state. [iOS+Android, on-device — needs a box with hand-started sessions]
+- **2 · Resume an idle session** — tap Resume on an IDLE row → a stepped "Resuming…" progress (Reading transcript → Re-ingesting N turns → Restoring tree → Handing off) → it opens as a normal Conduit chat with full prior context. Verify: resume a hand-started idle session → the agent continues with its full history, you can chat. [iOS+Android, on-device]
+- **3 · View transcript (read-only)** — View on any row opens the conversation read-only (persistent "read-only · not resumed" chip), with Resume/Branch offered at the bottom. Verify: View shows the real transcript; no composer; the chip is unmistakable. [iOS+Android, on-device]
+- **4 · Running rows never offer Resume; Branch is gated this build** — a RUNNING session (live in your terminal) offers "Branch a copy" (not Resume). In v0.0.160 the broker advertises `session_fork:false`, so the Branch CTA shows its unavailable/"not yet on this box" state — it must NEVER take over the live session. Verify: a running row shows Branch (disabled), never Resume; nothing you do touches the terminal session. (Real Branch lands in the next build.) [iOS+Android, on-device]
+- **5 · Hide / overflow / empty / offline** — row ⋯ → View · Copy resume command · Hide (4s undo, persists per box, removes from list only — deletes nothing). Empty and offline states explain themselves. Verify: Hide removes a row and persists; the sheet's empty/offline states read correctly. [iOS+Android, on-device]
+
+---
+
 ## v0.0.159
 
 App polish round: fresh-install launch sequencing, archived-session status, and full-swipe gestures. iOS PRs #597 (launch) + #599 (archive/swipe), Android PRs #598 (launch) + #600 (archive). App-only — no broker change, CI-compile-only → on-device verification.
