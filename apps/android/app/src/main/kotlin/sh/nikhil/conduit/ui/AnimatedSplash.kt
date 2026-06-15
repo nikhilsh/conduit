@@ -38,7 +38,7 @@ import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.R
 
 /**
- * Pure-data description of the cold-start splash — Compose mirror of
+ * Pure-data description of the cold-start splash -- Compose mirror of
  * `apps/ios/Sources/Views/AnimatedSplashModel`. Lifted out of the
  * composable so timing + dismiss-trigger logic can be unit-tested
  * without booting Robolectric / Compose UI.
@@ -47,18 +47,26 @@ import sh.nikhil.conduit.R
  * the view is dumb, the model is the contract.
  */
 object AnimatedSplashModel {
-    /** Pulse half-cycle (1.0 → 1.05). Auto-reverses, so full beat = 2× this. */
+    /** Pulse half-cycle (1.0 -> 1.05). Auto-reverses, so full beat = 2x this. */
     const val pulsePeriodMillis: Long = 600L
 
     /** Cross-fade duration applied when the splash dismisses. */
     const val crossFadeDurationMillis: Long = 300L
 
     /**
-     * Hard timeout — dismiss the splash this long after appearance even
+     * Hard timeout -- dismiss the splash this long after appearance even
      * if the broker never answers. Keeps the splash from lingering
      * forever when the harness is unreachable.
      */
     const val hardTimeoutMillis: Long = 1500L
+
+    /**
+     * Short timeout used on a fresh install (no saved servers). There is
+     * nothing to connect to so the harness never emits a decisive signal;
+     * waiting the full 1500ms just delays the onboarding screen. 550ms is
+     * enough time to see the brand mark without a perceptible hang.
+     */
+    const val freshInstallTimeoutMillis: Long = 550L
 
     /** Peak scale during the pulse cycle. */
     const val pulseScale: Float = 1.05f
@@ -66,11 +74,11 @@ object AnimatedSplashModel {
     /** Soft caption shown beneath the wordmark (no spinner). */
     const val loadingCaption: String = "Loading…"
 
-    /** Brand wordmark — matches the iOS copy + the GitHub repo name. */
+    /** Brand wordmark -- matches the iOS copy + the GitHub repo name. */
     const val wordmark: String = ">conduit"
 
     /**
-     * Mirror of `AnimatedSplashModel.shouldDismiss(on:)` on iOS — any
+     * Mirror of `AnimatedSplashModel.shouldDismiss(on:)` on iOS -- any
      * terminal-ish [HarnessState] qualifies, including [HarnessState.Failed],
      * so an unreachable harness still drops the user onto the real UI
      * (which has its own offline empty-state) rather than holding the
@@ -94,17 +102,24 @@ object AnimatedSplashModel {
  * Dismisses on whichever fires first:
  *   - the first decisive harness signal ([AnimatedSplashModel.shouldDismiss]
  *     returns true), i.e. we've heard from the broker; OR
- *   - the [AnimatedSplashModel.hardTimeoutMillis] timeout, so the splash
+ *   - the hard timeout (fresh install: [AnimatedSplashModel.freshInstallTimeoutMillis];
+ *     paired: [AnimatedSplashModel.hardTimeoutMillis]), so the splash
  *     never lingers when the network is gone.
  *
- * [onFinish] is invoked exactly once — the call-site flips a boolean on
+ * [onFinish] is invoked exactly once -- the call-site flips a boolean on
  * first event OR timeout, so this is idempotent.
  *
  * Compose mirror of `apps/ios/Sources/Views/AnimatedSplashView.swift`.
+ *
+ * @param freshInstall when true (no saved servers), use the shorter
+ *   [AnimatedSplashModel.freshInstallTimeoutMillis] timeout so onboarding
+ *   shows promptly rather than waiting the full 1500ms for a harness that
+ *   will never connect.
  */
 @Composable
 fun AnimatedSplash(
     harnessState: HarnessState = HarnessState.Disconnected,
+    freshInstall: Boolean = false,
     onFinish: () -> Unit,
 ) {
     var visible by remember { mutableStateOf(true) }
@@ -117,7 +132,7 @@ fun AnimatedSplash(
         }
     }
 
-    // Cross-fade end → notify call site after AnimatedVisibility has
+    // Cross-fade end -> notify call site after AnimatedVisibility has
     // run its `fadeOut(tween(300))` envelope.
     LaunchedEffect(visible) {
         if (!visible) {
@@ -126,20 +141,27 @@ fun AnimatedSplash(
         }
     }
 
-    // Hard timeout — fires regardless of broker state.
+    // Hard timeout -- fires regardless of broker state.
+    // Fresh install: use a shorter timeout so onboarding is not delayed
+    // by a harness that has no server to connect to.
+    val timeoutMillis = if (freshInstall) {
+        AnimatedSplashModel.freshInstallTimeoutMillis
+    } else {
+        AnimatedSplashModel.hardTimeoutMillis
+    }
     LaunchedEffect(Unit) {
-        delay(AnimatedSplashModel.hardTimeoutMillis)
+        delay(timeoutMillis)
         finish()
     }
 
-    // Broker signal — first decisive HarnessState dismisses the splash.
+    // Broker signal -- first decisive HarnessState dismisses the splash.
     LaunchedEffect(harnessState) {
         if (AnimatedSplashModel.shouldDismiss(harnessState)) {
             finish()
         }
     }
 
-    // Center logo scale-pulse 1.0 → 1.05 → 1.0, looping forever.
+    // Center logo scale-pulse 1.0 -> 1.05 -> 1.0, looping forever.
     val pulseTransition = rememberInfiniteTransition(label = "splash-pulse")
     val pulseScale by pulseTransition.animateFloat(
         initialValue = 1f,

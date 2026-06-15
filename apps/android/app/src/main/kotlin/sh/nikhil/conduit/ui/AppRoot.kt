@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.push.PushRegistrationState
 import sh.nikhil.conduit.push.PushStore
 
@@ -49,7 +50,7 @@ fun AppRoot(
     var showHistory by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
     var showBoxes by remember { mutableStateOf(false) }
-    // Redesign surfaces reachable from Home: command palette (⌘K, from the
+    // Redesign surfaces reachable from Home: command palette (Cmd-K, from the
     // bottom search), fan-out (from the palette), approvals (from the
     // needs-you banner), and per-box health (from a Boxes-list tap).
     var showCommandPalette by remember { mutableStateOf(false) }
@@ -69,26 +70,31 @@ fun AppRoot(
     val harness by store.harness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
 
-    // Onboarding gate (§5) — accounts-free, device-local. No sign-in wall:
+    // Onboarding gate (section 5) -- accounts-free, device-local. No sign-in wall:
     // show the wizard when this device holds no broker pairing key. `Full`
-    // route ⇒ overlay; a paired-but-offline broker is Home + offline banner.
+    // route => overlay; a paired-but-offline broker is Home + offline banner.
     var onboardingFinished by remember { mutableStateOf(false) }
-    val needsOnboarding = !onboardingFinished &&
+    // Gate on !showSplash: onboarding must not render concurrently with the
+    // splash. The splash is the last element in the tree (renders on top),
+    // but allowing onboarding to compose underneath causes a visible flash
+    // when the splash dismisses. Show onboarding only AFTER the splash has
+    // finished (showSplash flips false after the cross-fade completes).
+    val needsOnboarding = !showSplash && !onboardingFinished &&
         FeatureFlags.onboardingRoute(
             pairedBrokers = savedServers.size,
             brokerReachable = harness is HarnessState.Live || harness is HarnessState.Linked,
         ) == FeatureFlags.OnboardingRoute.Full
 
     // Auto-connect a paired-but-disconnected broker on launch (no settings
-    // takeover — onboarding handles the unpaired case).
+    // takeover -- onboarding handles the unpaired case).
     androidx.compose.runtime.LaunchedEffect(Unit) {
         if (endpoint.isComplete && harness is HarnessState.Disconnected) store.connect()
     }
 
     // Push registration trigger (WS-P.3): attempt registration after the
-    // first session exists — matches iOS timing (post-onboarding, never at
+    // first session exists -- matches iOS timing (post-onboarding, never at
     // app launch before the user has paired). Only fires once per install
-    // (when the push state is NotRegistered and sessions transitions 0 → ≥1).
+    // (when the push state is NotRegistered and sessions transitions 0 -> >=1).
     val pushRegistrationState by pushStore.registrationState.collectAsState()
     androidx.compose.runtime.LaunchedEffect(sessions.isNotEmpty()) {
         if (sessions.isNotEmpty() &&
@@ -119,8 +125,8 @@ fun AppRoot(
             if (maxWidth >= 840.dp) {
                 val neon = LocalNeonTheme.current
                 // Unified rail (design-reference tablet.jsx): no separate icon
-                // activity bar — the rail owns brand + search (→ History) +
-                // overflow (→ Settings/Boxes) + session lists + New session.
+                // activity bar -- the rail owns brand + search (-> History) +
+                // overflow (-> Settings/Boxes) + session lists + New session.
                 // Home is the center empty-state when nothing is selected.
                 Row(modifier = Modifier.fillMaxSize()) {
                     NeonTabletRail(
@@ -146,13 +152,13 @@ fun AppRoot(
                                 onOpenHistory = { showHistory = true },
                                 onAddServer = { showAddServer = true },
                                 onNewSession = onNewSession,
-                                // The bottom search now opens the ⌘K palette.
+                                // The bottom search now opens the Cmd-K palette.
                                 onSearch = { showCommandPalette = true },
                                 onVoice = { showVoice = true },
                                 onOpenApprovals = { showApprovals = true },
                                 onOpenBoxHealth = { server -> boxHealthTarget = server },
                                 // The tablet rail header already shows a Settings
-                                // gear — don't render a second one in the center.
+                                // gear -- don't render a second one in the center.
                                 showSettingsButton = false,
                                 onOpenOnboarding = {
                                     onboardingEntry = FeatureFlags.OnboardingEntry.replay
@@ -189,12 +195,17 @@ fun AppRoot(
                     } else {
                         HomeScreen(
                             store = store,
-                            onOpenSettings = { showSettings = true },
+                            // Fix: on a fresh install (no saved servers), onboarding owns
+                            // first-run -- don't auto-open Settings before the user has
+                            // paired a box. User-tapped Settings still works after pairing.
+                            onOpenSettings = {
+                                if (savedServers.isNotEmpty()) showSettings = true
+                            },
                             onOpenDrawer = { scope.launch { drawerState.open() } },
                             onOpenHistory = { showHistory = true },
                             onAddServer = { showAddServer = true },
                             onNewSession = onNewSession,
-                            // The bottom search now opens the ⌘K palette.
+                            // The bottom search now opens the Cmd-K palette.
                             onSearch = { showCommandPalette = true },
                             onVoice = { showVoice = true },
                             onOpenApprovals = { showApprovals = true },
@@ -256,7 +267,7 @@ fun AppRoot(
     }
 
     if (showCommandPalette) {
-        // ⌘K quick switcher. Reuses the same new-session / add-server /
+        // Cmd-K quick switcher. Reuses the same new-session / add-server /
         // select-session paths the rest of the app uses; "Fan out a task"
         // chains into the Fan-out surface.
         CommandPaletteScreen(
@@ -270,7 +281,7 @@ fun AppRoot(
     }
 
     if (showFanOut) {
-        // One task → N parallel sessions, one per branch. Launch is real:
+        // One task -> N parallel sessions, one per branch. Launch is real:
         // createSession per branch (no fan-out backend). Compare = no-op.
         FanOutScreen(
             store = store,
@@ -284,7 +295,7 @@ fun AppRoot(
     }
 
     if (showApprovals) {
-        // Approvals inbox — every action opens the session's chat (no
+        // Approvals inbox -- every action opens the session's chat (no
         // programmatic approve endpoint), so onOpenSession selects + dismisses.
         ApprovalsScreen(
             store = store,
@@ -378,9 +389,10 @@ fun AppRoot(
         )
     }
 
-    // Onboarding takeover (§5). Full-screen over the app; dismisses itself
-    // once a broker is paired (savedServers becomes non-empty → route flips
-    // to None) or the user finishes.
+    // Onboarding takeover (section 5). Full-screen over the app; dismisses itself
+    // once a broker is paired (savedServers becomes non-empty -> route flips
+    // to None) or the user finishes. Only shown after the splash has dismissed
+    // (needsOnboarding is gated on !showSplash above).
     if (needsOnboarding) {
         OnboardingScreen(
             store = store,
@@ -401,7 +413,31 @@ fun AppRoot(
     }
 
     if (showSplash) {
-        AnimatedSplash(onFinish = { showSplash = false })
+        // Fresh install (no saved servers): use the short timeout so onboarding
+        // follows the splash promptly without a 1500ms wait for a harness that
+        // will never connect. Paired users keep the full timeout + harness-dismiss
+        // so the splash drops as soon as the broker responds.
+        val isFreshInstall = savedServers.isEmpty()
+        AnimatedSplash(
+            harnessState = harness,
+            freshInstall = isFreshInstall,
+            onFinish = {
+                Telemetry.breadcrumb(
+                    "launch",
+                    "splash dismissed",
+                    mapOf(
+                        "fresh_install" to isFreshInstall.toString(),
+                        "saved_servers" to savedServers.size.toString(),
+                        "timeout_ms" to if (isFreshInstall) {
+                            AnimatedSplashModel.freshInstallTimeoutMillis.toString()
+                        } else {
+                            AnimatedSplashModel.hardTimeoutMillis.toString()
+                        },
+                    ),
+                )
+                showSplash = false
+            },
+        )
     }
 }
 
