@@ -61,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -187,8 +188,9 @@ fun FoundSessionsSheet(
         Box(Modifier.fillMaxWidth().fillMaxHeight(0.92f)) {
             when {
                 shownBranch != null -> {
+                    val branch = shownBranch ?: return@Box
                     BranchCopySheet(
-                        session = shownBranch!!,
+                        session = branch,
                         sessionFork = sessionFork,
                         neon = neon,
                         store = store,
@@ -198,8 +200,9 @@ fun FoundSessionsSheet(
                     )
                 }
                 shownTranscript != null -> {
+                    val transcript = shownTranscript ?: return@Box
                     TranscriptViewSheet(
-                        session = shownTranscript!!,
+                        session = transcript,
                         sessionFork = sessionFork,
                         neon = neon,
                         store = store,
@@ -216,8 +219,9 @@ fun FoundSessionsSheet(
                     )
                 }
                 resumeState != null -> {
+                    val resumeStateVal = resumeState ?: return@Box
                     ResumeProgressSheet(
-                        state = resumeState!!,
+                        state = resumeStateVal,
                         neon = neon,
                         store = store,
                         server = server,
@@ -499,7 +503,7 @@ private fun DiscoveryListContent(
                             }
                             FoundFilter.BY_FOLDER, FoundFilter.ALL -> {
                                 folderKeys.forEach { folder ->
-                                    val folderRows = FoundSessionsModel.rowsForFolder(rows, folder)
+                                    val folderRows = rows.filter { it.folderKey == folder }
                                     stickyHeader(key = "header_$folder") {
                                         FolderHeader(neon = neon, folder = folder, count = folderRows.size)
                                     }
@@ -979,11 +983,12 @@ private fun BranchCopySheet(
         Spacer(Modifier.weight(1f))
 
         // Error (if any)
-        if (errorMsg != null) {
+        val currentError = errorMsg
+        if (currentError != null) {
             FoundSessionErrorComposable(
                 neon = neon,
                 title = "Branch failed",
-                message = errorMsg ?: "",
+                message = currentError,
                 primaryLabel = "Try again",
                 onPrimary = { errorMsg = null },
                 secondaryLabel = null,
@@ -1141,7 +1146,7 @@ private fun TranscriptViewSheet(
                 }
             }
             else -> {
-                val transcriptItems = items!!
+                val transcriptItems = items ?: emptyList()
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
