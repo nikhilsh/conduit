@@ -192,6 +192,12 @@
   .cap p{margin:0;font-size:13.5px;color:var(--dim);line-height:1.5;}
   @media(max-width:880px){.cap-grid{grid-template-columns:1fr;}}
 
+  /* ===== security ===== */
+  .secsec{border-top:1px solid var(--line-soft);padding-top:64px;}
+  .sec-pledge{max-width:64ch;margin:36px auto 0;text-align:center;font-size:13.5px;
+    color:var(--dim);line-height:1.65;}
+  .sec-pledge b{color:var(--text);font-weight:600;}
+
   /* ===== download cta ===== */
   .cta{padding:18px 0 110px;}
   .cta-card{position:relative;border:1px solid var(--line);border-radius:26px;overflow:hidden;
@@ -243,6 +249,7 @@
       <a href="#browser">Browser</a>
       <a href="#tablet">Tablet</a>
       <a href="#everything">Everything</a>
+      <a href="#security">Security</a>
     </nav>
     <a class="nav-cta" href="#download">Get the app</a>
   </div>
@@ -403,6 +410,50 @@
     </div>
   </section>
 
+  <!-- SECURITY -->
+  <section class="caps secsec" id="security">
+    <div class="wrap">
+      <div class="caps-head reveal">
+        <span class="eyebrow"><span class="pip"></span>Security</span>
+        <h2 class="display">Your box. Your keys.<br />Nothing in the middle.</h2>
+        <p class="lead">Conduit is built so the app on your phone and the agent on your machine talk <b style="color:var(--text)">directly over a connection you own</b> — there's no Conduit server sitting in between holding your code or your credentials.</p>
+      </div>
+      <div class="cap-grid">
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"/><path d="M9.5 12l1.8 1.8 3.4-3.6"/></svg></div>
+          <h3>It's your connection</h3>
+          <p>The app reaches your machine over your own SSH login. Your SSH keys are entered on-device and never leave it — and we never see your servers.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg></div>
+          <h3>Not exposed to the internet</h3>
+          <p>On a paired box the broker listens on localhost and is reached only through your authenticated, encrypted tunnel — not on a public port for the world to find.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--claude)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="12" r="3.4"/><path d="M11.2 12H21l-2 2.2L17 12M16.5 12v3"/></svg></div>
+          <h3>Token-gated access</h3>
+          <p>Every connection is authenticated with a high-entropy key minted when you pair the box. No key, no entry — checked in constant time on every request.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v2"/></svg></div>
+          <h3>Encrypted on your machine</h3>
+          <p>Agent credentials are encrypted at rest with a key that stays on your box — readable by the broker, not by a stray backup or a snooping process.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 16a4 4 0 1 1 1-7.9A5 5 0 0 1 18 9a3.5 3.5 0 0 1-.5 7H7z"/><path d="M12 19v-7M9.5 14.5L12 12l2.5 2.5"/></svg></div>
+          <h3>We don't hold your data</h3>
+          <p>Sessions, code, and chat live on your box and your device. Push notifications travel through a relay that carries opaque tokens — never your code, keys, or messages.</p>
+        </div>
+        <div class="cap reveal">
+          <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"/><path d="M12 8v4M12 15v.01"/></svg></div>
+          <h3>Verified installs</h3>
+          <p>The broker is delivered over HTTPS and checksum-verified before it ever runs, so a tampered or man-in-the-middled binary won't install on your server.</p>
+        </div>
+      </div>
+      <p class="sec-pledge reveal">We treat the server you trust us to run with care — hardened by default, audited as we grow, and patched fast. Found something? <b>Responsible disclosure is always welcome.</b></p>
+    </div>
+  </section>
+
   <!-- DOWNLOAD CTA -->
   <section class="cta" id="download">
     <div class="wrap">
@@ -435,6 +486,7 @@
         <a href="#remote">Remote</a>
         <a href="#terminal">Terminal</a>
         <a href="#browser">Browser</a>
+        <a href="#security">Security</a>
         <a href="#download">Download</a>
         <a href="/privacy.html">Privacy</a>
       </nav>
