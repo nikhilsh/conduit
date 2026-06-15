@@ -88,6 +88,44 @@ jobs:
             broker/dist/conduit-broker-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
             --clobber
 
+  checksums:
+    name: publish SHA256SUMS
+    runs-on: ubuntu-24.04
+    needs: build-binaries
+    permissions:
+      contents: write
+    steps:
+      # Generate a SHA256SUMS manifest over the released broker binaries so
+      # install.sh / remote-bootstrap.sh can verify integrity before chmod+x.
+      # We pull the binaries back FROM the release (rather than re-building)
+      # so the digests cover the exact bytes clients will download.
+      - name: Download broker binaries from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mkdir -p sums
+          cd sums
+          # Pull every broker binary asset (bare binaries + sidecar tarballs).
+          gh release download "${RELEASE_TAG}" -R "$GITHUB_REPOSITORY" \
+            --pattern 'conduit-broker-*' --clobber
+          ls -la
+      - name: Generate SHA256SUMS
+        run: |
+          cd sums
+          # Bare filenames only (no path prefix) so clients can match by
+          # asset name. sha256sum's two-space format is what `sha256sum -c`
+          # and our shell verifiers expect.
+          sha256sum conduit-broker-* > SHA256SUMS
+          echo "── SHA256SUMS ──"
+          cat SHA256SUMS
+      - name: Upload SHA256SUMS to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release upload "${RELEASE_TAG}" sums/SHA256SUMS --clobber
+
   upload-installer:
     name: upload install.sh
     runs-on: ubuntu-24.04

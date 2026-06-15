@@ -98,6 +98,24 @@ else
     die "need curl or wget on PATH"
 fi
 
+# sha256 of a file → lowercase hex digest on stdout (empty if no tool found).
+# Linux ships `sha256sum`; macOS ships `shasum -a 256`. We need one of them
+# to verify binary integrity; if neither exists we degrade to a loud warning
+# (verify-if-able) rather than blocking the install.
+SHA256_TOOL=""
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA256_TOOL="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    SHA256_TOOL="shasum"
+fi
+sha256_of() {
+    case "$SHA256_TOOL" in
+        sha256sum) sha256sum "$1" | cut -d' ' -f1 ;;
+        shasum)    shasum -a 256 "$1" | cut -d' ' -f1 ;;
+        *)         return 1 ;;
+    esac
+}
+
 # os / arch detection — must match the matrix in .github/workflows/release-broker.yml.
 OS_RAW="$(uname -s)"
 case "$OS_RAW" in
@@ -132,10 +150,13 @@ else
 fi
 # `releases/latest/download/<asset>` follows the same redirect as a
 # specific tag URL, so this asset URL works for both forms.
+ASSET_NAME="conduit-broker-${OS}-${ARCH}"
 if [ -z "$VERSION" ]; then
-    ASSET="https://github.com/$REPO/releases/latest/download/conduit-broker-${OS}-${ARCH}"
+    ASSET="https://github.com/$REPO/releases/latest/download/${ASSET_NAME}"
+    SUMS_URL="https://github.com/$REPO/releases/latest/download/SHA256SUMS"
 else
-    ASSET="https://github.com/$REPO/releases/download/${VERSION}/conduit-broker-${OS}-${ARCH}"
+    ASSET="https://github.com/$REPO/releases/download/${VERSION}/${ASSET_NAME}"
+    SUMS_URL="https://github.com/$REPO/releases/download/${VERSION}/SHA256SUMS"
 fi
 
 TMP="$(mktemp -t conduit-broker.XXXXXX)" || die "mktemp failed"
@@ -157,6 +178,37 @@ case "$(head -c 4 "$TMP" | od -An -c 2>/dev/null | tr -d ' ')" in
         die "asset URL returned an HTML page (likely 404): $ASSET"
         ;;
 esac
+
+# ── Binary integrity: verify the SHA-256 against the published SHA256SUMS ──
+# Policy (backward-compatible): verify-if-present, HARD-FAIL on mismatch,
+# warn-if-absent. Releases published before SHA256SUMS existed have no manifest
+# to verify against, so an absent manifest is a warning (not a failure) — but a
+# present manifest with a NON-matching digest aborts the install. SHA256SUMS is
+# fetched over the same HTTPS release host as the binary.
+if [ -n "$SHA256_TOOL" ]; then
+    SUMS_TMP="$(mktemp -t conduit-sha256sums.XXXXXX)" || die "mktemp failed"
+    # Don't let a missing SHA256SUMS abort here; we branch on file presence.
+    # shellcheck disable=SC2086
+    $FETCH "$SUMS_URL" > "$SUMS_TMP" 2>/dev/null || :
+    if [ -s "$SUMS_TMP" ] && ! head -c 4 "$SUMS_TMP" | grep -qi 'html'; then
+        EXPECTED="$(grep " ${ASSET_NAME}\$" "$SUMS_TMP" 2>/dev/null | head -1 | cut -d' ' -f1)"
+        if [ -n "$EXPECTED" ]; then
+            ACTUAL="$(sha256_of "$TMP")"
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+                rm -f "$SUMS_TMP"
+                die "checksum MISMATCH for ${ASSET_NAME}: expected $EXPECTED, got $ACTUAL — refusing to install an unverified binary"
+            fi
+            echo "✓ verified sha256 $ACTUAL"
+        else
+            echo "install.sh: WARNING — ${ASSET_NAME} not listed in SHA256SUMS; skipping integrity check" >&2
+        fi
+    else
+        echo "install.sh: WARNING — no SHA256SUMS published for this release; cannot verify binary integrity" >&2
+    fi
+    rm -f "$SUMS_TMP"
+else
+    echo "install.sh: WARNING — no sha256sum/shasum tool found; cannot verify binary integrity" >&2
+fi
 
 chmod +x "$TMP"
 mv "$TMP" "$BIN_DIR/conduit-broker"
@@ -271,6 +323,17 @@ Restart=always
 RestartSec=2s
 StandardOutput=journal
 StandardError=journal
+# ── Sandboxing (post-compromise containment; conservative so the broker,
+#    its ExecStartPre mirror, and the agent CLIs it spawns keep working) ──
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# ProtectSystem=full (not strict): read-only /usr /boot /etc only — leaves
+# the broker's $SVC_HOME ($SVC_HOME/.claude, .codex, .conduit, workspace)
+# writable. Avoid ProtectHome=yes: it would hide the home the broker needs.
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target

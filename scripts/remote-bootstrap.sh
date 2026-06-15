@@ -117,6 +117,24 @@ CURL_MAX_TIME=180              # seconds: total curl transfer (broker install)
 CURL_HEALTH_MAX_TIME=5         # seconds: health-check curls (fast local calls)
 CURL_API_MAX_TIME=10           # seconds: GitHub API / version lookups
 CURL_NTFY_DL_MAX_TIME=120      # seconds: ntfy binary download
+
+# ── sha256 helper ────────────────────────────────────────────────────────────
+# Used to verify downloaded artifact integrity. Linux ships `sha256sum`; macOS
+# ships `shasum -a 256`. Returns the lowercase hex digest of $1 on stdout, or
+# non-zero if no tool is available.
+_sha256_tool=""
+if command -v sha256sum >/dev/null 2>&1; then
+  _sha256_tool="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  _sha256_tool="shasum"
+fi
+_sha256_of() {
+  case "$_sha256_tool" in
+    sha256sum) sha256sum "$1" | cut -d' ' -f1 ;;
+    shasum)    shasum -a 256 "$1" | cut -d' ' -f1 ;;
+    *)         return 1 ;;
+  esac
+}
 # ── Argument parsing ──────────────────────────────────────────────────────
 # Accept optional --with-ntfy flag before the positional args so callers
 # can pass  remote-bootstrap.sh --with-ntfy <TOKEN> ...
@@ -148,6 +166,34 @@ BIN="$BIN_DIR/conduit-broker"
 PIDFILE="$STATE_DIR/broker.pid"
 LOGFILE="$STATE_DIR/broker.log"
 HEALTH="http://127.0.0.1:$HOST_PORT/health"
+# Secrets (CONDUIT_TOKEN + API keys) live in a 0600 EnvironmentFile rather
+# than inline Environment= lines, so they are NOT exposed via `systemctl show`
+# or /proc/<pid>/environ to other same-UID processes. The broker reads them
+# from the process environment either way (os.Getenv), so loading them via
+# EnvironmentFile needs no broker code change.
+BROKER_ENV_FILE="$STATE_DIR/broker.env"
+
+# ── Atomic 0600 EnvironmentFile writer ────────────────────────────────────
+# $1=PATH value, $2=token, $3=anthropic key, $4=openai key, $5=ntfy url.
+# Writes systemd EnvironmentFile syntax (KEY=value, one per line — NO
+# Environment= prefix, NO surrounding quotes). Created with a restrictive
+# umask and moved into place atomically so it is never briefly world-readable.
+_write_broker_env_file() {
+  _wef_path="$1"; _wef_token="$2"; _wef_anth="$3"; _wef_openai="$4"; _wef_ntfy="$5"
+  mkdir -p "$STATE_DIR"
+  _wef_tmp="$(mktemp "$STATE_DIR/.broker.env.XXXXXX")" || return 1
+  chmod 600 "$_wef_tmp" 2>/dev/null || true
+  {
+    printf 'PATH=%s\n' "$_wef_path"
+    printf 'CONDUIT_TOKEN=%s\n' "$_wef_token"
+    [ -n "$_wef_anth" ]   && printf 'ANTHROPIC_API_KEY=%s\n' "$_wef_anth"
+    [ -n "$_wef_openai" ] && printf 'OPENAI_API_KEY=%s\n' "$_wef_openai"
+    [ -n "$_wef_ntfy" ]   && printf 'CONDUIT_NTFY_URL=%s\n' "$_wef_ntfy"
+    :
+  } > "$_wef_tmp"
+  mv -f "$_wef_tmp" "$BROKER_ENV_FILE"
+  chmod 600 "$BROKER_ENV_FILE" 2>/dev/null || true
+}
 
 # ntfy defaults (only used when _with_ntfy=1).
 NTFY_PORT="${CONDUIT_NTFY_PORT:-2586}"
@@ -320,18 +366,19 @@ _update_broker_if_stale() {
 # ── Idempotent unit-ensure ────────────────────────────────────────────────
 # Called on the reuse path (broker already healthy) to guarantee the systemd
 # unit is up-to-date.  Boxes bootstrapped by an older build may have a unit
-# that lacks the Environment=PATH= line; re-adding the box MUST self-heal
-# without any manual steps.
+# that lacks the Environment=PATH= line OR carries secrets inline via
+# Environment= (instead of the 0600 EnvironmentFile); re-adding the box MUST
+# self-heal both without any manual steps.
 #
-# Detection: check whether the unit file contains an Environment=PATH= line.
-# If absent (stale unit) → rewrite with the correct content and restart.
-# If already correct → do NOTHING (don't restart a healthy broker needlessly;
+# Detection: a current unit references "EnvironmentFile=" (secrets out of the
+# unit) AND carries the hardening directives. If EITHER is missing the unit is
+# stale → migrate it (write the env file, rewrite the unit) and restart.
+# If already current → do NOTHING (don't restart a healthy broker needlessly;
 # restarting reaps in-flight agent sessions).
 #
-# The token used in the rewritten unit is the one the caller passed ($TOKEN),
-# which is the same token already in the unit on a normal re-add.  A caller
-# that intentionally changes the token gets the new token written in — which
-# is the correct re-pair behaviour.
+# Token/keys are migrated FROM the existing inline unit when present (so reuse
+# does NOT force a re-pair); only when the old unit lacks them do we fall back
+# to the caller-passed values.
 _ensure_broker_unit() {
   # Only act when user-systemd is available and linger is enabled.
   if ! command -v systemctl >/dev/null 2>&1; then return 0; fi
@@ -345,34 +392,30 @@ _ensure_broker_unit() {
   # exports PATH in the environment, so it self-heals on the next re-add).
   if [ ! -f "$_unit_file" ]; then return 0; fi
 
-  # If the unit already has the PATH environment line, nothing to do.
-  if grep -q 'Environment=.PATH=' "$_unit_file"; then return 0; fi
+  # Current units have BOTH the EnvironmentFile= line and the hardening; if both
+  # are present, nothing to do.
+  if grep -q 'EnvironmentFile=' "$_unit_file" \
+     && grep -q 'NoNewPrivileges=' "$_unit_file"; then
+    return 0
+  fi
 
-  # ---- Stale unit detected: rewrite and restart ----
-  echo "conduit: unit lacks Environment=PATH=; rewriting for self-heal" >&2
+  # ---- Stale unit detected: migrate to EnvironmentFile + hardening ----
+  echo "conduit: unit is pre-hardening (inline secrets / no EnvironmentFile); migrating for self-heal" >&2
 
-  # Build Environment= lines (mirrors the fresh-install path exactly).
-  _eu_env_lines="Environment=\"PATH=$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
-  _eu_env_lines="$_eu_env_lines
-Environment=\"CONDUIT_TOKEN=$TOKEN\""
-  if [ -n "$ANTHROPIC" ]; then
-    _eu_env_lines="$_eu_env_lines
-Environment=\"ANTHROPIC_API_KEY=$ANTHROPIC\""
-  fi
-  if [ -n "$OPENAI" ]; then
-    _eu_env_lines="$_eu_env_lines
-Environment=\"OPENAI_API_KEY=$OPENAI\""
-  fi
-  # Preserve a pre-existing CONDUIT_NTFY_URL in the unit if present, so we
-  # don't drop ntfy on a reuse-path rewrite.
-  _eu_existing_ntfy="$(grep 'Environment=.CONDUIT_NTFY_URL=' "$_unit_file" 2>/dev/null | head -1 | sed 's/^Environment=//;s/^"//;s/"$//')"
-  if [ -n "$_eu_existing_ntfy" ]; then
-    _eu_env_lines="$_eu_env_lines
-Environment=\"$_eu_existing_ntfy\""
-  elif [ -n "${_ntfy_url:-}" ]; then
-    _eu_env_lines="$_eu_env_lines
-Environment=\"CONDUIT_NTFY_URL=$_ntfy_url\""
-  fi
+  # Recover secrets from the OLD inline unit so reuse doesn't force a re-pair.
+  _eu_old_token="$(grep 'Environment=.CONDUIT_TOKEN=' "$_unit_file" 2>/dev/null | head -1 | sed 's/.*CONDUIT_TOKEN=//; s/^"//; s/"$//')"
+  _eu_old_anth="$(grep 'Environment=.ANTHROPIC_API_KEY=' "$_unit_file" 2>/dev/null | head -1 | sed 's/.*ANTHROPIC_API_KEY=//; s/^"//; s/"$//')"
+  _eu_old_openai="$(grep 'Environment=.OPENAI_API_KEY=' "$_unit_file" 2>/dev/null | head -1 | sed 's/.*OPENAI_API_KEY=//; s/^"//; s/"$//')"
+  _eu_old_ntfy="$(grep 'Environment=.CONDUIT_NTFY_URL=' "$_unit_file" 2>/dev/null | head -1 | sed 's/.*CONDUIT_NTFY_URL=//; s/^"//; s/"$//')"
+
+  # Prefer the existing inline values; fall back to caller-passed values.
+  _eu_token="${_eu_old_token:-$TOKEN}"
+  _eu_anth="${_eu_old_anth:-$ANTHROPIC}"
+  _eu_openai="${_eu_old_openai:-$OPENAI}"
+  _eu_ntfy="${_eu_old_ntfy:-${_ntfy_url:-}}"
+
+  _eu_path="$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  _write_broker_env_file "$_eu_path" "$_eu_token" "$_eu_anth" "$_eu_openai" "$_eu_ntfy"
 
   mkdir -p "$_unit_dir"
   cat > "$_unit_file" <<_UNIT
@@ -386,7 +429,13 @@ StartLimitBurst=5
 ExecStart=$BIN up --addr 127.0.0.1:$HOST_PORT
 Restart=on-failure
 RestartSec=10
-$_eu_env_lines
+EnvironmentFile=$BROKER_ENV_FILE
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectSystem=full
 
 [Install]
 WantedBy=default.target
@@ -422,14 +471,24 @@ _UNIT
 # $TOKEN so the OK line matches what the broker accepts.
 #
 # Authoritative sources (in priority order):
-#   1. systemd unit file  (~/.config/systemd/user/conduit-broker.service)
-#      — the canonical location for every box bootstrapped at v0.0.141+.
-#   2. No fallback for the pidfile/nohup path: those boxes have no
-#      separate token file, but they ARE also covered by the systemd unit
-#      when systemd is available (the unit is written on first install).
-#      If the unit doesn't exist the broker must have been started without
-#      systemd AND with the caller's token, so keeping $TOKEN is correct.
+#   1. EnvironmentFile  ($STATE_DIR/broker.env, "CONDUIT_TOKEN=..." 0600)
+#      — where v0.0.157+ units load secrets from. _ensure_broker_unit runs
+#      BEFORE this and migrates older inline units into this file, so it is
+#      the canonical location after migration.
+#   2. systemd unit file inline Environment= (legacy units not yet migrated,
+#      e.g. when the pidfile path is in use and systemd is unavailable).
+#   3. No fallback for the pidfile/nohup path: those boxes have no separate
+#      token file. If neither source has it, keeping the caller's $TOKEN is
+#      correct (the broker was started with it).
 _read_live_token() {
+  if [ -f "$BROKER_ENV_FILE" ]; then
+    _live="$(grep '^CONDUIT_TOKEN=' "$BROKER_ENV_FILE" 2>/dev/null \
+             | head -1 | sed 's/^CONDUIT_TOKEN=//')"
+    if [ -n "$_live" ]; then
+      TOKEN="$_live"
+      return 0
+    fi
+  fi
   _unit_file_rt="$HOME/.config/systemd/user/conduit-broker.service"
   if [ -f "$_unit_file_rt" ]; then
     _live="$(grep 'Environment=.CONDUIT_TOKEN=' "$_unit_file_rt" 2>/dev/null \
@@ -604,11 +663,48 @@ if [ "$_with_ntfy" = "1" ]; then
       _ntfy_ver_num="${_ntfy_ver#v}"  # strip leading 'v' for path component
       _ntfy_tarball="ntfy_${_ntfy_ver_num}_${_ntfy_arch}.tar.gz"
       _ntfy_url_dl="https://github.com/binwiederhier/ntfy/releases/download/${_ntfy_ver}/${_ntfy_tarball}"
+      # ntfy publishes a per-release checksums manifest covering every asset:
+      #   ntfy_<ver>_checksums.txt  (sha256  <asset-name> lines)
+      _ntfy_sums="ntfy_${_ntfy_ver_num}_checksums.txt"
+      _ntfy_sums_url="https://github.com/binwiederhier/ntfy/releases/download/${_ntfy_ver}/${_ntfy_sums}"
       _ntfy_tmp="$(mktemp -d)"
       if curl -fsSL \
            --connect-timeout "$CURL_CONNECT_TIMEOUT" \
            --max-time "$CURL_NTFY_DL_MAX_TIME" \
            "$_ntfy_url_dl" -o "$_ntfy_tmp/$_ntfy_tarball" 2>&1 >&2; then
+        # ── Verify the tarball against ntfy's published checksums ──────────
+        # Policy: verify-if-present, HARD-FAIL on mismatch (skip the ntfy
+        # install — it is optional, so we keep the broker bootstrap alive),
+        # warn-if-absent (manifest/tool unavailable). We refuse to install an
+        # ntfy binary whose digest does not match the published value.
+        _ntfy_verify_ok=1
+        if [ -n "$_sha256_tool" ]; then
+          if curl -fsSL \
+               --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+               --max-time "$CURL_API_MAX_TIME" \
+               "$_ntfy_sums_url" -o "$_ntfy_tmp/$_ntfy_sums" 2>/dev/null \
+             && [ -s "$_ntfy_tmp/$_ntfy_sums" ]; then
+            _ntfy_expected="$(grep " ${_ntfy_tarball}\$" "$_ntfy_tmp/$_ntfy_sums" 2>/dev/null | head -1 | cut -d' ' -f1)"
+            if [ -n "$_ntfy_expected" ]; then
+              _ntfy_actual="$(_sha256_of "$_ntfy_tmp/$_ntfy_tarball")"
+              if [ "$_ntfy_actual" != "$_ntfy_expected" ]; then
+                echo "conduit: ntfy: checksum MISMATCH for $_ntfy_tarball (expected $_ntfy_expected, got $_ntfy_actual); refusing unverified ntfy binary, skipping ntfy" >&2
+                _ntfy_verify_ok=0
+                _with_ntfy=0
+              else
+                echo "conduit: ntfy: verified sha256 $_ntfy_actual" >&2
+              fi
+            else
+              echo "conduit: ntfy: $_ntfy_tarball not listed in checksums manifest; skipping integrity check" >&2
+            fi
+          else
+            echo "conduit: ntfy: no checksums manifest available; cannot verify ntfy integrity" >&2
+          fi
+        else
+          echo "conduit: ntfy: no sha256sum/shasum tool; cannot verify ntfy integrity" >&2
+        fi
+      fi
+      if [ "$_with_ntfy" = "1" ] && [ "${_ntfy_verify_ok:-1}" = "1" ] && [ -f "$_ntfy_tmp/$_ntfy_tarball" ]; then
         tar -xzf "$_ntfy_tmp/$_ntfy_tarball" -C "$_ntfy_tmp" 2>&1 >&2
         # The binary lives at ntfy_<ver>_<arch>/ntfy inside the tarball.
         _ntfy_extracted="$_ntfy_tmp/ntfy_${_ntfy_ver_num}_${_ntfy_arch}/ntfy"
@@ -621,7 +717,9 @@ if [ "$_with_ntfy" = "1" ]; then
           _with_ntfy=0
         fi
       else
-        echo "conduit: ntfy: download failed; skipping ntfy" >&2
+        # Reached on download failure, checksum mismatch, or missing tarball
+        # (a specific reason was already logged above). Skip ntfy either way.
+        echo "conduit: ntfy: not installed (download/verify failed); skipping ntfy" >&2
         _with_ntfy=0
       fi
       rm -rf "$_ntfy_tmp"
@@ -672,6 +770,13 @@ After=network.target
 ExecStart=$NTFY_BIN serve --config $NTFY_CONFIG
 Restart=always
 RestartSec=5
+# ── Sandboxing (conservative; ntfy only needs its config dir + sockets) ──
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectSystem=full
 
 [Install]
 WantedBy=default.target
@@ -763,28 +868,14 @@ fi
 if [ "$_use_systemd" = "1" ]; then
   mkdir -p "$SYSTEMD_UNIT_DIR"
 
-  # Build Environment= lines — PATH first (so the broker can find agent CLIs
-  # installed in ~/.local/bin by the post-OK install step or by hand);
-  # CONDUIT_TOKEN always; API keys only when set;
-  # CONDUIT_NTFY_URL when ntfy was installed successfully (so the broker
-  # advertises it in /api/capabilities features.ntfy_url).
-  # Use $HOME (expanded at write time) rather than %h so the shell heredoc
-  # does not need quoting gymnastics; both are equivalent in user units.
-  _env_lines="Environment=\"PATH=$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
-  _env_lines="$_env_lines
-Environment=\"CONDUIT_TOKEN=$TOKEN\""
-  if [ -n "$ANTHROPIC" ]; then
-    _env_lines="$_env_lines
-Environment=\"ANTHROPIC_API_KEY=$ANTHROPIC\""
-  fi
-  if [ -n "$OPENAI" ]; then
-    _env_lines="$_env_lines
-Environment=\"OPENAI_API_KEY=$OPENAI\""
-  fi
-  if [ -n "$_ntfy_url" ]; then
-    _env_lines="$_env_lines
-Environment=\"CONDUIT_NTFY_URL=$_ntfy_url\""
-  fi
+  # Secrets go into a 0600 EnvironmentFile (NOT inline Environment=), so they
+  # are not readable via `systemctl show` / /proc/<pid>/environ by other
+  # same-UID processes. PATH is included so the broker can find agent CLIs in
+  # ~/.local/bin; CONDUIT_TOKEN always; API keys only when set; CONDUIT_NTFY_URL
+  # when ntfy is up (advertised via /api/capabilities features.ntfy_url).
+  # Write the env file BEFORE the unit so the first daemon-reload sees it.
+  _broker_path="$HOME/.local/bin:$HOME/.local/share/conduit/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  _write_broker_env_file "$_broker_path" "$TOKEN" "$ANTHROPIC" "$OPENAI" "$_ntfy_url"
 
   # Write (or overwrite) the unit. Overwriting is idempotent for the same
   # token; a changed token causes a deliberate re-install (the app issues a
@@ -800,7 +891,19 @@ StartLimitBurst=5
 ExecStart=$BIN up --addr 127.0.0.1:$HOST_PORT
 Restart=on-failure
 RestartSec=10
-$_env_lines
+EnvironmentFile=$BROKER_ENV_FILE
+# ── Sandboxing (post-compromise containment; conservative so the broker and
+#    the agent CLIs it spawns under ~/.local/bin, ~/.claude, ~/.codex, ~/.conduit
+#    and the workspace cwd keep working) ──
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# ProtectSystem=full (not strict): read-only /usr /boot /etc only — does NOT
+# touch \$HOME, so all broker/agent writes under the user's home keep working.
+# Avoid ProtectHome=yes: it would hide the home the broker depends on.
+ProtectSystem=full
 
 [Install]
 WantedBy=default.target
