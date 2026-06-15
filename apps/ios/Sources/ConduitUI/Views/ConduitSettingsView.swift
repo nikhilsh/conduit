@@ -1292,7 +1292,7 @@ extension ConduitUI {
                                             }
                                             .tint(neon.accent)
                                         }
-                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                             Button(role: .destructive) {
                                                 pendingServerDelete = PendingServerDelete(id: server.id, name: server.name)
                                             } label: {

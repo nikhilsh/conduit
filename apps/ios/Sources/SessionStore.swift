@@ -2790,6 +2790,13 @@ final class SessionStore {
         // Archiving must leave the history row intact so it stays viewable
         // as a read-only transcript. Permanent removal lives in
         // `permanentlyDelete(sessionID:)`, invoked only from History.
+        //
+        // Mark the persisted History row as exited so it renders "ended"
+        // rather than "running". Use the same owner-ID logic as
+        // `recordSavedSession` (sessionBox stamp, then active endpoint).
+        let ownerID = sessionBox[sessionID] ?? savedHistoryServerID
+        SavedSessionsStore.shared.markExited(id: sessionID, serverID: ownerID)
+        Telemetry.breadcrumb("session", "archived row marked exited", data: ["session": sessionID, "server": ownerID])
         tearDownOnBroker(sessionID: sessionID, phase: "session_archive")
     }
 

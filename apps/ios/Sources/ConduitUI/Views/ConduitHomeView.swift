@@ -611,7 +611,7 @@ extension ConduitUI {
                                         }
                                     }
                                 }
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     if case .session(let id) = row.kind {
                                         Button {
                                             pendingDelete = PendingSessionDelete(id: id, title: row.title)

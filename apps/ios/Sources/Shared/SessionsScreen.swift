@@ -394,7 +394,7 @@ struct SessionsScreen: View {
                     ForEach(section.sessions, id: \.compoundID) { row in
                         sessionRow(row, serverName: showServerChip ? model.serverName(for: row) : nil)
                             .listRowBackground(Color.clear)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     pendingDelete = PendingSavedSessionDelete(
                                         id: row.id,
