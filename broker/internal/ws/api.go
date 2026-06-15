@@ -119,6 +119,12 @@ type capabilitiesResponse struct {
 		// app can auto-configure UnifiedPush against it — no Firebase, no
 		// third-party distributor. Absent / empty when ntfy is not configured.
 		NtfyURL string `json:"ntfy_url,omitempty"`
+		// SessionDiscovery: GET /api/sessions/discovered + /transcript are available.
+		// Clients gate the Found Sessions UI on this flag.
+		SessionDiscovery bool `json:"session_discovery"`
+		// SessionFork: POST /api/sessions/adopt supports mode=fork (worktree fork).
+		// False in this build: fork is not implemented; clients hide the Branch CTA.
+		SessionFork bool `json:"session_fork"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -170,6 +176,8 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.Push = true
 	resp.Features.PushRelayConfigured = s.PushRelayConfigured
 	resp.Features.NtfyURL = s.NtfyURL
+	resp.Features.SessionDiscovery = true
+	resp.Features.SessionFork = false // fork-onto-worktree not implemented this PR
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
@@ -786,4 +794,164 @@ func newSessionID() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 	hexed := hex.EncodeToString(b[:])
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hexed[0:8], hexed[8:12], hexed[12:16], hexed[16:20], hexed[20:32])
+}
+
+// ---------------------------------------------------------------------------
+// Found Sessions endpoints
+// ---------------------------------------------------------------------------
+
+// serveDiscoveredSessions handles GET /api/sessions/discovered.
+// Returns external Claude/Codex sessions (started outside Conduit), sorted
+// recent-first, with deduplication against Conduit's own sessions.
+//
+// Query params:
+//
+//	q=<s>               case-insensitive substring filter over title/cwd/git_branch
+//	agent=claude,codex  comma-separated; absent = both
+func (s *Server) serveDiscoveredSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	q := r.URL.Query().Get("q")
+	agentParam := strings.TrimSpace(r.URL.Query().Get("agent"))
+	var agents []string
+	if agentParam != "" {
+		for _, a := range strings.Split(agentParam, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				agents = append(agents, a)
+			}
+		}
+	}
+	resp := s.Sessions.DiscoverExternalSessions(q, agents)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// serveDiscoveredTranscript handles GET /api/sessions/discovered/transcript.
+// Returns the read-only transcript for an external session before adoption.
+//
+// Query params: agent=claude|codex, external_id=<id>
+func (s *Server) serveDiscoveredTranscript(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	externalID := strings.TrimSpace(r.URL.Query().Get("external_id"))
+	if agent == "" || externalID == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "agent and external_id are required")
+		return
+	}
+	items, err := session.ExternalTranscript(agent, externalID)
+	if err != nil {
+		// Return empty rather than 404: corrupt/partial files should return what parsed.
+		items = nil
+	}
+	if items == nil {
+		items = []session.ConvEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// adoptRequest is the body for POST /api/sessions/adopt.
+type adoptRequest struct {
+	Agent      string `json:"agent"`       // "claude" | "codex"
+	ExternalID string `json:"external_id"` // claude session uuid / codex thread id
+	CWD        string `json:"cwd"`
+	Mode       string `json:"mode"` // "resume" | "fork"
+}
+
+// serveAdoptSession handles POST /api/sessions/adopt.
+// Creates a NEW Conduit session seeded to resume (or fork) an external session.
+//
+//   - mode=resume: pre-seeds ClaudeChatSessionID / CodexThreadID so the backend
+//     resumes the external conversation via --resume / thread/resume.
+//   - mode=fork: returns 409 fork_unsupported (SessionFork=false this build).
+func (s *Server) serveAdoptSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	var req adoptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+		return
+	}
+	req.Agent = strings.TrimSpace(req.Agent)
+	req.ExternalID = strings.TrimSpace(req.ExternalID)
+	req.CWD = strings.TrimSpace(req.CWD)
+	req.Mode = strings.TrimSpace(req.Mode)
+
+	if req.Agent == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "agent is required")
+		return
+	}
+	if req.ExternalID == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "external_id is required")
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "resume"
+	}
+
+	// Fork is not implemented in this build; clients gate on SessionFork=false.
+	if req.Mode == "fork" {
+		writeAPIError(w, http.StatusConflict, "fork_unsupported",
+			"session fork is not supported on this broker (session_fork=false)")
+		return
+	}
+	if req.Mode != "resume" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_mode", "mode must be 'resume' or 'fork'")
+		return
+	}
+
+	// Validate CWD when present.
+	if req.CWD != "" {
+		if !filepath.IsAbs(req.CWD) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_cwd", "cwd must be an absolute path")
+			return
+		}
+	}
+
+	// Mint a new Conduit session ID for this adoption.
+	sessID := newSessionID()
+
+	// Create the session with the external conversation seeded.
+	// The ExternalID becomes the resume seed (ClaudeChatSessionID or CodexThreadID)
+	// which the agent backend picks up when launching: --resume <id> for claude,
+	// thread/resume for codex.
+	opts := session.CreateOptions{
+		CWD: req.CWD,
+		// ExternalResume carries the external_id so the session manager pre-seeds
+		// the appropriate backend resume field before spawning.
+		ExternalResume: session.ExternalResumeOptions{
+			Agent:      req.Agent,
+			ExternalID: req.ExternalID,
+		},
+	}
+	sess, _, err := s.Sessions.GetOrCreateWithOptions(sessID, req.Agent, opts)
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "unknown assistant"):
+			writeAPIError(w, http.StatusBadRequest, "assistant_unknown", msg)
+		case strings.Contains(msg, "invalid cwd"):
+			writeAPIError(w, http.StatusBadRequest, "invalid_cwd", msg)
+		case strings.Contains(msg, "gave up"):
+			writeAPIError(w, http.StatusGone, "session_gave_up", msg)
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "adopt_failed", msg)
+		}
+		return
+	}
+
+	log.Printf("found-sessions: adopted %s session %s as conduit session %s (mode=%s)",
+		req.Agent, req.ExternalID, sess.ID, req.Mode)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sess.ID,
+		"ws_path":    fmt.Sprintf("/ws/%s?assistant=%s", sess.ID, req.Agent),
+		"mode":       req.Mode,
+	})
 }
