@@ -266,10 +266,20 @@ func runUp(args []string) int {
 	var mdnsShutdown func()
 	if *local {
 		port, err := parsePort(*addr)
-		if err != nil {
+		switch {
+		case err != nil:
 			log.Printf("--local: cannot parse port from %q: %v (skipping mDNS)", *addr, err)
-		} else {
-			shutdown, err := discovery.Advertise(port)
+		case isPublicBind(*addr):
+			// The mDNS TXT record carries the bearer token so a phone on
+			// the same LAN can auto-pair. That is only safe on a trusted
+			// (private/loopback) bind — broadcasting the token while the
+			// broker is also reachable on a public interface would let a
+			// hostile same-segment neighbor (e.g. a datacenter co-tenant)
+			// read it and then connect over the public IP. Refuse to shout
+			// the token in that posture; the operator pairs via QR instead.
+			log.Printf("--local with a PUBLIC bind %q: NOT advertising over mDNS (would broadcast the bearer token in cleartext); pair via the QR code / manual token entry", *addr)
+		default:
+			shutdown, err := discovery.Advertise(port, token)
 			if err != nil {
 				log.Printf("--local: mDNS advertise failed: %v", err)
 			} else {
