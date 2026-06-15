@@ -443,6 +443,7 @@ fun BoxHealthScreen(
                 store = store,
                 server = server,
                 sessionFork = features?.sessionFork == true,
+                sessionWatch = features?.sessionWatch == true,
                 onDismiss = { showFoundSheet = false },
                 onOpenSession = { _ ->
                     // Select this box and navigate to the session.

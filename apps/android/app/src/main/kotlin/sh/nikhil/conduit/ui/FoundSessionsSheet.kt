@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.ForkRight
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -73,8 +75,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
@@ -101,6 +105,7 @@ fun FoundSessionsSheet(
     store: SessionStore,
     server: SavedServer,
     sessionFork: Boolean,
+    sessionWatch: Boolean,
     onDismiss: () -> Unit,
     onOpenSession: (sessionId: String) -> Unit,
 ) {
@@ -121,6 +126,7 @@ fun FoundSessionsSheet(
     // -- Sheet-level navigation --
     var shownBranch by remember { mutableStateOf<SessionStore.DiscoveredSession?>(null) }
     var shownTranscript by remember { mutableStateOf<SessionStore.DiscoveredSession?>(null) }
+    var shownWatch by remember { mutableStateOf<SessionStore.DiscoveredSession?>(null) }
     var resumeState by remember { mutableStateOf<ResumeUiState?>(null) }
 
     // Fetch discovered sessions on open and when filter/query changes
@@ -243,6 +249,21 @@ fun FoundSessionsSheet(
                         },
                     )
                 }
+                shownWatch != null -> {
+                    val watchSession = shownWatch ?: return@Box
+                    WatchLiveSheet(
+                        session = watchSession,
+                        sessionFork = sessionFork,
+                        neon = neon,
+                        store = store,
+                        server = server,
+                        onBack = { shownWatch = null },
+                        onBranch = { sess ->
+                            shownWatch = null
+                            shownBranch = sess
+                        },
+                    )
+                }
                 else -> {
                     // Main discovery list
                     DiscoveryListContent(
@@ -263,6 +284,8 @@ fun FoundSessionsSheet(
                         },
                         onBranch = { sess -> shownBranch = sess },
                         onView = { sess -> shownTranscript = sess },
+                        onWatch = { sess -> shownWatch = sess },
+                        sessionWatch = sessionWatch,
                         onRefresh = {
                             scope.launch {
                                 discoveryState = FoundDiscoveryState.Scanning
@@ -342,7 +365,9 @@ private fun DiscoveryListContent(
     onResume: (SessionStore.DiscoveredSession) -> Unit,
     onBranch: (SessionStore.DiscoveredSession) -> Unit,
     onView: (SessionStore.DiscoveredSession) -> Unit,
+    onWatch: (SessionStore.DiscoveredSession) -> Unit,
     onHide: (SessionStore.DiscoveredSession) -> Unit,
+    sessionWatch: Boolean,
     onRefresh: () -> Unit,
     onReconnect: () -> Unit,
 ) {
@@ -494,9 +519,11 @@ private fun DiscoveryListContent(
                                     FoundSessionRowItem(
                                         session = row.session,
                                         neon = neon,
+                                        sessionWatch = sessionWatch,
                                         onResume = { onResume(ds) },
                                         onBranch = { onBranch(ds) },
                                         onView = { onView(ds) },
+                                        onWatch = { onWatch(ds) },
                                         onHide = { onHide(ds) },
                                     )
                                 }
@@ -512,9 +539,11 @@ private fun DiscoveryListContent(
                                         FoundSessionRowItem(
                                             session = row.session,
                                             neon = neon,
+                                            sessionWatch = sessionWatch,
                                             onResume = { onResume(ds) },
                                             onBranch = { onBranch(ds) },
                                             onView = { onView(ds) },
+                                            onWatch = { onWatch(ds) },
                                             onHide = { onHide(ds) },
                                         )
                                     }
@@ -723,9 +752,11 @@ private fun FolderHeader(neon: NeonTheme, folder: String, count: Int) {
 private fun FoundSessionRowItem(
     session: FoundSession,
     neon: NeonTheme,
+    sessionWatch: Boolean,
     onResume: () -> Unit,
     onBranch: () -> Unit,
     onView: () -> Unit,
+    onWatch: () -> Unit,
     onHide: () -> Unit,
 ) {
     val tint = neonAgentColor(session.agent, neon)
@@ -802,6 +833,20 @@ private fun FoundSessionRowItem(
                         text = { Text("View transcript", fontFamily = neon.sans, fontSize = 13.sp) },
                         onClick = { overflowOpen = false; onView() },
                     )
+                    if (session.state == FoundSessionState.RUNNING && sessionWatch) {
+                        DropdownMenuItem(
+                            text = { Text("Watch live", fontFamily = neon.sans, fontSize = 13.sp) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.Visibility,
+                                    contentDescription = null,
+                                    tint = neon.yellow,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            },
+                            onClick = { overflowOpen = false; onWatch() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Copy resume command", fontFamily = neon.sans, fontSize = 13.sp) },
                         onClick = {
@@ -856,8 +901,21 @@ private fun FoundSessionRowItem(
                             Spacer(Modifier.size(4.dp))
                             Text("Branch a copy", fontFamily = neon.sans, fontSize = 12.sp)
                         }
-                        OutlinedButton(onClick = onView, modifier = Modifier.weight(1f)) {
-                            Text("View", fontFamily = neon.sans, fontSize = 12.sp)
+                        if (sessionWatch) {
+                            OutlinedButton(onClick = onWatch, modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    Icons.Outlined.Visibility,
+                                    contentDescription = null,
+                                    tint = neon.yellow,
+                                    modifier = Modifier.size(13.dp),
+                                )
+                                Spacer(Modifier.size(4.dp))
+                                Text("Watch live", fontFamily = neon.sans, fontSize = 12.sp)
+                            }
+                        } else {
+                            OutlinedButton(onClick = onView, modifier = Modifier.weight(1f)) {
+                                Text("View", fontFamily = neon.sans, fontSize = 12.sp)
+                            }
                         }
                     }
                     FoundSessionState.ADOPTED -> {
@@ -1451,5 +1509,391 @@ private fun relativeTime(ms: Long): String {
         hours > 0 -> "${hours}h ago"
         mins > 0 -> "${mins}m ago"
         else -> "just now"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Screen 09: Watch live -- read-only tail of a running session
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-only live-tail screen for a RUNNING discovered session.
+ * Polls GET /api/sessions/discovered/transcript?since_ts=<cursor> every 2.5s,
+ * appending new items and advancing the cursor.
+ *
+ * States:
+ *  - Polling normally: transcript grows; pulse dot animates.
+ *  - Poll failure (box drop): "stream paused -- reconnecting" banner;
+ *    frames kept; retrying continues automatically.
+ *  - Session ended (no new items and latest_ts stable): "session ended" notice
+ *    + View full transcript + Branch from last point.
+ *  - Cancelled: coroutine scope cancellation stops the loop cleanly.
+ *
+ * Reduced-motion: pulse dot becomes static when the system animator scale is 0.
+ * The ONE looping animation in this feature is the pulse dot -- everything else
+ * is instant state transitions.
+ */
+@Composable
+private fun WatchLiveSheet(
+    session: SessionStore.DiscoveredSession,
+    sessionFork: Boolean,
+    neon: NeonTheme,
+    store: SessionStore,
+    server: SavedServer,
+    onBack: () -> Unit,
+    onBranch: (SessionStore.DiscoveredSession) -> Unit,
+) {
+    // Reduced-motion: system animator scale 0 means no looping animation.
+    val context = LocalContext.current
+    val reduceMotion = remember {
+        android.provider.Settings.Global.getFloat(
+            context.contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }
+
+    val lazyState = rememberLazyListState()
+
+    // Full transcript items (initial load + incremental poll appended).
+    var watchItems by remember { mutableStateOf<List<SessionStore.FoundTranscriptItem>>(emptyList()) }
+    // Polling cursor -- advances to latest_ts on each successful poll.
+    var cursorMs by remember { mutableStateOf(0L) }
+    // Pause/error banner when the last poll failed.
+    var streamPaused by remember { mutableStateOf(false) }
+    // True once we confirm the session has ended (no growth after two consecutive polls).
+    var sessionEnded by remember { mutableStateOf(false) }
+    // Track stable-ts rounds to detect session end.
+    var stableRounds by remember { mutableStateOf(0) }
+    // Initial load state.
+    var initialLoading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf(false) }
+
+    // Initial full-transcript load (no since_ts), then start poll loop.
+    LaunchedEffect(session.externalId) {
+        Telemetry.breadcrumb(
+            "found_sessions",
+            "watch opened",
+            mapOf("agent" to session.agent, "id" to session.externalId),
+        )
+        val initial = store.fetchDiscoveredTranscript(server.endpoint, session.agent, session.externalId)
+        if (initial == null) {
+            initialLoading = false
+            loadError = true
+            Telemetry.breadcrumb("found_sessions", "watch initial load failed", mapOf("id" to session.externalId))
+            return@LaunchedEffect
+        }
+        watchItems = initial
+        // Seed the cursor from the last item's ts converted to ms; fall back to now.
+        cursorMs = initial.lastOrNull()?.let {
+            try { java.time.Instant.parse(it.ts).toEpochMilli() } catch (_: Exception) { 0L }
+        } ?: System.currentTimeMillis()
+        initialLoading = false
+
+        // Auto-scroll to bottom after initial load.
+        if (initial.isNotEmpty()) {
+            lazyState.animateScrollToItem(initial.size - 1)
+        }
+
+        // Poll loop: runs until the coroutine is cancelled (navigation away).
+        while (true) {
+            delay(2_500L)
+            if (sessionEnded) break
+
+            val result = store.fetchDiscoveredTranscriptSince(
+                endpoint = server.endpoint,
+                agent = session.agent,
+                externalId = session.externalId,
+                sinceMs = cursorMs,
+            )
+            if (result == null) {
+                // Transient failure: show paused banner; keep retrying.
+                if (!streamPaused) {
+                    streamPaused = true
+                    Telemetry.breadcrumb("found_sessions", "watch paused", mapOf("id" to session.externalId))
+                }
+                continue
+            }
+            streamPaused = false
+            val (newItems, latestTs) = result
+            if (newItems.isNotEmpty()) {
+                watchItems = watchItems + newItems
+                cursorMs = latestTs
+                stableRounds = 0
+                // Auto-scroll to the newly appended items.
+                withContext(Dispatchers.Main) {
+                    lazyState.animateScrollToItem(watchItems.size - 1)
+                }
+            } else {
+                // No new items this round. After two consecutive stable rounds assume session ended.
+                stableRounds++
+                if (stableRounds >= 2) {
+                    sessionEnded = true
+                    Telemetry.breadcrumb("found_sessions", "watch session ended", mapOf("id" to session.externalId))
+                }
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        // -- Header --
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.Close, contentDescription = "Back", tint = neon.textFaint)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    session.title,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    color = neon.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${session.cwd} · ${session.gitBranch}",
+                    fontFamily = neon.mono,
+                    fontSize = 10.sp,
+                    color = neon.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // "Watching live" chip with pulse dot
+            WatchingChip(neon = neon, reduceMotion = reduceMotion, ended = sessionEnded)
+        }
+
+        // -- Persistent "You're watching -- not driving" banner --
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(neon.yellow.copy(alpha = 0.08f))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Outlined.Visibility,
+                contentDescription = null,
+                tint = neon.yellow,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                "You're watching -- not driving",
+                fontFamily = neon.mono,
+                fontSize = 11.sp,
+                color = neon.yellow,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+
+        // -- Stream paused banner --
+        if (streamPaused && !sessionEnded) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(neon.red.copy(alpha = 0.07f))
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = neon.red,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    "Stream paused -- reconnecting",
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    color = neon.red,
+                )
+            }
+        }
+
+        // -- Session ended banner --
+        if (sessionEnded) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(neon.textFaint.copy(alpha = 0.06f))
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    Icons.Default.Terminal,
+                    contentDescription = null,
+                    tint = neon.textFaint,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    "Session ended",
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    color = neon.textFaint,
+                )
+            }
+        }
+
+        // -- Transcript body --
+        when {
+            initialLoading -> {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = neon.accent, modifier = Modifier.size(32.dp))
+                }
+            }
+            loadError -> {
+                FoundSessionErrorComposable(
+                    neon = neon,
+                    title = "Could not load transcript",
+                    message = "The connection dropped before the transcript could load.",
+                    primaryLabel = "Go back",
+                    onPrimary = onBack,
+                    secondaryLabel = null,
+                    onSecondary = null,
+                )
+            }
+            else -> {
+                LazyColumn(
+                    state = lazyState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(watchItems) { item ->
+                        TranscriptItemRow(neon = neon, item = item)
+                    }
+                    if (watchItems.isEmpty()) {
+                        item {
+                            Text(
+                                "Waiting for messages...",
+                                fontFamily = neon.mono,
+                                fontSize = 12.sp,
+                                color = neon.textFaint,
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                    }
+                    // Live updates footer
+                    if (!sessionEnded) {
+                        item {
+                            Row(
+                                Modifier.padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(6.dp)
+                                        .clip(RoundedCornerShape(99.dp))
+                                        .background(if (streamPaused) neon.red else neon.green),
+                                )
+                                Text(
+                                    if (streamPaused) "reconnecting..." else "live -- updates as it runs",
+                                    fontFamily = neon.mono,
+                                    fontSize = 10.sp,
+                                    color = neon.textFaint,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- Pinned bottom CTA: Branch a copy to take control --
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(neon.surfaceSolid)
+                .padding(16.dp)
+                .windowInsetsPadding(WindowInsets.navigationBars),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            FilledTonalButton(
+                onClick = {
+                    Telemetry.breadcrumb(
+                        "found_sessions",
+                        "watch branch",
+                        mapOf("id" to session.externalId),
+                    )
+                    onBranch(session)
+                },
+                enabled = sessionFork,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    if (sessionFork) "Branch a copy to take control" else "Branch a copy -- unavailable on this box yet",
+                    fontFamily = neon.sans,
+                    fontSize = 13.sp,
+                )
+            }
+            Text(
+                "Watching never changes the session -- branch to drive your own copy",
+                fontFamily = neon.mono,
+                fontSize = 10.sp,
+                color = neon.textFaint,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Watching chip (live pulse or static dot when reduced-motion)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WatchingChip(neon: NeonTheme, reduceMotion: Boolean, ended: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "watch_pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "watch_dot_pulse",
+    )
+    val dotAlpha = when {
+        ended -> 1f
+        reduceMotion -> 1f
+        else -> pulseAlpha
+    }
+    val chipColor = if (ended) neon.textFaint else neon.yellow
+
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(99.dp))
+            .background(chipColor.copy(alpha = 0.12f))
+            .border(1.dp, chipColor.copy(alpha = 0.28f), RoundedCornerShape(99.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .clip(RoundedCornerShape(99.dp))
+                .background(chipColor.copy(alpha = dotAlpha)),
+        )
+        Text(
+            if (ended) "Ended" else "Watching live",
+            fontFamily = neon.mono,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp,
+            color = chipColor,
+        )
     }
 }

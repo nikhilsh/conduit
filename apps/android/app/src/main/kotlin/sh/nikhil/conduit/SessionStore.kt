@@ -3545,6 +3545,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val sessionDiscovery: Boolean = false,
         /** Broker supports fork-onto-worktree for running sessions. */
         val sessionFork: Boolean = false,
+        /** Broker supports read-only live-tail of a running session. */
+        val sessionWatch: Boolean = false,
     )
 
     /**
@@ -3680,6 +3682,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 ntfyUrl = if (rawNtfyUrl.isNullOrBlank()) null else rawNtfyUrl,
                 sessionDiscovery = features?.optBoolean("session_discovery", false) ?: false,
                 sessionFork = features?.optBoolean("session_fork", false) ?: false,
+                sessionWatch = features?.optBoolean("session_watch", false) ?: false,
             )
         }.getOrNull()
     }
@@ -3892,6 +3895,78 @@ class SessionStore : ViewModel(), ConduitDelegate {
             }
         }.getOrElse { e ->
             Telemetry.breadcrumb("found_sessions", "transcript exception", mapOf("error" to (e.message ?: "unknown")))
+            null
+        }
+    }
+
+    /**
+     * Fetch NEW transcript items for a running session since [sinceMs] (unix millis).
+     * Used by the Watch live poll loop: GET /api/sessions/discovered/transcript
+     * with the since_ts query parameter.
+     * Returns a Pair of (new items, latest_ts) on success; null on any failure.
+     * Callers should keep retrying on null (paused state) and stop on session end.
+     */
+    suspend fun fetchDiscoveredTranscriptSince(
+        endpoint: Endpoint,
+        agent: String,
+        externalId: String,
+        sinceMs: Long,
+    ): Pair<List<FoundTranscriptItem>, Long>? = withContext(Dispatchers.IO) {
+        val base = endpoint.httpBaseUrl ?: return@withContext null
+        Telemetry.breadcrumb(
+            "found_sessions",
+            "watch poll",
+            mapOf("agent" to agent, "id" to externalId, "since_ms" to sinceMs.toString()),
+        )
+        val url = URL(
+            "$base/api/sessions/discovered/transcript" +
+                "?agent=${java.net.URLEncoder.encode(agent, "UTF-8")}" +
+                "&external_id=${java.net.URLEncoder.encode(externalId, "UTF-8")}" +
+                "&since_ts=$sinceMs",
+        )
+        return@withContext runCatching {
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                connectTimeout = 7_000
+                readTimeout = 15_000
+            }
+            try {
+                if (conn.responseCode !in 200..299) {
+                    Telemetry.breadcrumb(
+                        "found_sessions",
+                        "watch poll error",
+                        mapOf("code" to conn.responseCode.toString()),
+                    )
+                    return@runCatching null
+                }
+                val raw = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = org.json.JSONObject(raw)
+                val arr = obj.optJSONArray("items") ?: org.json.JSONArray()
+                val items = (0 until arr.length()).map { i ->
+                    val item = arr.getJSONObject(i)
+                    FoundTranscriptItem(
+                        role = item.optString("role", "user"),
+                        content = item.optString("content", ""),
+                        ts = item.optString("ts", ""),
+                    )
+                }
+                val latestTs = obj.optLong("latest_ts", sinceMs)
+                Telemetry.breadcrumb(
+                    "found_sessions",
+                    "watch poll ok",
+                    mapOf("new_items" to items.size.toString(), "latest_ts" to latestTs.toString()),
+                )
+                Pair(items, latestTs)
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrElse { e ->
+            Telemetry.breadcrumb(
+                "found_sessions",
+                "watch poll exception",
+                mapOf("error" to (e.message ?: "unknown")),
+            )
             null
         }
     }
