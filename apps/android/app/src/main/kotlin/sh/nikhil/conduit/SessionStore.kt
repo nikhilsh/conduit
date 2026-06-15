@@ -3538,9 +3538,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
         /**
          * URL of the ntfy server co-located on this box, or null when the
          * broker does not advertise one (`features.ntfy_url` absent/empty).
-         * Older brokers that omit the key parse as null — no regression.
+         * Older brokers that omit the key parse as null -- no regression.
          */
         val ntfyUrl: String? = null,
+        /** Broker can enumerate sessions started outside Conduit. */
+        val sessionDiscovery: Boolean = false,
+        /** Broker supports fork-onto-worktree for running sessions. */
+        val sessionFork: Boolean = false,
     )
 
     /**
@@ -3674,6 +3678,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 shellSessions = features?.optBoolean("shell_sessions", false) ?: false,
                 push = features?.optBoolean("push", false) ?: false,
                 ntfyUrl = if (rawNtfyUrl.isNullOrBlank()) null else rawNtfyUrl,
+                sessionDiscovery = features?.optBoolean("session_discovery", false) ?: false,
+                sessionFork = features?.optBoolean("session_fork", false) ?: false,
             )
         }.getOrNull()
     }
@@ -3708,6 +3714,251 @@ class SessionStore : ViewModel(), ConduitDelegate {
             )
             metrics
         }.getOrNull()
+    }
+
+    // -----------------------------------------------------------------------
+    // Found Sessions (session_discovery capability)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Persisted set of hidden found-session external ids, keyed by box id.
+     * A hidden session stays suppressed even if rediscovered, until the user
+     * unhides it from the "All" filter. Per-box, not global.
+     */
+    private val _hiddenFound = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+
+    /** Persisted hidden ids for a specific box. */
+    fun hiddenFoundIds(boxId: String): Set<String> = _hiddenFound.value[boxId] ?: emptySet()
+
+    /** Hide a found session by externalId for the given boxId (persisted in memory; no network). */
+    fun hideFound(boxId: String, externalId: String) {
+        val current = _hiddenFound.value.toMutableMap()
+        val box = (current[boxId] ?: emptySet()).toMutableSet()
+        box.add(externalId)
+        current[boxId] = box
+        _hiddenFound.value = current
+        Telemetry.breadcrumb("found_sessions", "hide", mapOf("box" to boxId, "external_id" to externalId))
+    }
+
+    /** Undo a hide for a found session (used by Snackbar undo). */
+    fun unhideFound(boxId: String, externalId: String) {
+        val current = _hiddenFound.value.toMutableMap()
+        val box = (current[boxId] ?: emptySet()).toMutableSet()
+        box.remove(externalId)
+        current[boxId] = box
+        _hiddenFound.value = current
+        Telemetry.breadcrumb("found_sessions", "unhide", mapOf("box" to boxId, "external_id" to externalId))
+    }
+
+    /**
+     * Wire model for a discovered external session (GET /api/sessions/discovered).
+     * Mirrors the JSON shape from FOUND-SESSIONS-CONTRACT.md.
+     */
+    data class DiscoveredSession(
+        val agent: String,
+        val externalId: String,
+        val title: String,
+        val cwd: String,
+        val gitBranch: String,
+        val turnCount: Int,
+        val lastActivityAtMs: Long,
+        val isRunning: Boolean,
+    )
+
+    /**
+     * Wire result of GET /api/sessions/discovered.
+     */
+    data class DiscoveredSessionsPage(
+        val sessions: List<DiscoveredSession>,
+        val nextCursor: String,
+        val totalOnDisk: Int,
+    )
+
+    /**
+     * Fetch a paged list of sessions started outside Conduit on this box.
+     * Uses GET /api/sessions/discovered per FOUND-SESSIONS-CONTRACT.md.
+     * Returns null on any failure (broker unreachable, 403, etc.).
+     */
+    suspend fun fetchDiscoveredSessions(
+        endpoint: Endpoint,
+        q: String = "",
+        agent: String = "",
+        cursor: String = "",
+    ): DiscoveredSessionsPage? = withContext(Dispatchers.IO) {
+        val base = endpoint.httpBaseUrl ?: return@withContext null
+        Telemetry.breadcrumb("found_sessions", "fetch start", mapOf("host" to endpoint.displayHost, "q" to q))
+        val sb = StringBuilder("$base/api/sessions/discovered?limit=50")
+        if (q.isNotBlank()) sb.append("&q=${java.net.URLEncoder.encode(q, "UTF-8")}")
+        if (agent.isNotBlank()) sb.append("&agent=${java.net.URLEncoder.encode(agent, "UTF-8")}")
+        if (cursor.isNotBlank()) sb.append("&cursor=${java.net.URLEncoder.encode(cursor, "UTF-8")}")
+        return@withContext runCatching {
+            val conn = (URL(sb.toString()).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                connectTimeout = 7_000
+                readTimeout = 15_000
+            }
+            try {
+                if (conn.responseCode !in 200..299) {
+                    Telemetry.breadcrumb("found_sessions", "fetch error", mapOf("code" to conn.responseCode.toString()))
+                    return@runCatching null
+                }
+                val raw = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(raw)
+                val arr = obj.optJSONArray("sessions") ?: org.json.JSONArray()
+                val sessions = (0 until arr.length()).map { i ->
+                    val s = arr.getJSONObject(i)
+                    DiscoveredSession(
+                        agent = s.optString("agent", "claude"),
+                        externalId = s.optString("external_id", ""),
+                        title = s.optString("title", ""),
+                        cwd = s.optString("cwd", ""),
+                        gitBranch = s.optString("git_branch", ""),
+                        turnCount = s.optInt("turn_count", 0),
+                        lastActivityAtMs = s.optLong("last_activity_at", 0L),
+                        isRunning = s.optBoolean("is_running", false),
+                    )
+                }
+                Telemetry.breadcrumb(
+                    "found_sessions", "fetch ok",
+                    mapOf("count" to sessions.size.toString(), "total" to obj.optInt("total_on_disk", 0).toString()),
+                )
+                DiscoveredSessionsPage(
+                    sessions = sessions,
+                    nextCursor = obj.optString("next_cursor", ""),
+                    totalOnDisk = obj.optInt("total_on_disk", 0),
+                )
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrElse { e ->
+            Telemetry.breadcrumb("found_sessions", "fetch exception", mapOf("error" to (e.message ?: "unknown")))
+            null
+        }
+    }
+
+    /**
+     * Wire model for a transcript item from GET /api/sessions/discovered/transcript.
+     */
+    data class FoundTranscriptItem(
+        val role: String,
+        val content: String,
+        val ts: String,
+    )
+
+    /**
+     * Fetch the read-only transcript for a discovered session (pre-adopt).
+     * Returns the item list; partial result on corrupt/partial files per contract.
+     */
+    suspend fun fetchDiscoveredTranscript(
+        endpoint: Endpoint,
+        agent: String,
+        externalId: String,
+    ): List<FoundTranscriptItem>? = withContext(Dispatchers.IO) {
+        val base = endpoint.httpBaseUrl ?: return@withContext null
+        Telemetry.breadcrumb("found_sessions", "transcript fetch", mapOf("agent" to agent, "id" to externalId))
+        val url = URL(
+            "$base/api/sessions/discovered/transcript" +
+                "?agent=${java.net.URLEncoder.encode(agent, "UTF-8")}" +
+                "&external_id=${java.net.URLEncoder.encode(externalId, "UTF-8")}",
+        )
+        return@withContext runCatching {
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                connectTimeout = 7_000
+                readTimeout = 15_000
+            }
+            try {
+                if (conn.responseCode !in 200..299) {
+                    Telemetry.breadcrumb("found_sessions", "transcript error", mapOf("code" to conn.responseCode.toString()))
+                    return@runCatching null
+                }
+                val raw = conn.inputStream.bufferedReader().use { it.readText() }
+                val obj = JSONObject(raw)
+                val arr = obj.optJSONArray("items") ?: org.json.JSONArray()
+                (0 until arr.length()).map { i ->
+                    val item = arr.getJSONObject(i)
+                    FoundTranscriptItem(
+                        role = item.optString("role", "user"),
+                        content = item.optString("content", ""),
+                        ts = item.optString("ts", ""),
+                    )
+                }.also { items ->
+                    Telemetry.breadcrumb("found_sessions", "transcript ok", mapOf("items" to items.size.toString()))
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrElse { e ->
+            Telemetry.breadcrumb("found_sessions", "transcript exception", mapOf("error" to (e.message ?: "unknown")))
+            null
+        }
+    }
+
+    /**
+     * Adopt a discovered session (resume or fork) via POST /api/sessions/adopt.
+     * Returns the new Conduit session_id on success, or null on failure.
+     *
+     * After success the caller should open the session via the normal WS flow
+     * (select the box + connect, then open the returned session_id in ProjectScreen).
+     *
+     * mode: "resume" (idle sessions only) | "fork" (running, requires session_fork capability)
+     */
+    suspend fun adoptFound(
+        endpoint: Endpoint,
+        agent: String,
+        externalId: String,
+        cwd: String,
+        mode: String,
+    ): String? = withContext(Dispatchers.IO) {
+        val base = endpoint.httpBaseUrl ?: return@withContext null
+        Telemetry.breadcrumb(
+            "found_sessions", "adopt start",
+            mapOf("agent" to agent, "external_id" to externalId, "mode" to mode),
+        )
+        return@withContext runCatching {
+            val body = JSONObject().apply {
+                put("agent", agent)
+                put("external_id", externalId)
+                put("cwd", cwd)
+                put("mode", mode)
+            }.toString().toByteArray(Charsets.UTF_8)
+            val conn = (URL("$base/api/sessions/adopt").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Authorization", "Bearer ${endpoint.token}")
+                setRequestProperty("Content-Type", "application/json")
+                doOutput = true
+                connectTimeout = 7_000
+                readTimeout = 30_000
+            }
+            try {
+                conn.outputStream.use { it.write(body) }
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    val errBody = runCatching {
+                        conn.errorStream?.bufferedReader()?.use { it.readText() }
+                    }.getOrNull()
+                    Telemetry.breadcrumb(
+                        "found_sessions", "adopt error",
+                        mapOf("code" to code.toString(), "body" to (errBody ?: "")),
+                    )
+                    return@runCatching null
+                }
+                val raw = conn.inputStream.bufferedReader().use { it.readText() }
+                val sessionId = JSONObject(raw).optString("session_id", null)
+                Telemetry.breadcrumb(
+                    "found_sessions", "adopt ok",
+                    mapOf("session_id" to (sessionId ?: "null"), "mode" to mode),
+                )
+                sessionId
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrElse { e ->
+            Telemetry.breadcrumb("found_sessions", "adopt exception", mapOf("error" to (e.message ?: "unknown")))
+            null
+        }
     }
 
     /**

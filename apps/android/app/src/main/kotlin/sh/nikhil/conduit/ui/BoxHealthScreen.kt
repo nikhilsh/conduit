@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.HarnessState
+import androidx.compose.material3.CircularProgressIndicator
 import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
@@ -122,14 +123,60 @@ fun BoxHealthScreen(
     val sessionsOnBox = if (isActive) sessions.filter { sessionBox[it.id] == server.id } else emptyList()
 
     // Probe results for THIS box (fetched on open). null = probe not
-    // finished or box doesn't answer — dependent UI stays hidden.
+    // finished or box doesn't answer -- dependent UI stays hidden.
     var metrics by remember(server.id) { mutableStateOf<SessionStore.HostMetrics?>(null) }
     var features by remember(server.id) { mutableStateOf<SessionStore.BoxFeatures?>(null) }
+    var foundSnapshot by remember(server.id) { mutableStateOf<FoundSessionsSnapshot?>(null) }
+    var showFoundSheet by remember { mutableStateOf(false) }
     LaunchedEffect(server.id) {
         Telemetry.breadcrumb("box_health", "open", mapOf("host" to server.endpoint.displayHost))
         features = store.fetchBoxFeatures(server.endpoint)
         if (features?.hostMetrics == true) {
             metrics = store.fetchHostMetrics(server.endpoint)
+        }
+        // Probe found sessions if the box advertises session_discovery
+        if (features?.sessionDiscovery == true) {
+            Telemetry.breadcrumb("found_sessions", "entry probe", mapOf("host" to server.endpoint.displayHost))
+            foundSnapshot = FoundSessionsSnapshot(
+                boxId = server.id,
+                sessions = emptyList(),
+                hiddenIds = store.hiddenFoundIds(server.id),
+                query = "",
+                filter = FoundFilter.RECENT,
+                discoveryState = FoundDiscoveryState.Scanning,
+            )
+            val page = store.fetchDiscoveredSessions(server.endpoint)
+            foundSnapshot = if (page == null) {
+                FoundSessionsSnapshot(
+                    boxId = server.id,
+                    sessions = emptyList(),
+                    hiddenIds = store.hiddenFoundIds(server.id),
+                    query = "",
+                    filter = FoundFilter.RECENT,
+                    discoveryState = FoundDiscoveryState.Offline,
+                )
+            } else {
+                FoundSessionsSnapshot(
+                    boxId = server.id,
+                    sessions = page.sessions.map { d ->
+                        FoundSession(
+                            externalId = d.externalId,
+                            agent = d.agent,
+                            title = d.title,
+                            cwd = d.cwd,
+                            gitBranch = d.gitBranch,
+                            turnCount = d.turnCount,
+                            lastActivityAtMs = d.lastActivityAtMs,
+                            state = if (d.isRunning) FoundSessionState.RUNNING else FoundSessionState.IDLE,
+                        )
+                    },
+                    hiddenIds = store.hiddenFoundIds(server.id),
+                    query = "",
+                    filter = FoundFilter.RECENT,
+                    discoveryState = if (page.sessions.isEmpty()) FoundDiscoveryState.Empty else FoundDiscoveryState.Loaded,
+                    totalOnDisk = page.totalOnDisk,
+                )
+            }
         }
     }
 
@@ -141,14 +188,15 @@ fun BoxHealthScreen(
         else -> "offline" to neon.textFaint
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(neon.bg)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(neon.bg)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
         // ── Header — name · host · status chip ──────────────────────────
         Row(
             modifier = Modifier
@@ -252,7 +300,111 @@ fun BoxHealthScreen(
             }
         }
 
-        // ── Account-wide limits pointer (NO per-box quota — data rule) ───
+        // -- "Started outside Conduit" entry section -------------------------
+        // Capability-gated on session_discovery. Hidden when count==0 and not
+        // scanning. Offline -> dimmed card routing to reconnect.
+        val showFound = FoundSessionsModel.showEntryCard(
+            snapshot = foundSnapshot,
+            sessionDiscovery = features?.sessionDiscovery == true,
+        )
+        if (showFound) {
+            SectionLabel("STARTED OUTSIDE CONDUIT")
+            val snap = foundSnapshot!!
+            val hiddenIds = store.hiddenFoundIds(server.id)
+            val count = snap.sessions.count { it.externalId !in hiddenIds }
+            val scanning = snap.discoveryState is FoundDiscoveryState.Scanning
+            val offline = snap.discoveryState is FoundDiscoveryState.Offline
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .neonCardSurface(
+                        neon = neon,
+                        shape = RoundedCornerShape(14.dp),
+                        fill = neon.accent.copy(alpha = if (neon.dark) 0.05f else 0.03f),
+                        borderColor = neon.accent.copy(alpha = if (offline) 0.12f else 0.25f),
+                    )
+                    .clickable(enabled = !offline) {
+                        if (!offline) showFoundSheet = true
+                        else onReconnect()
+                    }
+                    .padding(13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(neon.accent.copy(alpha = if (offline) 0.05f else 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Terminal,
+                        contentDescription = null,
+                        tint = neon.accent.copy(alpha = if (offline) 0.4f else 1f),
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Continue a session",
+                        fontFamily = neon.sans,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = neon.text.copy(alpha = if (offline) 0.4f else 1f),
+                    )
+                    Text(
+                        when {
+                            offline -> "offline -- can't scan"
+                            scanning -> "scanning..."
+                            else -> "$count found -- resume or branch a copy"
+                        },
+                        fontFamily = neon.mono,
+                        fontSize = 11.sp,
+                        color = neon.textFaint.copy(alpha = if (offline) 0.4f else 1f),
+                        maxLines = 1,
+                    )
+                }
+                if (scanning) {
+                    CircularProgressIndicator(
+                        color = neon.accent,
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else if (!offline) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(neon.accent.copy(alpha = 0.15f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            count.toString(),
+                            fontFamily = neon.mono,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = neon.accent,
+                        )
+                    }
+                }
+            }
+            // Footnote
+            Row(
+                Modifier.padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = neon.textFaint, modifier = Modifier.size(11.dp))
+                Text(
+                    "Claude & Codex sessions you launched by hand. Conduit picks up where they left off -- it doesn't take over a live one.",
+                    fontFamily = neon.mono,
+                    fontSize = 10.sp,
+                    color = neon.textFaint,
+                )
+            }
+        }
+
+        // -- Account-wide limits pointer (NO per-box quota -- data rule) ---
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -285,7 +437,23 @@ fun BoxHealthScreen(
                 }
             }
         }
-    }
+        // -- FoundSessionsSheet modal --
+        if (showFoundSheet) {
+            FoundSessionsSheet(
+                store = store,
+                server = server,
+                sessionFork = features?.sessionFork == true,
+                onDismiss = { showFoundSheet = false },
+                onOpenSession = { _ ->
+                    // Select this box and navigate to the session.
+                    store.selectSavedServer(server.id, autoConnect = true)
+                    showFoundSheet = false
+                    onDismiss()
+                },
+            )
+        }
+    } // end Column
+  } // end Box
 }
 
 /** "3d 4h" / "5h 12m" / "9m" — coarse box uptime. */
