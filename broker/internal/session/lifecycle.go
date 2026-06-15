@@ -675,7 +675,7 @@ func (s *Session) switchToAdapter(adapter agents.Adapter) error {
 	if oldChat != nil {
 		_ = oldChat.Close()
 	}
-	s.startChatBackend(adapter, resumeClaude, false, resumeCodex)
+	s.startChatBackend(adapter, resumeClaude, false, resumeCodex, "")
 	if err := s.persistMetadata(); err != nil {
 		return err
 	}

@@ -38,11 +38,21 @@ var claudeChatNow = time.Now
 // recent conversation in the cwd; with the per-session agent-home that
 // is unambiguously THIS session's own conversation (verified live).
 func claudeStreamCommand(command, args []string, resumeSessionID string, continueLatest bool) []string {
-	argv := make([]string, 0, len(command)+len(args)+8)
+	return claudeStreamCommandFork(command, args, resumeSessionID, continueLatest, false)
+}
+
+// claudeStreamCommandFork is like claudeStreamCommand but adds --fork-session
+// after --resume when forkSession is true. This branches the resumed conversation
+// into a NEW claude session id, leaving the original untouched.
+func claudeStreamCommandFork(command, args []string, resumeSessionID string, continueLatest bool, forkSession bool) []string {
+	argv := make([]string, 0, len(command)+len(args)+10)
 	argv = append(argv, command...)
 	argv = append(argv, args...)
 	if resumeSessionID != "" {
 		argv = append(argv, "--resume", resumeSessionID)
+		if forkSession {
+			argv = append(argv, "--fork-session")
+		}
 	} else if continueLatest {
 		argv = append(argv, "--continue")
 	}

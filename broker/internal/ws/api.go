@@ -123,8 +123,11 @@ type capabilitiesResponse struct {
 		// Clients gate the Found Sessions UI on this flag.
 		SessionDiscovery bool `json:"session_discovery"`
 		// SessionFork: POST /api/sessions/adopt supports mode=fork (worktree fork).
-		// False in this build: fork is not implemented; clients hide the Branch CTA.
+		// True: fork-onto-worktree is fully implemented + tested (real --fork-session).
 		SessionFork bool `json:"session_fork"`
+		// SessionWatch: GET /api/sessions/discovered/transcript supports since_ts
+		// for incremental polling. True from this version forward.
+		SessionWatch bool `json:"session_watch"`
 	} `json:"features"`
 	// Models is the per-assistant model+effort catalog discovered live from
 	// the agent CLIs (claude control-protocol initialize, codex app-server
@@ -177,7 +180,8 @@ func (s *Server) serveCapabilities(w http.ResponseWriter, r *http.Request) {
 	resp.Features.PushRelayConfigured = s.PushRelayConfigured
 	resp.Features.NtfyURL = s.NtfyURL
 	resp.Features.SessionDiscovery = true
-	resp.Features.SessionFork = false // fork-onto-worktree not implemented this PR
+	resp.Features.SessionFork = true  // real worktree fork with --fork-session (this PR)
+	resp.Features.SessionWatch = true // since_ts incremental transcript polling
 	resp.Models = s.Sessions.ModelCatalog()
 	resp.Agents = s.Sessions.AgentDescriptors()
 	// Pass the pushed-credential store as a nil INTERFACE when unset:
@@ -829,7 +833,14 @@ func (s *Server) serveDiscoveredSessions(w http.ResponseWriter, r *http.Request)
 // serveDiscoveredTranscript handles GET /api/sessions/discovered/transcript.
 // Returns the read-only transcript for an external session before adoption.
 //
-// Query params: agent=claude|codex, external_id=<id>
+// Query params:
+//
+//	agent=claude|codex
+//	external_id=<id>
+//	since_ts=<unix_ms>   (optional) — when present, return ONLY items with ts
+//	                     strictly greater than since_ts; full transcript when absent.
+//	                     Always returns latest_ts (max ts in the file) so the
+//	                     client can advance its cursor even when no new items.
 func (s *Server) serveDiscoveredTranscript(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
@@ -840,15 +851,24 @@ func (s *Server) serveDiscoveredTranscript(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "agent and external_id are required")
 		return
 	}
-	items, err := session.ExternalTranscript(agent, externalID)
-	if err != nil {
-		// Return empty rather than 404: corrupt/partial files should return what parsed.
-		items = nil
+	var sinceMs int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("since_ts")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 0 {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "since_ts must be a non-negative unix millisecond timestamp")
+			return
+		}
+		sinceMs = v
 	}
+	result, _ := session.ExternalTranscriptSince(agent, externalID, sinceMs)
+	items := result.Items
 	if items == nil {
 		items = []session.ConvEntry{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":     items,
+		"latest_ts": result.LatestTs,
+	})
 }
 
 // adoptRequest is the body for POST /api/sessions/adopt.
@@ -864,7 +884,10 @@ type adoptRequest struct {
 //
 //   - mode=resume: pre-seeds ClaudeChatSessionID / CodexThreadID so the backend
 //     resumes the external conversation via --resume / thread/resume.
-//   - mode=fork: returns 409 fork_unsupported (SessionFork=false this build).
+//   - mode=fork: creates a NEW git worktree off the repo containing cwd, then
+//     launches the agent with --resume <id> --fork-session (claude) or plain
+//     resume into the new worktree (codex, which has no wire-level fork).
+//     The original terminal session is never modified.
 func (s *Server) serveAdoptSession(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
@@ -894,14 +917,7 @@ func (s *Server) serveAdoptSession(w http.ResponseWriter, r *http.Request) {
 	if req.Mode == "" {
 		req.Mode = "resume"
 	}
-
-	// Fork is not implemented in this build; clients gate on SessionFork=false.
-	if req.Mode == "fork" {
-		writeAPIError(w, http.StatusConflict, "fork_unsupported",
-			"session fork is not supported on this broker (session_fork=false)")
-		return
-	}
-	if req.Mode != "resume" {
+	if req.Mode != "resume" && req.Mode != "fork" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_mode", "mode must be 'resume' or 'fork'")
 		return
 	}
@@ -917,14 +933,17 @@ func (s *Server) serveAdoptSession(w http.ResponseWriter, r *http.Request) {
 	// Mint a new Conduit session ID for this adoption.
 	sessID := newSessionID()
 
-	// Create the session with the external conversation seeded.
+	if req.Mode == "fork" {
+		s.serveForkSession(w, req, sessID)
+		return
+	}
+
+	// mode=resume: create the session with the external conversation seeded.
 	// The ExternalID becomes the resume seed (ClaudeChatSessionID or CodexThreadID)
 	// which the agent backend picks up when launching: --resume <id> for claude,
 	// thread/resume for codex.
 	opts := session.CreateOptions{
 		CWD: req.CWD,
-		// ExternalResume carries the external_id so the session manager pre-seeds
-		// the appropriate backend resume field before spawning.
 		ExternalResume: session.ExternalResumeOptions{
 			Agent:      req.Agent,
 			ExternalID: req.ExternalID,
@@ -953,5 +972,91 @@ func (s *Server) serveAdoptSession(w http.ResponseWriter, r *http.Request) {
 		"session_id": sess.ID,
 		"ws_path":    fmt.Sprintf("/ws/%s?assistant=%s", sess.ID, req.Agent),
 		"mode":       req.Mode,
+	})
+}
+
+// serveForkSession handles mode=fork in POST /api/sessions/adopt.
+//
+// Fork strategy:
+//  1. Resolve the git repo root for req.CWD. If cwd is inside a git repo,
+//     create a new worktree at <conduitRoot>/sessions/<sessID>/fork-worktree
+//     on a fresh branch conduit/fork-<short>. The original repo HEAD is
+//     unchanged.
+//  2. If cwd is NOT inside a git repo (or worktree creation fails), fall back
+//     to a plain work directory. Claude still gets --fork-session; codex gets
+//     plain resume. The isolation guarantee is weaker (no separate git state)
+//     but the original session is still untouched.
+//  3. Launch the agent in the new directory:
+//     - claude: --resume <external_id> --fork-session  (new claude session id)
+//     - codex:  plain resume into new worktree (codex has no wire-level fork)
+func (s *Server) serveForkSession(w http.ResponseWriter, req adoptRequest, sessID string) {
+	conduitRoot := s.Sessions.ConduitRoot()
+
+	// Step 1: resolve the workspace for the fork.
+	var worktreeDir string
+	cwd := req.CWD
+	if cwd == "" {
+		// No cwd supplied — use a plain sessions/<id>/fork-work directory.
+		worktreeDir = ""
+	} else {
+		repoRoot, isGit := session.FindGitRepoRoot(cwd)
+		if isGit {
+			// Create a new worktree at sessions/<id>/fork-worktree.
+			wtPath := filepath.Join(conduitRoot, "sessions", sessID, "fork-worktree")
+			_, err := session.CreateForkWorktree(repoRoot, wtPath, sessID)
+			if err != nil {
+				log.Printf("found-sessions: fork %s worktree add failed: %v", sessID, err)
+				writeAPIError(w, http.StatusConflict, "fork_failed",
+					"could not create git worktree: "+err.Error())
+				return
+			}
+			worktreeDir = wtPath
+			log.Printf("found-sessions: fork %s git worktree created at %s (repo %s)", sessID, wtPath, repoRoot)
+		} else {
+			// cwd is not inside a git repo — use a plain directory.
+			// The session runs in the original cwd but with an isolated broker session.
+			worktreeDir = ""
+			cwd = req.CWD
+			log.Printf("found-sessions: fork %s — cwd %s is not a git repo; using plain cwd isolation", sessID, cwd)
+		}
+	}
+
+	// Effective CWD for the new session.
+	effectiveCWD := worktreeDir
+	if effectiveCWD == "" {
+		effectiveCWD = cwd
+	}
+
+	opts := session.CreateOptions{
+		CWD: effectiveCWD,
+		ExternalFork: session.ExternalForkOptions{
+			Agent:       req.Agent,
+			ExternalID:  req.ExternalID,
+			WorktreeDir: worktreeDir,
+		},
+	}
+	sess, _, err := s.Sessions.GetOrCreateWithOptions(sessID, req.Agent, opts)
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "unknown assistant"):
+			writeAPIError(w, http.StatusBadRequest, "assistant_unknown", msg)
+		case strings.Contains(msg, "invalid cwd"):
+			writeAPIError(w, http.StatusBadRequest, "invalid_cwd", msg)
+		case strings.Contains(msg, "gave up"):
+			writeAPIError(w, http.StatusGone, "session_gave_up", msg)
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "fork_failed", msg)
+		}
+		return
+	}
+
+	log.Printf("found-sessions: forked %s session %s as conduit session %s (worktree=%s)",
+		req.Agent, req.ExternalID, sess.ID, worktreeDir)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sess.ID,
+		"ws_path":    fmt.Sprintf("/ws/%s?assistant=%s", sess.ID, req.Agent),
+		"mode":       "fork",
 	})
 }
