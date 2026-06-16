@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Vibration
@@ -95,6 +94,8 @@ import sh.nikhil.conduit.push.PushStore
 import uniffi.conduit_core.ProjectSession
 import uniffi.conduit_core.SessionStatus
 
+private const val DEBUG_UNLOCK_TAPS = 7
+
 private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/conduitapp"
 
 /**
@@ -149,13 +150,11 @@ fun SettingsScreen(
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
     val replyHaptics by appearance.replyHaptics.collectAsState()
-    val chatStylePref by appearance.chatStylePreference.collectAsState()
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val terminalFontSize by appearance.terminalFontSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val neonGlow by appearance.neonGlow.collectAsState()
-    val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
 
     // Fix 3 breadcrumb: log inferred installed state from brokerReadiness whenever
     // it arrives. Source: readiness.agents[key].cliPresent from /api/capabilities.
@@ -188,6 +187,10 @@ fun SettingsScreen(
     }
     // Saved-server pending deletion (drives the Forget confirmation alert).
     var pendingForget by remember { mutableStateOf<SavedServer?>(null) }
+
+    // Staff-unlock tap counter: 7 taps on the version row opens the Debug menu.
+    var debugTapCount by remember { mutableStateOf(0) }
+    var showDebugMenu by remember { mutableStateOf(false) }
 
     val neon = LocalNeonTheme.current
     val versionLabel = if (BuildConfig.RELEASE_TAG != "dev") {
@@ -483,46 +486,6 @@ fun SettingsScreen(
                 }
             }
 
-            // Labs — chat-shell-v2 A/B override (§2). Auto follows the
-            // assigned bucket; A/B are a local override for dogfooding.
-            // Also hosts the debug-gated Agents panel toggle.
-            SettingsSection("Labs") {
-                val neon = LocalNeonTheme.current
-                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Conversation style", fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = neon.text)
-                        Spacer(Modifier.weight(1f))
-                        Text(appearance.resolvedChatArm().label, fontFamily = neon.mono, fontSize = 11.sp, color = neon.textFaint)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                        FeatureFlags.ChatStylePreference.entries.forEach { p ->
-                            val on = p == chatStylePref
-                            Box(
-                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                                    .background(if (on) neon.accent.copy(alpha = 0.16f) else neon.surface)
-                                    .border(1.dp, if (on) neon.accent else neon.border, RoundedCornerShape(10.dp))
-                                    .clickable { appearance.setChatStylePreference(p) }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(p.label, fontFamily = neon.mono, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, fontSize = 13.sp, color = if (on) neon.accent else neon.textDim)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text("A = Breathe · B = Signature · Auto follows your assigned bucket.", fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint)
-                }
-                SettingsDivider()
-                ToggleRow(
-                    icon = Icons.Filled.Person,
-                    title = "Subagent panel",
-                    subtitle = "Show Agents section in session Info (debug)",
-                    isOn = showSubagentPanel,
-                    onChange = { appearance.setShowSubagentPanel(it) },
-                )
-            }
-
             // Support — external donation link (not an IAP; opens system browser).
             SettingsSection("Support") {
                 SettingsRow(
@@ -539,8 +502,23 @@ fun SettingsScreen(
 
             // About — static identity card, onboarding guide re-entry, and
             // third-party licenses + trademark attribution screen.
+            // Tap the version row 7 times to unlock the staff Debug menu.
             SettingsSection("About") {
-                KeyValueRow(label = "Conduit", value = versionLabel)
+                TappableVersionRow(
+                    label = "Conduit",
+                    value = versionLabel,
+                    tapCount = debugTapCount,
+                    totalTaps = DEBUG_UNLOCK_TAPS,
+                    onTap = {
+                        val next = debugTapCount + 1
+                        debugTapCount = next
+                        if (next >= DEBUG_UNLOCK_TAPS) {
+                            debugTapCount = 0
+                            Telemetry.breadcrumb("settings", "debug unlock")
+                            showDebugMenu = true
+                        }
+                    },
+                )
                 SettingsDivider()
                 SettingsRow(
                     icon = Icons.Filled.Article,
@@ -639,6 +617,10 @@ fun SettingsScreen(
                 TextButton(onClick = { pendingForget = null }) { Text("Cancel") }
             },
         )
+    }
+
+    if (showDebugMenu) {
+        DebugMenuScreen(store = store, onDismiss = { showDebugMenu = false })
     }
 }
 
@@ -1406,6 +1388,52 @@ private fun KeyValueRow(label: String, value: String) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        },
+        colors = transparentListItemColors(),
+    )
+}
+
+/**
+ * Version row with a hidden tap-counter for the staff Debug menu unlock.
+ * Tapping [totalTaps] times calls [onTap] which the caller uses to open
+ * the Debug menu. A faint countdown hint appears after the halfway point
+ * so staff know the gesture is working.
+ */
+@Composable
+private fun TappableVersionRow(
+    label: String,
+    value: String,
+    tapCount: Int,
+    totalTaps: Int,
+    onTap: () -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    val halfway = totalTaps / 2
+    val hint = if (tapCount in (halfway + 1) until totalTaps) {
+        "${totalTaps - tapCount} more"
+    } else null
+    ListItem(
+        modifier = Modifier.clickable(onClick = onTap),
+        headlineContent = {
+            Text(label, color = neon.textDim, fontFamily = neon.sans)
+        },
+        trailingContent = {
+            androidx.compose.foundation.layout.Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (hint != null) {
+                    Text(hint, fontFamily = neon.mono, fontSize = 10.sp, color = neon.textFaint)
+                }
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = neon.mono,
+                    color = neon.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         },
         colors = transparentListItemColors(),
     )

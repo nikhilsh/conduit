@@ -112,19 +112,16 @@ object FeatureFlags {
     fun bucket(id: String): ChatArm = if (fnv1a(id) and 1 == 0) ChatArm.A else ChatArm.B
 
     /**
-     * The arm the chat shell should render: kill-switch → A; local A/B
-     * override → that arm; Auto → the assigned bucket.
+     * The arm the chat shell should render. Conversation style B (Signature)
+     * is now the permanent default for all users; the A/B experiment is
+     * concluded. Preference and kill-switch params are accepted for call-site
+     * compatibility but ignored.
      */
     fun resolvedChatArm(
         preference: ChatStylePreference,
         killed: Boolean,
         assigned: ChatArm,
-    ): ChatArm = when {
-        killed -> ChatArm.A
-        preference == ChatStylePreference.A -> ChatArm.A
-        preference == ChatStylePreference.B -> ChatArm.B
-        else -> assigned
-    }
+    ): ChatArm = ChatArm.B
 
     // ── Onboarding routing (§5) ─────────────────────────────────────────
 
