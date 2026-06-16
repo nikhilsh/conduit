@@ -1971,11 +1971,12 @@ final class SessionStore {
             let total_on_disk: Int
         }
 
+        var items: [URLQueryItem] = []
+        if !q.isEmpty { items.append(URLQueryItem(name: "q", value: q)) }
+        if !agent.isEmpty { items.append(URLQueryItem(name: "agent", value: agent)) }
+        if !cursor.isEmpty { items.append(URLQueryItem(name: "cursor", value: cursor)) }
         var comps = URLComponents()
-        comps.queryItems = []
-        if !q.isEmpty { comps.queryItems?.append(URLQueryItem(name: "q", value: q)) }
-        if !agent.isEmpty { comps.queryItems?.append(URLQueryItem(name: "agent", value: agent)) }
-        if !cursor.isEmpty { comps.queryItems?.append(URLQueryItem(name: "cursor", value: cursor)) }
+        comps.queryItems = items.isEmpty ? nil : items
         let query = comps.query.map { "?\($0)" } ?? ""
 
         Telemetry.breadcrumb("found_sessions", "discover start",
@@ -2224,10 +2225,20 @@ final class SessionStore {
     private func getJSON(endpoint: StoredEndpoint, path: String) async -> Data? {
         guard let base = endpoint.httpBaseURL else { return nil }
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
-        components?.path = path
+        // `path` may include a query string (e.g. "/api/x?q=1"). Assigning
+        // the whole string to `components.path` percent-encodes the "?" into
+        // "%3F", mangling the URL so it 404s on the broker. Split the query
+        // off and set it as a real query component instead.
+        if let qIdx = path.firstIndex(of: "?") {
+            components?.path = String(path[..<qIdx])
+            let rawQuery = String(path[path.index(after: qIdx)...])
+            components?.percentEncodedQuery = rawQuery.isEmpty ? nil : rawQuery
+        } else {
+            components?.path = path
+        }
         guard let url = components?.url else { return nil }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 10
+        req.timeoutInterval = 25
         req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode)
