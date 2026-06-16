@@ -1831,7 +1831,11 @@ private struct ConduitUserBubble: View {
 
     var body: some View {
         let parsed = ConduitUI.splitAttachmentReferences(event.content)
-        let failed = event.status.lowercased() == "failed"
+        let status = event.status.lowercased()
+        let failed = status == "failed"
+        // Broker no longer knows this session (restart/redeploy/GC): the send
+        // path stopped retrying and marked the echo `expired`. Offer Resume.
+        let expired = status == "expired"
         return VStack(alignment: .trailing, spacing: 8) {
             if !parsed.text.isEmpty {
                 ConduitBlockStack(
@@ -1865,7 +1869,11 @@ private struct ConduitUserBubble: View {
             ForEach(parsed.attachments, id: \.filename) { ref in
                 ConduitAttachmentChip(ref: ref)
             }
-            if failed { sendFailedFooter }
+            if expired {
+                sessionExpiredFooter
+            } else if failed {
+                sendFailedFooter
+            }
         }
     }
 
@@ -1882,6 +1890,26 @@ private struct ConduitUserBubble: View {
             HStack(spacing: 4) {
                 Image(systemName: "exclamationmark.arrow.circlepath")
                 Text("failed — tap to retry")
+            }
+            .font(neon.mono(10).weight(.bold))
+            .foregroundStyle(neon.red)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The broker forgot this session (restart/redeploy/GC) so the send was
+    /// stopped (not retried into a dead session). Surface a clear, tappable
+    /// "session expired — Resume to continue" that re-attaches the session via
+    /// the existing recoverable-resume flow.
+    @ViewBuilder
+    private var sessionExpiredFooter: some View {
+        Button {
+            let assistant = store.sessions.first(where: { $0.id == sessionID })?.assistant ?? "claude"
+            store.resumeRecoverableSession(sessionID: sessionID, assistant: assistant)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.clockwise.circle")
+                Text("session expired — Resume to continue")
             }
             .font(neon.mono(10).weight(.bold))
             .foregroundStyle(neon.red)

@@ -3639,6 +3639,37 @@ final class SessionStore {
         sendChat(sessionID: sessionID, message: entry.message)
     }
 
+    /// True when a send/deliver error means the broker no longer knows this
+    /// session (restarted/redeployed/GC'd) — `ConduitError.UnknownSession`.
+    /// Such an error will NEVER recover by retrying the same dead session, so
+    /// the deliver path stops retrying and routes the user to Resume instead
+    /// of burning the retry budget + capturing a Sentry ERROR on every broker
+    /// restart. Matched on the exact UniFFI case (not a string) so it stays
+    /// correct if the message wording changes.
+    // `internal` (not `private`) so the @testable unit suite can exercise the
+    // exact-case match + the expired-echo flip without a live WS.
+    func isUnknownSession(_ error: Error) -> Bool {
+        if case ConduitError.UnknownSession = error { return true }
+        return false
+    }
+
+    /// Handle a send/deliver that failed because the broker GC'd/forgot the
+    /// session (`UnknownSession`). Stops retrying immediately (drops the entry
+    /// from the queue so later flushes don't re-hit the dead session), marks
+    /// the echo `expired` so the bubble offers a Resume affordance, and
+    /// downgrades the telemetry to an info breadcrumb (NOT a captured ERROR).
+    func handleExpiredSession(sessionID: String, localID: String, box: String?) {
+        // Drop from the queue so flushPendingChats / turn-complete flushes
+        // don't keep re-delivering into a session the broker no longer has.
+        pendingChats.markDelivered(sessionID: sessionID, localID: localID)
+        setEchoStatus(sessionID: sessionID, localID: localID, status: "expired")
+        var data: [String: String] = ["session": sessionID]
+        if let box { data["box"] = box }
+        // Downgrade: info breadcrumb, not Telemetry.capture. This fires on
+        // every broker restart and is not an actionable error.
+        Telemetry.breadcrumb("chat", "send hit UnknownSession — session expired, offering Resume", data: data)
+    }
+
     /// Attempt to deliver one queued message over the live WS, reporting the
     /// outcome back to `pendingChats` (ack on success, attempt-bump on
     /// failure) and flipping the transcript echo's status accordingly. Safe
@@ -3665,6 +3696,13 @@ final class SessionStore {
                     Telemetry.breadcrumb("chat", "ws-write ok — awaiting broker ack",
                         data: ["session": sessionID, "box": stamped])
                 } catch {
+                    // Broker forgot the session (restart/redeploy/GC): retrying
+                    // can't recover it. Stop now + route to Resume; don't burn
+                    // the retry budget or capture a Sentry ERROR.
+                    if self.isUnknownSession(error) {
+                        self.handleExpiredSession(sessionID: sessionID, localID: localID, box: stamped)
+                        return
+                    }
                     let gaveUp = self.pendingChats.markAttemptFailed(sessionID: sessionID, localID: localID)
                     if gaveUp {
                         self.setEchoStatus(sessionID: sessionID, localID: localID, status: "failed")
@@ -3720,6 +3758,13 @@ final class SessionStore {
                 Telemetry.breadcrumb("chat", "ws-write ok — awaiting broker ack",
                     data: ["session": sessionID])
             } catch {
+                // Broker forgot the session (restart/redeploy/GC): retrying
+                // can't recover it. Stop now + route to Resume; don't burn the
+                // retry budget or capture a Sentry ERROR.
+                if self.isUnknownSession(error) {
+                    self.handleExpiredSession(sessionID: sessionID, localID: localID, box: nil)
+                    return
+                }
                 let gaveUp = self.pendingChats.markAttemptFailed(sessionID: sessionID, localID: localID)
                 if gaveUp {
                     self.setEchoStatus(sessionID: sessionID, localID: localID, status: "failed")
