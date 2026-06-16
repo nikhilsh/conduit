@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMaybeInstallAgentBinaryPresent verifies that when the binary is already
@@ -106,9 +107,19 @@ func TestMaybeInstallAgentSingleFlight(t *testing.T) {
 	tmpDir := t.TempDir()
 	fakeBin := filepath.Join(tmpDir, "sf-agent")
 	counterFile := filepath.Join(tmpDir, "counter")
+	startedFile := filepath.Join(tmpDir, "started") // installer touches this, then blocks
+	goFile := filepath.Join(tmpDir, "go")           // test creates this to release the installer
 
-	// Install command: append a line to counter, then write the binary.
-	installCmd := "echo x >> " + counterFile +
+	// Install command: signal it has started, BLOCK until the test releases it
+	// (goFile appears), then append a line to counter and write the binary.
+	// Blocking the first install deterministically parks the second caller on
+	// the single-flight in-flight entry — instead of racing both installs
+	// through together (which flaked under CI load: if the first finished and
+	// cleared the flight before the second reached run(), the second installed
+	// again → count 2).
+	installCmd := "touch " + startedFile +
+		" && while [ ! -f " + goFile + " ]; do sleep 0.01; done" +
+		" && echo x >> " + counterFile +
 		" && printf '#!/bin/sh\\necho ok\\n' > " + fakeBin +
 		" && chmod +x " + fakeBin
 
@@ -124,11 +135,27 @@ func TestMaybeInstallAgentSingleFlight(t *testing.T) {
 	type result struct{ err error }
 	results := make(chan result, 2)
 
-	for i := 0; i < 2; i++ {
-		go func() {
-			err := maybeInstallAgent("sf-agent", "sf-agent", installCmd, nil)
-			results <- result{err}
-		}()
+	// Caller A: acquires the flight and runs the (blocking) install.
+	go func() {
+		results <- result{maybeInstallAgent("sf-agent", "sf-agent", installCmd, nil)}
+	}()
+
+	// Wait until A is inside the install command and blocked (flight held).
+	waitForFile(t, startedFile, 5*time.Second)
+
+	// Caller B: the binary is still absent (A is blocked), so B passes the
+	// fast-path and enters run(), finds the in-flight entry A holds, and parks
+	// on it. A is deliberately blocked (not racing), so B has uncontended time
+	// to park before we release A — no tight race window.
+	go func() {
+		results <- result{maybeInstallAgent("sf-agent", "sf-agent", installCmd, nil)}
+	}()
+
+	// Give B time to reach the in-flight wait (A is blocked, so this is a
+	// generous safety margin, not a race window), then release A.
+	time.Sleep(100 * time.Millisecond)
+	if err := os.WriteFile(goFile, []byte("go"), 0o600); err != nil {
+		t.Fatalf("write go file: %v", err)
 	}
 
 	var errs []error
@@ -142,11 +169,6 @@ func TestMaybeInstallAgentSingleFlight(t *testing.T) {
 		t.Fatalf("install errors: %v", errs)
 	}
 
-	// The counter file should have at most 2 lines (both could win the race
-	// before the binary is on-path), but ideally 1 (single-flight). In our
-	// single-flight implementation the second caller blocks and shares the
-	// first's result, so the install command runs exactly once. Verify <= 2
-	// to be robust to timing without being flaky.
 	data, err := os.ReadFile(counterFile)
 	if err != nil {
 		t.Fatalf("read counter: %v", err)
@@ -155,8 +177,21 @@ func TestMaybeInstallAgentSingleFlight(t *testing.T) {
 	if strings.TrimSpace(string(data)) == "" {
 		lines = 0
 	}
-	// With single-flight, exactly 1.
+	// Single-flight: the install command runs exactly once; B shares A's result.
 	if lines != 1 {
 		t.Errorf("install command ran %d times, want 1 (single-flight)", lines)
 	}
+}
+
+// waitForFile blocks until path exists or the timeout elapses (then fails t).
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
 }
