@@ -277,6 +277,11 @@ type Session struct {
 	// used so a claude session with no anthropic creds can fall back to the
 	// codex AI-niceties provider. nil/"" → no codex fallback.
 	codexBinary func() string
+
+	// claudeBinary returns the claude CLI binary path (registry-resolved),
+	// used by the external-resume recap one-shot (`claude --resume … --print`).
+	// nil/"" → recap falls back to the deterministic note.
+	claudeBinary func() string
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
@@ -341,6 +346,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		previewPort:  opts.previewPort,
 		modelCatalog: opts.modelCatalog,
 		codexBinary:  opts.codexBinary,
+		claudeBinary: opts.claudeBinary,
 		requestedCWD: strings.TrimSpace(opts.requestedCWD),
 		checkpointEvery: durationFromEnv(
 			"CONDUIT_SESSION_CHECKPOINT_INTERVAL_MS",
@@ -495,16 +501,17 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		realHome := hostHomeDir()
 		if er := opts.externalResume; er.ExternalID != "" {
 			stageExternalTranscript(ephemeral, realHome, er.Agent, er.ExternalID)
-			// Seed the new session's chat log with a short excerpt of the prior
-			// transcript so the Chat tab opens showing recent context rather than
-			// appearing empty. Best-effort: never blocks the spawn.
-			seedResumeExcerpt(s.convLog.path, er.Agent, er.ExternalID)
+			// Seed the new session's chat log with an agent-WRITTEN recap of the
+			// prior transcript so the Chat tab opens showing "what we were doing"
+			// rather than appearing empty. Bounded + best-effort: never blocks
+			// the spawn past recapTimeout, falls back to a deterministic note.
+			seedResumeRecap(s.convLog.path, er.Agent, er.ExternalID, ephemeral, s.recapBinary(er.Agent))
 		}
 		if ef := opts.externalFork; ef.ExternalID != "" {
 			stageExternalTranscript(ephemeral, realHome, ef.Agent, ef.ExternalID)
-			// Same excerpt seed for fork: the user branched the conversation and
-			// should see the prior context as the starting point.
-			seedResumeExcerpt(s.convLog.path, ef.Agent, ef.ExternalID)
+			// Same recap for fork: the user branched the conversation and should
+			// see a recap of the prior context as the starting point.
+			seedResumeRecap(s.convLog.path, ef.Agent, ef.ExternalID, ephemeral, s.recapBinary(ef.Agent))
 		}
 	}
 	cmd.Env = s.commandEnv(nil)
@@ -1540,6 +1547,17 @@ func (m *Manager) codexBinary() string {
 	return adapter.Command[0]
 }
 
+// claudeBinary returns the registered claude adapter's CLI binary path, or ""
+// when claude isn't registered. Used by the external-resume recap one-shot.
+// Resolves on every call so it tracks registry edits.
+func (m *Manager) claudeBinary() string {
+	adapter, err := m.registry.Get("claude")
+	if err != nil || len(adapter.Command) == 0 {
+		return ""
+	}
+	return adapter.Command[0]
+}
+
 func (m *Manager) SetCredentialStore(s *credentials.Store) {
 	m.mu.Lock()
 	m.credStore = s
@@ -1996,6 +2014,7 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		previewPort:         previewPort,
 		modelCatalog:        m.ModelCatalog,
 		codexBinary:         m.codexBinary,
+		claudeBinary:        m.claudeBinary,
 		credentialProviders: credentialProvidersFromRegistry(m.registry),
 		resumeChatSessionID: resumeChatID,
 		resumeCodexThreadID: resumeCodexID,
@@ -2168,6 +2187,10 @@ type sessionOptions struct {
 	// provider when it has no anthropic creds (and vice-versa). "" when codex
 	// isn't a registered adapter. Manager fills this in; tests leave it nil.
 	codexBinary func() string
+	// claudeBinary returns the claude CLI binary path (registry-resolved),
+	// used by the external-resume recap one-shot. "" when claude isn't a
+	// registered adapter. Manager fills this in; tests leave it nil.
+	claudeBinary func() string
 	// externalResume, when set, triggers transcript staging before the agent
 	// is spawned: the external conversation file is copied from the broker's
 	// real $HOME into the per-session agent-home so --resume / exec-resume
