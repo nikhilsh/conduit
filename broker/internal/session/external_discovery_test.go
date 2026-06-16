@@ -632,3 +632,65 @@ func TestCreateForkWorktree_CreatesWorktreeAndLeavesSourceUnchanged(t *testing.T
 		t.Error("worktree is on 'main'; expected a conduit/fork-... branch")
 	}
 }
+
+// TestDiscoverExternalSessions_QualityFloorDropsOneShots verifies the
+// discovery quality floor: trivial single-turn sessions are excluded so the
+// list and TotalOnDisk reflect only sessions worth resuming.
+func TestDiscoverExternalSessions_QualityFloorDropsOneShots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".claude", "projects", "-home-user-proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeClaude := func(id string, pairs int) {
+		lines := []map[string]any{
+			{"type": "agent-setting", "agentSetting": "claude", "sessionId": id},
+		}
+		for i := 0; i < pairs; i++ {
+			lines = append(lines,
+				map[string]any{
+					"type": "user", "sessionId": id,
+					"timestamp": "2024-12-14T10:00:00.000Z",
+					"message":   map[string]any{"role": "user", "content": "hi"},
+					"cwd":       "/home/user/proj",
+				},
+				map[string]any{
+					"type": "assistant", "sessionId": id,
+					"timestamp": "2024-12-14T10:05:00.000Z",
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": []map[string]any{{"type": "text", "text": "ok"}},
+					},
+				},
+			)
+		}
+		var content string
+		for _, rec := range lines {
+			b, _ := json.Marshal(rec)
+			content += string(b) + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeClaude("11111111-1111-1111-1111-111111111111", 1) // 1 pair  -> filtered out
+	writeClaude("22222222-2222-2222-2222-222222222222", 3) // 3 pairs -> kept
+
+	m := &Manager{conduitRoot: t.TempDir()}
+	resp := m.DiscoverExternalSessions("", []string{"claude"})
+
+	if resp.TotalOnDisk != 1 {
+		t.Errorf("TotalOnDisk=%d want 1 (the one-shot must be filtered)", resp.TotalOnDisk)
+	}
+	if len(resp.Sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(resp.Sessions))
+	}
+	if got := resp.Sessions[0].ExternalID; got != "22222222-2222-2222-2222-222222222222" {
+		t.Errorf("kept the wrong session: %s", got)
+	}
+	if resp.Sessions[0].TurnCount < minMeaningfulTurns {
+		t.Errorf("kept session TurnCount=%d below floor %d", resp.Sessions[0].TurnCount, minMeaningfulTurns)
+	}
+}

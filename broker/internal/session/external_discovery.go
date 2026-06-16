@@ -36,6 +36,11 @@ type DiscoveredResponse struct {
 }
 
 // DiscoverExternalSessions scans external Claude and Codex session dirs and
+// minMeaningfulTurns is the discovery quality floor: sessions with fewer than
+// this many turns (Claude exchange pairs / Codex turns) are treated as trivial
+// one-shots and excluded from discovery so the list and count stay meaningful.
+const minMeaningfulTurns = 2
+
 // returns sessions started outside Conduit, sorted recent-first.
 //
 // Filter parameters:
@@ -74,6 +79,21 @@ func (m *Manager) DiscoverExternalSessions(q string, agents []string) Discovered
 		}
 		all = append(all, codexSessions...)
 	}
+
+	// Quality floor: drop trivial single-turn one-shots (quick Qs / tests /
+	// aborted starts) from discovery. On a real box roughly half the on-disk
+	// sessions are a single exchange and aren't worth resuming; surfacing them
+	// just inflates the count and clutters the list. They remain on disk and
+	// resumable from the CLI — we only avoid advertising them in the app.
+	// (Claude TurnCount is exchange PAIRS, Codex is raw turns; <=1 = trivial
+	// for both.)
+	kept := all[:0]
+	for _, s := range all {
+		if s.TurnCount >= minMeaningfulTurns {
+			kept = append(kept, s)
+		}
+	}
+	all = kept
 
 	total := len(all)
 
