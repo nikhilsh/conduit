@@ -85,12 +85,22 @@ extension ConduitUI {
         @State private var detailHeight: CGFloat = 0
         private let now = Date()
 
+        /// Single source of truth for the expand transition. Height, detail
+        /// opacity, and the chevron rotation are ALL driven off this same
+        /// curve+value (`.animation(_, value: expanded)`) so they move in
+        /// lockstep — no second `withAnimation`, which previously raced the
+        /// preference-driven height against the opacity and left a gap.
+        private static let expandAnim: Animation = .easeInOut(duration: 0.28)
+
         var body: some View {
             let agents = store.accountUsageByAgent.filter { $0.hasData }
             if !agents.isEmpty {
                 VStack(spacing: 8) {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.28)) { expanded.toggle() }
+                        // Plain toggle — the `.animation(value: expanded)`
+                        // modifiers below own the transition so every animated
+                        // property runs on the one transaction/curve.
+                        expanded.toggle()
                     } label: {
                         HStack(spacing: 10) {
                             ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
@@ -104,7 +114,7 @@ extension ConduitUI {
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(neon.textFaint)
                                 .rotationEffect(.degrees(expanded ? 180 : 0))
-                                .animation(.easeInOut(duration: 0.28), value: expanded)
+                                .animation(Self.expandAnim, value: expanded)
                         }
                     }
                     .buttonStyle(.plain)
@@ -119,8 +129,17 @@ extension ConduitUI {
                     // subview (the cell snaps instead of easing). Keep the
                     // detail ALWAYS BUILT and reveal it with an animatable
                     // clip-height + opacity so the row eases open/closed.
+                    //
+                    // The intrinsic content is measured by an OVERLAY (sized to
+                    // the natural content, BEFORE the height clamp) so the
+                    // measured `detailHeight` is stable and never depends on the
+                    // animating outer frame. We then animate the outer frame
+                    // between 0 and that measured height, CLIPPING so the
+                    // detail can't draw past the growing container (that
+                    // overflow was the visible gap above ACTIVE SESSIONS).
                     expandedDetail(agents: agents)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .opacity(expanded ? 1 : 0)
                         .background(
                             GeometryReader { geo in
                                 Color.clear.preference(
@@ -133,14 +152,13 @@ extension ConduitUI {
                             detailHeight = h
                         }
                         .frame(height: expanded ? detailHeight : 0, alignment: .top)
-                        .opacity(expanded ? 1 : 0)
                         .clipped()
+                        .animation(Self.expandAnim, value: expanded)
                         .accessibilityHidden(!expanded)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: 12)
-                .animation(.easeInOut(duration: 0.28), value: expanded)
             }
         }
 
