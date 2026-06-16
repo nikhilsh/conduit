@@ -47,10 +47,13 @@ class PushFanOutTest {
 
     // ── Payload builder (mirrors PushStore.postRegisterToEndpoint body) ───
 
-    private fun buildRegisterBody(platform: String, token: String): JSONObject =
+    private val testDeviceId = "test-device-uuid-1234"
+
+    private fun buildRegisterBody(platform: String, token: String, deviceId: String? = testDeviceId): JSONObject =
         JSONObject().apply {
             put("platform", platform)
             put("token", token)
+            deviceId?.let { put("device_id", it) }
         }
 
     // ── Fan-out result simulation ─────────────────────────────────────────
@@ -154,7 +157,8 @@ class PushFanOutTest {
             val body = buildRegisterBody(platform, "token-abc")
             assertEquals(platform, body.getString("platform"))
             assertEquals("token-abc", body.getString("token"))
-            assertEquals(2, body.length())
+            assertEquals(testDeviceId, body.getString("device_id"))
+            assertEquals(3, body.length())
         }
     }
 
@@ -176,6 +180,7 @@ class PushFanOutTest {
         bodies.forEach { body ->
             assertEquals("unifiedpush", body.getString("platform"))
             assertEquals(token, body.getString("token"))
+            assertEquals(testDeviceId, body.getString("device_id"))
         }
     }
 }

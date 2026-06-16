@@ -46,6 +46,7 @@ import uniffi.conduit_core.SshHostKeyDelegate
 import uniffi.conduit_core.SshProgressDelegate
 import uniffi.conduit_core.ConduitClient
 import sh.nikhil.conduit.auth.AgentLoginCoordinator
+import sh.nikhil.conduit.push.PushStore
 import uniffi.conduit_core.ConduitDelegate
 import uniffi.conduit_core.ViewEventFile
 import uniffi.conduit_core.sshBootstrap as ffiSshBootstrap
@@ -1271,7 +1272,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         viewModelScope.launch {
             try {
                 val newId = withContext(Dispatchers.IO) {
-                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode, fastMode)
+                    val devId = appContext?.let { PushStore.getOrCreateDeviceId(it) }
+                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode, fastMode, devId)
                 }
                 val seed = "Forked from ${original.name} (id $sessionId). Pick up where the previous session left off."
                 // Fire-and-forget seed: not outbox-tracked, but still carries a
@@ -2630,7 +2632,10 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedModel = model?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
-                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode, fastMode) }
+                val id = withContext(Dispatchers.IO) {
+                    val devId = appContext?.let { PushStore.getOrCreateDeviceId(it) }
+                    c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode, fastMode, devId)
+                }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
                 // Belt-and-suspenders parity with iOS: also propagate stored
                 // agent credentials to this box on session create, so a box

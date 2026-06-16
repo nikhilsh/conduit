@@ -570,7 +570,7 @@ public protocol ConduitClientProtocol : AnyObject {
     
     func connect(delegate: ConduitDelegate) async throws 
     
-    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?, fastMode: Bool?) async throws  -> String
+    func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?, fastMode: Bool?, deviceId: String?) async throws  -> String
     
     func disconnect() 
     
@@ -716,13 +716,13 @@ open func connect(delegate: ConduitDelegate)async throws  {
         )
 }
     
-open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?, fastMode: Bool?)async throws  -> String {
+open func createSession(assistant: String, branch: String?, reasoningEffort: String?, model: String?, cwd: String?, permissionMode: String?, fastMode: Bool?, deviceId: String?)async throws  -> String {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_conduit_core_fn_method_conduitclient_create_session(
                     self.uniffiClonePointer(),
-                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model),FfiConverterOptionString.lower(cwd),FfiConverterOptionString.lower(permissionMode),FfiConverterOptionBool.lower(fastMode)
+                    FfiConverterString.lower(assistant),FfiConverterOptionString.lower(branch),FfiConverterOptionString.lower(reasoningEffort),FfiConverterOptionString.lower(model),FfiConverterOptionString.lower(cwd),FfiConverterOptionString.lower(permissionMode),FfiConverterOptionBool.lower(fastMode),FfiConverterOptionString.lower(deviceId)
                 )
             },
             pollFunc: ffi_conduit_core_rust_future_poll_rust_buffer,
@@ -4685,7 +4685,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_conduit_core_checksum_method_conduitclient_connect() != 37807) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_conduit_core_checksum_method_conduitclient_create_session() != 48656) {
+    if (uniffi_conduit_core_checksum_method_conduitclient_create_session() != 39922) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_conduit_core_checksum_method_conduitclient_disconnect() != 13038) {

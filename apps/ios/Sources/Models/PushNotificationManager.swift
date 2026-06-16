@@ -276,6 +276,7 @@ final class PushNotificationManager {
         let payload: [String: String] = [
             "title": title.isEmpty ? "Conduit test" : title,
             "body": body.isEmpty ? "Push notifications are working" : body,
+            "device_id": DeviceIdentity.deviceID,
         ]
         guard let body = try? JSONEncoder().encode(payload) else { return "Encoding error" }
         req.httpBody = body
@@ -481,7 +482,11 @@ final class PushNotificationManager {
         req.timeoutInterval = 15
         req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let payload = ["platform": "apns", "token": hex]
+        let payload: [String: String] = [
+            "platform": "apns",
+            "token": hex,
+            "device_id": DeviceIdentity.deviceID,
+        ]
         guard let body = try? JSONEncoder().encode(payload) else { return false }
         req.httpBody = body
         Telemetry.breadcrumb("push", "register POST start", data: ["host": endpoint.displayHost])

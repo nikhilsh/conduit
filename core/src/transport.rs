@@ -200,6 +200,11 @@ pub struct SpawnOverride {
     /// broker appends `--settings '{"fastMode":...}'` to the claude argv (and
     /// ignores it for every other adapter). See broker override.go.
     pub fast_mode: Option<bool>,
+    /// Stable per-install device UUID. Rides to the broker as `device_id=`
+    /// on the WS connect so the broker can record this device as the session
+    /// owner and route push notifications back to it. None = no device
+    /// targeting (broker falls back to broadcast).
+    pub device_id: Option<String>,
 }
 
 /// Open a WebSocket session against the harness and spawn a worker that
@@ -630,6 +635,12 @@ fn build_initial_ws_url(
         } else {
             "&fast_mode=false"
         });
+    }
+    if let Some(did) = override_.device_id.as_deref() {
+        if !did.is_empty() {
+            raw.push_str("&device_id=");
+            raw.push_str(&urlencode(did));
+        }
     }
     Url::parse(&raw).map_err(|e| ConduitError::Connection(e.to_string()))
 }
@@ -1334,6 +1345,7 @@ mod tests {
                 cwd: Some("/home/me/proj".into()),
                 permission_mode: Some("plan".into()),
                 fast_mode: Some(true),
+                device_id: None,
             },
         )
         .unwrap();
@@ -1367,6 +1379,7 @@ mod tests {
                 cwd: Some(String::new()),
                 permission_mode: Some(String::new()),
                 fast_mode: None,
+                device_id: None,
             },
         )
         .unwrap();
@@ -1389,6 +1402,23 @@ mod tests {
         )
         .unwrap();
         assert!(off.as_str().contains("fast_mode=false"));
+
+        // device_id present: rides as device_id= query param.
+        let with_device = build_initial_ws_url(
+            &base,
+            "s1",
+            "claude",
+            "tok",
+            &SpawnOverride {
+                device_id: Some("test-uuid-1234".into()),
+                ..SpawnOverride::default()
+            },
+        )
+        .unwrap();
+        assert!(with_device.as_str().contains("device_id=test-uuid-1234"));
+
+        // device_id absent: no device_id= in the URL.
+        assert!(!plain.as_str().contains("device_id"));
     }
 
     #[test]
