@@ -79,3 +79,8 @@ website/out/
 # so the broker release pipeline doesn't accidentally tarball deps.
 broker/sidecar/node_modules/
 broker/sidecar/package-lock.json
+
+# Conduit-managed agent-awareness file injected into session working dirs
+# (see "BEGIN CONDUIT AWARENESS"). Not source; agents kept accidentally
+# committing it into unrelated PRs.
+AGENTS.md
