@@ -694,3 +694,134 @@ func TestDiscoverExternalSessions_QualityFloorDropsOneShots(t *testing.T) {
 		t.Errorf("kept session TurnCount=%d below floor %d", resp.Sessions[0].TurnCount, minMeaningfulTurns)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Discovery cache tests
+// ---------------------------------------------------------------------------
+
+// writeClaudeFixture writes a minimal claude JSONL session with the given
+// number of user/assistant pairs into dir.
+func writeClaudeFixture(t *testing.T, dir, id string, pairs int) {
+	t.Helper()
+	lines := []map[string]any{
+		{"type": "agent-setting", "agentSetting": "claude", "sessionId": id},
+	}
+	for i := 0; i < pairs; i++ {
+		lines = append(lines,
+			map[string]any{
+				"type": "user", "sessionId": id,
+				"timestamp": "2025-01-01T00:00:00.000Z",
+				"message":   map[string]any{"role": "user", "content": "hello"},
+				"cwd":       "/tmp/cache-proj",
+			},
+			map[string]any{
+				"type": "assistant", "sessionId": id,
+				"timestamp": "2025-01-01T00:01:00.000Z",
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": []map[string]any{{"type": "text", "text": "world"}},
+				},
+			},
+		)
+	}
+	var content string
+	for _, rec := range lines {
+		b, _ := json.Marshal(rec)
+		content += string(b) + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDiscoveryCache_CachePopulatedAndConsistent verifies:
+//  1. After the first call the cache fields are populated.
+//  2. A second call within the TTL returns identical results (cache hit).
+//  3. A new fixture file written between the two calls does NOT appear in the
+//     second result (proves the second call did not re-scan disk).
+func TestDiscoveryCache_CachePopulatedAndConsistent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-cache-proj")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write one session with enough turns to pass the quality floor.
+	id1 := "cache-1111-1111-1111-111111111111"
+	writeClaudeFixture(t, projDir, id1, 3)
+
+	m := &Manager{conduitRoot: t.TempDir()}
+
+	// First call — triggers a real scan and primes the cache.
+	resp1 := m.DiscoverExternalSessions("", []string{"claude"})
+	if len(resp1.Sessions) != 1 {
+		t.Fatalf("first call: got %d sessions, want 1", len(resp1.Sessions))
+	}
+
+	// Verify the cache is now populated.
+	m.discCacheMu.Lock()
+	cacheLen := len(m.discCache)
+	cacheAt := m.discCacheAt
+	m.discCacheMu.Unlock()
+	if cacheLen == 0 {
+		t.Error("cache should be non-empty after first call")
+	}
+	if cacheAt.IsZero() {
+		t.Error("discCacheAt should be non-zero after first call")
+	}
+
+	// Write a second fixture file — within the TTL this must NOT appear.
+	id2 := "cache-2222-2222-2222-222222222222"
+	writeClaudeFixture(t, projDir, id2, 3)
+
+	// Second call — must hit the cache and NOT see id2.
+	resp2 := m.DiscoverExternalSessions("", []string{"claude"})
+	if len(resp2.Sessions) != 1 {
+		t.Errorf("second call (cache hit): got %d sessions, want 1 (new file must not appear within TTL)", len(resp2.Sessions))
+	}
+	if len(resp2.Sessions) > 0 && resp2.Sessions[0].ExternalID != id1 {
+		t.Errorf("second call returned wrong session %s, want %s", resp2.Sessions[0].ExternalID, id1)
+	}
+
+	// Results must be identical across both calls.
+	if resp1.TotalOnDisk != resp2.TotalOnDisk {
+		t.Errorf("TotalOnDisk changed between calls: %d → %d (cache inconsistency)", resp1.TotalOnDisk, resp2.TotalOnDisk)
+	}
+}
+
+// TestDiscoveryCache_ExpiredCacheRescans verifies that after the TTL expires
+// a new scan runs and picks up the newly written fixture.
+func TestDiscoveryCache_ExpiredCacheRescans(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-rescan-proj")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	id1 := "rescan-1111-1111-1111-111111111111"
+	writeClaudeFixture(t, projDir, id1, 3)
+
+	m := &Manager{conduitRoot: t.TempDir()}
+
+	// First call — prime the cache.
+	_ = m.DiscoverExternalSessions("", []string{"claude"})
+
+	// Artificially expire the cache by backdating discCacheAt.
+	m.discCacheMu.Lock()
+	m.discCacheAt = time.Now().Add(-(discoveryCacheTTL + time.Second))
+	m.discCacheMu.Unlock()
+
+	// Write a new session file.
+	id2 := "rescan-2222-2222-2222-222222222222"
+	writeClaudeFixture(t, projDir, id2, 3)
+
+	// Second call — cache is expired, must re-scan and see both sessions.
+	resp := m.DiscoverExternalSessions("", []string{"claude"})
+	if resp.TotalOnDisk != 2 {
+		t.Errorf("after cache expiry: TotalOnDisk=%d want 2 (both sessions)", resp.TotalOnDisk)
+	}
+}

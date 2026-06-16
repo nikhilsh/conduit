@@ -35,13 +35,19 @@ type DiscoveredResponse struct {
 	TotalOnDisk int               `json:"total_on_disk"`
 }
 
-// DiscoverExternalSessions scans external Claude and Codex session dirs and
+// discoveryCacheTTL is how long the raw Found Sessions scan is cached before
+// the next call triggers a fresh file-system scan. New sessions started
+// outside Conduit appear within one TTL window; 45 s is well within the
+// practical "just started a session, now opening Found Sessions" latency.
+const discoveryCacheTTL = 45 * time.Second
+
 // minMeaningfulTurns is the discovery quality floor: sessions with fewer than
 // this many turns (Claude exchange pairs / Codex turns) are treated as trivial
 // one-shots and excluded from discovery so the list and count stay meaningful.
 const minMeaningfulTurns = 2
 
-// returns sessions started outside Conduit, sorted recent-first.
+// DiscoverExternalSessions returns sessions started outside Conduit, sorted
+// recent-first.
 //
 // Filter parameters:
 //   - q: case-insensitive substring over title/cwd/git_branch (empty = no filter)
@@ -49,6 +55,11 @@ const minMeaningfulTurns = 2
 //
 // Sessions whose external_id matches a Conduit-own session's
 // claude_chat_session_id or codex_thread_id are excluded (dedupe).
+//
+// The raw file-system scan is cached for discoveryCacheTTL so repeat calls
+// (e.g. polling from the app) are served from memory. Dedup, quality floor,
+// agent filter, q filter, and sort are applied per-call on a copy so an
+// adopted / forked session disappears immediately without waiting for the TTL.
 func (m *Manager) DiscoverExternalSessions(q string, agents []string) DiscoveredResponse {
 	wantClaude := len(agents) == 0
 	wantCodex := len(agents) == 0
@@ -61,23 +72,54 @@ func (m *Manager) DiscoverExternalSessions(q string, agents []string) Discovered
 		}
 	}
 
-	// Collect conduit-own external IDs for deduplication.
+	// --- cache layer: raw scan (no dedup baked in) ---------------------------
+	// Hold the mutex for the whole read-or-refresh so only one goroutine
+	// does the expensive scan at a time. The scan itself is fast enough
+	// (hundreds of files, no network) that blocking callers briefly is
+	// simpler and safer than a double-checked-lock pattern.
+	m.discCacheMu.Lock()
+	if m.discCacheAt.IsZero() || time.Since(m.discCacheAt) >= discoveryCacheTTL {
+		// Cache miss or expired — re-scan both agents unconditionally so the
+		// cached slice always covers the full universe. Per-call agent
+		// filtering happens below after we release the lock.
+		var raw []ExternalSession
+		if claudeSessions, err := scanClaudeSessions(nil); err != nil {
+			log.Printf("found-sessions: claude scan error: %v", err)
+		} else {
+			raw = append(raw, claudeSessions...)
+		}
+		if codexSessions, err := scanCodexSessions(nil); err != nil {
+			log.Printf("found-sessions: codex scan error: %v", err)
+		} else {
+			raw = append(raw, codexSessions...)
+		}
+		m.discCache = raw
+		m.discCacheAt = time.Now()
+	}
+	// Copy the cached slice so per-call filtering never mutates the cache.
+	cached := make([]ExternalSession, len(m.discCache))
+	copy(cached, m.discCache)
+	m.discCacheMu.Unlock()
+	// -------------------------------------------------------------------------
+
+	// Per-call dedup: collect Conduit-own IDs fresh on every call so an
+	// adopted/forked session disappears immediately (not after the TTL).
 	ownIDs := m.ownExternalIDs()
 
 	var all []ExternalSession
-	if wantClaude {
-		claudeSessions, err := scanClaudeSessions(ownIDs)
-		if err != nil {
-			log.Printf("found-sessions: claude scan error: %v", err)
+	for _, s := range cached {
+		// Agent filter.
+		if s.Agent == "claude" && !wantClaude {
+			continue
 		}
-		all = append(all, claudeSessions...)
-	}
-	if wantCodex {
-		codexSessions, err := scanCodexSessions(ownIDs)
-		if err != nil {
-			log.Printf("found-sessions: codex scan error: %v", err)
+		if s.Agent == "codex" && !wantCodex {
+			continue
 		}
-		all = append(all, codexSessions...)
+		// Dedup: skip sessions Conduit already owns.
+		if _, own := ownIDs[s.ExternalID]; own {
+			continue
+		}
+		all = append(all, s)
 	}
 
 	// Quality floor: drop trivial single-turn one-shots (quick Qs / tests /
