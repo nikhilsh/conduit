@@ -229,10 +229,15 @@ func (s *Server) rewireLASender() {
 // Dispatcher fans out Payload to every registered device. Also wires the
 // Dispatcher as the session Manager's Notifier so turn-complete and
 // pending-input events fire pushes when no client is attached.
+// Additionally wires the Registry + Dispatcher for per-device targeting
+// so sessions created with a device_id can call NotifyDevice.
 func (s *Server) WithDispatcher(d *push.Dispatcher) *Server {
 	s.Dispatcher = d
 	if s.Sessions != nil && d != nil {
 		s.Sessions.SetPushNotifier(d, pushIdentity)
+		if s.Push != nil {
+			s.Sessions.SetPushDispatcher(s.Push, d)
+		}
 	}
 	return s
 }
@@ -390,9 +395,15 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		PermissionMode:  strings.TrimSpace(r.URL.Query().Get("permission_mode")),
 		FastMode:        parseFastMode(r.URL.Query().Get("fast_mode")),
 	}
+	// device_id is the stable per-install UUID sent by the app. When present
+	// on session-create it is stored as the session's owner device so
+	// turn-done / pending-input pushes target that device rather than
+	// broadcasting to all paired phones.
+	ownerDeviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
 	sess, created, err := s.Sessions.GetOrCreateWithOptions(id, assistant, session.CreateOptions{
-		CWD:      cwd,
-		Override: override,
+		CWD:           cwd,
+		Override:      override,
+		OwnerDeviceID: ownerDeviceID,
 	})
 	if err != nil {
 		msg := err.Error()
@@ -785,6 +796,9 @@ func (c *client) handleText(payload []byte) {
 		// register_push_token / unregister_push_token (Package 5).
 		Platform string `json:"platform"`
 		Token    string `json:"token"`
+		// DeviceID is the stable per-install UUID sent by new app clients
+		// on register_push_token frames for per-device push targeting.
+		DeviceID string `json:"device_id"`
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
@@ -968,10 +982,10 @@ func (c *client) handleText(payload []byte) {
 		// WS is already bearer-authenticated; tokens land in the
 		// single-operator bucket. Bad input is dropped silently (the
 		// phone retries on next launch) — no socket-killing error.
-		c.handleRegisterPushToken(env.Platform, env.Token, true)
+		c.handleRegisterPushToken(env.Platform, env.Token, env.DeviceID, true)
 	case "unregister_push_token":
 		// Phone logged out / disabled notifications.
-		c.handleRegisterPushToken(env.Platform, env.Token, false)
+		c.handleRegisterPushToken(env.Platform, env.Token, env.DeviceID, false)
 	default:
 		// Per protocol §3.3: unknown types are logged and ignored.
 	}
@@ -981,12 +995,14 @@ func (c *client) handleText(payload []byte) {
 // (register=false) a device token from the push registry. No-op when no
 // registry is wired or the input is malformed — the phone re-registers
 // on its next launch, so a dropped registration is self-healing.
-func (c *client) handleRegisterPushToken(platform, token string, register bool) {
+// deviceID is the stable per-install UUID from new clients; empty for old
+// clients (backward-compat: those tokens participate in broadcast only).
+func (c *client) handleRegisterPushToken(platform, token, deviceID string, register bool) {
 	server := c.serverRef()
 	if server == nil || server.Push == nil {
 		return
 	}
-	dt := push.DeviceToken{Platform: push.Platform(platform), Token: token}
+	dt := push.DeviceToken{Platform: push.Platform(platform), Token: token, DeviceID: strings.TrimSpace(deviceID)}
 	if register {
 		server.Push.Register(pushIdentity, dt)
 	} else {

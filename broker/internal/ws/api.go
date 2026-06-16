@@ -421,10 +421,14 @@ func (s *Server) serveSessionDelete(w http.ResponseWriter, r *http.Request) {
 
 // pushRegisterRequest is the body for POST /api/push/register.
 // session_id is required when platform="apns-liveactivity"; omitted for alert platforms.
+// device_id is the stable per-install UUID sent by new app clients to enable
+// per-device push targeting. Omitted by old clients; those tokens participate
+// only in broadcast Notify.
 type pushRegisterRequest struct {
 	Platform  string `json:"platform"`
 	Token     string `json:"token"`
 	SessionID string `json:"session_id"`
+	DeviceID  string `json:"device_id"`
 }
 
 // servePushRegister handles POST /api/push/register.
@@ -451,6 +455,7 @@ func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
 	platform := strings.TrimSpace(req.Platform)
 	token := strings.TrimSpace(req.Token)
 	sessionID := strings.TrimSpace(req.SessionID)
+	deviceID := strings.TrimSpace(req.DeviceID)
 
 	// LA token path: session-scoped, stored separately from alert tokens.
 	if platform == "apns-liveactivity" {
@@ -474,7 +479,7 @@ func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Standard alert registration path — unchanged.
+	// Standard alert registration path — stores device_id for per-device targeting.
 	pp := push.Platform(platform)
 	if !push.ValidPlatform(pp) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_platform", "platform must be apns, fcm, or unifiedpush")
@@ -488,9 +493,13 @@ func (s *Server) servePushRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusServiceUnavailable, "push_unavailable", "push registry not configured")
 		return
 	}
-	dt := push.DeviceToken{Platform: pp, Token: token}
+	dt := push.DeviceToken{Platform: pp, Token: token, DeviceID: deviceID}
 	s.Push.Register(pushIdentity, dt)
-	log.Printf("push: registered %s token for %s", platform, pushIdentity)
+	if deviceID != "" {
+		log.Printf("push: registered %s token for %s device_id=%s", platform, pushIdentity, deviceID)
+	} else {
+		log.Printf("push: registered %s token for %s", platform, pushIdentity)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"registered": true, "platform": string(pp)})
 }
 
@@ -568,9 +577,14 @@ func (s *Server) servePushUnregister(w http.ResponseWriter, r *http.Request) {
 }
 
 // pushTestRequest is the body for POST /api/push/test.
+// device_id, when non-empty, restricts the test push to tokens registered
+// by that specific device (per-device targeting). If device_id is empty or
+// no stored token matches it, the test falls back to broadcasting to all
+// registered tokens (backward-compat with old clients and old tokens).
 type pushTestRequest struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	DeviceID string `json:"device_id"`
 }
 
 // servePushTest handles POST /api/push/test — sends a test push to all
@@ -602,21 +616,43 @@ func (s *Server) servePushTest(w http.ResponseWriter, r *http.Request) {
 	if body == "" {
 		body = "Push notifications are working"
 	}
+	deviceID := strings.TrimSpace(req.DeviceID)
 	payload := push.Payload{
 		Title: title,
 		Body:  body,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	if err := s.Dispatcher.Notify(ctx, pushIdentity, payload); err != nil {
-		log.Printf("push test: notify error: %v", err)
-		writeAPIError(w, http.StatusInternalServerError, "push_send_failed", err.Error())
-		return
+
+	// Per-device targeting: if the caller supplied a device_id AND we have
+	// at least one stored token for that device, send only to it.
+	// Fallback to broadcast when device_id is empty (old client) or when
+	// no stored token matches (e.g. token registered before device_id was
+	// introduced). This ensures no push is ever silently dropped.
+	targeted := false
+	if deviceID != "" && s.Push != nil {
+		if matched := s.Push.TokensForDevice(pushIdentity, deviceID); len(matched) > 0 {
+			if err := s.Dispatcher.NotifyDevice(ctx, pushIdentity, deviceID, payload); err != nil {
+				log.Printf("push test: notify device %s error: %v", deviceID, err)
+				writeAPIError(w, http.StatusInternalServerError, "push_send_failed", err.Error())
+				return
+			}
+			targeted = true
+		}
 	}
+	if !targeted {
+		if err := s.Dispatcher.Notify(ctx, pushIdentity, payload); err != nil {
+			log.Printf("push test: notify error: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, "push_send_failed", err.Error())
+			return
+		}
+	}
+
 	tokens := s.Push.TokensFor(pushIdentity)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sent":        true,
 		"token_count": len(tokens),
+		"targeted":    targeted,
 	})
 }
 

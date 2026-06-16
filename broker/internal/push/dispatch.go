@@ -40,8 +40,26 @@ func NewDispatcher(registry *Registry, senders map[Platform]Sender) *Dispatcher 
 // [ErrTokenGone] result unregisters that token instead. A platform with
 // no configured sender is skipped silently. Implements [Notifier].
 func (d *Dispatcher) Notify(ctx context.Context, identity string, payload Payload) error {
+	return d.sendToTokens(ctx, identity, d.registry.TokensFor(identity), payload)
+}
+
+// NotifyDevice delivers payload only to tokens registered for identity whose
+// DeviceID matches deviceID. If deviceID is empty or no matching token is
+// found this is a no-op (callers must fall back to Notify themselves — see
+// the servePushTest and maybeNotify* sites). Per-device send errors are
+// collected and returned joined; ErrTokenGone prunes the token.
+func (d *Dispatcher) NotifyDevice(ctx context.Context, identity, deviceID string, payload Payload) error {
+	tokens := d.registry.TokensForDevice(identity, deviceID)
+	if len(tokens) == 0 {
+		return nil
+	}
+	return d.sendToTokens(ctx, identity, tokens, payload)
+}
+
+// sendToTokens is the shared fan-out loop used by Notify and NotifyDevice.
+func (d *Dispatcher) sendToTokens(ctx context.Context, identity string, tokens []DeviceToken, payload Payload) error {
 	var errs []error
-	for _, tok := range d.registry.TokensFor(identity) {
+	for _, tok := range tokens {
 		sender := d.senders[tok.Platform]
 		if sender == nil {
 			continue

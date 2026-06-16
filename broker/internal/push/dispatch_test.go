@@ -98,3 +98,82 @@ func TestDispatcherJoinsTransientErrors(t *testing.T) {
 
 // Dispatcher must satisfy the Notifier interface.
 var _ Notifier = (*Dispatcher)(nil)
+
+// ---- NotifyDevice tests (b) ----
+
+// (b) NotifyDevice sends only to the matching device's tokens.
+func TestNotifyDevice_TargetsOnlyMatchingDevice(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register("broker", DeviceToken{Platform: PlatformAPNs, Token: "tok-a-apns", DeviceID: "device-a"})
+	reg.Register("broker", DeviceToken{Platform: PlatformFCM, Token: "tok-a-fcm", DeviceID: "device-a"})
+	reg.Register("broker", DeviceToken{Platform: PlatformAPNs, Token: "tok-b", DeviceID: "device-b"})
+
+	apns := &recordingSender{}
+	fcm := &recordingSender{}
+	d := NewDispatcher(reg, map[Platform]Sender{PlatformAPNs: apns, PlatformFCM: fcm})
+
+	if err := d.NotifyDevice(context.Background(), "broker", "device-a", Payload{Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("NotifyDevice: %v", err)
+	}
+	// device-a has 2 tokens (apns + fcm); device-b must NOT be notified.
+	if len(apns.sent) != 1 || apns.sent[0].Token != "tok-a-apns" {
+		t.Fatalf("apns sent = %+v, want [tok-a-apns]", apns.sent)
+	}
+	if len(fcm.sent) != 1 || fcm.sent[0].Token != "tok-a-fcm" {
+		t.Fatalf("fcm sent = %+v, want [tok-a-fcm]", fcm.sent)
+	}
+
+	// Notify device-b: only tok-b via apns.
+	apns.sent = nil
+	fcm.sent = nil
+	if err := d.NotifyDevice(context.Background(), "broker", "device-b", Payload{}); err != nil {
+		t.Fatalf("NotifyDevice device-b: %v", err)
+	}
+	if len(apns.sent) != 1 || apns.sent[0].Token != "tok-b" {
+		t.Fatalf("apns for device-b = %+v, want [tok-b]", apns.sent)
+	}
+	if len(fcm.sent) != 0 {
+		t.Fatalf("fcm for device-b should be 0 (no fcm token), got %d", len(fcm.sent))
+	}
+}
+
+// (b) NotifyDevice with empty or unknown device_id is a no-op (no panic, no sends).
+func TestNotifyDevice_EmptyDeviceID_IsNoOp(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register("broker", DeviceToken{Platform: PlatformAPNs, Token: "tok-a", DeviceID: "device-a"})
+	apns := &recordingSender{}
+	d := NewDispatcher(reg, map[Platform]Sender{PlatformAPNs: apns})
+
+	// Empty device_id: no-op.
+	if err := d.NotifyDevice(context.Background(), "broker", "", Payload{}); err != nil {
+		t.Fatalf("NotifyDevice empty device_id: %v", err)
+	}
+	if len(apns.sent) != 0 {
+		t.Fatalf("empty device_id should send nothing, got %d sends", len(apns.sent))
+	}
+
+	// Unknown device_id: no-op (caller must fall back to Notify).
+	if err := d.NotifyDevice(context.Background(), "broker", "no-such-device", Payload{}); err != nil {
+		t.Fatalf("NotifyDevice unknown device: %v", err)
+	}
+	if len(apns.sent) != 0 {
+		t.Fatalf("unknown device_id should send nothing, got %d sends", len(apns.sent))
+	}
+}
+
+// (b) NotifyDevice prunes gone tokens (ErrTokenGone), just like Notify.
+func TestNotifyDevice_PrunesGoneToken(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register("broker", DeviceToken{Platform: PlatformAPNs, Token: "dead", DeviceID: "device-a"})
+	reg.Register("broker", DeviceToken{Platform: PlatformAPNs, Token: "good", DeviceID: "device-a"})
+	apns := &recordingSender{failWith: map[string]error{"dead": ErrTokenGone}}
+	d := NewDispatcher(reg, map[Platform]Sender{PlatformAPNs: apns})
+
+	if err := d.NotifyDevice(context.Background(), "broker", "device-a", Payload{}); err != nil {
+		t.Fatalf("NotifyDevice with gone token should not surface error: %v", err)
+	}
+	left := reg.TokensForDevice("broker", "device-a")
+	if len(left) != 1 || left[0].Token != "good" {
+		t.Fatalf("after prune, tokens = %+v, want only [good]", left)
+	}
+}

@@ -620,6 +620,151 @@ func TestPushRegisterStart_NoPushRegistry_Returns200(t *testing.T) {
 	}
 }
 
+// ---- Per-device push targeting tests (c) ----
+
+// (c) Register with device_id stores it; POST /api/push/test with the same
+// device_id targets ONLY that device (relay sees exactly 1 send, for that token).
+func TestPushTest_DeviceIDTargetsOneDevice(t *testing.T) {
+	srv, tok, reg, relay := newTestServerWithPush(t)
+
+	doRegister := func(platform, token, deviceID string) {
+		body := `{"platform":"` + platform + `","token":"` + token + `","device_id":"` + deviceID + `"}`
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register?token="+url.QueryEscape(tok), strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		_ = resp.Body.Close()
+	}
+
+	// Two devices register tokens.
+	doRegister("apns", "tok-phone-a", "device-a")
+	doRegister("apns", "tok-phone-b", "device-b")
+
+	if n := len(reg.TokensFor(pushIdentity)); n != 2 {
+		t.Fatalf("expected 2 registered tokens, got %d", n)
+	}
+
+	// Test push with device_id="device-a" must only send to tok-phone-a.
+	testBody := `{"title":"Test","body":"hello","device_id":"device-a"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/test?token="+url.QueryEscape(tok), strings.NewReader(testBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST test-push: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+
+	var out struct {
+		Sent     bool `json:"sent"`
+		Targeted bool `json:"targeted"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Targeted {
+		t.Error("response.targeted should be true when device_id matched")
+	}
+
+	// Relay must have received exactly 1 send for tok-phone-a.
+	if relay.calls != 1 {
+		t.Fatalf("relay got %d calls, want 1 (targeted to one device)", relay.calls)
+	}
+	body := relay.bodies[0]
+	if body["token"] != "tok-phone-a" {
+		t.Errorf("relay token=%v, want tok-phone-a", body["token"])
+	}
+}
+
+// (c) Empty device_id falls back to broadcast (all registered tokens).
+func TestPushTest_EmptyDeviceIDBroadcasts(t *testing.T) {
+	srv, tok, _, relay := newTestServerWithPush(t)
+
+	doRegister := func(platform, token string) {
+		body := `{"platform":"` + platform + `","token":"` + token + `"}`
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register?token="+url.QueryEscape(tok), strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		_ = resp.Body.Close()
+	}
+
+	doRegister("apns", "tok-a")
+	doRegister("apns", "tok-b")
+
+	// Test push with no device_id → broadcast.
+	testBody := `{"title":"Test","body":"hello"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/test?token="+url.QueryEscape(tok), strings.NewReader(testBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST test-push: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+
+	var out struct {
+		Targeted bool `json:"targeted"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Targeted {
+		t.Error("response.targeted should be false for broadcast (empty device_id)")
+	}
+
+	// Relay must have received 2 sends (broadcast to all tokens).
+	if relay.calls != 2 {
+		t.Fatalf("relay got %d calls, want 2 (broadcast)", relay.calls)
+	}
+}
+
+// (c) device_id that doesn't match any stored token falls back to broadcast.
+func TestPushTest_UnmatchedDeviceIDFallsBackToBroadcast(t *testing.T) {
+	srv, tok, _, relay := newTestServerWithPush(t)
+
+	// Register a token WITHOUT a device_id (old client).
+	body := `{"platform":"apns","token":"old-tok"}`
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/register?token="+url.QueryEscape(tok), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	_ = resp.Body.Close()
+
+	// Test push with a device_id that doesn't match any token → fallback broadcast.
+	testBody := `{"title":"Test","body":"hello","device_id":"no-such-device"}`
+	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/push/test?token="+url.QueryEscape(tok), strings.NewReader(testBody))
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("POST test-push: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp2.StatusCode)
+	}
+
+	var out struct {
+		Targeted bool `json:"targeted"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Targeted {
+		t.Error("response.targeted should be false when device_id has no stored token (fallback broadcast)")
+	}
+
+	// Relay must have received the broadcast (old-tok reached).
+	if relay.calls != 1 {
+		t.Fatalf("relay got %d calls, want 1 (broadcast fallback)", relay.calls)
+	}
+	body2 := relay.bodies[0]
+	if body2["token"] != "old-tok" {
+		t.Errorf("relay token=%v, want old-tok", body2["token"])
+	}
+}
+
 // TestLARegisterAlertPathUnchanged verifies that existing alert registrations
 // (platform="apns") continue working when the LA registry is also wired.
 func TestLARegisterAlertPathUnchanged(t *testing.T) {

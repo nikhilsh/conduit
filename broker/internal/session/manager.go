@@ -1522,6 +1522,11 @@ type Manager struct {
 	// tests, brokers without a relay or UnifiedPush client).
 	pushNotifier push.Notifier
 	pushIdentity string
+	// pushRegistry and pushDispatcher are wired via SetPushDispatcher so that
+	// sessions with an ownerDeviceID can call NotifyDevice for targeted pushes.
+	// nil = per-device targeting disabled (falls back to broadcast via pushNotifier).
+	pushRegistry   *push.Registry
+	pushDispatcher *push.Dispatcher
 	// laTokens and laSender are wired from cmd/conduit-broker via SetLASender
 	// for Live Activity push support. nil = LA disabled.
 	laTokens *push.LARegistry
@@ -1574,6 +1579,18 @@ func (m *Manager) SetPushNotifier(n push.Notifier, identity string) {
 	m.mu.Lock()
 	m.pushNotifier = n
 	m.pushIdentity = identity
+	m.mu.Unlock()
+}
+
+// SetPushDispatcher wires the push Registry and Dispatcher into the Manager
+// to enable per-device targeting on new sessions. When ownerDeviceID is set
+// on a CreateOptions the session's push notify path calls NotifyDevice
+// instead of Notify, falling back to broadcast when no token is found.
+// Must be called after SetPushNotifier so the notifier is already wired.
+func (m *Manager) SetPushDispatcher(reg *push.Registry, d *push.Dispatcher) {
+	m.mu.Lock()
+	m.pushRegistry = reg
+	m.pushDispatcher = d
 	m.mu.Unlock()
 }
 
@@ -1652,6 +1669,13 @@ type CreateOptions struct {
 	// --resume <id> --fork-session; codex falls back to plain resume into the
 	// new worktree for isolation. Zero value = no fork.
 	ExternalFork ExternalForkOptions
+	// OwnerDeviceID is the stable per-install UUID of the device that
+	// created this session (from the WS connect device_id query param).
+	// When non-empty, turn-done and pending-input push notifications are
+	// directed to this device's token(s) instead of broadcasting to all
+	// paired devices. Empty for sessions created by old clients or without
+	// a device_id param — those fall back to broadcast (no regression).
+	OwnerDeviceID string
 }
 
 func NewManager(registry *agents.Registry) *Manager {
@@ -2036,6 +2060,11 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 	// notifications when no client is attached. nil notifier is a no-op.
 	if m.pushNotifier != nil {
 		s.SetPushNotifier(m.pushNotifier, m.pushIdentity)
+	}
+	// Wire per-device targeting when a device_id was supplied on connect.
+	// SetPushOwner is a no-op when ownerDeviceID is empty (old clients).
+	if opts.OwnerDeviceID != "" && m.pushRegistry != nil && m.pushDispatcher != nil {
+		s.SetPushOwner(opts.OwnerDeviceID, m.pushRegistry, m.pushDispatcher)
 	}
 	// Wire the Live Activity sender so the session can emit content-state
 	// updates to the iOS lock-screen turn card. nil reg/sender = no-op.
