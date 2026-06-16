@@ -61,6 +61,12 @@ extension ConduitUI {
         @State private var pulseAnimating = false
         /// Poll task -- cancelled on disappear.
         @State private var pollTask: Task<Void, Never>?
+        /// Held so startWatch() can drive a scroll cascade once items load.
+        @State private var scrollProxy: ScrollViewProxy?
+
+        /// Cap initial render of long transcripts (parity with ConduitChatView's
+        /// visibleRowWindow). We only ever want the tail visible on open anyway.
+        private let visibleRowWindow = 80
 
         private let pollInterval: TimeInterval = 2.5
         private let staleEndedThreshold = 4   // ~10s of no new items = ended
@@ -224,7 +230,14 @@ extension ConduitUI {
                         .frame(maxWidth: .infinity)
                     } else {
                         LazyVStack(spacing: 0) {
-                            ForEach(items, id: \.id) { item in
+                            // Window to the tail so long transcripts don't lay
+                            // out every item on open (parity with ConduitChatView).
+                            // The bottom anchor + autoscroll are unaffected -- we
+                            // always keep the most recent rows.
+                            let windowed = items.count > visibleRowWindow
+                                ? Array(items.suffix(visibleRowWindow))
+                                : items
+                            ForEach(windowed, id: \.id) { item in
                                 WatchTranscriptRow(item: item, neon: neon)
                                     .id(item.id)
                             }
@@ -244,8 +257,11 @@ extension ConduitUI {
                         proxy.scrollTo("watch-bottom", anchor: .bottom)
                     }
                 }
-                // Scroll on initial load too
+                // Hold the proxy so startWatch() can fire the open cascade once
+                // items load (a single .onAppear here is a no-op -- items are
+                // empty at appear).
                 .onAppear {
+                    scrollProxy = proxy
                     proxy.scrollTo("watch-bottom", anchor: .bottom)
                 }
             }
@@ -400,6 +416,17 @@ extension ConduitUI {
 
             withAnimation { watchState = .watching }
             pulseAnimating = !reduceMotion
+
+            // Anchor to the latest message on open. The transcript only just
+            // became non-empty, and the LazyVStack resolves row heights lazily,
+            // so a single jump lands short -- re-pin across the first few layout
+            // passes (same trick as ConduitChatView.scrollToBottomOnOpen).
+            Task { @MainActor in
+                for delayMs: UInt64 in [16, 60, 200, 500] {
+                    try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                    scrollProxy?.scrollTo("watch-bottom", anchor: .bottom)
+                }
+            }
 
             // Start polling
             // Capture self by value (View is a struct -- no reference cycle).

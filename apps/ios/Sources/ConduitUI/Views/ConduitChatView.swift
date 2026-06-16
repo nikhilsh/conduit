@@ -488,7 +488,7 @@ extension ConduitUI {
                 "windowed": String(min(chatRows.count, visibleRowWindow)),
             ])
             Task { @MainActor in
-                for delayMs: UInt64 in [0, 60, 200, 500] {
+                for delayMs: UInt64 in [16, 60, 200, 500] {
                     if delayMs > 0 { try? await Task.sleep(nanoseconds: delayMs * 1_000_000) }
                     proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
                 }
