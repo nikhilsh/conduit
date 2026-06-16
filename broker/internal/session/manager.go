@@ -495,9 +495,16 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		realHome := hostHomeDir()
 		if er := opts.externalResume; er.ExternalID != "" {
 			stageExternalTranscript(ephemeral, realHome, er.Agent, er.ExternalID)
+			// Seed the new session's chat log with a short excerpt of the prior
+			// transcript so the Chat tab opens showing recent context rather than
+			// appearing empty. Best-effort: never blocks the spawn.
+			seedResumeExcerpt(s.convLog.path, er.Agent, er.ExternalID)
 		}
 		if ef := opts.externalFork; ef.ExternalID != "" {
 			stageExternalTranscript(ephemeral, realHome, ef.Agent, ef.ExternalID)
+			// Same excerpt seed for fork: the user branched the conversation and
+			// should see the prior context as the starting point.
+			seedResumeExcerpt(s.convLog.path, ef.Agent, ef.ExternalID)
 		}
 	}
 	cmd.Env = s.commandEnv(nil)

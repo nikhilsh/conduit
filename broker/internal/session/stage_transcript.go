@@ -1,12 +1,20 @@
 package session
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// resumeExcerptN is the number of prior-transcript entries seeded into the
+// new session's conversation.jsonl when a Found Session is resumed. Small
+// enough to render quickly; large enough to show meaningful context.
+const resumeExcerptN = 10
 
 // stageExternalTranscript copies the external agent's conversation file from
 // the user's REAL home into the per-session agent-home so that the agent
@@ -150,4 +158,114 @@ func stageCopyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return atomicWriteFileMode(dst, data, mode)
+}
+
+// seedResumeExcerpt seeds the new session's conversation.jsonl with a short
+// excerpt of the prior external transcript so the Chat tab opens showing recent
+// context rather than appearing empty after a Found-Session resume.
+//
+// It reads the full prior transcript via ExternalTranscript then delegates to
+// seedResumeExcerptFromEntries. Best-effort: any error is logged; the session
+// continues normally with an empty chat history.
+func seedResumeExcerpt(convLogPath, agent, externalID string) {
+	if convLogPath == "" || agent == "" || externalID == "" {
+		return
+	}
+
+	// Fetch the full prior transcript from disk.
+	all, err := ExternalTranscript(agent, externalID)
+	if err != nil || len(all) == 0 {
+		if err != nil {
+			log.Printf("found-sessions: seedResumeExcerpt: ExternalTranscript(%s,%s): %v (skipping excerpt seed)", agent, externalID, err)
+		} else {
+			log.Printf("found-sessions: seedResumeExcerpt: ExternalTranscript(%s,%s) returned empty transcript (skipping excerpt seed)", agent, externalID)
+		}
+		return
+	}
+
+	seedResumeExcerptFromEntries(convLogPath, all, agent)
+}
+
+// seedResumeExcerptFromEntries is the testable core of seedResumeExcerpt.
+// It takes the already-fetched full transcript (all) and writes up to
+// resumeExcerptN of its tail entries plus a trailing system note into
+// convLogPath.
+//
+// Idempotency: if convLogPath already has content (broker restarted and
+// re-ran newSession), the seed is skipped — checked by a non-zero file size.
+//
+// It appends two things (in order):
+//  1. The last resumeExcerptN entries (oldest → newest within the excerpt),
+//     preserving their original roles and timestamps.
+//  2. A trailing "system" entry noting the total turn count and that the
+//     full history is loaded in the agent's memory.
+func seedResumeExcerptFromEntries(convLogPath string, all []ConvEntry, agent string) {
+	if convLogPath == "" || len(all) == 0 {
+		return
+	}
+
+	// Idempotency guard: skip if conversation.jsonl is already non-empty.
+	if info, err := os.Stat(convLogPath); err == nil && info.Size() > 0 {
+		log.Printf("found-sessions: seedResumeExcerpt: conversation.jsonl already has content at %s (skipping)", convLogPath)
+		return
+	}
+
+	totalTurns := len(all)
+
+	// Take the last resumeExcerptN entries (oldest-first within the excerpt).
+	excerpt := all
+	if len(excerpt) > resumeExcerptN {
+		excerpt = excerpt[len(excerpt)-resumeExcerptN:]
+	}
+
+	// Ensure the session dir exists (it's created by prepareFilesystem before
+	// we reach this point, but be defensive in case tests call us earlier).
+	if mkErr := os.MkdirAll(filepath.Dir(convLogPath), 0o700); mkErr != nil {
+		log.Printf("found-sessions: seedResumeExcerpt: mkdir %s: %v (skipping)", filepath.Dir(convLogPath), mkErr)
+		return
+	}
+
+	// Open the log file for append (creates if absent).
+	f, openErr := os.OpenFile(convLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if openErr != nil {
+		log.Printf("found-sessions: seedResumeExcerpt: open %s: %v (skipping)", convLogPath, openErr)
+		return
+	}
+	defer f.Close()
+
+	// Write each excerpt entry as a JSONL line.
+	writeEntry := func(e ConvEntry) error {
+		b, merr := json.Marshal(e)
+		if merr != nil {
+			return merr
+		}
+		if _, werr := fmt.Fprintf(f, "%s\n", b); werr != nil {
+			return werr
+		}
+		return nil
+	}
+
+	for _, e := range excerpt {
+		if werr := writeEntry(e); werr != nil {
+			log.Printf("found-sessions: seedResumeExcerpt: write entry: %v (partial seed)", werr)
+			return
+		}
+	}
+
+	// Append the trailing system note.
+	note := fmt.Sprintf(
+		"Resumed from a session you started in your terminal — %d earlier turns. The full history is loaded in %s's memory; the messages above are the most recent excerpt.",
+		totalTurns, agent,
+	)
+	systemEntry := ConvEntry{
+		Role:    "system",
+		Content: note,
+		Ts:      time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if werr := writeEntry(systemEntry); werr != nil {
+		log.Printf("found-sessions: seedResumeExcerpt: write system note: %v", werr)
+		return
+	}
+
+	log.Printf("found-sessions: seedResumeExcerpt: seeded %d-entry excerpt + system note into %s (totalTurns=%d)", len(excerpt), convLogPath, totalTurns)
 }
