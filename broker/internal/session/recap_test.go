@@ -408,3 +408,34 @@ func TestClaudeRecap_EmptyTranscriptFallsBack(t *testing.T) {
 		t.Errorf("expected transcript-read error (ExternalTranscript/empty transcript), got: %v", err)
 	}
 }
+
+func TestRecapEnv_AlwaysSetsIsSandbox(t *testing.T) {
+	// Without IS_SANDBOX=1 the recap `claude --dangerously-skip-permissions`
+	// one-shot is refused under root (the bare-VPS deploy), so the recap must
+	// always inject it — for both the no-agent-home and agent-home paths.
+	for _, agentHome := range []string{"", "/tmp/some-agent-home"} {
+		env := recapEnv(agentHome)
+		var sandbox, home int
+		var homeVal string
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "IS_SANDBOX=") {
+				sandbox++
+				if kv != "IS_SANDBOX=1" {
+					t.Errorf("agentHome=%q: IS_SANDBOX = %q, want IS_SANDBOX=1", agentHome, kv)
+				}
+			}
+			if strings.HasPrefix(kv, "HOME=") {
+				home++
+				homeVal = strings.TrimPrefix(kv, "HOME=")
+			}
+		}
+		if sandbox != 1 {
+			t.Errorf("agentHome=%q: IS_SANDBOX set %d times, want exactly 1", agentHome, sandbox)
+		}
+		if agentHome != "" {
+			if home != 1 || homeVal != agentHome {
+				t.Errorf("agentHome=%q: HOME set %d times (val=%q), want exactly 1 = agentHome", agentHome, home, homeVal)
+			}
+		}
+	}
+}
