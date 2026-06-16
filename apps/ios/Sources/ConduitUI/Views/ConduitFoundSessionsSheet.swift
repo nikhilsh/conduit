@@ -20,8 +20,13 @@ extension ConduitUI {
 
         let server: SavedServer
 
-        @State private var snapshot: FoundSessionsSnapshot = .empty
+        @State private var snapshot: FoundSessionsSnapshot
         @State private var features: SessionStore.BoxFeatures?
+
+        init(server: SavedServer, initialSnapshot: FoundSessionsSnapshot = .empty) {
+            self.server = server
+            _snapshot = State(initialValue: initialSnapshot)
+        }
 
         // Navigation into sub-sheets
         @State private var selectedForBranch: FoundSessionRow?
@@ -127,6 +132,8 @@ extension ConduitUI {
                 offlineState
             case .empty where searchQuery.isEmpty:
                 emptyState
+            case .scanning where snapshot.sessions.isEmpty:
+                scanningState
             default:
                 discoveryList
             }
@@ -625,6 +632,22 @@ extension ConduitUI {
             }
         }
 
+        // MARK: - Scanning state (cold open, no sessions yet)
+
+        private var scanningState: some View {
+            VStack(spacing: 16) {
+                Spacer()
+                ProgressView()
+                    .tint(neon.accent)
+                    .scaleEffect(1.4)
+                Text("Scanning sessions on \(server.name)...")
+                    .font(neon.mono(13))
+                    .foregroundStyle(neon.textFaint)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        }
+
         // MARK: - Undo overlay
 
         @ViewBuilder
@@ -669,7 +692,7 @@ extension ConduitUI {
                 return
             }
 
-            snapshot.discoveryState = .scanning
+            if snapshot.sessions.isEmpty { snapshot.discoveryState = .scanning }
             snapshot.boxID = server.id
             snapshot.boxName = server.name
 
