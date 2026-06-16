@@ -378,18 +378,33 @@ func transcriptDigest(all []ConvEntry) string {
 
 // recapEnv builds the environment for a one-shot recap exec: the broker env
 // with HOME pinned to the per-session agent-home so the staged transcript and
-// credentials resolve there (matching the live session's isolation).
+// credentials resolve there (matching the live session's isolation), plus
+// IS_SANDBOX=1.
+//
+// IS_SANDBOX=1 is Claude Code's documented escape hatch for
+// --dangerously-skip-permissions under root: on the bare-VPS deploy the broker
+// runs as root, and without it `claude --dangerously-skip-permissions --print`
+// is REFUSED ("cannot be used with root/sudo privileges"), so the recap
+// one-shot always failed and fell back to the deterministic note — the
+// agent-written recap never appeared. The live-session spawn already sets this
+// (see lifecycle.go); the recap exec must match. Harmless for codex (its bypass
+// flag has no root guard).
 func recapEnv(agentHome string) []string {
 	env := os.Environ()
-	if strings.TrimSpace(agentHome) == "" {
-		return env
-	}
-	out := make([]string, 0, len(env)+1)
+	overrideHome := strings.TrimSpace(agentHome) != ""
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "HOME=") {
+		if strings.HasPrefix(kv, "IS_SANDBOX=") {
+			continue // re-added below, deduped
+		}
+		if overrideHome && strings.HasPrefix(kv, "HOME=") {
 			continue
 		}
 		out = append(out, kv)
 	}
-	return append(out, "HOME="+agentHome)
+	out = append(out, "IS_SANDBOX=1")
+	if overrideHome {
+		out = append(out, "HOME="+agentHome)
+	}
+	return out
 }
