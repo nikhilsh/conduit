@@ -154,25 +154,48 @@ extension ConduitUI {
                 if features?.hostMetrics == true {
                     metrics = await store.fetchHostMetrics(endpoint: server.endpoint)
                 }
-                // Probe found sessions if the box supports discovery
-                if features?.sessionDiscovery == true && connected {
-                    foundSessionsSnapshot.boxID = server.id
-                    foundSessionsSnapshot.boxName = server.name
-                    foundSessionsSnapshot.discoveryState = .scanning
-                    let result = await store.fetchDiscoveredSessions(endpoint: server.endpoint)
-                    if let result {
-                        foundSessionsSnapshot.sessions = result.sessions
-                        foundSessionsSnapshot.totalOnDisk = result.totalOnDisk
-                        foundSessionsSnapshot.discoveryState = result.sessions.isEmpty ? .empty : .loaded
-                    } else if !connected {
-                        foundSessionsSnapshot.discoveryState = .offline
-                    } else {
-                        foundSessionsSnapshot.discoveryState = .error("Could not reach box")
-                    }
+                // Probe found sessions if the box advertises discovery. This is a
+                // plain HTTP call to the broker (like host-metrics above), so it
+                // must NOT be gated on the WS harness being linked -- otherwise on
+                // a box that hasn't finished connecting the instant this screen
+                // opens, the probe is skipped and the "Started outside Conduit"
+                // card never appears even after the box goes connected.
+                await probeFoundSessions()
+            }
+            .onChange(of: connected) { _, nowConnected in
+                // A box that finishes connecting (e.g. an SSH-tunnel box whose
+                // HTTP API only becomes reachable once the tunnel is up) after
+                // this screen opened: re-run discovery so the card recovers from
+                // an early, pre-connect attempt that came back offline/empty.
+                if nowConnected, features?.sessionDiscovery == true,
+                   foundSessionsSnapshot.discoveryState != .loaded {
+                    Task { await probeFoundSessions() }
                 }
             }
             .sheet(isPresented: $showFoundSessions) {
                 ConduitUI.FoundSessionsSheet(server: server)
+            }
+        }
+
+        /// Fetch the box's externally-started sessions over HTTP and fold the
+        /// result into `foundSessionsSnapshot`. Safe to call repeatedly (on open
+        /// and again when the box connects). No-op unless the box advertises
+        /// `session_discovery`.
+        @MainActor
+        private func probeFoundSessions() async {
+            guard features?.sessionDiscovery == true else { return }
+            foundSessionsSnapshot.boxID = server.id
+            foundSessionsSnapshot.boxName = server.name
+            foundSessionsSnapshot.discoveryState = .scanning
+            let result = await store.fetchDiscoveredSessions(endpoint: server.endpoint)
+            if let result {
+                foundSessionsSnapshot.sessions = result.sessions
+                foundSessionsSnapshot.totalOnDisk = result.totalOnDisk
+                foundSessionsSnapshot.discoveryState = result.sessions.isEmpty ? .empty : .loaded
+            } else if !connected {
+                foundSessionsSnapshot.discoveryState = .offline
+            } else {
+                foundSessionsSnapshot.discoveryState = .error("Could not reach box")
             }
         }
 
