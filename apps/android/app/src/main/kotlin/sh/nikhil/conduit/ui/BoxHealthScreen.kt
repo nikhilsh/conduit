@@ -445,9 +445,13 @@ fun BoxHealthScreen(
                 sessionFork = features?.sessionFork == true,
                 sessionWatch = features?.sessionWatch == true,
                 onDismiss = { showFoundSheet = false },
-                onOpenSession = { _ ->
-                    // Select this box and navigate to the session.
+                onOpenSession = { sessionId ->
+                    // Switch to this box (if not already active) so the WS
+                    // routes correctly, then dismiss and let attachLiveSession
+                    // (called inside FoundSessionsSheet before this callback)
+                    // navigate to the joined session via _selectedId.
                     store.selectSavedServer(server.id, autoConnect = true)
+                    store.select(sessionId)
                     showFoundSheet = false
                     onDismiss()
                 },

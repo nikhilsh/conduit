@@ -2428,6 +2428,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
             _sessionBox.value[s.id] == boxId && isConfirmedLive(s.id)
         }
 
+    /**
+     * Stamp [sessionId] as belonging to [serverId] in the per-session box
+     * routing map. Must be called before [attachLiveSession] for sessions
+     * that are not yet in [sessions] (e.g. freshly adopted found-sessions)
+     * so liveSessionCount and per-box filtering attribute them correctly.
+     */
+    fun stampSessionBox(sessionId: String, serverId: String) {
+        _sessionBox.value = _sessionBox.value + (sessionId to serverId)
+    }
+
     fun isConfirmedLive(sessionID: String): Boolean {
         return when (_sessionLifecycle.value[sessionID]) {
             is SessionLifecycle.Exited,

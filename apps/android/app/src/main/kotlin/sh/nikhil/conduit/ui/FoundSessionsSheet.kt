@@ -1070,6 +1070,12 @@ private fun BranchCopySheet(
                     )
                     branching = false
                     if (sessionId != null) {
+                        // Stamp box ownership then join over WS so the resumed
+                        // agent streams in and chat send works (mirrors iOS fix).
+                        Telemetry.breadcrumb("found_sessions", "adopt attach",
+                            mapOf("session_id" to sessionId, "mode" to "fork", "box" to server.id))
+                        store.stampSessionBox(sessionId, server.id)
+                        store.attachLiveSession(sessionId, session.agent)
                         onOpenSession(sessionId)
                     } else {
                         errorMsg = "The box dropped while forking. Your terminal session keeps running, untouched."
@@ -1346,6 +1352,12 @@ private fun ResumeProgressSheet(
                     currentStep = steps.size
                     progress = 1f
                     Telemetry.breadcrumb("found_sessions", "resume done", mapOf("session_id" to sessionId))
+                    // Stamp box ownership then join over WS so the resumed
+                    // agent streams in and chat send works (mirrors iOS fix).
+                    Telemetry.breadcrumb("found_sessions", "adopt attach",
+                        mapOf("session_id" to sessionId, "mode" to "resume", "box" to server.id))
+                    store.stampSessionBox(sessionId, server.id)
+                    store.attachLiveSession(sessionId, session.agent)
                     onDone(sessionId)
                 } else {
                     Telemetry.breadcrumb("found_sessions", "resume failed", mapOf("external_id" to session.externalId))
