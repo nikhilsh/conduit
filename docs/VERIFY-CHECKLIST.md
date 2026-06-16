@@ -9,6 +9,14 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.163
+
+**Found Sessions discovery actually works on iOS now.** The card was hidden on every connected box because of an iOS URL bug, not the feature. iOS PR #614. App-only — no broker change, no redeploy.
+
+- **1 · "Started outside Conduit" card appears + lists sessions (iOS)** — iOS `getJSON` was assigning a query-bearing path to `URLComponents.path`, which percent-encoded the `?` to `%3F` (`/api/sessions/discovered%3F`), 404ing on the broker; the discovery probe got nothing so the card stayed hidden (capabilities/host-metrics have no query, which is why HEALTH rings showed but the card didn't). Confirmed via packet capture of the device. Fixed: `getJSON` splits path/query properly, the no-filter probe no longer emits a stray `?`, and the request timeout is bumped 10→25s (the scan takes ~6s). This also un-breaks **View transcript** (same code path). Verify on the dev box (David): open box detail → the card appears with a count → the sheet lists your hand-started Claude/Codex (and `claude agents`) sessions; tap one's View → the transcript loads. [iOS, on-device]
+
+---
+
 ## v0.0.162
 
 **Found Sessions fixes** — the entry card was invisible on connected boxes, and discovery was cluttered with one-shots. iOS PR #610 (visibility), broker PR #611 (quality floor). Broker REDEPLOYED (floor live: discovery went 238 → 111 on the dev box; min turn_count now 2, no one-shots leaked; caps discovery/fork/watch all live, token unchanged).
