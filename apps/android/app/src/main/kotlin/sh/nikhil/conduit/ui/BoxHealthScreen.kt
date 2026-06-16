@@ -16,11 +16,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -108,6 +110,10 @@ fun BoxHealthScreen(
     server: SavedServer,
     onReconnect: () -> Unit = {},
     onDismiss: () -> Unit = {},
+    // Visible back affordance -> returns to Home. Mirrors the chat screen's
+    // back chevron (#642) and iOS box-detail nav back. Defaults to onDismiss
+    // so older call sites keep compiling.
+    onBack: () -> Unit = onDismiss,
 ) {
     val neon = LocalNeonTheme.current
     val endpoint by store.endpoint.collectAsState()
@@ -211,6 +217,17 @@ fun BoxHealthScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(11.dp),
         ) {
+            // Back chevron -> Home. Pairs with the system BackHandler wired in
+            // AppRoot so both the on-screen affordance and the OS back button
+            // return to the Home screen.
+            IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back to home",
+                    tint = neon.text,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Box(
                 modifier = Modifier
                     .size(38.dp)

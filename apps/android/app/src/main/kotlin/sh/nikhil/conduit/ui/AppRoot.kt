@@ -310,10 +310,23 @@ fun AppRoot(
     boxHealthTarget?.let { server ->
         // Per-box health detail. Reconnect reuses the same select-server path
         // a Boxes-list tap used before.
+        //
+        // Fix: system back on phone returns Home from the box-health/detail
+        // page instead of exiting the app (parity with the chat screen back,
+        // #642, and iOS nav back/edge-swipe on the box detail). This overlay is
+        // composed after the BoxWithConstraints content, so this BackHandler is
+        // registered last and wins over the session `selectedId` handler while
+        // the box page is shown. Dismissing only clears boxHealthTarget; the
+        // underlying Home/session state is untouched.
+        BackHandler(enabled = true) {
+            Telemetry.breadcrumb("nav", "box-health-back-to-home", mapOf("host" to server.endpoint.displayHost))
+            boxHealthTarget = null
+        }
         BoxHealthScreen(
             store = store,
             server = server,
             onReconnect = { store.selectSavedServer(server.id, autoConnect = true) },
+            onBack = { boxHealthTarget = null },
             onDismiss = { boxHealthTarget = null },
         )
     }
