@@ -12,6 +12,15 @@ import SwiftUI
 // codex sessions an ambient account-level strip can only show one. Shared
 // formatting/tint helpers live in `AccountUsageFormat`.
 
+// MARK: - PreferenceKey for measuring expandedDetail intrinsic height
+
+private struct DetailHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 extension ConduitUI {
 
     /// Shared % → tint and ISO-reset → countdown formatting for the usage
@@ -73,6 +82,7 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @State private var expanded = false
+        @State private var detailHeight: CGFloat = 0
         private let now = Date()
 
         var body: some View {
@@ -111,7 +121,18 @@ extension ConduitUI {
                     // clip-height + opacity so the row eases open/closed.
                     expandedDetail(agents: agents)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: expanded ? nil : 0, alignment: .top)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: DetailHeightKey.self,
+                                    value: geo.size.height
+                                )
+                            }
+                        )
+                        .onPreferenceChange(DetailHeightKey.self) { h in
+                            detailHeight = h
+                        }
+                        .frame(height: expanded ? detailHeight : 0, alignment: .top)
                         .opacity(expanded ? 1 : 0)
                         .clipped()
                         .accessibilityHidden(!expanded)
