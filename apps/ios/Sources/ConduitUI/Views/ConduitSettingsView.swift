@@ -71,6 +71,10 @@ extension ConduitUI {
         /// Feedback string shown after a "Send test notification" tap.
         @State private var testPushResult: String?
         @State private var testPushInFlight = false
+        /// Staff-unlock tap counter on the About version row. Reaching 7 taps
+        /// reveals a NavigationLink to the Debug menu (hidden from regular users).
+        @State private var aboutVersionTapCount = 0
+        @State private var showDebugMenu = false
 
         var body: some View {
             @Bindable var appearance = appearance
@@ -87,7 +91,6 @@ extension ConduitUI {
                             notificationsSection
                             conversationSection
                             agentsSection
-                            labsSection
                             supportSection
                             aboutSection
                         }
@@ -970,64 +973,6 @@ extension ConduitUI {
             }
         }
 
-        // MARK: Labs (handoff §2 — chat A/B + Debug)
-
-        /// Settings › Labs (`01-ab`): the user-facing "Conversation style"
-        /// A/B/Auto control, plus a drill-in to the staff Debug menu. The
-        /// segments override the chat shell locally; `Auto` defers to the
-        /// assigned experiment bucket without changing the logged bucket.
-        private var labsSection: some View {
-            @Bindable var flags = flags
-            return sectionCard(title: "Labs") {
-                VStack(alignment: .leading, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Conversation style")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(neon.text)
-                            Spacer(minLength: 6)
-                            Text(flags.resolvedChatArm.label)
-                                .font(neon.mono(11))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                        Picker("Conversation style", selection: $flags.chatStylePreference) {
-                            ForEach(FeatureFlags.ChatStylePreference.allCases) { pref in
-                                Text(pref.label).tag(pref)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .tint(neon.accent)
-                        Text("A = Breathe · B = Signature · Auto follows your assigned bucket.")
-                            .font(neon.mono(10.5))
-                            .foregroundStyle(neon.textFaint)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-
-                    Divider()
-                        .background(neon.border)
-                        .padding(.leading, 14)
-
-                    NavigationLink {
-                        ConduitUI.DebugMenuView()
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "ladybug",
-                            title: "Debug menu",
-                            subtitle: "Experiment buckets & feature flags",
-                            iconTint: neon.accent
-                        ) {
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-
         // MARK: Support / Buy me a coffee
 
         /// External donation link (not an IAP — Apple explicitly permits
@@ -1060,12 +1005,29 @@ extension ConduitUI {
         private var aboutSection: some View {
             sectionCard(title: "About") {
                 VStack(spacing: 0) {
-                    ConduitUI.valueRow(
-                        icon: "info.circle.fill",
-                        title: "Conduit",
-                        value: aboutVersion,
-                        subtitle: nil
-                    )
+                    // Tapping the version row 7 times unlocks the Debug menu
+                    // (staff-only; not visible to regular users).
+                    Button {
+                        aboutVersionTapCount += 1
+                        if aboutVersionTapCount >= 7 {
+                            aboutVersionTapCount = 0
+                            showDebugMenu = true
+                            Telemetry.breadcrumb("settings", "debug unlock")
+                        }
+                    } label: {
+                        ConduitUI.valueRow(
+                            icon: "info.circle.fill",
+                            title: "Conduit",
+                            value: aboutVersion,
+                            subtitle: nil
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    // Hidden NavigationLink driven by showDebugMenu.
+                    NavigationLink(destination: ConduitUI.DebugMenuView(), isActive: $showDebugMenu) {
+                        EmptyView()
+                    }
+                    .hidden()
                     Divider()
                         .background(neon.border)
                         .padding(.leading, 46)

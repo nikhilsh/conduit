@@ -23,7 +23,6 @@ extension ConduitUI {
 
     struct SessionInfoView: View {
         @Environment(SessionStore.self) private var store
-        @Environment(FeatureFlags.self) private var flags
         @Environment(\.neonTheme) private var neon
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
@@ -76,9 +75,7 @@ extension ConduitUI {
                         usageSection
                         limitsSection
                         activitySection
-                        if flags.showSubagentPanel {
-                            agentsSection
-                        }
+                        agentsSection
                         detailsSection
                         actionRow
                     }

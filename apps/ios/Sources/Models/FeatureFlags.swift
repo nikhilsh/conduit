@@ -278,16 +278,16 @@ final class FeatureFlags {
 
     // MARK: - Resolution
 
-    /// The arm the chat shell should actually render right now (§2):
-    ///   - kill-switch on → always **A** (safe evolution);
-    ///   - local override `a`/`b` → that arm (does NOT change the bucket);
-    ///   - `auto` → the persisted assigned bucket.
+    /// The arm the chat shell renders. Experiment concluded — B (Signature)
+    /// wins for everyone. Staff can still override via the Debug menu
+    /// (chatStylePreference) for dogfooding; the kill-switch still works in
+    /// the Debug menu. All other callers always get .b.
     var resolvedChatArm: ChatArm {
         if chatExperimentKilled { return .a }
         switch chatStylePreference {
         case .a:    return .a
         case .b:    return .b
-        case .auto: return chatAssignedArm
+        case .auto: return .b
         }
     }
 
