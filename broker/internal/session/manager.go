@@ -486,6 +486,19 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		if err := seedClaudeConfig(ephemeral); err != nil {
 			fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
 		}
+		// Stage the external conversation transcript into the isolated agent-home
+		// so --resume / exec resume can find it. External sessions (Found Sessions
+		// adopt-resume / adopt-fork) store their transcripts in the broker's real
+		// $HOME (~/.claude/projects/…  or  ~/.codex/sessions/…), but the agent
+		// runs with HOME=<ephemeral> and can't see them. Copy the file before the
+		// agent launches. Best-effort: a miss is logged but never blocks the spawn.
+		realHome := hostHomeDir()
+		if er := opts.externalResume; er.ExternalID != "" {
+			stageExternalTranscript(ephemeral, realHome, er.Agent, er.ExternalID)
+		}
+		if ef := opts.externalFork; ef.ExternalID != "" {
+			stageExternalTranscript(ephemeral, realHome, ef.Agent, ef.ExternalID)
+		}
 	}
 	cmd.Env = s.commandEnv(nil)
 	if len(opts.snapshot) > 0 {
@@ -1980,6 +1993,8 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 		resumeChatSessionID: resumeChatID,
 		resumeCodexThreadID: resumeCodexID,
 		forkChatSessionID:   forkChatID,
+		externalResume:      opts.ExternalResume,
+		externalFork:        opts.ExternalFork,
 	})
 	if err != nil {
 		return nil, false, err
@@ -2146,6 +2161,15 @@ type sessionOptions struct {
 	// provider when it has no anthropic creds (and vice-versa). "" when codex
 	// isn't a registered adapter. Manager fills this in; tests leave it nil.
 	codexBinary func() string
+	// externalResume, when set, triggers transcript staging before the agent
+	// is spawned: the external conversation file is copied from the broker's
+	// real $HOME into the per-session agent-home so --resume / exec-resume
+	// finds it in the isolated home. Zero value = no staging (ordinary session).
+	externalResume ExternalResumeOptions
+	// externalFork mirrors externalResume for the fork path: the source
+	// transcript is staged so --resume --fork-session finds it in the
+	// isolated agent-home. Zero value = no staging.
+	externalFork ExternalForkOptions
 }
 
 type sessionMetadata struct {
