@@ -1455,6 +1455,13 @@ type Manager struct {
 	repoRoot       string
 	conduitRoot    string
 
+	// discCacheMu guards the Found Sessions raw-scan cache below.
+	// Held only while reading or refreshing the cache; per-call
+	// filtering (dedup/floor/sort) happens outside the lock on a copy.
+	discCacheMu sync.Mutex
+	discCache   []ExternalSession // raw scan, nil ownIDs (no dedup baked in)
+	discCacheAt time.Time         // zero → cache empty
+
 	// termgrid is the optional headless xterm.js sidecar. nil when node
 	// isn't installed at startup. Shared by all sessions.
 	termgrid *termgrid.Manager
