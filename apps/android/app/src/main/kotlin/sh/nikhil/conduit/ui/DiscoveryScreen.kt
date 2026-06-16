@@ -165,7 +165,7 @@ fun DiscoveryScreen(
             setReferenceCounted(false)
             acquire()
         }
-        Telemetry.breadcrumb("discovery", "multicast_lock_acquired", mapOf("held" to multicastLock.isHeld))
+        Telemetry.breadcrumb("discovery", "multicast_lock_acquired", mapOf("held" to multicastLock.isHeld.toString()))
 
         try {
             nsd.discoverServices("_conduit._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
