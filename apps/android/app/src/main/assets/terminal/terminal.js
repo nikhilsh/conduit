@@ -10,6 +10,9 @@
 //   window.feedBytes(b64)   — base64-decoded UTF-8 bytes are written into xterm
 //   window.serializeState() — returns full ANSI snapshot via SerializeAddon
 //   window.reset()          — clears terminal (used on snapshot replace)
+//   window.setFontSize(n)   — sets cell font size, re-fits the grid
+//   window.setTheme(json)   — sets the xterm color theme
+//   window.setFontFamily(s) — sets the terminal font face, re-fits after load
 (function () {
   "use strict";
 
@@ -44,9 +47,17 @@
   var seed = window.CONDUIT_TERM_CONFIG || {};
   var initialFontSize = typeof seed.fontSize === "number" ? seed.fontSize : 10;
   var initialTheme = seed.theme || { background: "#1d1f21", foreground: "#c5c8c6", cursor: "#c5c8c6" };
+  // Terminal font face (mirrors iOS GhosttyFont). Native seeds a CSS family
+  // name (e.g. "JetBrains Mono") matching a bundled @font-face in
+  // terminal.html; falls back to the platform monospace ("System").
+  var FONT_FALLBACK = "monospace";
+  function familyStack(name) {
+    return (name && name !== "monospace") ? (name + ", monospace") : FONT_FALLBACK;
+  }
+  var initialFontFamily = familyStack(typeof seed.fontFamily === "string" ? seed.fontFamily : null);
 
   var term = new Terminal({
-    fontFamily: "Menlo, monospace",
+    fontFamily: initialFontFamily,
     fontSize: initialFontSize,
     theme: initialTheme,
     allowProposedApi: true,
@@ -237,6 +248,25 @@
         var t = typeof themeJson === "string" ? JSON.parse(themeJson) : themeJson;
         if (t) term.options.theme = t;
       } catch (e) { /* malformed theme — keep current */ }
+    };
+
+    // Live-update the terminal font FACE (mirrors iOS GhosttyFont). `name`
+    // is a CSS family ("JetBrains Mono", "Hack", ...) bundled as a
+    // @font-face in terminal.html, or "monospace"/null for System. We set
+    // the option immediately (so the metrics are correct synchronously) but
+    // re-fit AFTER document.fonts.load resolves the face, otherwise the
+    // first fit measures a fallback glyph and the grid is mis-sized.
+    window.setFontFamily = function (name) {
+      var stack = familyStack(name);
+      term.options.fontFamily = stack;
+      var doFit = function () { try { fit.fit(); } catch (e) { /* ignore */ } };
+      doFit();
+      try {
+        if (name && name !== "monospace" && document.fonts && document.fonts.load) {
+          var size = term.options.fontSize || 10;
+          document.fonts.load(size + "px \"" + name + "\"").then(doFit).catch(doFit);
+        }
+      } catch (e) { /* fonts API unavailable — the sync fit above stands */ }
     };
 
     // Tell Swift we are ready to receive bytes.

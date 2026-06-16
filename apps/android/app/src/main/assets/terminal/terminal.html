@@ -6,6 +6,18 @@
   <title>Terminal</title>
   <link rel="stylesheet" href="xterm.css">
   <style>
+    /* Terminal font faces — bundled TTFs (mirror iOS GhosttyFont). These
+       resolve over file:///android_asset/terminal/fonts/* since the WebView
+       loads terminal.html from that same asset base URL. JS setFontFamily()
+       waits on document.fonts.load(...) before re-fitting. */
+    @font-face { font-family: "JetBrains Mono"; font-weight: 400; src: url("fonts/jetbrains_mono_regular.ttf"); }
+    @font-face { font-family: "JetBrains Mono"; font-weight: 700; src: url("fonts/jetbrains_mono_bold.ttf"); }
+    @font-face { font-family: "Hack"; font-weight: 400; src: url("fonts/hack_regular.ttf"); }
+    @font-face { font-family: "Hack"; font-weight: 700; src: url("fonts/hack_bold.ttf"); }
+    @font-face { font-family: "Fira Code"; font-weight: 400; src: url("fonts/fira_code_regular.ttf"); }
+    @font-face { font-family: "Fira Code"; font-weight: 700; src: url("fonts/fira_code_bold.ttf"); }
+    @font-face { font-family: "IBM Plex Mono"; font-weight: 400; src: url("fonts/ibm_plex_mono_regular.ttf"); }
+    @font-face { font-family: "IBM Plex Mono"; font-weight: 700; src: url("fonts/ibm_plex_mono_bold.ttf"); }
     html, body { background: #0c0c0c; }
     body { margin: 0; height: 100%; overflow: hidden; -webkit-tap-highlight-color: transparent; }
     #term { width: 100vw; height: 100vh; }

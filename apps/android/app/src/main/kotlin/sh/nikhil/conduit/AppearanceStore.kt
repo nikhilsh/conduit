@@ -105,6 +105,35 @@ class AppearanceStore : ViewModel() {
         GruvboxDark("Gruvbox Dark"),
     }
 
+    /**
+     * Terminal **font face** (NOT the chat pairing). Mirrors iOS
+     * `GhosttyVT.GhosttyFont` one-for-one — same five cases, same order,
+     * same default ([JetBrainsMono]). [System] keeps the renderer's
+     * built-in monospaced face; the rest are bundled TTFs resolved through
+     * `R.font.*` (Termux path) and `@font-face` over
+     * `file:///android_asset/terminal/fonts/<face>.ttf` (xterm.js path).
+     *
+     * [cssFamily] is the CSS `font-family` name the xterm.js path sets via
+     * `window.setFontFamily(...)`; `null` keeps the xterm.js default. The
+     * `R.font` id and SwiftUI-equivalent preview face live in
+     * `sh.nikhil.conduit.ui.NeonTheme` (terminalFontResource /
+     * terminalPreviewFamily) so the data enum stays renderer-agnostic.
+     */
+    enum class TerminalFont(val label: String, val cssFamily: String?) {
+        System("System Default", null),
+        JetBrainsMono("JetBrains Mono", "JetBrains Mono"),
+        Hack("Hack", "Hack"),
+        FiraCode("Fira Code", "Fira Code"),
+        IbmPlexMono("IBM Plex Mono", "IBM Plex Mono");
+
+        companion object {
+            /** Decode a persisted name; corrupt / unknown → default
+             *  [JetBrainsMono], matching iOS hydrate fallback. */
+            fun fromPersisted(raw: String?): TerminalFont =
+                raw?.let { runCatching { valueOf(it) }.getOrNull() } ?: JetBrainsMono
+        }
+    }
+
     private val _fontFamily = MutableStateFlow(FontFamily.Terminal)
     val fontFamily: StateFlow<FontFamily> = _fontFamily.asStateFlow()
 
@@ -163,6 +192,15 @@ class AppearanceStore : ViewModel() {
      */
     private val _terminalTheme = MutableStateFlow(TerminalTheme.GhosttyDark)
     val terminalTheme: StateFlow<TerminalTheme> = _terminalTheme.asStateFlow()
+
+    /**
+     * Terminal font face. Default [TerminalFont.JetBrainsMono], matching
+     * iOS `AppearanceStore.terminalFont`. Drives the Termux `Typeface`
+     * (via `R.font.*`) and the xterm.js `fontFamily` option. Persisted by
+     * enum name.
+     */
+    private val _terminalFont = MutableStateFlow(TerminalFont.JetBrainsMono)
+    val terminalFont: StateFlow<TerminalFont> = _terminalFont.asStateFlow()
 
     /**
      * Neon Terminal palette choice. Default [NeonPalette.Ice], matching
@@ -259,6 +297,7 @@ class AppearanceStore : ViewModel() {
         _terminalTheme.value = p.getString(KEY_TERMINAL_THEME, null)
             ?.let { runCatching { TerminalTheme.valueOf(it) }.getOrNull() }
             ?: TerminalTheme.GhosttyDark
+        _terminalFont.value = TerminalFont.fromPersisted(p.getString(KEY_TERMINAL_FONT, null))
         _neonPalette.value = NeonPalette.fromId(p.getString(KEY_NEON_PALETTE, null))
         _neonGlow.value = p.getBoolean(KEY_NEON_GLOW, true)
 
@@ -409,6 +448,13 @@ class AppearanceStore : ViewModel() {
         prefs?.edit()?.putString(KEY_TERMINAL_THEME, value.name)?.apply()
     }
 
+    /** Set the terminal font face; persisted by enum name. Drives both the
+     *  Termux and xterm.js renderers via the [terminalFont] flow. */
+    fun setTerminalFont(value: TerminalFont) {
+        _terminalFont.value = value
+        prefs?.edit()?.putString(KEY_TERMINAL_FONT, value.name)?.apply()
+    }
+
     /** Set the Neon Terminal palette; persisted by stable [NeonPalette.id]. */
     fun setNeonPalette(value: NeonPalette) {
         _neonPalette.value = value
@@ -449,6 +495,7 @@ class AppearanceStore : ViewModel() {
         private const val KEY_BODY_POINT_SIZE = "bodyPointSize"
         private const val KEY_TERMINAL_FONT_SIZE = "terminalFontSize"
         private const val KEY_TERMINAL_THEME = "terminalTheme"
+        private const val KEY_TERMINAL_FONT = "terminalFont"
         private const val KEY_NEON_PALETTE = "neonPalette"
         private const val KEY_NEON_GLOW = "neonGlow"
         private const val KEY_CHAT_STYLE_PREF = "chat.stylePreference"
