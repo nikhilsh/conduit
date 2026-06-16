@@ -83,11 +83,12 @@ extension ConduitUI {
             if !agents.isEmpty {
                 VStack(spacing: 8) {
                     Button {
-                        // Drive the toggle through `withAnimation` so the
-                        // ENCLOSING `List` animates the cell height on the SAME
-                        // transaction as the content insert. See the body note
-                        // below for why this matters.
-                        withAnimation(Self.expandAnim) { expanded.toggle() }
+                        // Plain assignment — the `.animation(value: expanded)`
+                        // modifiers below own the transition so every animated
+                        // property (chevron rotation, detail opacity, detail
+                        // scale) runs on the SAME transaction/curve with no
+                        // second `withAnimation` racing them.
+                        expanded.toggle()
                     } label: {
                         HStack(spacing: 10) {
                             ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
@@ -101,37 +102,42 @@ extension ConduitUI {
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(neon.textFaint)
                                 .rotationEffect(.degrees(expanded ? 180 : 0))
+                                .animation(Self.expandAnim, value: expanded)
                         }
                     }
                     .buttonStyle(.plain)
-                    // FIX (rebuilt — expand gap): this strip is a cell inside a
-                    // `List`. The List measures a cell's height from its
-                    // reported INTRINSIC size and animates the row to that
-                    // height on the List's OWN layout pass. The previous
-                    // measured-PreferenceKey approach kept the detail ALWAYS
-                    // BUILT and animated an inner `.frame(height: detailHeight)`
-                    // clip on a SEPARATE `.animation(value:)` transaction. Those
-                    // two timelines (List row-height vs. inner clip) diverged:
-                    // the List reserved the full row height up front while the
-                    // clipped content lagged behind it -> the empty GAP between
-                    // the card and ACTIVE SESSIONS mid-animation. The preference
-                    // also delivered `detailHeight` a frame late on first
-                    // expand (the first-open jump).
+                    // FIX (symmetric expand+collapse): the detail is ALWAYS
+                    // built so the List never sees an insert/remove and never
+                    // races its own row-height animation against a SwiftUI
+                    // .transition. Instead:
                     //
-                    // Robust rebuild: NO measured height, NO PreferenceKey, NO
-                    // clip. The detail is conditionally in the tree (`if
-                    // expanded`) so the cell's INTRINSIC height is always exactly
-                    // the content height — never over-measured. Toggling inside
-                    // `withAnimation` makes the List animate the row height in
-                    // lockstep with the content, so the list below reflows in
-                    // sync with no leftover reserved space. The detail fades via
-                    // an opacity-only `.transition` (no move/scale that the List
-                    // would snap).
-                    if expanded {
-                        expandedDetail(agents: agents)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .transition(.opacity)
-                    }
+                    //  • scaleEffect(y:, anchor: .top): compresses the detail
+                    //    to zero height at the top anchor on collapse; grows to
+                    //    full height on expand. Because scale is a continuous
+                    //    animatable property (not a view-tree mutation), the
+                    //    List row height tracks it frame-by-frame — no gap.
+                    //
+                    //  • clipped(): keeps the vertically-scaled content inside
+                    //    its shrinking/growing frame so nothing overflows the
+                    //    cell boundary at any point in the animation.
+                    //
+                    //  • opacity: drives 0..1 in lockstep with the scale on
+                    //    the SAME .animation(value:) curve in BOTH directions
+                    //    — expand: grow+fade-in together; collapse: shrink+
+                    //    fade-out together. Content is invisible exactly when
+                    //    the frame height is 0 (no lingering bars over a
+                    //    collapsed container, no gap before content appears).
+                    //
+                    //  All three share the single `expandAnim` curve via
+                    //  `.animation(Self.expandAnim, value: expanded)` so they
+                    //  are guaranteed in-lockstep in both directions.
+                    expandedDetail(agents: agents)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .scaleEffect(y: expanded ? 1 : 0.001, anchor: .top)
+                        .opacity(expanded ? 1 : 0)
+                        .clipped()
+                        .animation(Self.expandAnim, value: expanded)
+                        .accessibilityHidden(!expanded)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
@@ -140,8 +146,9 @@ extension ConduitUI {
         }
 
         /// Always-built expanded detail (two windows per agent). Revealed via
-        /// an animatable clip-height in `body` (see the R4 fix 6 note) so the
-        /// `List` row eases open/closed instead of snapping.
+        /// scaleEffect(y:)+opacity in `body` (see animation fix note) so the
+        /// `List` row eases open/closed in both directions without lingering
+        /// content or a gap between the card and what follows it.
         @ViewBuilder
         private func expandedDetail(agents: [SessionStore.AgentUsageSnapshot]) -> some View {
             VStack(alignment: .leading, spacing: 10) {
