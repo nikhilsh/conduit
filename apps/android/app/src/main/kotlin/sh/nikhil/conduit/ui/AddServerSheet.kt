@@ -31,7 +31,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -94,7 +93,6 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
             )
             EntryCard(
                 icon = { Icon(Icons.Filled.QrCodeScanner, null, tint = neon.accentText) },
-                tint = neon.accent,
                 title = "Scan pairing QR",
                 subtitle = "Camera or pick from Photos.",
             ) {
@@ -103,8 +101,6 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
             }
             EntryCard(
                 icon = { Icon(Icons.Filled.Wifi, null, tint = neon.accentText) },
-                // Semantic "discovery / network" green.
-                tint = neon.green,
                 title = "Discover on LAN",
                 subtitle = "Find a broker advertising via mDNS on the same Wi-Fi.",
             ) {
@@ -113,7 +109,6 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
             }
             EntryCard(
                 icon = { Icon(Icons.Filled.Terminal, null, tint = neon.accentText) },
-                tint = neon.claude,
                 title = "Add via SSH",
                 subtitle = "Set it up over SSH — conduit installs and runs everything on the box for you (nothing to set up there first).",
             ) {
@@ -122,7 +117,6 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
             }
             EntryCard(
                 icon = { Icon(Icons.Filled.Link, null, tint = neon.accentText) },
-                tint = neon.yellow,
                 title = "Paste URL + token",
                 subtitle = "If you already have ws://… + a bearer token.",
             ) {
@@ -175,22 +169,28 @@ fun AddServerSheet(store: SessionStore, onDismiss: () -> Unit) {
 @Composable
 private fun EntryCard(
     icon: @Composable () -> Unit,
-    tint: Color,
     title: String,
     subtitle: String,
     onTap: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
     val shape = RoundedCornerShape(14.dp)
+    // Uniform card fill -- parity with the iOS add-server sheet, where every
+    // row uses the same glass surface and the per-route tint was dropped
+    // (audit A.4.3). Previously each row passed its own `tint.copy(alpha=0.10f)`
+    // translucent fill, so the themed gradient backdrop bled through each
+    // card differently by vertical position -> uneven shades. We now lay an
+    // opaque `surfaceSolid` base (so the gradient never refracts through) under
+    // the neutral `neon.surface` glass, with a single accent border/glow. All
+    // four cards composite to the identical colour.
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .background(color = neon.surfaceSolid, shape = shape)
             .neonCardSurface(
                 neon = neon,
                 shape = shape,
-                fill = tint.copy(alpha = 0.10f),
-                borderColor = tint.copy(alpha = 0.5f),
-                glowTint = tint,
+                fill = neon.surface,
             )
             .clickable(onClick = onTap),
     ) {
@@ -199,7 +199,7 @@ private fun EntryCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier.size(42.dp).clip(CircleShape).background(tint),
+                modifier = Modifier.size(42.dp).clip(CircleShape).background(neon.accent),
                 contentAlignment = Alignment.Center,
             ) { icon() }
             Spacer(Modifier.width(14.dp))
