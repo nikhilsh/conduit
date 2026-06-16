@@ -9,6 +9,15 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.162
+
+**Found Sessions fixes** — the entry card was invisible on connected boxes, and discovery was cluttered with one-shots. iOS PR #610 (visibility), broker PR #611 (quality floor). Broker REDEPLOYED (floor live: discovery went 238 → 111 on the dev box; min turn_count now 2, no one-shots leaked; caps discovery/fork/watch all live, token unchanged).
+
+- **1 · "Started outside Conduit" card now appears on connected boxes** — it was being skipped: the iOS box-detail discovery probe was gated on the WS harness being linked at the instant the screen opened, so on first open it was skipped and never retried (host-metrics weren't gated, which is why HEALTH rings showed but the card didn't). The probe now runs whenever the box advertises `session_discovery` (it's a plain HTTP call, like host-metrics) and re-probes when the box finishes connecting. Verify on the dev box (David): open box detail → "STARTED OUTSIDE CONDUIT" appears with a count → the sheet lists your hand-started Claude/Codex (and `claude agents`) sessions. (Was the v0.0.161 bug where only the Conduit-started session showed.) [iOS, on-device]
+- **2 · Discovery no longer cluttered with trivial one-shots** — ~half of on-disk sessions are single-turn (quick Qs / tests / aborted starts). The broker now applies a quality floor: sessions with <2 turns (Claude exchange pairs / Codex turns) are excluded from discovery, so the count and "All" view stay meaningful (dev box: 238 → 111). They're untouched on disk and still CLI-resumable. Verify: the entry-card count and the sheet show substantial sessions, not a wall of 1-turn entries. [broker — live now; visible in any app build with Found Sessions]
+
+---
+
 ## v0.0.161
 
 **Found Sessions — Branch (fork) enabled + Flow B "Watch live".** Broker fork+watch PR #606, iOS Watch UI #608, Android Watch UI #607. Broker REDEPLOYED (v0.0.161 binary: `session_discovery`+`session_fork`+`session_watch` all live, token unchanged, since_ts endpoint verified). NOTE: because Branch un-gates on the live broker capability, **Branch already works on v0.0.160 too** now that the broker is redeployed — but the Watch live UI is new in v0.0.161.
