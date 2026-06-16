@@ -40,10 +40,13 @@ struct FeatureFlagsTests {
 
     // MARK: - Resolution
 
-    @Test func autoResolvesToAssignedBucket() {
+    @Test func autoResolvesToArmB() {
+        // Conversation style B is graduated: .auto now always resolves to .b
+        // (style B permanent), regardless of the assigned bucket. The
+        // kill-switch still forces .a (see killSwitchForcesArmAGlobally).
         let flags = FeatureFlags(defaults: freshDefaults())
         flags.chatStylePreference = .auto
-        #expect(flags.resolvedChatArm == flags.chatAssignedArm)
+        #expect(flags.resolvedChatArm == .b)
     }
 
     @Test func localOverrideWinsButDoesNotChangeBucket() {
