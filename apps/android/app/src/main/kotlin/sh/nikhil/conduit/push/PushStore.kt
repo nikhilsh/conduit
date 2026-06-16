@@ -6,6 +6,8 @@ import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +50,29 @@ sealed class PushRegistrationState {
  * rather than claim an outcome.
  */
 enum class ApprovalResolveResult { Resolved, Stale, Failed }
+
+/**
+ * Structured outcome of a single broker POST, so failures are diagnosable
+ * (404 vs 401 vs connect-timeout) instead of a bare null. [body] is non-null
+ * only on HTTP 2xx. [code] is the HTTP status (-1 when the request threw
+ * before a response, e.g. connect/read timeout). [errorKind] is the exception
+ * class simple-name on a thrown failure, null otherwise.
+ */
+data class PostResult(
+    val ok: Boolean,
+    val code: Int,
+    val body: String?,
+    val errorKind: String?,
+    val errorMessage: String?,
+) {
+    /** Short, log-safe failure descriptor for breadcrumbs/Telemetry extras. */
+    fun diagnostic(): String = when {
+        ok -> "ok"
+        errorKind != null -> "exception:$errorKind"
+        code >= 0 -> "http:$code"
+        else -> "unknown"
+    }
+}
 
 /**
  * Manages push-notification registration for the active broker box.
@@ -267,9 +292,21 @@ class PushStore : ViewModel() {
     }
 
     /**
-     * Fan out registration to ALL endpoints concurrently under a SupervisorJob
-     * so one failure does not cancel others. The [_registrationState] is updated
-     * based on the ACTIVE endpoint's result; other boxes are breadcrumbed only.
+     * Fan out registration to ALL paired endpoints concurrently under a
+     * SupervisorJob so one failure does not cancel others.
+     *
+     * Resilience contract (the fix for "can't register" with an offline box):
+     *   - Each endpoint registers INDEPENDENTLY; a failing/unreachable box
+     *     (e.g. an offline secondary) is breadcrumbed only and NEVER throws or
+     *     aborts the others.
+     *   - The whole operation is SUCCESS if AT LEAST ONE endpoint registered.
+     *     The visible [_registrationState] follows the ACTIVE endpoint when it
+     *     succeeded; otherwise it follows any other box that succeeded so a
+     *     reachable secondary still counts as "registered".
+     *   - An ERROR (Telemetry.capture + Error state) is surfaced ONLY when
+     *     EVERY endpoint failed (total failure). A single offline box does not
+     *     reach Sentry as an error — just a per-endpoint breadcrumb that now
+     *     carries the HTTP status / exception kind for diagnosis.
      */
     fun registerWithAllEndpoints(
         activeEndpoint: Endpoint,
@@ -286,41 +323,69 @@ class PushStore : ViewModel() {
             }
         }
 
+        if (endpoints.isEmpty()) {
+            Telemetry.breadcrumb("push", "fan-out register: no complete endpoints")
+            return
+        }
+
         Telemetry.breadcrumb(
             "push", "fan-out register: N boxes",
             mapOf("count" to endpoints.size.toString()),
         )
 
-        for (ep in endpoints) {
-            val isActive = (ep.url == activeEndpoint.url)
-            appScope.launch {
-                val ok = postRegisterToEndpoint(ep, token, platform)
-                Telemetry.breadcrumb(
-                    "push", "fan-out register result",
-                    mapOf("host" to ep.displayHost, "success" to ok.toString()),
-                )
-                if (!ok && isActive) {
-                    Telemetry.capture(
-                        error = IllegalStateException("fan-out register failed"),
-                        message = "Android push fan-out register failed",
-                        tags = mapOf("surface" to "android", "phase" to "push_register_fanout"),
-                        extras = mapOf("host" to ep.displayHost, "isActive" to "true"),
+        appScope.launch {
+            // Register to every endpoint independently; failures are isolated.
+            val outcomes = endpoints.map { ep ->
+                async {
+                    val isActive = (ep.url == activeEndpoint.url)
+                    val result = postRegisterToEndpoint(ep, token, platform)
+                    Telemetry.breadcrumb(
+                        "push", "fan-out register result",
+                        mapOf(
+                            "host" to ep.displayHost,
+                            "success" to result.ok.toString(),
+                            "isActive" to isActive.toString(),
+                            "result" to result.diagnostic(),
+                        ),
                     )
+                    Triple(ep, isActive, result)
                 }
-                // Active endpoint result drives the visible registration state.
-                if (isActive) {
-                    withContext(Dispatchers.Main) {
-                        if (ok) {
-                            _registeredEndpointUrl.value = token
-                            _registrationState.value = when (platform) {
-                                "fcm" -> PushRegistrationState.RegisteredFcm
-                                else -> PushRegistrationState.RegisteredUnifiedPush("ntfy")
-                            }
-                        } else {
-                            _registrationState.value = PushRegistrationState.Error(
-                                "Failed to register push with broker"
-                            )
+            }.awaitAll()
+
+            val anySucceeded = outcomes.any { it.third.ok }
+            val activeSucceeded = outcomes.any { it.second && it.third.ok }
+
+            withContext(Dispatchers.Main) {
+                when {
+                    // Prefer the active box's result, then any reachable box.
+                    activeSucceeded || anySucceeded -> {
+                        _registeredEndpointUrl.value = token
+                        _registrationState.value = when (platform) {
+                            "fcm" -> PushRegistrationState.RegisteredFcm
+                            else -> PushRegistrationState.RegisteredUnifiedPush("ntfy")
                         }
+                    }
+                    // Total failure: every paired box failed. Now it is a real error.
+                    else -> {
+                        val detail = outcomes.joinToString(",") {
+                            "${it.first.displayHost}=${it.third.diagnostic()}"
+                        }
+                        Telemetry.capture(
+                            error = IllegalStateException("fan-out register failed (all $detail)"),
+                            message = "Android push fan-out register failed (all endpoints)",
+                            tags = mapOf(
+                                "surface" to "android",
+                                "phase" to "push_register_fanout",
+                                "platform" to platform,
+                            ),
+                            extras = mapOf(
+                                "count" to endpoints.size.toString(),
+                                "results" to detail,
+                            ),
+                        )
+                        _registrationState.value = PushRegistrationState.Error(
+                            "Failed to register push with broker"
+                        )
                     }
                 }
             }
@@ -378,20 +443,21 @@ class PushStore : ViewModel() {
     }
 
     /**
-     * POST /api/push/register to one endpoint. Returns true on HTTP 2xx,
-     * false on any failure. Pure HTTP — no state side effects.
+     * POST /api/push/register to one endpoint. Returns a [PostResult] carrying
+     * the HTTP status / exception kind so failures are diagnosable (404 vs 401
+     * vs connect-timeout). Pure HTTP — no state side effects.
      * Must be called from within Dispatchers.IO context.
      */
     private suspend fun postRegisterToEndpoint(
         endpoint: Endpoint,
         token: String,
         platform: String,
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): PostResult = withContext(Dispatchers.IO) {
         Telemetry.breadcrumb(
             "push", "register POST start",
             mapOf("platform" to platform, "host" to endpoint.displayHost),
         )
-        val result = postJsonOrNull(
+        val result = postJson(
             endpoint = endpoint,
             path = "/api/push/register",
             body = JSONObject().apply {
@@ -400,15 +466,18 @@ class PushStore : ViewModel() {
                 deviceId?.let { put("device_id", it) }
             }.toString(),
         )
-        val ok = result != null
-        if (ok) {
+        if (result.ok) {
             Telemetry.breadcrumb("push", "register POST success",
                 mapOf("platform" to platform, "host" to endpoint.displayHost))
         } else {
             Telemetry.breadcrumb("push", "register POST failed",
-                mapOf("platform" to platform, "host" to endpoint.displayHost))
+                mapOf(
+                    "platform" to platform,
+                    "host" to endpoint.displayHost,
+                    "result" to result.diagnostic(),
+                ))
         }
-        ok
+        result
     }
 
     /**
@@ -420,9 +489,9 @@ class PushStore : ViewModel() {
         token: String,
         platform: String,
     ) = withContext(Dispatchers.IO) {
-        val ok = postRegisterToEndpoint(endpoint, token, platform)
+        val result = postRegisterToEndpoint(endpoint, token, platform)
         withContext(Dispatchers.Main) {
-            if (ok) {
+            if (result.ok) {
                 _registeredEndpointUrl.value = token
                 _registrationState.value = when (platform) {
                     "fcm" -> PushRegistrationState.RegisteredFcm
@@ -431,10 +500,10 @@ class PushStore : ViewModel() {
             } else {
                 val msg = "Failed to register push with broker"
                 Telemetry.capture(
-                    error = IllegalStateException(msg),
+                    error = IllegalStateException("$msg (${result.diagnostic()})"),
                     message = "Android push register failed",
                     tags = mapOf("surface" to "android", "phase" to "push_register", "platform" to platform),
-                    extras = mapOf("host" to endpoint.displayHost),
+                    extras = mapOf("host" to endpoint.displayHost, "result" to result.diagnostic()),
                 )
                 _registrationState.value = PushRegistrationState.Error(msg)
             }
@@ -544,13 +613,19 @@ class PushStore : ViewModel() {
     }
 
     /**
-     * POST a JSON body to an authed broker path.
-     * Returns the response body string on HTTP 2xx, null on any failure.
+     * POST a JSON body to an authed broker path, returning a structured
+     * [PostResult] that distinguishes a non-2xx HTTP code from a thrown
+     * exception (connect/read timeout, DNS, etc.) so callers can log WHY a
+     * request failed instead of a bare null.
      * Mirrors [sh.nikhil.conduit.SessionStore.getJsonOrNull] (GET variant).
      * Must be called on Dispatchers.IO.
      */
-    fun postJsonOrNull(endpoint: Endpoint, path: String, body: String): String? {
-        val base = endpoint.httpBaseUrl ?: return null
+    fun postJson(endpoint: Endpoint, path: String, body: String): PostResult {
+        val base = endpoint.httpBaseUrl
+            ?: return PostResult(
+                ok = false, code = -1, body = null,
+                errorKind = "NoBaseUrl", errorMessage = "endpoint has no http base url",
+            )
         return runCatching {
             val conn = (URL("$base$path").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -562,11 +637,29 @@ class PushStore : ViewModel() {
             }
             try {
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                if (conn.responseCode !in 200..299) return@runCatching null
-                conn.inputStream.bufferedReader().use { it.readText() }
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    PostResult(ok = false, code = code, body = null, errorKind = null, errorMessage = null)
+                } else {
+                    val resp = conn.inputStream.bufferedReader().use { it.readText() }
+                    PostResult(ok = true, code = code, body = resp, errorKind = null, errorMessage = null)
+                }
             } finally {
                 conn.disconnect()
             }
-        }.getOrNull()
+        }.getOrElse { t ->
+            PostResult(
+                ok = false, code = -1, body = null,
+                errorKind = t.javaClass.simpleName,
+                errorMessage = t.message,
+            )
+        }
     }
+
+    /**
+     * Back-compat wrapper: returns the response body on HTTP 2xx, null on any
+     * failure. Prefer [postJson] when the failure reason matters for telemetry.
+     */
+    fun postJsonOrNull(endpoint: Endpoint, path: String, body: String): String? =
+        postJson(endpoint, path, body).body
 }
