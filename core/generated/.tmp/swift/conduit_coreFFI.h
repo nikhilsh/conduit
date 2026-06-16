@@ -400,7 +400,7 @@ uint64_t uniffi_conduit_core_fn_method_conduitclient_connect(void*_Nonnull ptr, 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_CREATE_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_CREATE_SESSION
-uint64_t uniffi_conduit_core_fn_method_conduitclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch, RustBuffer reasoning_effort, RustBuffer model, RustBuffer cwd, RustBuffer permission_mode, RustBuffer fast_mode
+uint64_t uniffi_conduit_core_fn_method_conduitclient_create_session(void*_Nonnull ptr, RustBuffer assistant, RustBuffer branch, RustBuffer reasoning_effort, RustBuffer model, RustBuffer cwd, RustBuffer permission_mode, RustBuffer fast_mode, RustBuffer device_id
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CONDUIT_CORE_FN_METHOD_CONDUITCLIENT_DISCONNECT

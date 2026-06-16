@@ -254,6 +254,9 @@ impl ConduitClient {
     /// query params on the WS connect, and the broker applies them to the
     /// spawned agent's CLI flags. Empty / None = the adapter's defaults
     /// unchanged (the normal create path).
+    /// `device_id` is the stable per-install UUID of the calling device; it
+    /// rides to the broker as `device_id=` so the broker records this device
+    /// as the session owner for targeted push routing.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_session(
         &self,
@@ -264,6 +267,7 @@ impl ConduitClient {
         cwd: Option<String>,
         permission_mode: Option<String>,
         fast_mode: Option<bool>,
+        device_id: Option<String>,
     ) -> Result<String, ConduitError> {
         let inner = Arc::clone(&self.inner);
         run_on_core(async move {
@@ -278,6 +282,7 @@ impl ConduitClient {
                     cwd,
                     permission_mode,
                     fast_mode,
+                    device_id,
                 )
                 .await?;
             Ok(session_id)
@@ -302,6 +307,7 @@ impl ConduitClient {
                     None,
                     None,
                     None,
+                    None, // device_id: join does not target a specific device
                 )
                 .await
         })
@@ -581,6 +587,7 @@ impl Inner {
         cwd: Option<String>,
         permission_mode: Option<String>,
         fast_mode: Option<bool>,
+        device_id: Option<String>,
     ) -> Result<(), ConduitError> {
         let delegate = self
             .delegate
@@ -597,6 +604,7 @@ impl Inner {
         let model = model.filter(|s| !s.trim().is_empty());
         let cwd = cwd.filter(|s| !s.trim().is_empty());
         let permission_mode = permission_mode.filter(|s| !s.trim().is_empty());
+        let device_id = device_id.filter(|s| !s.trim().is_empty());
 
         self.sessions.lock().insert(
             session_id.clone(),
@@ -638,6 +646,7 @@ impl Inner {
                 cwd,
                 permission_mode,
                 fast_mode,
+                device_id,
             },
             Arc::new(ClientDelegate {
                 sessions: Arc::clone(&self.sessions),
