@@ -604,6 +604,15 @@ fun ChatPage(
         }
     }
 
+    // Switching to an already-cached session: streamingSignature may not change
+    // (same size/last-length), so the follow effects above don't re-fire and the
+    // list opens at the top. Key on the session id to pin the bottom on switch.
+    LaunchedEffect(session.id) {
+        if (events.isNotEmpty()) {
+            scrollToTrueBottom(listState)
+        }
+    }
+
     // Android IME handling (task #39): on sdk35 `WindowInsets.isImeVisible`
     // is unreliable, so detect the keyboard via the LazyColumn's
     // `viewportEndOffset` shrinking. When the viewport shrinks (keyboard
@@ -936,7 +945,9 @@ fun ChatPage(
  * again if we're still not pinned. The trailing 1dp `Spacer` is the
  * genuine last item, so `totalItemsCount - 1` is the real end.
  */
-private suspend fun scrollToTrueBottom(listState: androidx.compose.foundation.lazy.LazyListState) {
+// internal (not private): also used by FoundSessionsSheet's WatchLiveSheet so the
+// watch transcript pins the true bottom on open (same 3-retry + final snap).
+internal suspend fun scrollToTrueBottom(listState: androidx.compose.foundation.lazy.LazyListState) {
     repeat(3) {
         val target = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
         listState.animateScrollToItem(target)

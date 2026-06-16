@@ -1140,6 +1140,7 @@ private fun TranscriptViewSheet(
 ) {
     var items by remember { mutableStateOf<List<SessionStore.FoundTranscriptItem>?>(null) }
     var loadError by remember { mutableStateOf(false) }
+    val lazyListState = rememberLazyListState()
 
     LaunchedEffect(session.externalId) {
         Telemetry.breadcrumb("found_sessions", "transcript view open", mapOf("id" to session.externalId))
@@ -1148,6 +1149,15 @@ private fun TranscriptViewSheet(
             loadError = true
         } else {
             items = result
+        }
+    }
+
+    // Anchor to the latest message once the transcript loads -- otherwise the
+    // list opens at the top and the user watches it churn down to the newest.
+    LaunchedEffect(items) {
+        val loaded = items
+        if (!loaded.isNullOrEmpty()) {
+            lazyListState.scrollToItem(loaded.size - 1)
         }
     }
 
@@ -1212,7 +1222,8 @@ private fun TranscriptViewSheet(
             else -> {
                 val transcriptItems = items ?: emptyList()
                 LazyColumn(
-                    Modifier.weight(1f).fillMaxWidth(),
+                    state = lazyListState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -1602,9 +1613,11 @@ private fun WatchLiveSheet(
         } ?: System.currentTimeMillis()
         initialLoading = false
 
-        // Auto-scroll to bottom after initial load.
+        // Auto-scroll to the true bottom after initial load. A single
+        // animateScrollToItem lands short while rows are still measuring, so use
+        // the shared 3-retry + final-snap helper (parity with ChatPage).
         if (initial.isNotEmpty()) {
-            lazyState.animateScrollToItem(initial.size - 1)
+            scrollToTrueBottom(lazyState)
         }
 
         // Poll loop: runs until the coroutine is cancelled (navigation away).
