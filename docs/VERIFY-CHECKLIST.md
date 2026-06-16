@@ -9,9 +9,20 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.168
+
+**Android stabilization + mDNS multicast + resume recap fix.** PRs #628 (Android mDNS permissions + usage-strip), #632 (Android stabilization), #633/#638 (broker recap digest + IS_SANDBOX), #634 (CI test stabilization). Broker REDEPLOYED (recap is broker-side, live now). Website redeployed to conduit.kaopeh.com with v0.0.168 links.
+
+- **1 · LAN auto-discovery works on Android (mDNS multicast)** — Android was missing the `CHANGE_WIFI_MULTICAST_STATE` and `ACCESS_WIFI_STATE` permissions and the `WifiManager.MulticastLock` acquire/release, so mDNS broker discovery never fired on Android over Wi-Fi. PR #628 adds the permissions and the lock, plus a smoother usage-strip expand animation. Verify: on Android on the same Wi-Fi as a broker, open the app → the broker is discovered automatically (no manual IP entry); the usage strip expands/collapses smoothly. [Android, on-device]
+- **2 · Android stabilization: back navigation, swipe-to-archive, dir-list fallback, phone-landscape layout** — four compounding issues fixed in PR #632: (a) back-from-chat now returns to Home (BackHandler wired); (b) Home session rows support swipe-to-archive with a undo Snackbar; (c) a session can start even when the directory listing fails (dir-list is non-blocking); (d) phone-landscape no longer triggers the tablet 3-pane layout (form-factor detection tightened). Verify on an Android phone: back from a chat → Home; swipe a session → archive + Snackbar appears with Undo; start a session when the dir listing errors out → session still opens. Verify on an Android tablet: landscape layout uses the correct pane count. [Android phone + tablet, on-device]
+- **3 · Resume recap now works on large sessions (broker — verified live)** — the v0.0.167 recap timed out on sessions with many turns (>~150) because the broker passed the full transcript to `claude --resume` for re-ingest, which could take minutes. PR #633 switches to a digest-based approach (no full re-ingest) and PR #638 sets `IS_SANDBOX=1` so the one-shot claude invocation is not refused under root. VERIFIED LIVE on the box: a 21,235-line session produced an agent-written recap in ~13s (not the deterministic fallback). App-side: verify the recap system message appears at the top of a resumed Found Session. [broker — live; app-side on-device]
+- **4 · CI test stabilization** — PR #634 fixes a FeatureFlags style-B test and a single-flight test flake. CI-only change; no device verification needed. [released, no device aspect]
+
+---
+
 ## v0.0.167
 
-**UI polish + experiment graduation (iOS+Android, phone+tablet).** PRs #624/#625 (resume sheets, host-key, add-box, SSH theme), #626 (broker recap), #627 (usage anim), #629/#630 (flags). Broker REDEPLOYED (recap). NOTE: agent-written recap currently times out on very large sessions (>~150 turns) and falls back to a generic "Resumed (N turns)" note — a digest-based speedup is queued for v0.0.168.
+**UI polish + experiment graduation (iOS+Android, phone+tablet).** PRs #624/#625 (resume sheets, host-key, add-box, SSH theme), #626 (broker recap), #627 (usage anim), #629/#630 (flags). Broker REDEPLOYED (recap).
 
 - **1 · Resume/Branch lands directly in the chat (no leftover sheets)** — after Resume/Branch, the Found-Sessions + Box-Health sheets now auto-dismiss so you land on the chat. Verify: discovery → Resume → you end up in the chat, not stacked sheets. [iOS+Android, on-device]
 - **2 · Resumed chat shows a recap** — the chat opens with a "Resumed from your terminal — picking up where you left off" message (agent-written when fast enough, else a generic note). Verify: resumed chat isn't blank. [broker, live]
