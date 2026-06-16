@@ -1,9 +1,13 @@
 package session
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestStageExternalTranscript_Claude verifies that stageExternalTranscript
@@ -200,4 +204,167 @@ func TestStageExternalTranscript_EmptyParams(t *testing.T) {
 	stageExternalTranscript("", "", "claude", "some-id")
 	stageExternalTranscript("/tmp/fake", "/tmp/real", "claude", "")
 	stageExternalTranscript("/tmp/fake", "", "codex", "some-id")
+}
+
+// ---------------------------------------------------------------------------
+// seedResumeExcerptFromEntries tests
+// ---------------------------------------------------------------------------
+
+// makeEntries builds a slice of alternating user/assistant ConvEntry values
+// for testing. Each entry's content is "msg-N" and its Ts is a fixed
+// RFC3339Nano string so tests can assert exact values.
+func makeEntries(n int) []ConvEntry {
+	entries := make([]ConvEntry, n)
+	base := time.Date(2025, 6, 16, 0, 0, 0, 0, time.UTC)
+	for i := range entries {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		entries[i] = ConvEntry{
+			Role:    role,
+			Content: fmt.Sprintf("msg-%d", i),
+			Ts:      base.Add(time.Duration(i) * time.Minute).UTC().Format(time.RFC3339Nano),
+		}
+	}
+	return entries
+}
+
+// readAllConvEntries reads and parses every line of a conversation.jsonl file.
+func readAllConvEntries(t *testing.T, path string) []ConvEntry {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("readAllConvEntries: %v", err)
+	}
+	var out []ConvEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var e ConvEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("readAllConvEntries: unmarshal %q: %v", line, err)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// TestSeedResumeExcerpt_TakesLastN verifies that a 25-entry transcript
+// seeds the last resumeExcerptN (10) entries plus the trailing system note.
+func TestSeedResumeExcerpt_TakesLastN(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	convLogPath := filepath.Join(dir, "conversation.jsonl")
+
+	all := makeEntries(25)
+	seedResumeExcerptFromEntries(convLogPath, all, "claude")
+
+	got := readAllConvEntries(t, convLogPath)
+
+	// Expect resumeExcerptN content entries + 1 system note.
+	wantTotal := resumeExcerptN + 1
+	if len(got) != wantTotal {
+		t.Fatalf("got %d entries, want %d (excerpt=%d + system note)", len(got), wantTotal, resumeExcerptN)
+	}
+
+	// The first resumeExcerptN entries must be the LAST 10 of the input (indices 15..24).
+	for i := 0; i < resumeExcerptN; i++ {
+		want := all[25-resumeExcerptN+i]
+		if got[i].Role != want.Role || got[i].Content != want.Content {
+			t.Errorf("entry[%d]: got {%s %q} want {%s %q}", i, got[i].Role, got[i].Content, want.Role, want.Content)
+		}
+	}
+
+	// The last entry must be the system note.
+	last := got[len(got)-1]
+	if last.Role != "system" {
+		t.Errorf("last entry role=%q want 'system'", last.Role)
+	}
+	if !strings.Contains(last.Content, "25 earlier turns") {
+		t.Errorf("system note missing total-turns count: %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "claude") {
+		t.Errorf("system note missing agent name: %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "Resumed from") {
+		t.Errorf("system note missing 'Resumed from': %q", last.Content)
+	}
+}
+
+// TestSeedResumeExcerpt_ShortTranscript verifies that a transcript shorter than
+// resumeExcerptN seeds ALL entries (not just the last N).
+func TestSeedResumeExcerpt_ShortTranscript(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	convLogPath := filepath.Join(dir, "conversation.jsonl")
+
+	all := makeEntries(4) // fewer than resumeExcerptN
+	seedResumeExcerptFromEntries(convLogPath, all, "codex")
+
+	got := readAllConvEntries(t, convLogPath)
+	// 4 content entries + 1 system note
+	if len(got) != 5 {
+		t.Fatalf("got %d entries, want 5", len(got))
+	}
+	for i := 0; i < 4; i++ {
+		if got[i].Content != all[i].Content {
+			t.Errorf("entry[%d] content=%q want %q", i, got[i].Content, all[i].Content)
+		}
+	}
+	if got[4].Role != "system" {
+		t.Errorf("last entry role=%q want 'system'", got[4].Role)
+	}
+	if !strings.Contains(got[4].Content, "4 earlier turns") {
+		t.Errorf("system note totalTurns: %q", got[4].Content)
+	}
+}
+
+// TestSeedResumeExcerpt_Idempotent verifies that a second call to
+// seedResumeExcerptFromEntries is a no-op when conversation.jsonl already
+// contains data.
+func TestSeedResumeExcerpt_Idempotent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	convLogPath := filepath.Join(dir, "conversation.jsonl")
+
+	all := makeEntries(25)
+
+	// First call: seeds the log.
+	seedResumeExcerptFromEntries(convLogPath, all, "claude")
+	firstRead := readAllConvEntries(t, convLogPath)
+	if len(firstRead) != resumeExcerptN+1 {
+		t.Fatalf("after first seed: got %d entries, want %d", len(firstRead), resumeExcerptN+1)
+	}
+
+	// Second call with MORE entries: must be a no-op (idempotent).
+	more := makeEntries(30)
+	seedResumeExcerptFromEntries(convLogPath, more, "claude")
+	secondRead := readAllConvEntries(t, convLogPath)
+	if len(secondRead) != len(firstRead) {
+		t.Fatalf("after second seed (idempotent): got %d entries, want %d (no change)", len(secondRead), len(firstRead))
+	}
+}
+
+// TestSeedResumeExcerpt_EmptyTranscript verifies that an empty transcript
+// slice is handled gracefully (no file written, no panic).
+func TestSeedResumeExcerpt_EmptyTranscript(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	convLogPath := filepath.Join(dir, "conversation.jsonl")
+
+	seedResumeExcerptFromEntries(convLogPath, nil, "claude")
+	if _, err := os.Stat(convLogPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no conversation.jsonl for empty transcript, got err=%v", err)
+	}
+}
+
+// TestSeedResumeExcerpt_EmptyParams verifies no panic on empty path.
+func TestSeedResumeExcerpt_EmptyParams(t *testing.T) {
+	t.Parallel()
+	entries := makeEntries(5)
+	// None of these should panic.
+	seedResumeExcerptFromEntries("", entries, "claude")
+	seedResumeExcerptFromEntries("", nil, "claude")
 }
