@@ -715,7 +715,7 @@ private fun InstallProgressDialog(
                         Icon(
                             Icons.Default.Bolt,
                             contentDescription = null,
-                            tint = neon.codex,
+                            tint = neon.accent,
                             modifier = Modifier.size(22.dp),
                         )
                         Column {
@@ -770,7 +770,7 @@ private fun InstallProgressDialog(
                                 color = neon.textFaint,
                             )
                             Surface(
-                                color = neon.surface,
+                                color = neon.surfaceSolid,
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
@@ -832,7 +832,7 @@ private fun InstallProgressDialog(
                                                     modifier = Modifier
                                                         .size(14.dp)
                                                         .clip(CircleShape)
-                                                        .background(neon.codex.copy(alpha = 0.25f)),
+                                                        .background(neon.accent.copy(alpha = 0.25f)),
                                                 )
                                             }
                                             Box(
@@ -842,7 +842,7 @@ private fun InstallProgressDialog(
                                                     .background(
                                                         when {
                                                             idx < activeIdx -> neon.green
-                                                            idx == activeIdx -> neon.codex
+                                                            idx == activeIdx -> neon.accent
                                                             else -> neon.border
                                                         }
                                                     ),
@@ -867,7 +867,7 @@ private fun InstallProgressDialog(
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
                                     strokeWidth = 2.dp,
-                                    color = neon.codex,
+                                    color = neon.accent,
                                 )
                                 Text(
                                     bootstrap.message,
@@ -907,7 +907,7 @@ private fun InstallProgressDialog(
                                     onClick = onRetry,
                                     shape = RoundedCornerShape(11.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = neon.codex,
+                                        containerColor = neon.accent,
                                         contentColor = neon.accentText,
                                     ),
                                     modifier = Modifier.weight(1f),
