@@ -26,7 +26,11 @@ extension ConduitUI {
         var body: some View {
             NavigationStack {
                 ZStack {
-                    ConduitUI.Palette.surface.color.ignoresSafeArea()
+                    // Match the rest of the app (HomeView / SettingsView use
+                    // GlassAppBackground) instead of the flat surface fill,
+                    // which read as the default system grouped background and
+                    // clashed with the navy/neon canvas.
+                    GlassAppBackground()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             sectionLabel("Where is the broker?")
@@ -167,7 +171,8 @@ struct ConduitManualPairSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                ConduitUI.Palette.surface.color.ignoresSafeArea()
+                // Themed app canvas (parity with AddServerSheet / Home).
+                GlassAppBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("SERVER URL")
