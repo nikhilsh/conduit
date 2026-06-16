@@ -19,7 +19,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.MoreVert
@@ -458,32 +460,27 @@ fun SettingsScreen(
                 )
             }
 
-            // New session — which agents appear in the picker. claude + codex
-            // are always available; the rest are opt-in to keep the picker
-            // uncluttered for the common case.
-            SettingsSection("New session") {
-                val neon = LocalNeonTheme.current
+            // Agents — which agents the new-session picker offers. Mirrors
+            // iOS `agentsSection`: one per-agent row (tinted glyph + name +
+            // tinted switch) for every known agent. claude + codex are the
+            // guaranteed defaults (FeatureFlags.defaultEnabledAgents) and are
+            // always shown, so their switch is locked on — the iOS "you can't
+            // disable the last agent" rule, applied to the two that the
+            // picker always keeps. gemini / opencode are freely opt-in.
+            SettingsSection("Agents") {
                 val enabledAgents by appearance.enabledAgents.collectAsState()
                 val descriptors by store.agentDescriptors.collectAsState()
-                Text(
-                    "Claude and Codex are always shown. Enable others to offer them when you start a session.",
-                    fontFamily = neon.mono,
-                    fontSize = 10.5.sp,
-                    color = neon.textFaint,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                AgentEnableSection(
+                    enabledAgents = enabledAgents,
+                    descriptors = descriptors,
+                    onToggle = { agent, on ->
+                        appearance.setAgentEnabled(agent, on)
+                        Telemetry.breadcrumb(
+                            "settings", "agent toggle",
+                            mapOf("agent" to agent, "on" to on.toString()),
+                        )
+                    },
                 )
-                FeatureFlags.optionalAgents.forEachIndexed { idx, agent ->
-                    if (idx > 0) SettingsDivider()
-                    val name = descriptors[agent]?.displayName
-                        ?: agent.replaceFirstChar { it.uppercaseChar() }
-                    ToggleRow(
-                        icon = Icons.Filled.Person,
-                        title = name,
-                        subtitle = "Show $name in the new-session picker",
-                        isOn = agent in enabledAgents,
-                        onChange = { appearance.setAgentEnabled(agent, it) },
-                    )
-                }
             }
 
             // Support — external donation link (not an IAP; opens system browser).
@@ -1339,6 +1336,96 @@ internal fun ToggleRow(
         },
         colors = transparentListItemColors(),
     )
+}
+
+/**
+ * The "Agents" section body — one [AgentEnableRow] per known agent, in the
+ * same order as iOS `agentsSection` (claude, codex, gemini, opencode). The
+ * two defaults (claude + codex) are locked on because the new-session picker
+ * always keeps them; the rest are freely opt-in. Bound to the SAME
+ * [AppearanceStore.enabledAgents] / [AppearanceStore.setAgentEnabled] store
+ * the picker reads — presentation parity only, no semantics change.
+ */
+@Composable
+private fun AgentEnableSection(
+    enabledAgents: Set<String>,
+    descriptors: Map<String, sh.nikhil.conduit.AgentDescriptor>,
+    onToggle: (agent: String, on: Boolean) -> Unit,
+) {
+    // Known agents in iOS order. defaultEnabledAgents (claude, codex) come
+    // first and are always shown; optionalAgents follow.
+    val knownAgents = FeatureFlags.defaultEnabledAgents + FeatureFlags.optionalAgents
+    knownAgents.forEachIndexed { idx, agent ->
+        if (idx > 0) SettingsDivider()
+        val locked = agent in FeatureFlags.defaultEnabledAgents
+        val name = descriptors[agent]?.displayName
+            ?: agent.replaceFirstChar { it.uppercaseChar() }
+        AgentEnableRow(
+            agent = agent,
+            title = name,
+            // Locked defaults read as "always available"; the rest say what
+            // toggling does, matching the iOS subtitle voice.
+            subtitle = if (locked) "Always available in the new-session picker"
+                       else "Show $name in the new-session picker",
+            isOn = locked || agent in enabledAgents,
+            locked = locked,
+            onChange = { on -> if (!locked) onToggle(agent, on) },
+        )
+    }
+}
+
+/**
+ * One agent row in the "Agents" section — mirrors the iOS per-agent row:
+ * a per-agent tinted glyph, the agent name, and a per-agent-tinted switch.
+ * [locked] rows (the guaranteed defaults) render on + non-interactive, the
+ * iOS "can't disable the last agent" rule applied to claude / codex.
+ */
+@Composable
+private fun AgentEnableRow(
+    agent: String,
+    title: String,
+    subtitle: String,
+    isOn: Boolean,
+    locked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    val tint = neonAgentColor(agent, neon)
+    ListItem(
+        leadingContent = {
+            Icon(agentEnableGlyph(agent), contentDescription = null, tint = tint)
+        },
+        headlineContent = { Text(title, color = neon.text, fontFamily = neon.sans) },
+        supportingContent = {
+            Text(subtitle, color = neon.textDim, fontFamily = neon.sans)
+        },
+        trailingContent = {
+            Switch(
+                checked = isOn,
+                onCheckedChange = if (locked) null else onChange,
+                enabled = !locked,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = neon.accentText,
+                    checkedTrackColor = tint,
+                    // Keep a locked-on default reading as ON, not greyed-off.
+                    disabledCheckedThumbColor = neon.accentText,
+                    disabledCheckedTrackColor = tint.copy(alpha = 0.55f),
+                ),
+            )
+        },
+        colors = transparentListItemColors(),
+    )
+}
+
+/**
+ * Per-agent glyph for the Agents rows. Reuses the app's existing
+ * agent-glyph intent (claude / gemini → sparkle, codex / opencode →
+ * code-brackets) with icons known to be in the bundled core set. Mirrors
+ * the iOS per-agent SF Symbol choice.
+ */
+private fun agentEnableGlyph(agent: String): ImageVector = when (agent.lowercase()) {
+    "codex", "opencode" -> Icons.Filled.Code
+    else                -> Icons.Filled.AutoAwesome
 }
 
 @Composable
