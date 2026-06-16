@@ -163,9 +163,12 @@ extension ConduitUI {
                 .sheet(item: $selectedBox) { server in
                     // Per-box health detail. Reconnect reuses the same
                     // select-server path a box-row tap used before.
+                    // onOpenedSession: dismiss the box-health sheet so the
+                    // user lands directly on the adopted session's chat.
                     ConduitUI.BoxHealthView(
                         server: server,
-                        onReconnect: { store.selectSavedServer(server.id, autoConnect: true) }
+                        onReconnect: { store.selectSavedServer(server.id, autoConnect: true) },
+                        onOpenedSession: { selectedBox = nil }
                     )
                     .environment(store)
                 }

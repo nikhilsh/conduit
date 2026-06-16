@@ -235,12 +235,12 @@ struct SSHLoginSheet: View {
                                 Text("Retry")
                                     .font(neon.mono(13).weight(.semibold))
                             }
-                            .foregroundStyle(neon.accentText)
+                            .foregroundStyle(neon.bg)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 11)
                             .background(
                                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .fill(neon.codex)
+                                    .fill(neon.accent)
                             )
                         }
                         .buttonStyle(.plain)
@@ -275,7 +275,10 @@ struct SSHLoginSheet: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(neon.surface)
+                // surfaceSolid (opaque) prevents the form underneath from
+                // bleeding through the card — the host-key card was too
+                // transparent with neon.surface (semi-opaque in dark mode).
+                .fill(neon.surfaceSolid)
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .strokeBorder(neon.border, lineWidth: 1)
@@ -336,12 +339,12 @@ struct SSHLoginSheet: View {
                 } label: {
                     Text("Trust & continue")
                         .font(neon.mono(13).weight(.semibold))
-                        .foregroundStyle(neon.accentText)
+                        .foregroundStyle(neon.bg)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 11)
                         .background(
                             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(neon.codex)
+                                .fill(neon.accent)
                         )
                 }
                 .buttonStyle(.plain)
@@ -637,19 +640,19 @@ struct SSHLoginSheet: View {
                     Text("Connect & install broker")
                         .font(neon.mono(14.5).weight(.bold))
                 }
-                .foregroundStyle(neon.accentText)
+                .foregroundStyle(neon.bg)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(LinearGradient(
-                            colors: [neon.codex, neon.green],
+                            colors: [neon.accent, neon.green],
                             startPoint: .leading,
                             endPoint: .trailing
                         ))
                         .opacity(canConnect ? 1.0 : 0.4)
                 )
-                .neonGlowBox(canConnect && neon.glow ? neon.glowBox?.tinted(neon.codex) : nil)
+                .neonGlowBox(canConnect && neon.glow ? neon.glowBox?.tinted(neon.accent) : nil)
             }
             .buttonStyle(.plain)
             if !disabledReasons.isEmpty {

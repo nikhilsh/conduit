@@ -20,11 +20,19 @@ extension ConduitUI {
 
         let server: SavedServer
 
+        /// Called after a successful resume or branch so the whole sheet
+        /// stack (found-sessions + box-health) can be dismissed, landing
+        /// the user directly on the newly adopted chat. Defaults to a
+        /// no-op so standalone presentations work without a closure.
+        var onOpenedSession: () -> Void = {}
+
         @State private var snapshot: FoundSessionsSnapshot
         @State private var features: SessionStore.BoxFeatures?
 
-        init(server: SavedServer, initialSnapshot: FoundSessionsSnapshot = .empty) {
+        init(server: SavedServer, initialSnapshot: FoundSessionsSnapshot = .empty,
+             onOpenedSession: @escaping () -> Void = {}) {
             self.server = server
+            self.onOpenedSession = onOpenedSession
             _snapshot = State(initialValue: initialSnapshot)
         }
 
@@ -69,7 +77,13 @@ extension ConduitUI {
             .sheet(item: $selectedForBranch) { row in
                 FoundBranchSheet(server: server, row: row, features: features,
                                  onError: { kind in errorState = kind },
-                                 onDismiss: { selectedForBranch = nil })
+                                 onDismiss: { selectedForBranch = nil },
+                                 onSuccess: {
+                                     selectedForBranch = nil
+                                     Telemetry.breadcrumb("found_sessions", "branch adopt: dismissing sheet chain")
+                                     dismiss()
+                                     onOpenedSession()
+                                 })
             }
             .sheet(item: $selectedForView) { row in
                 FoundTranscriptView(server: server, row: row,
@@ -91,7 +105,12 @@ extension ConduitUI {
                         errorState = kind
                         selectedForResume = nil
                     },
-                    onSuccess: { selectedForResume = nil; dismiss() }
+                    onSuccess: {
+                        selectedForResume = nil
+                        Telemetry.breadcrumb("found_sessions", "resume adopt: dismissing sheet chain")
+                        dismiss()
+                        onOpenedSession()
+                    }
                 )
             }
             .sheet(item: $errorState) { kind in
@@ -734,6 +753,9 @@ extension ConduitUI {
         let features: SessionStore.BoxFeatures?
         let onError: (FoundSessionsErrorKind) -> Void
         let onDismiss: () -> Void
+        /// Called on a successful branch-adopt so the whole sheet chain
+        /// (branch + found-sessions + box-health) dismisses atomically.
+        var onSuccess: () -> Void = {}
 
         @State private var isBranching = false
         private var forkSupported: Bool { features?.sessionFork == true }
@@ -914,7 +936,7 @@ extension ConduitUI {
                                 if result != nil {
                                     Telemetry.breadcrumb("found_sessions", "branch success",
                                         data: ["id": row.externalID])
-                                    dismiss()
+                                    onSuccess()
                                 } else {
                                     Telemetry.breadcrumb("found_sessions", "branch failed",
                                         data: ["id": row.externalID])
