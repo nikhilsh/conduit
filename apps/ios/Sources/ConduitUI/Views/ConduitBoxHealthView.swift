@@ -69,6 +69,13 @@ extension ConduitUI {
         /// `store.selectSavedServer(server.id, autoConnect: true)`).
         var onReconnect: () -> Void = {}
 
+        /// Called when the user successfully adopts a found session (resume or
+        /// branch). The caller should dismiss the box-health sheet so the user
+        /// lands directly on the new chat. Defaults to a no-op so the view
+        /// compiles standalone (the real path sets selectedSessionID then
+        /// dismisses the box-health presenter).
+        var onOpenedSession: () -> Void = {}
+
         /// Probe results for THIS box (fetched on open). nil = probe not
         /// finished or box doesn't answer — dependent UI stays hidden.
         @State private var metrics: SessionStore.HostMetrics?
@@ -173,7 +180,17 @@ extension ConduitUI {
                 }
             }
             .sheet(isPresented: $showFoundSessions) {
-                ConduitUI.FoundSessionsSheet(server: server, initialSnapshot: foundSessionsSnapshot)
+                ConduitUI.FoundSessionsSheet(
+                    server: server,
+                    initialSnapshot: foundSessionsSnapshot,
+                    onOpenedSession: {
+                        // Dismiss found-sessions sheet then tell the presenter
+                        // (HomeView) to dismiss box-health so the user lands
+                        // directly on the adopted session's chat.
+                        showFoundSessions = false
+                        onOpenedSession()
+                    }
+                )
             }
         }
 

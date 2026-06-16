@@ -167,52 +167,20 @@ extension ConduitUI {
 
                     Divider().background(neon.border)
 
+                    // Single consolidated "Add a box" entry — opens the
+                    // direct add-server sheet. The redundant "Replay walkthrough"
+                    // and "Add a machine" (onboarding re-runs) are removed;
+                    // first-run onboarding is still gated by needsOnboarding
+                    // in RootView and remains accessible via "How it works" in
+                    // the About section.
                     Button {
+                        Telemetry.breadcrumb("settings", "add a box tapped")
                         showAddServer = true
                     } label: {
                         ConduitUI.ListRow(
-                            icon: "externaldrive.connected.to.line.below",
-                            title: "Add server",
-                            subtitle: nil,
-                            iconTint: neon.accent
-                        ) {
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                    }
-                    .buttonStyle(.plain)
-
-                    Divider().background(neon.border)
-
-                    // Fix 1: replay / add-machine onboarding intents.
-                    Button {
-                        Telemetry.breadcrumb("onboarding", "settings: replay walkthrough tapped")
-                        onboardingEntry = .replay
-                    } label: {
-                        ConduitUI.ListRow(
-                            icon: "arrow.counterclockwise",
-                            title: "Replay walkthrough",
-                            subtitle: "Run the setup flow again from Welcome",
-                            iconTint: neon.accent
-                        ) {
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(neon.textFaint)
-                        }
-                    }
-                    .buttonStyle(.plain)
-
-                    Divider().background(neon.border)
-
-                    Button {
-                        Telemetry.breadcrumb("onboarding", "settings: add a machine tapped")
-                        onboardingEntry = .addMachine
-                    } label: {
-                        ConduitUI.ListRow(
                             icon: "plus.rectangle.on.rectangle",
-                            title: "Add a machine",
-                            subtitle: "Pair another box starting from Install",
+                            title: "Add a box",
+                            subtitle: "Connect another server via SSH or pairing code",
                             iconTint: neon.accent
                         ) {
                             Image(systemName: "chevron.right")
