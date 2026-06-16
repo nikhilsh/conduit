@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -48,6 +49,7 @@ fun DebugMenuScreen(store: SessionStore, onDismiss: () -> Unit) {
 
     val sshTunnelEnabled by store.debugSshTunnelEnabled.collectAsState()
     val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
+    val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -83,6 +85,27 @@ fun DebugMenuScreen(store: SessionStore, onDismiss: () -> Unit) {
                             mapOf("enabled" to enabled.toString()),
                         )
                         store.setDebugSshTunnelEnabled(enabled)
+                    },
+                )
+            }
+
+            Spacer(Modifier.height(18.dp))
+
+            // Native-terminal toggle, moved here from the Appearance section to
+            // match iOS Settings (iOS keeps this off the main Appearance card).
+            SettingsSection("Terminal") {
+                ToggleRow(
+                    icon = Icons.Filled.Science,
+                    title = "Native terminal",
+                    subtitle = "On by default. Turn off to use the legacy web terminal.",
+                    isOn = experimentalNativeTerminal,
+                    onChange = { enabled ->
+                        Telemetry.breadcrumb(
+                            "debug_menu",
+                            "native_terminal toggled",
+                            mapOf("enabled" to enabled.toString()),
+                        )
+                        appearance.setExperimentalNativeTerminal(enabled)
                     },
                 )
             }

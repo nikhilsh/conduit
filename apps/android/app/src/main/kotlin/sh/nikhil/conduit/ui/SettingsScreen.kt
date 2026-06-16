@@ -22,15 +22,16 @@ import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Coffee
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.ImportExport
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Science
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.UnfoldLess
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
@@ -114,11 +115,12 @@ private const val SUPPORT_DONATION_URL = "https://buymeacoffee.com/conduitapp"
  *                     Servers sections; the server has one home now.
  *   • Usage & limits— account-wide, BOTH agents (claude + codex), each with
  *                     a 5-hour AND a weekly window.
- *   • Appearance    — ONE grouped card with Terminal folded IN: Theme,
- *                     accent palette, the type-forward Chat font strip,
- *                     Terminal colors, Text size, Terminal font size, the
- *                     native-terminal toggle, Glow & scanlines, + the
- *                     `conduit --theme <id>` chip.
+ *   • Appearance    — ONE grouped card (iOS parity): Theme, accent palette,
+ *                     the type-forward Chat font strip, Terminal font strip,
+ *                     Terminal colors, Text size, Glow & scanlines, + the
+ *                     `conduit --theme <id>` chip. (The native-terminal toggle
+ *                     lives in the Debug menu; iOS has no terminal-font-size
+ *                     slider, so that row was dropped.)
  *   • Conversation  — collapse-turns toggle.
  *   • About         — version + licenses.
  *
@@ -152,9 +154,7 @@ fun SettingsScreen(
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
     val replyHaptics by appearance.replyHaptics.collectAsState()
-    val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
-    val terminalFontSize by appearance.terminalFontSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val terminalFont by appearance.terminalFont.collectAsState()
     val neonGlow by appearance.neonGlow.collectAsState()
@@ -245,18 +245,6 @@ fun SettingsScreen(
                 onAddServer = { showAddServer = true },
             )
 
-            // Notifications (WS-P.3) — push settings section. Shown when a
-            // PushStore is provided (i.e. MainActivity wired it up). The
-            // endpoint is the currently-active broker endpoint; features is
-            // lazily probed by the BoxHealthScreen flow.
-            pushStore?.let { ps ->
-                PushSettingsSection(
-                    pushStore = ps,
-                    endpoint = endpoint,
-                    features = null, // Probed lazily; null = show registration UI
-                )
-            }
-
             // Usage & limits — account-wide, BOTH agents (claude + codex),
             // each with a 5-hour AND a weekly window.
             SettingsSection("Usage & limits") {
@@ -346,25 +334,10 @@ fun SettingsScreen(
 
                     SettingsDivider()
 
-                    // Terminal colors — drill-in to the terminal theme picker
-                    // (folded in from the old Terminal section).
-                    ListItem(
-                        modifier = Modifier.clickable { showTerminalTheme = true },
-                        leadingContent = { Icon(Icons.Filled.Palette, contentDescription = null, tint = neon.accent) },
-                        headlineContent = { Text("Terminal colors", color = neon.text, fontFamily = neon.sans) },
-                        trailingContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(terminalTheme.label, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
-                                Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint)
-                            }
-                        },
-                        colors = transparentListItemColors(),
-                    )
-
-                    SettingsDivider()
-
                     // Terminal font — type-forward face strip (NOT the chat
-                    // pairing). Mirrors iOS `terminalFontRow`.
+                    // pairing). Mirrors iOS `terminalFontRow`. Ordered BEFORE
+                    // Terminal colors to match iOS (Chat font → Terminal font →
+                    // Terminal colors).
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
                         verticalArrangement = Arrangement.spacedBy(11.dp),
@@ -382,6 +355,23 @@ fun SettingsScreen(
                         }
                         TerminalFontStrip(current = terminalFont, onSelect = { appearance.setTerminalFont(it) })
                     }
+
+                    SettingsDivider()
+
+                    // Terminal colors — drill-in to the terminal theme picker
+                    // (folded in from the old Terminal section).
+                    ListItem(
+                        modifier = Modifier.clickable { showTerminalTheme = true },
+                        leadingContent = { Icon(Icons.Filled.Palette, contentDescription = null, tint = neon.accent) },
+                        headlineContent = { Text("Terminal colors", color = neon.text, fontFamily = neon.sans) },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(terminalTheme.label, fontFamily = neon.mono, fontSize = 12.5.sp, color = neon.textFaint)
+                                Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = neon.textFaint)
+                            }
+                        },
+                        colors = transparentListItemColors(),
+                    )
 
                     SettingsDivider()
 
@@ -412,47 +402,9 @@ fun SettingsScreen(
 
                     SettingsDivider()
 
-                    // Terminal font size slider (folded in from Terminal).
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.FormatSize, contentDescription = null, tint = neon.accent, modifier = Modifier.size(24.dp))
-                            Spacer(Modifier.width(16.dp))
-                            Text("Terminal font size", style = MaterialTheme.typography.bodyLarge, fontFamily = neon.sans, color = neon.text)
-                            Spacer(Modifier.weight(1f))
-                            Text("${terminalFontSize.toInt()}pt", fontFamily = neon.mono, fontSize = 12.sp, color = neon.textFaint)
-                        }
-                        Slider(
-                            value = terminalFontSize,
-                            onValueChange = { appearance.setTerminalFontSize(it) },
-                            valueRange = AppearanceStore.TERMINAL_FONT_SIZE_RANGE,
-                            steps = (AppearanceStore.TERMINAL_FONT_SIZE_RANGE.endInclusive
-                                - AppearanceStore.TERMINAL_FONT_SIZE_RANGE.start).toInt() - 1,
-                            colors = SliderDefaults.colors(
-                                thumbColor = neon.accent,
-                                activeTrackColor = neon.accent,
-                            ),
-                        )
-                    }
-
-                    SettingsDivider()
-
-                    // Native terminal toggle (folded in from Terminal).
-                    ToggleRow(
-                        icon = Icons.Filled.Science,
-                        title = "Native terminal",
-                        subtitle = "On by default. Turn off to use the legacy web terminal.",
-                        isOn = experimentalNativeTerminal,
-                        onChange = { appearance.setExperimentalNativeTerminal(it) },
-                    )
-
-                    SettingsDivider()
-
                     // Glow & scanlines.
                     ToggleRow(
-                        icon = Icons.Filled.Star,
+                        icon = Icons.Filled.AutoAwesome,
                         title = "Glow & scanlines",
                         subtitle = if (neon.dark) "neon halos · on dark" else "neon halos · dimmed in light",
                         isOn = neonGlow,
@@ -465,12 +417,26 @@ fun SettingsScreen(
                 NeonThemePreviewChip(appearance)
             }
 
+            // Notifications (WS-P.3) — push settings section. Placed after
+            // Appearance to match iOS section order (Connection → Usage →
+            // Appearance → Notifications → Conversation → ...). Shown when a
+            // PushStore is provided (i.e. MainActivity wired it up). The
+            // endpoint is the currently-active broker endpoint; features is
+            // lazily probed by the BoxHealthScreen flow.
+            pushStore?.let { ps ->
+                PushSettingsSection(
+                    pushStore = ps,
+                    endpoint = endpoint,
+                    features = null, // Probed lazily; null = show registration UI
+                )
+            }
+
             // Conversation.
             SettingsSection("Conversation") {
                 ToggleRow(
-                    icon = Icons.Filled.UnfoldLess,
+                    icon = Icons.Filled.ImportExport,
                     title = "Collapse Turns",
-                    subtitle = "Show only summaries; tap to expand",
+                    subtitle = "Start command cards collapsed by default",
                     isOn = collapseTurns,
                     onChange = { appearance.setCollapseTurns(it) },
                 )
@@ -485,11 +451,9 @@ fun SettingsScreen(
 
             // Agents — which agents the new-session picker offers. Mirrors
             // iOS `agentsSection`: one per-agent row (tinted glyph + name +
-            // tinted switch) for every known agent. claude + codex are the
-            // guaranteed defaults (FeatureFlags.defaultEnabledAgents) and are
-            // always shown, so their switch is locked on — the iOS "you can't
-            // disable the last agent" rule, applied to the two that the
-            // picker always keeps. gemini / opencode are freely opt-in.
+            // tinted switch) for every known agent. EVERY agent is freely
+            // toggleable; the only block is disabling the LAST enabled one
+            // (the picker must always offer at least one choice).
             SettingsSection("Agents") {
                 val enabledAgents by appearance.enabledAgents.collectAsState()
                 val descriptors by store.agentDescriptors.collectAsState()
@@ -508,15 +472,26 @@ fun SettingsScreen(
 
             // Support — external donation link (not an IAP; opens system browser).
             SettingsSection("Support") {
-                SettingsRow(
-                    icon = Icons.Filled.Favorite,
-                    title = "Buy me a coffee",
-                    subtitle = "Support Conduit development",
-                    onClick = {
+                ListItem(
+                    modifier = Modifier.clickable {
                         Telemetry.breadcrumb("settings", "buy-me-a-coffee tapped")
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SUPPORT_DONATION_URL))
                         context.startActivity(intent)
                     },
+                    leadingContent = { Icon(Icons.Filled.Coffee, contentDescription = null, tint = neon.accent) },
+                    headlineContent = { Text("Buy me a coffee", color = neon.text, fontFamily = neon.sans) },
+                    supportingContent = {
+                        Text(
+                            "Support Conduit development",
+                            fontFamily = neon.sans,
+                            color = neon.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    // External link → up-right arrow (iOS `arrow.up.right`), not a chevron.
+                    trailingContent = { Icon(Icons.Filled.OpenInNew, contentDescription = null, tint = neon.textFaint) },
+                    colors = transparentListItemColors(),
                 )
             }
 
@@ -539,6 +514,21 @@ fun SettingsScreen(
                         }
                     },
                 )
+                // "How it works" — re-opens the onboarding guide (iOS About
+                // `How it works` row). onOpenOnboarding is provided by AppRoot;
+                // only render when present. replay = run the full flow.
+                onOpenOnboarding?.let { openOnboarding ->
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = Icons.Filled.AutoAwesome,
+                        title = "How it works",
+                        subtitle = "Add a box, run agents, work from anywhere",
+                        onClick = {
+                            Telemetry.breadcrumb("settings", "how_it_works_tapped")
+                            openOnboarding(FeatureFlags.OnboardingEntry.replay)
+                        },
+                    )
+                }
                 SettingsDivider()
                 SettingsRow(
                     icon = Icons.Filled.Article,
@@ -777,7 +767,7 @@ private fun ConnectionSection(
             SettingsRow(
                 icon = Icons.Filled.AddCircle,
                 title = "Add a box",
-                subtitle = null,
+                subtitle = "Connect another server via SSH or pairing code",
                 onClick = {
                     Telemetry.breadcrumb("settings", "add_box_tapped")
                     onAddServer()
@@ -1183,7 +1173,7 @@ private fun AgentAccountRow(
 
     val (phoneText, phoneColor) = when (phone) {
         PhoneAuthState.SIGNED_IN -> "Signed in" to neon.green
-        PhoneAuthState.EXPIRED -> "Signed in · expired" to neon.yellow
+        PhoneAuthState.EXPIRED -> "Signed in - expired" to neon.yellow
         PhoneAuthState.NOT_SIGNED_IN -> "Not signed in" to neon.textFaint
     }
     val hasMenu = phone != PhoneAuthState.NOT_SIGNED_IN || boxSignedIn == true
@@ -1420,11 +1410,12 @@ internal fun ToggleRow(
 
 /**
  * The "Agents" section body — one [AgentEnableRow] per known agent, in the
- * same order as iOS `agentsSection` (claude, codex, gemini, opencode). The
- * two defaults (claude + codex) are locked on because the new-session picker
- * always keeps them; the rest are freely opt-in. Bound to the SAME
- * [AppearanceStore.enabledAgents] / [AppearanceStore.setAgentEnabled] store
- * the picker reads — presentation parity only, no semantics change.
+ * same order as iOS `agentsSection` (claude, codex, gemini, opencode). EVERY
+ * agent is freely toggleable; the only block is disabling the LAST enabled
+ * agent (the new-session picker must always offer at least one choice) —
+ * the iOS rule (`isLast = enabledAgents.count == 1 && enabled`). Bound to the
+ * SAME [AppearanceStore.enabledAgents] / [AppearanceStore.setAgentEnabled]
+ * store the picker reads.
  */
 @Composable
 private fun AgentEnableSection(
@@ -1432,24 +1423,26 @@ private fun AgentEnableSection(
     descriptors: Map<String, sh.nikhil.conduit.AgentDescriptor>,
     onToggle: (agent: String, on: Boolean) -> Unit,
 ) {
-    // Known agents in iOS order. defaultEnabledAgents (claude, codex) come
-    // first and are always shown; optionalAgents follow.
+    // Known agents in iOS order (claude, codex, gemini, opencode).
     val knownAgents = FeatureFlags.defaultEnabledAgents + FeatureFlags.optionalAgents
     knownAgents.forEachIndexed { idx, agent ->
         if (idx > 0) SettingsDivider()
-        val locked = agent in FeatureFlags.defaultEnabledAgents
+        val enabled = agent in enabledAgents
+        // iOS: block only the toggle that would leave zero agents enabled.
+        val isLast = enabledAgents.size == 1 && enabled
         val name = descriptors[agent]?.displayName
             ?: agent.replaceFirstChar { it.uppercaseChar() }
         AgentEnableRow(
             agent = agent,
             title = name,
-            // Locked defaults read as "always available"; the rest say what
-            // toggling does, matching the iOS subtitle voice.
-            subtitle = if (locked) "Always available in the new-session picker"
-                       else "Show $name in the new-session picker",
-            isOn = locked || agent in enabledAgents,
-            locked = locked,
-            onChange = { on -> if (!locked) onToggle(agent, on) },
+            isOn = enabled,
+            // Disable the switch only when this is the sole enabled agent, so
+            // the user can never end up with an empty picker.
+            locked = isLast,
+            onChange = { on ->
+                // Never allow turning the last-enabled agent off.
+                if (on || !isLast) onToggle(agent, on)
+            },
         )
     }
 }
@@ -1457,14 +1450,14 @@ private fun AgentEnableSection(
 /**
  * One agent row in the "Agents" section — mirrors the iOS per-agent row:
  * a per-agent tinted glyph, the agent name, and a per-agent-tinted switch.
- * [locked] rows (the guaranteed defaults) render on + non-interactive, the
- * iOS "can't disable the last agent" rule applied to claude / codex.
+ * No subtitle (iOS has none). [locked] is set only for the sole remaining
+ * enabled agent, so its switch stays on + non-interactive (iOS "can't disable
+ * the last agent" rule).
  */
 @Composable
 private fun AgentEnableRow(
     agent: String,
     title: String,
-    subtitle: String,
     isOn: Boolean,
     locked: Boolean,
     onChange: (Boolean) -> Unit,
@@ -1476,9 +1469,6 @@ private fun AgentEnableRow(
             Icon(agentEnableGlyph(agent), contentDescription = null, tint = tint)
         },
         headlineContent = { Text(title, color = neon.text, fontFamily = neon.sans) },
-        supportingContent = {
-            Text(subtitle, color = neon.textDim, fontFamily = neon.sans)
-        },
         trailingContent = {
             Switch(
                 checked = isOn,
@@ -1487,7 +1477,8 @@ private fun AgentEnableRow(
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = neon.accentText,
                     checkedTrackColor = tint,
-                    // Keep a locked-on default reading as ON, not greyed-off.
+                    // Keep the last-enabled (locked-on) agent reading as ON,
+                    // not greyed-off.
                     disabledCheckedThumbColor = neon.accentText,
                     disabledCheckedTrackColor = tint.copy(alpha = 0.55f),
                 ),
@@ -1498,14 +1489,16 @@ private fun AgentEnableRow(
 }
 
 /**
- * Per-agent glyph for the Agents rows. Reuses the app's existing
- * agent-glyph intent (claude / gemini → sparkle, codex / opencode →
- * code-brackets) with icons known to be in the bundled core set. Mirrors
- * the iOS per-agent SF Symbol choice.
+ * Per-agent glyph for the Agents rows — four DISTINCT glyphs matching the iOS
+ * SF Symbol intent: claude=cpu (Memory), codex=curly-braces (DataObject),
+ * gemini=sparkle (AutoAwesome), opencode=code-brackets (Code).
  */
 private fun agentEnableGlyph(agent: String): ImageVector = when (agent.lowercase()) {
-    "codex", "opencode" -> Icons.Filled.Code
-    else                -> Icons.Filled.AutoAwesome
+    "claude"   -> Icons.Filled.Memory
+    "codex"    -> Icons.Filled.DataObject
+    "gemini"   -> Icons.Filled.AutoAwesome
+    "opencode" -> Icons.Filled.Code
+    else       -> Icons.Filled.AutoAwesome
 }
 
 @Composable
