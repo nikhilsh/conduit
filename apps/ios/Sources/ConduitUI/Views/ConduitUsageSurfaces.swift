@@ -12,15 +12,6 @@ import SwiftUI
 // codex sessions an ambient account-level strip can only show one. Shared
 // formatting/tint helpers live in `AccountUsageFormat`.
 
-// MARK: - PreferenceKey for measuring expandedDetail intrinsic height
-
-private struct DetailHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 extension ConduitUI {
 
     /// Shared % → tint and ISO-reset → countdown formatting for the usage
@@ -82,14 +73,9 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @State private var expanded = false
-        @State private var detailHeight: CGFloat = 0
         private let now = Date()
 
-        /// Single source of truth for the expand transition. Height, detail
-        /// opacity, and the chevron rotation are ALL driven off this same
-        /// curve+value (`.animation(_, value: expanded)`) so they move in
-        /// lockstep — no second `withAnimation`, which previously raced the
-        /// preference-driven height against the opacity and left a gap.
+        /// Single source of truth for the expand transition.
         private static let expandAnim: Animation = .easeInOut(duration: 0.28)
 
         var body: some View {
@@ -97,10 +83,11 @@ extension ConduitUI {
             if !agents.isEmpty {
                 VStack(spacing: 8) {
                     Button {
-                        // Plain toggle — the `.animation(value: expanded)`
-                        // modifiers below own the transition so every animated
-                        // property runs on the one transaction/curve.
-                        expanded.toggle()
+                        // Drive the toggle through `withAnimation` so the
+                        // ENCLOSING `List` animates the cell height on the SAME
+                        // transaction as the content insert. See the body note
+                        // below for why this matters.
+                        withAnimation(Self.expandAnim) { expanded.toggle() }
                     } label: {
                         HStack(spacing: 10) {
                             ForEach(Array(agents.enumerated()), id: \.element.id) { idx, a in
@@ -114,47 +101,37 @@ extension ConduitUI {
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(neon.textFaint)
                                 .rotationEffect(.degrees(expanded ? 180 : 0))
-                                .animation(Self.expandAnim, value: expanded)
                         }
                     }
                     .buttonStyle(.plain)
-                    // Round-2 fix 4 (handoff images 07→08): every expanded
-                    // window row carries ALL THREE — meter · % used · reset.
-                    // The old rows showed only the reset caption, so the
-                    // expanded view had LESS information than the collapsed
-                    // glance. Two rows per agent (5h + weekly), agent-tinted.
+                    // FIX (rebuilt — expand gap): this strip is a cell inside a
+                    // `List`. The List measures a cell's height from its
+                    // reported INTRINSIC size and animates the row to that
+                    // height on the List's OWN layout pass. The previous
+                    // measured-PreferenceKey approach kept the detail ALWAYS
+                    // BUILT and animated an inner `.frame(height: detailHeight)`
+                    // clip on a SEPARATE `.animation(value:)` transaction. Those
+                    // two timelines (List row-height vs. inner clip) diverged:
+                    // the List reserved the full row height up front while the
+                    // clipped content lagged behind it -> the empty GAP between
+                    // the card and ACTIVE SESSIONS mid-animation. The preference
+                    // also delivered `detailHeight` a frame late on first
+                    // expand (the first-open jump).
                     //
-                    // R4 fix 6: this strip lives inside a `List` row, and a
-                    // `List` drops a SwiftUI `.transition` on an `if`-inserted
-                    // subview (the cell snaps instead of easing). Keep the
-                    // detail ALWAYS BUILT and reveal it with an animatable
-                    // clip-height + opacity so the row eases open/closed.
-                    //
-                    // The intrinsic content is measured by an OVERLAY (sized to
-                    // the natural content, BEFORE the height clamp) so the
-                    // measured `detailHeight` is stable and never depends on the
-                    // animating outer frame. We then animate the outer frame
-                    // between 0 and that measured height, CLIPPING so the
-                    // detail can't draw past the growing container (that
-                    // overflow was the visible gap above ACTIVE SESSIONS).
-                    expandedDetail(agents: agents)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .opacity(expanded ? 1 : 0)
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: DetailHeightKey.self,
-                                    value: geo.size.height
-                                )
-                            }
-                        )
-                        .onPreferenceChange(DetailHeightKey.self) { h in
-                            detailHeight = h
-                        }
-                        .frame(height: expanded ? detailHeight : 0, alignment: .top)
-                        .clipped()
-                        .animation(Self.expandAnim, value: expanded)
-                        .accessibilityHidden(!expanded)
+                    // Robust rebuild: NO measured height, NO PreferenceKey, NO
+                    // clip. The detail is conditionally in the tree (`if
+                    // expanded`) so the cell's INTRINSIC height is always exactly
+                    // the content height — never over-measured. Toggling inside
+                    // `withAnimation` makes the List animate the row height in
+                    // lockstep with the content, so the list below reflows in
+                    // sync with no leftover reserved space. The detail fades via
+                    // an opacity-only `.transition` (no move/scale that the List
+                    // would snap).
+                    if expanded {
+                        expandedDetail(agents: agents)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .transition(.opacity)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)

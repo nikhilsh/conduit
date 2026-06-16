@@ -2,6 +2,15 @@ import SwiftUI
 
 // MARK: - ConduitAddServerSheet
 //
+// FIX (uniform card color): `conduitGlassRoundedRect` renders a translucent
+// `.glassEffect(.regular)` that REFRACTS whatever sits behind it. The sheet
+// backdrop is `GlassAppBackground` = `neon.appBg`, a RADIAL gradient that is
+// brighter near the top — so the topmost option card refracted a lighter band
+// of the gradient and read lighter than the three below it. The fix gives
+// every card the SAME opaque base fill UNDER the glass, so the backdrop
+// gradient can no longer bleed through unevenly by vertical position. The
+// glass specular edge is preserved; only the see-through fill is pinned.
+//
 // Native ConduitUI Add-Server sheet. Replaces the legacy
 // `AddServerSheet` (now deleted) with a upstream-faithful surface:
 //   - small-caps "WHERE" section label
@@ -17,6 +26,7 @@ extension ConduitUI {
     struct AddServerSheet: View {
         @Environment(SessionStore.self) private var store
         @Environment(\.dismiss) private var dismiss
+        @Environment(\.neonTheme) private var neon
 
         @State private var showScanner = false
         @State private var showDiscover = false
@@ -141,6 +151,13 @@ extension ConduitUI {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+                // Opaque base UNDER the glass so the radial backdrop gradient
+                // can't refract through at different brightness per row. Same
+                // fill for all four cards => identical surface color.
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(neon.surfaceSolid)
+                )
                 .conduitGlassRoundedRect(cornerRadius: 14)
             }
             .buttonStyle(.plain)
