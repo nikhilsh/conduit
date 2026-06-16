@@ -11,7 +11,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
@@ -59,7 +58,6 @@ enum class ProjectTab(val label: String) { Chat("Chat"), Terminal("Terminal"), B
 fun ProjectScreen(
     store: SessionStore,
     session: ProjectSession,
-    onOpenDrawer: () -> Unit,
     // Phone back-chevron: navigates back to Home by deselecting the session.
     // Null on tablet (no back affordance — the rail is always visible).
     onBack: (() -> Unit)? = null,
@@ -231,7 +229,6 @@ fun ProjectScreen(
                     scope.launch { pagerState.animateScrollToPage(ProjectTab.Browser.ordinal) }
                 },
                 onEndSession = { menuExpanded = false; showEndConfirm = true },
-                onOpenDrawer = onOpenDrawer,
                 onBack = onBack,
                 onShowInfo = { showInfo = true },
                 viewerCount = status?.viewers?.toInt(),
@@ -440,7 +437,6 @@ private fun ControlsRow(
     browserMode: BrowserMode,
     onToggleMemory: () -> Unit,
     onEndSession: () -> Unit,
-    onOpenDrawer: () -> Unit,
     // Fix 1: phone back chevron (null on tablet where the rail is always visible).
     onBack: (() -> Unit)? = null,
     onShowInfo: () -> Unit,
@@ -452,20 +448,17 @@ private fun ControlsRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // Tablet 3-pane centre (chatOnly): the sessions rail is already
-        // pinned on the left, so the drawer toggle is a dead button here —
-        // hide it. Phone keeps back chevron (primary) + hamburger (secondary).
-        if (!chatOnly) {
-            if (onBack != null) {
-                // Fix 1: leading back chevron on phone — mirrors iOS NavigationStack
-                // back button. Tapping returns to Home (store.select(null)).
-                HeaderCircleButton(
-                    icon = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    onClick = onBack,
-                )
-            }
-            HeaderCircleButton(icon = Icons.Default.Menu, contentDescription = "Sessions", onClick = onOpenDrawer)
+        // Phone keeps the leading back chevron (returns to Home). The legacy
+        // hamburger that opened the side drawer was removed (drawer deleted,
+        // 2026-06-16) — Home is the canonical session list now.
+        if (!chatOnly && onBack != null) {
+            // Fix 1: leading back chevron on phone — mirrors iOS NavigationStack
+            // back button. Tapping returns to Home (store.select(null)).
+            HeaderCircleButton(
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                onClick = onBack,
+            )
         }
 
         Box(modifier = Modifier.weight(1f)) {

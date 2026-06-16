@@ -7,11 +7,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -21,7 +18,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import sh.nikhil.conduit.FeatureFlags
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.SessionStore
@@ -38,8 +34,6 @@ fun AppRoot(
      *  The Activity uses this to request the notification permission + register. */
     onFirstSessionForPush: (() -> Unit)? = null,
 ) {
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val scope = rememberCoroutineScopeCompat()
     var showSettings by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(true) }
     var showAddServer by remember { mutableStateOf(false) }
@@ -123,7 +117,8 @@ fun AppRoot(
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             // iPad / wide screen: a permanent activity-bar rail + section
             // content (Sessions = ProjectList rail + ProjectScreen). Phone
-            // keeps the ModalNavigationDrawer. Mirrors iOS ConduitUI.TabletShell.
+            // renders Home / ProjectScreen directly (no side drawer). Mirrors
+            // iOS ConduitUI.TabletShell.
             // Gate on a TRUE tablet: smallest-width >= 600dp (sw600dp, the
             // Android tablet breakpoint) AND maxWidth >= 840dp. A phone in
             // landscape can exceed 840dp but its sw is ~360-480dp, so it stays
@@ -151,12 +146,11 @@ fun AppRoot(
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                         val selected = sessions.firstOrNull { it.id == selectedId }
                         if (selected != null) {
-                            ProjectScreen(store = store, session = selected, onOpenDrawer = {}, chatOnly = true)
+                            ProjectScreen(store = store, session = selected, chatOnly = true)
                         } else {
                             HomeScreen(
                                 store = store,
                                 onOpenSettings = { showSettings = true },
-                                onOpenDrawer = {},
                                 onOpenHistory = { showHistory = true },
                                 onAddServer = { showAddServer = true },
                                 onNewSession = onNewSession,
@@ -190,48 +184,41 @@ fun AppRoot(
                     Telemetry.breadcrumb("nav", "back-to-home", mapOf("from" to (selectedId ?: "")))
                     store.select(null)
                 }
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = {
-                        ProjectListScreen(
-                            store = store,
-                            onOpenSettings = { showSettings = true },
-                            onCloseDrawer = { scope.launch { drawerState.close() } },
-                        )
-                    },
-                ) {
-                    val selected = sessions.firstOrNull { it.id == selectedId }
-                    if (selected != null) {
-                        ProjectScreen(
-                            store = store,
-                            session = selected,
-                            onOpenDrawer = { scope.launch { drawerState.open() } },
-                            onBack = { store.select(null) },
-                        )
-                    } else {
-                        HomeScreen(
-                            store = store,
-                            // Fix: on a fresh install (no saved servers), onboarding owns
-                            // first-run -- don't auto-open Settings before the user has
-                            // paired a box. User-tapped Settings still works after pairing.
-                            onOpenSettings = {
-                                if (savedServers.isNotEmpty()) showSettings = true
-                            },
-                            onOpenDrawer = { scope.launch { drawerState.open() } },
-                            onOpenHistory = { showHistory = true },
-                            onAddServer = { showAddServer = true },
-                            onNewSession = onNewSession,
-                            // The bottom search now opens the Cmd-K palette.
-                            onSearch = { showCommandPalette = true },
-                            onVoice = { showVoice = true },
-                            onOpenApprovals = { showApprovals = true },
-                            onOpenBoxHealth = { server -> boxHealthTarget = server },
-                            onOpenOnboarding = {
-                                onboardingEntry = FeatureFlags.OnboardingEntry.replay
-                                showOnboarding = true
-                            },
-                        )
-                    }
+                // The legacy ModalNavigationDrawer (ProjectListScreen) was
+                // removed (user feedback 2026-06-16): Home already lists
+                // active/archived sessions, the BOXES section, the broker-update
+                // banner, and the Settings entry, so the side drawer was
+                // redundant. Render the phone content directly. Matches iOS,
+                // whose home view IS the live session list.
+                val selected = sessions.firstOrNull { it.id == selectedId }
+                if (selected != null) {
+                    ProjectScreen(
+                        store = store,
+                        session = selected,
+                        onBack = { store.select(null) },
+                    )
+                } else {
+                    HomeScreen(
+                        store = store,
+                        // Fix: on a fresh install (no saved servers), onboarding owns
+                        // first-run -- don't auto-open Settings before the user has
+                        // paired a box. User-tapped Settings still works after pairing.
+                        onOpenSettings = {
+                            if (savedServers.isNotEmpty()) showSettings = true
+                        },
+                        onOpenHistory = { showHistory = true },
+                        onAddServer = { showAddServer = true },
+                        onNewSession = onNewSession,
+                        // The bottom search now opens the Cmd-K palette.
+                        onSearch = { showCommandPalette = true },
+                        onVoice = { showVoice = true },
+                        onOpenApprovals = { showApprovals = true },
+                        onOpenBoxHealth = { server -> boxHealthTarget = server },
+                        onOpenOnboarding = {
+                            onboardingEntry = FeatureFlags.OnboardingEntry.replay
+                            showOnboarding = true
+                        },
+                    )
                 }
             }
         }
@@ -456,8 +443,3 @@ fun AppRoot(
         )
     }
 }
-
-// Small shim so this file doesn't pull androidx.compose.runtime.rememberCoroutineScope
-// at every call site. Inlined to keep imports tidy.
-@Composable
-private fun rememberCoroutineScopeCompat() = androidx.compose.runtime.rememberCoroutineScope()

@@ -25,16 +25,19 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
@@ -97,7 +100,6 @@ import sh.nikhil.conduit.needsYouBanner
 fun HomeScreen(
     store: SessionStore,
     onOpenSettings: () -> Unit,
-    onOpenDrawer: () -> Unit,
     onOpenHistory: () -> Unit,
     onAddServer: () -> Unit,
     onNewSession: () -> Unit,
@@ -237,12 +239,12 @@ fun HomeScreen(
                 )
             }
             Spacer(Modifier.weight(1f))
-            // Trailing slot now carries both History (cross-server, includes
-            // archived) and the live-sessions drawer. iOS only needs the
-            // history entry because its home view IS the live list; Android
-            // needs the drawer too for multi-project nav.
+            // Trailing slot carries History (cross-server, includes archived).
+            // The legacy live-sessions side drawer was removed (user feedback
+            // 2026-06-16): Home already lists active/archived sessions, the
+            // BOXES section, and the broker-update banner, so the drawer was
+            // redundant. Matches iOS, whose home view IS the live list.
             CircleIconButton(Icons.Default.History, "History", onClick = onOpenHistory)
-            CircleIconButton(Icons.AutoMirrored.Filled.List, "Sessions", onClick = onOpenDrawer)
         }
 
         // Ambient account-usage strip (design handoff §B.10) — per-agent plan
@@ -825,8 +827,14 @@ fun HomeScreen(
                         // Fix 4: non-active reachability from probe.
                         reachable = reachabilityMap[server.id],
                         onClick = { onOpenBoxHealth(server) },
-                        // Fix 4: long-press to rename.
+                        // Long-press to rename (kept as a secondary path).
                         onLongClick = {
+                            renameTarget = server
+                            renameDraft = server.name
+                        },
+                        // Discoverable rename: overflow (3-dot) menu -> Rename.
+                        // Mirrors iOS Settings box rename (ConduitSettingsView).
+                        onRename = {
                             renameTarget = server
                             renameDraft = server.name
                         },
@@ -962,11 +970,14 @@ private fun HomeBoxRow(
     // Fix 4: reachability probe result for non-active boxes; null = pending.
     reachable: Boolean? = null,
     onClick: () -> Unit,
-    // Fix 4: long-press opens rename dialog.
+    // Fix 4: long-press opens rename dialog (secondary path).
     onLongClick: () -> Unit = {},
+    // Discoverable rename via the overflow (3-dot) menu.
+    onRename: () -> Unit = {},
     // Fix 4: per-row Connect switches to this box.
     onConnect: () -> Unit = {},
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     val connected = isActive && (harness is HarnessState.Live || harness is HarnessState.Linked)
     // Real per-box session count suffix — shown for any box that has live
     // sessions attributed to it, so non-active boxes surface their count too.
@@ -1062,6 +1073,29 @@ private fun HomeBoxRow(
             fontFamily = neon.mono,
             color = statusColor,
         )
+        // Discoverable affordance: an overflow (3-dot) menu with Rename. The
+        // long-press path is undiscoverable on its own (user feedback
+        // 2026-06-16); this surfaces rename as a visible control. Mirrors iOS
+        // Settings box rename.
+        Box {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = "Box options",
+                    modifier = Modifier.size(18.dp),
+                    tint = neon.textFaint,
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    onClick = {
+                        menuOpen = false
+                        onRename()
+                    },
+                )
+            }
+        }
     }
 }
 

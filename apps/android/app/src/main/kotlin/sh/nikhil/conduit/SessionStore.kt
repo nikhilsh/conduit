@@ -476,6 +476,50 @@ fun stripPendingSentinel(text: String): String {
 }
 
 /**
+ * Pure per-box merge for [SessionStore.refreshSessions]. Extracted so it can be
+ * unit-tested on the JVM classpath (the store's [refreshSessions] is private and
+ * needs the Rust client).
+ *
+ * Rules:
+ *  - Sessions stamped to a DIFFERENT box than [currentBoxId] are kept verbatim
+ *    (dimmed history rows per #522).
+ *  - The freshly [listed] sessions for the current box replace this box's
+ *    entries (fresh list wins on overlap for status/fields).
+ *  - DATA-LOSS GUARD: existing current-box sessions the fresh list OMITTED are
+ *    PRESERVED unless they are known-[deleted] or in [recentlyArchived]. This
+ *    stops a transient empty/partial `listSessions()` (which happens right
+ *    after a resume/adopt join, before status frames land) from wiping the
+ *    whole home list ("No sessions yet" / "all sessions vanish" bug). A real
+ *    deletion still propagates once the id lands in `deleted`/`archived`.
+ *
+ * Mirror of iOS `SessionStore.refreshSessions`' per-box merge intent.
+ */
+internal fun <T> mergeRefreshedSessions(
+    existing: List<T>,
+    listed: List<T>,
+    sessionBox: Map<String, String?>,
+    currentBoxId: String?,
+    deleted: Set<String>,
+    recentlyArchived: Set<String>,
+    idOf: (T) -> String,
+): List<T> {
+    val otherBoxSessions = existing.filter { s ->
+        val stamp = sessionBox[idOf(s)] ?: return@filter false
+        stamp != currentBoxId
+    }
+    val listedIds = listed.map(idOf).toSet()
+    val preservedCurrentBox = existing.filter { s ->
+        val id = idOf(s)
+        val stamp = sessionBox[id]
+        stamp == currentBoxId &&
+            id !in listedIds &&
+            id !in deleted &&
+            id !in recentlyArchived
+    }
+    return otherBoxSessions + listed + preservedCurrentBox
+}
+
+/**
  * v1 store: wraps ConduitClient and bridges Rust delegate callbacks back onto
  * the main dispatcher as StateFlow updates. Replaced by Hilt-style DI in v2.
  */
@@ -4311,21 +4355,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         Telemetry.breadcrumb("session", "refreshSessions",
             mapOf("count" to list.size.toString(), "box" to currentBoxId))
-        // Per-box merge: keep sessions whose sessionBox stamp points to a
-        // DIFFERENT box (they stay visible as dimmed history rows per #522),
-        // and replace this box's session entries with the freshly-listed ones.
-        // This fixes the box-switch bug: switching A->B now shows box B's
-        // sessions once the broker responds (even if box B has zero sessions),
-        // while keeping box A's sessions visible (stamped boxA). The old
-        // "if isNotEmpty" guard prevented box B from ever populating because
-        // the Rust client returns [] until status frames land -- which never
-        // happens for sessions we haven't joined yet.
-        // Mirror of iOS `SessionStore.refreshSessions`.
-        val otherBoxSessions = _sessions.value.filter { s ->
-            val stamp = _sessionBox.value[s.id] ?: return@filter false
-            stamp != currentBoxId
-        }
-        _sessions.value = otherBoxSessions + list
+        _sessions.value = mergeRefreshedSessions(
+            existing = _sessions.value,
+            listed = list,
+            sessionBox = _sessionBox.value,
+            currentBoxId = currentBoxId,
+            deleted = deleted,
+            recentlyArchived = recentlyArchived,
+            idOf = { it.id },
+        )
         for (s in _sessions.value) {
             // Do NOT blanket-default listed sessions to `Live`.
             // `listSessions` can include recovered / exited /
