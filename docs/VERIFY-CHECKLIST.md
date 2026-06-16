@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.165
+
+**Found Sessions Resume actually works now.** Resume opened an empty chat that never replied — three compounding bugs, all fixed. Broker PRs #620 (stage transcript) + #621 (excerpt), iOS+Android PR #622 (join WS). Broker REDEPLOYED. The WS-join (#622) is app-side → needs v0.0.165 installed.
+
+- **1 · Resumed agent actually loads the conversation (broker)** — the broker runs each agent in an isolated per-session home, but the external session's transcript lives in the user's real ~/.claude / ~/.codex, so `claude --resume` / codex `thread/resume` found "No conversation" and the agent exited status 1 (empty chat, no reply, both agents). The broker now STAGES the external transcript into the session's agent-home before launch. Verified live: the resumed claude agent now spawns with `--resume <id>` and stays alive. [broker — live]
+- **2 · App joins the resumed session over WebSocket (iOS+Android)** — adopt created + navigated to the session but never called `joinSession`, so the app wasn't attached: typing returned broker `UnknownSession` + "chat send failed" (Sentry-confirmed) and no stream arrived. Adopt now goes through `attachLiveSession` (opens the WS). Verify: Resume an idle found session → it opens into a live chat; type a message → the agent replies with full prior context. [iOS+Android, on-device]
+- **3 · Resumed chat shows an excerpt so it reads as a continuation (broker)** — `--resume` loads history into the agent's memory but doesn't reprint it, so the chat opened blank (looked like a new session). The broker now seeds the resumed session's conversation with the last 10 prior messages + a "Resumed from your terminal — N earlier turns" note. Verified live (11 entries seeded). Verify: the resumed chat opens showing recent prior messages + the resumed note, then live turns append. [broker — live]
+
+---
+
 ## v0.0.164
 
 **Found Sessions UX fixes** — Resume now actually opens the session, the discovery sheet is instant + has a loading indicator, and the broker caches the scan. iOS PRs #616 (sheet) + #618 (resume open), broker PR #617 (cache, redeployed live). Found via on-device testing.
