@@ -2,6 +2,7 @@ package sh.nikhil.conduit.ui
 
 import android.content.Context
 import android.net.nsd.NsdManager
+import android.net.wifi.WifiManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Handler
 import android.os.Looper
@@ -159,6 +160,13 @@ fun DiscoveryScreen(
             }
         }
 
+        val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val multicastLock = wifi.createMulticastLock("conduit-nsd").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+        Telemetry.breadcrumb("discovery", "multicast_lock_acquired", mapOf("held" to multicastLock.isHeld.toString()))
+
         try {
             nsd.discoverServices("_conduit._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
         } catch (_: Throwable) {
@@ -166,6 +174,7 @@ fun DiscoveryScreen(
         }
 
         onDispose {
+            runCatching { if (multicastLock.isHeld) multicastLock.release() }
             try { nsd.stopServiceDiscovery(discoveryListener) } catch (_: Throwable) {}
         }
     }
