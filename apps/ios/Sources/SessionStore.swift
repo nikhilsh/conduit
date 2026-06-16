@@ -2928,7 +2928,7 @@ final class SessionStore {
                 let pickedEffort = (trimmedEffort?.isEmpty == false) ? trimmedEffort : nil
                 let trimmedMode = permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let pickedMode = (trimmedMode?.isEmpty == false) ? trimmedMode : nil
-                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode, fastMode: fastMode)
+                let id = try await client.createSession(assistant: assistant, branch: branch, reasoningEffort: pickedEffort, model: pickedModel, cwd: startup, permissionMode: pickedMode, fastMode: fastMode, deviceId: nil)
                 // Multi-box: stamp the new session to its owning box so every
                 // later op routes back to the same connection. (Single-box: the
                 // existing refreshSessions stamps to the current box.)
@@ -5632,7 +5632,8 @@ final class SessionStore {
                     model: model,
                     cwd: nil,
                     permissionMode: pickedMode,
-                    fastMode: fastMode
+                    fastMode: fastMode,
+                    deviceId: nil
                 )
                 if let forkBoxID { self.sessionBox[newID] = forkBoxID }
                 let seed = "Forked from \(original.name) (id \(sessionID)). Pick up where the previous session left off."

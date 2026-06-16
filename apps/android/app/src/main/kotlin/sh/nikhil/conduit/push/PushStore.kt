@@ -16,6 +16,7 @@ import sh.nikhil.conduit.Endpoint
 import sh.nikhil.conduit.Telemetry
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 
 /**
  * Possible states the push-notification registration can be in.
@@ -77,6 +78,7 @@ class PushStore : ViewModel() {
         private const val KEY_PLATFORM = "up_platform"
         private const val KEY_BROKER_URL = "broker_url"
         private const val KEY_BROKER_TOKEN = "broker_token"
+        private const val KEY_DEVICE_ID = "device_id"
 
         /**
          * Process-scoped singleton for use from [ConduitUnifiedPushReceiver].
@@ -93,6 +95,26 @@ class PushStore : ViewModel() {
                 }
             }
         }
+
+        /**
+         * Read (or lazily mint) the stable per-install device UUID.
+         * Generated once on first call and persisted in the [PREFS_NAME]
+         * SharedPreferences under [KEY_DEVICE_ID]. Never regenerated.
+         * Safe to call from any thread; SharedPreferences reads are atomic.
+         */
+        fun getOrCreateDeviceId(ctx: Context): String {
+            val prefs = ctx.applicationContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val existing = prefs.getString(KEY_DEVICE_ID, null)
+            if (existing != null) return existing
+            val fresh = UUID.randomUUID().toString()
+            prefs.edit().putString(KEY_DEVICE_ID, fresh).apply()
+            Telemetry.breadcrumb(
+                "push", "device_id minted",
+                mapOf("device_id" to fresh.take(8)),
+            )
+            return fresh
+        }
     }
 
     private val _registrationState =
@@ -105,6 +127,14 @@ class PushStore : ViewModel() {
 
     private var prefs: SharedPreferences? = null
     private var brokerPrefs: SharedPreferences? = null
+
+    /**
+     * Stable per-install UUID used to target push notifications to this
+     * specific device. Populated in [hydrate]; never null after that.
+     * Sent on every push register, test, and session-create request so
+     * the broker can route pushes to the originating device.
+     */
+    private var deviceId: String? = null
 
     /**
      * Application-scoped coroutine scope, used for all async work in
@@ -125,6 +155,8 @@ class PushStore : ViewModel() {
         if (prefs != null) return
         prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         brokerPrefs = ctx.getSharedPreferences(BROKER_PREFS_NAME, Context.MODE_PRIVATE)
+        // Mint (or restore) the stable per-install device UUID.
+        deviceId = getOrCreateDeviceId(ctx)
         val savedUrl = prefs?.getString(KEY_ENDPOINT_URL, null)
         val savedPlatform = prefs?.getString(KEY_PLATFORM, "unifiedpush")
         if (savedUrl != null) {
@@ -365,6 +397,7 @@ class PushStore : ViewModel() {
             body = JSONObject().apply {
                 put("platform", platform)
                 put("token", token)
+                deviceId?.let { put("device_id", it) }
             }.toString(),
         )
         val ok = result != null
@@ -449,6 +482,7 @@ class PushStore : ViewModel() {
                 body = JSONObject().apply {
                     put("title", "Conduit")
                     put("body", "Test notification from ${endpoint.displayHost}")
+                    deviceId?.let { put("device_id", it) }
                 }.toString(),
             )
             withContext(Dispatchers.Main) {

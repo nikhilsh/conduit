@@ -967,7 +967,7 @@ internal interface UniffiLib : Library {
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_connect(`ptr`: Pointer,`delegate`: Long,
     ): Long
-    fun uniffi_conduit_core_fn_method_conduitclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`cwd`: RustBuffer.ByValue,`permissionMode`: RustBuffer.ByValue,`fastMode`: RustBuffer.ByValue,
+    fun uniffi_conduit_core_fn_method_conduitclient_create_session(`ptr`: Pointer,`assistant`: RustBuffer.ByValue,`branch`: RustBuffer.ByValue,`reasoningEffort`: RustBuffer.ByValue,`model`: RustBuffer.ByValue,`cwd`: RustBuffer.ByValue,`permissionMode`: RustBuffer.ByValue,`fastMode`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,
     ): Long
     fun uniffi_conduit_core_fn_method_conduitclient_disconnect(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1920,8 +1920,8 @@ public interface ConduitClientInterface {
     
     suspend fun `connect`(`delegate`: ConduitDelegate)
     
-    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?, `fastMode`: kotlin.Boolean?): kotlin.String
-    
+    suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?, `fastMode`: kotlin.Boolean?, `deviceId`: kotlin.String?): kotlin.String
+
     fun `disconnect`()
     
     suspend fun `exitSession`(`sessionId`: kotlin.String)
@@ -2114,12 +2114,12 @@ open class ConduitClient: Disposable, AutoCloseable, ConduitClientInterface {
     
     @Throws(ConduitException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?, `fastMode`: kotlin.Boolean?) : kotlin.String {
+    override suspend fun `createSession`(`assistant`: kotlin.String, `branch`: kotlin.String?, `reasoningEffort`: kotlin.String?, `model`: kotlin.String?, `cwd`: kotlin.String?, `permissionMode`: kotlin.String?, `fastMode`: kotlin.Boolean?, `deviceId`: kotlin.String?) : kotlin.String {
         return uniffiRustCallAsync(
         callWithPointer { thisPtr ->
             UniffiLib.INSTANCE.uniffi_conduit_core_fn_method_conduitclient_create_session(
                 thisPtr,
-                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),FfiConverterOptionalString.lower(`cwd`),FfiConverterOptionalString.lower(`permissionMode`),FfiConverterOptionalBoolean.lower(`fastMode`),
+                FfiConverterString.lower(`assistant`),FfiConverterOptionalString.lower(`branch`),FfiConverterOptionalString.lower(`reasoningEffort`),FfiConverterOptionalString.lower(`model`),FfiConverterOptionalString.lower(`cwd`),FfiConverterOptionalString.lower(`permissionMode`),FfiConverterOptionalBoolean.lower(`fastMode`),FfiConverterOptionalString.lower(`deviceId`),
             )
         },
         { future, callback, continuation -> UniffiLib.INSTANCE.ffi_conduit_core_rust_future_poll_rust_buffer(future, callback, continuation) },
