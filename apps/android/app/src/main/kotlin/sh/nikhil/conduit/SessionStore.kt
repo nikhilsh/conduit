@@ -854,6 +854,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _sshTunnelLost = MutableStateFlow(false)
     val sshTunnelLost: StateFlow<Boolean> = _sshTunnelLost.asStateFlow()
 
+    /** Debug: SSH-tunnel transport enabled (default ON). Exposed for the
+     *  staff-only Debug menu; not shown in regular Settings. */
+    private val _debugSshTunnelEnabled = MutableStateFlow(true)
+    val debugSshTunnelEnabled: StateFlow<Boolean> = _debugSshTunnelEnabled.asStateFlow()
+
+    /** Toggle SSH-tunnel transport from the staff Debug menu. Takes effect on
+     *  the next connect/reconnect (does not interrupt a live connection). */
+    fun setDebugSshTunnelEnabled(enabled: Boolean) {
+        _debugSshTunnelEnabled.value = enabled
+        prefs?.edit()?.putBoolean(KEY_SSH_TUNNEL, enabled)?.apply()
+    }
+
     /** Outstanding TOFU prompt; MainActivity observes this and shows a dialog. */
     private val _pendingHostKey = MutableStateFlow<HostKeyPrompt?>(null)
     val pendingHostKey: StateFlow<HostKeyPrompt?> = _pendingHostKey.asStateFlow()
@@ -1420,6 +1432,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             _deletedIds.value = decodeDeletedIds(p.getString(KEY_DELETED_IDS, null))
             _savedSessions.value = SavedSessionsReducer.decode(p.getString(KEY_SAVED_SESSIONS, null))
             _pendingChats.value = PendingChatQueue.decode(p.getString(KEY_PENDING_CHATS, null))
+            _debugSshTunnelEnabled.value = p.getBoolean(KEY_SSH_TUNNEL, true)
             refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)

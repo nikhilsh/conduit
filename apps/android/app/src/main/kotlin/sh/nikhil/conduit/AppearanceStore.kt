@@ -292,7 +292,7 @@ class AppearanceStore : ViewModel() {
             }
     }
 
-    /** Resolved chat arm after overrides + kill-switch (§2). */
+    /** Resolved chat arm — always B (Signature) now that the experiment is concluded. */
     fun resolvedChatArm(): FeatureFlags.ChatArm = FeatureFlags.resolvedChatArm(
         preference = _chatStylePreference.value,
         killed = _chatExperimentKilled.value,

@@ -66,7 +66,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
-import sh.nikhil.conduit.LocalAppearanceStore
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.SubagentEntry
@@ -106,8 +105,6 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
     val context = LocalContext.current
     val neon = LocalNeonTheme.current
 
-    val appearance = LocalAppearanceStore.current
-    val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
     val subagentRosterMap by store.subagentRoster.collectAsState()
     val subagents = subagentRosterMap[session.id].orEmpty()
 
@@ -425,10 +422,8 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
                 }
             }
 
-            // 4b · Agents (debug-gated subagent roster — only when flag ON)
-            if (showSubagentPanel) {
-                AgentsSection(subagents = subagents, neon = neon)
-            }
+            // 4b · Agents — always visible for all users
+            AgentsSection(subagents = subagents, neon = neon)
 
             // 5 · Details
             Column {
@@ -683,8 +678,7 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
 /**
  * Agents section — full-session roster of subagents the claude agent spawned.
  * Each row shows name, status pill, description (or last tool), and token count.
- * Hidden when the roster is empty (hides the section header too).
- * DEBUG-gated via [AppearanceStore.showSubagentPanel]; only rendered when ON.
+ * Always rendered for all users (flag graduated to permanent on).
  * Needs on-device verification.
  */
 @Composable

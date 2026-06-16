@@ -34,25 +34,27 @@ class FeatureFlagsTest {
     }
 
     // ── Resolution ──────────────────────────────────────────────────────
+    // Experiment concluded: resolvedChatArm always returns B regardless of
+    // preference, kill-switch, or assigned bucket.
 
-    @Test fun autoResolvesToAssigned() {
+    @Test fun resolvedChatArmAlwaysB_auto() {
         assertEquals(
             FeatureFlags.ChatArm.B,
             FeatureFlags.resolvedChatArm(FeatureFlags.ChatStylePreference.Auto, killed = false, assigned = FeatureFlags.ChatArm.B),
         )
     }
 
-    @Test fun localOverrideWins() {
+    @Test fun resolvedChatArmAlwaysB_preferenceA() {
         assertEquals(
-            FeatureFlags.ChatArm.A,
-            FeatureFlags.resolvedChatArm(FeatureFlags.ChatStylePreference.A, killed = false, assigned = FeatureFlags.ChatArm.B),
+            FeatureFlags.ChatArm.B,
+            FeatureFlags.resolvedChatArm(FeatureFlags.ChatStylePreference.A, killed = false, assigned = FeatureFlags.ChatArm.A),
         )
     }
 
-    @Test fun killSwitchForcesA() {
+    @Test fun resolvedChatArmAlwaysB_killed() {
         assertEquals(
-            FeatureFlags.ChatArm.A,
-            FeatureFlags.resolvedChatArm(FeatureFlags.ChatStylePreference.B, killed = true, assigned = FeatureFlags.ChatArm.B),
+            FeatureFlags.ChatArm.B,
+            FeatureFlags.resolvedChatArm(FeatureFlags.ChatStylePreference.B, killed = true, assigned = FeatureFlags.ChatArm.A),
         )
     }
 
