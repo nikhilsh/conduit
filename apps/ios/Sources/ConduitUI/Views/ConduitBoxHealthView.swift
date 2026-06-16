@@ -173,7 +173,7 @@ extension ConduitUI {
                 }
             }
             .sheet(isPresented: $showFoundSessions) {
-                ConduitUI.FoundSessionsSheet(server: server)
+                ConduitUI.FoundSessionsSheet(server: server, initialSnapshot: foundSessionsSnapshot)
             }
         }
 
