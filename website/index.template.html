@@ -45,15 +45,19 @@
   }
   *{box-sizing:border-box;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
   @media(prefers-reduced-motion:no-preference){html{scroll-behavior:smooth;}}
+  /* Clip any horizontal overrun (decorative glows, sub-pixel rounding) so the
+     page can never scroll sideways on phones. `clip` (not `hidden`) keeps the
+     sticky nav working and never turns the body into a scroll container. */
+  html,body{overflow-x:clip;max-width:100%;}
   body{
     margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
-    line-height:1.55;overflow-x:hidden;
+    line-height:1.55;
   }
   a{color:inherit;text-decoration:none;}
   ::selection{background:rgba(62,240,160,0.28);color:#fff;}
 
   /* ambient glow + grid backdrop */
-  .backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;}
+  .backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
   .backdrop::before{
     content:"";position:absolute;left:50%;top:-340px;transform:translateX(-50%);
     width:1100px;height:760px;border-radius:50%;
@@ -226,7 +230,7 @@
   .foot-in{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;}
   .foot-brand{display:flex;align-items:center;gap:11px;font-weight:600;}
   .foot-brand img{width:30px;height:30px;border-radius:8px;}
-  .foot-links{display:flex;gap:26px;font-family:var(--mono);font-size:12.5px;color:var(--dim);}
+  .foot-links{display:flex;flex-wrap:wrap;gap:14px 26px;font-family:var(--mono);font-size:12.5px;color:var(--dim);}
   .foot-links a:hover{color:var(--green);}
   .foot-copy{width:100%;margin-top:26px;font-family:var(--mono);font-size:11.5px;color:var(--faint);
     display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;}
