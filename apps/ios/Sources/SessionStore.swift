@@ -2178,9 +2178,47 @@ final class SessionStore {
         Telemetry.breadcrumb("found_sessions", "adopt success",
             data: ["agent": agent, "id": externalID, "mode": mode,
                    "new_session_id": newSessionID])
-        // Open the new session via the store's normal selected-session path.
+        // Open the adopted session, mirroring createSession's post-id block so
+        // it shows in Active Sessions and the UI navigates into its chat.
         DispatchQueue.main.async { [weak self] in
-            self?.selectedSessionID = newSessionID
+            guard let self else { return }
+            // Derive the owning box from the endpoint so sessionBox routes
+            // "Sessions here" filtering correctly (same pattern as refreshSessions).
+            let boxID = self.savedServers.first(where: { $0.endpoint == endpoint })?.id
+            if let boxID { self.sessionBox[newSessionID] = boxID }
+            // Mark as live, clearing any stale lifecycle entry.
+            self.sessionLifecycle[newSessionID] = .live
+            if self.useRustStore {
+                self.rustStore.applyLifecycle(sessionId: newSessionID, lifecycle: .live)
+            }
+            self.harness = .live
+            self.refreshSessions()
+            // Synthesize a minimal live ProjectSession so recordSavedSession
+            // has a row to fold into the History index even before the broker's
+            // listSessions round-trip returns (mirrors createSession's pattern).
+            if !self.sessions.contains(where: { $0.id == newSessionID }) {
+                self.sessions.insert(
+                    ProjectSession(
+                        id: newSessionID,
+                        name: newSessionID,
+                        assistant: agent,
+                        branch: nil,
+                        preview: nil,
+                        reasoningEffort: nil,
+                        cwd: cwd.isEmpty ? nil : cwd,
+                        startedAt: nil,
+                        lastActivityAt: nil,
+                        displayName: nil
+                    ),
+                    at: 0
+                )
+            }
+            self.recordSavedSession(forSessionID: newSessionID)
+            Telemetry.breadcrumb("found_sessions", "adopt opened",
+                data: ["new_session_id": newSessionID, "box": boxID ?? "unknown", "mode": mode])
+            // Defer one runloop tick (same pattern as createSession) so any
+            // in-flight CoreAnimation commit finishes before the chat mounts.
+            DispatchQueue.main.async { self.selectedSessionID = newSessionID }
         }
         return newSessionID
     }
