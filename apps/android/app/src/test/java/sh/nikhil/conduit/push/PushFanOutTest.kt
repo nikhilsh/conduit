@@ -149,6 +149,81 @@ class PushFanOutTest {
         assertEquals(0, countFailures(emptyList()))
     }
 
+    // ── Tests: resilient aggregate decision ───────────────────────────────
+    // Mirrors PushStore.registerWithAllEndpoints: overall success when AT
+    // LEAST ONE endpoint registered; error ONLY on total failure. An offline
+    // secondary box must not flip the operation to failed.
+
+    /** (anySucceeded, activeSucceeded) modelled from per-endpoint ok flags. */
+    private fun aggregate(results: List<Pair<Boolean, Boolean>>): Pair<Boolean, Boolean> {
+        // results: (isActive, ok)
+        val anySucceeded = results.any { it.second }
+        val activeSucceeded = results.any { it.first && it.second }
+        return anySucceeded to activeSucceeded
+    }
+
+    private fun isOverallSuccess(results: List<Pair<Boolean, Boolean>>): Boolean {
+        val (any, active) = aggregate(results)
+        return any || active
+    }
+
+    private fun isTotalFailure(results: List<Pair<Boolean, Boolean>>): Boolean =
+        results.isNotEmpty() && !isOverallSuccess(results)
+
+    @Test fun activeSucceedsOfflineSecondaryStillOverallSuccess() {
+        // active box (reachable) ok, second box offline. THE BUG: this used to
+        // mark the whole registration failed. Now it is a success.
+        val results = listOf(
+            true to true,    // active, registered
+            false to false,  // secondary, offline
+        )
+        assertTrue(isOverallSuccess(results))
+        assertFalse(isTotalFailure(results))
+    }
+
+    @Test fun activeOfflineButSecondaryReachableIsStillSuccess() {
+        // active box offline, a reachable secondary registered: don't error.
+        val results = listOf(
+            true to false,  // active, offline
+            false to true,  // secondary, registered
+        )
+        assertTrue(isOverallSuccess(results))
+        assertFalse(isTotalFailure(results))
+    }
+
+    @Test fun allEndpointsFailingIsTotalFailure() {
+        val results = listOf(
+            true to false,
+            false to false,
+            false to false,
+        )
+        assertFalse(isOverallSuccess(results))
+        assertTrue(isTotalFailure(results))
+    }
+
+    @Test fun singleActiveEndpointSuccessIsSuccess() {
+        val results = listOf(true to true)
+        assertTrue(isOverallSuccess(results))
+        assertFalse(isTotalFailure(results))
+    }
+
+    // ── Tests: PostResult diagnostic ──────────────────────────────────────
+
+    @Test fun postResultDiagnosticForHttpCode() {
+        val r = PostResult(ok = false, code = 404, body = null, errorKind = null, errorMessage = null)
+        assertEquals("http:404", r.diagnostic())
+    }
+
+    @Test fun postResultDiagnosticForException() {
+        val r = PostResult(ok = false, code = -1, body = null, errorKind = "SocketTimeoutException", errorMessage = "timeout")
+        assertEquals("exception:SocketTimeoutException", r.diagnostic())
+    }
+
+    @Test fun postResultDiagnosticForSuccess() {
+        val r = PostResult(ok = true, code = 200, body = "{}", errorKind = null, errorMessage = null)
+        assertEquals("ok", r.diagnostic())
+    }
+
     // ── Tests: register payload shape per box ─────────────────────────────
 
     @Test fun registerBodyHasCorrectFieldsForEachBox() {
