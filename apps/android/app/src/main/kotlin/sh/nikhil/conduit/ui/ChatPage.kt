@@ -2047,6 +2047,41 @@ private fun SendStatusFooter(ev: ConversationItem) {
                 )
             }
         }
+        // The broker no longer knows this session (restart/redeploy/GC): the
+        // send path stopped retrying (it would never recover into a dead
+        // session) and marked the echo `expired`. Offer a tappable Resume that
+        // re-attaches the session via the existing recoverable-resume flow.
+        // Mirror of iOS `sessionExpiredFooter`.
+        "expired" -> {
+            val store = LocalSessionStore.current
+            val sessionId = LocalSessionId.current
+            val doResume: () -> Unit = resume@{
+                if (store == null || sessionId == null) return@resume
+                val assistant = store.sessions.value
+                    .firstOrNull { it.id == sessionId }?.assistant ?: "claude"
+                store.resumeRecoverableSession(sessionId, assistant)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .semantics { role = Role.Button }
+                    .clickable(enabled = store != null && sessionId != null) { doResume() },
+            ) {
+                Icon(
+                    Icons.Outlined.Refresh,
+                    contentDescription = null,
+                    tint = neon.red,
+                    modifier = Modifier.size(12.dp),
+                )
+                Text(
+                    "session expired — Resume to continue",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    color = neon.red,
+                )
+            }
+        }
         else -> Unit
     }
 }

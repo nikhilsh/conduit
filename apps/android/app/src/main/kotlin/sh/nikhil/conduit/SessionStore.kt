@@ -35,6 +35,7 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.util.UUID
 import uniffi.conduit_core.ChatEvent
+import uniffi.conduit_core.ConduitException
 import uniffi.conduit_core.ConnectionHealth
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.PreviewInfo
@@ -3248,6 +3249,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
                         mapOf("session" to sessionId, "local_id" to localId, "ok" to "true"))
                 }
             } else {
+                // Broker forgot the session (restart/redeploy/GC): retrying
+                // can't recover it. Stop now + route to Resume; don't burn the
+                // retry budget or capture a Sentry ERROR on every broker restart.
+                if (isUnknownSession(result.exceptionOrNull())) {
+                    handleExpiredSession(sessionId, localId)
+                    return@launch
+                }
                 updatePendingChats { it.markAttemptFailed(sessionId, localId) }
                 if (_pendingChats.value.isFailed(localId, sessionId) || manualRetry) {
                     // Hard fail, or a manual retry the user is watching: surface
@@ -3438,6 +3446,57 @@ class SessionStore : ViewModel(), ConduitDelegate {
             val list = m[sessionId] ?: return@also
             m[sessionId] = list.map { if (it.id == localId) it.copy(status = status) else it }
         }
+    }
+
+    /**
+     * True when a send/deliver error means the broker no longer knows this
+     * session (restarted/redeployed/GC'd) -- [ConduitException.UnknownSession].
+     * Such an error will NEVER recover by retrying the same dead session, so
+     * the deliver path stops retrying and routes the user to Resume instead of
+     * burning the retry budget + capturing a Sentry ERROR on every broker
+     * restart. Matched on the exact UniFFI case (case 6, not a string) so it
+     * stays correct if the message wording changes. Mirror of iOS
+     * `isUnknownSession`.
+     *
+     * `internal` (not `private`) so the unit suite can exercise the exact-case
+     * match + the expired-echo flip without a live WS.
+     */
+    internal fun isUnknownSession(error: Throwable?): Boolean =
+        error is ConduitException.UnknownSession
+
+    /**
+     * Handle a send/deliver that failed because the broker GC'd/forgot the
+     * session ([ConduitException.UnknownSession]). Stops retrying immediately
+     * (drops only THIS entry from the queue so later flushes don't re-hit the
+     * dead session, and other pending sends are untouched), marks the echo
+     * `expired` so the bubble offers a Resume affordance, and downgrades the
+     * telemetry to an info breadcrumb (NOT a captured ERROR). Mirror of iOS
+     * `handleExpiredSession`.
+     */
+    internal fun handleExpiredSession(sessionId: String, localId: String) {
+        // Drop only this entry so flushPendingChats / turn-complete flushes
+        // don't keep re-delivering into a session the broker no longer has;
+        // other queued sends stay pending.
+        updatePendingChats { it.markDelivered(sessionId, localId) }
+        setEchoStatus(sessionId, localId, "expired")
+        // Downgrade: info breadcrumb, not Telemetry.capture. This fires on
+        // every broker restart and is not an actionable error.
+        Telemetry.breadcrumb("chat", "send hit UnknownSession -- session expired, offering Resume",
+            mapOf("session" to sessionId, "local_id" to localId))
+    }
+
+    /**
+     * Resume a session the broker forgot ([ConduitException.UnknownSession]):
+     * re-attach the live WebSocket so the broker respawns/rejoins the agent,
+     * driving the recovered status frame to promote the row to live. Thin
+     * wrapper over [attachLiveSession] for parity with iOS
+     * `resumeRecoverableSession`; tapped from the `expired` bubble's Resume
+     * footer.
+     */
+    fun resumeRecoverableSession(sessionID: String, assistant: String) {
+        Telemetry.breadcrumb("session", "resume_recoverable",
+            mapOf("session" to sessionID, "assistant" to assistant))
+        attachLiveSession(sessionID, assistant)
     }
 
     /**
