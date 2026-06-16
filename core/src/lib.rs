@@ -264,6 +264,7 @@ impl ConduitClient {
         cwd: Option<String>,
         permission_mode: Option<String>,
         fast_mode: Option<bool>,
+        device_id: Option<String>,
     ) -> Result<String, ConduitError> {
         let inner = Arc::clone(&self.inner);
         run_on_core(async move {
@@ -278,6 +279,7 @@ impl ConduitClient {
                     cwd,
                     permission_mode,
                     fast_mode,
+                    device_id,
                 )
                 .await?;
             Ok(session_id)
@@ -296,6 +298,7 @@ impl ConduitClient {
                 .open_session(
                     session_id,
                     assistant.unwrap_or_else(|| "claude".to_string()),
+                    None,
                     None,
                     None,
                     None,
@@ -581,6 +584,7 @@ impl Inner {
         cwd: Option<String>,
         permission_mode: Option<String>,
         fast_mode: Option<bool>,
+        device_id: Option<String>,
     ) -> Result<(), ConduitError> {
         let delegate = self
             .delegate
@@ -638,6 +642,7 @@ impl Inner {
                 cwd,
                 permission_mode,
                 fast_mode,
+                device_id,
             },
             Arc::new(ClientDelegate {
                 sessions: Arc::clone(&self.sessions),

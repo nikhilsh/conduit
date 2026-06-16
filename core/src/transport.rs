@@ -200,6 +200,11 @@ pub struct SpawnOverride {
     /// broker appends `--settings '{"fastMode":...}'` to the claude argv (and
     /// ignores it for every other adapter). See broker override.go.
     pub fast_mode: Option<bool>,
+    /// Stable per-install UUID that identifies this device to the broker so
+    /// pushes can be routed back to the originating device. Rides to the
+    /// broker as `device_id=` on the WS connect URL; the broker records it
+    /// as the session owner's device. None = broker falls back to broadcast.
+    pub device_id: Option<String>,
 }
 
 /// Open a WebSocket session against the harness and spawn a worker that
@@ -630,6 +635,12 @@ fn build_initial_ws_url(
         } else {
             "&fast_mode=false"
         });
+    }
+    if let Some(did) = override_.device_id.as_deref() {
+        if !did.is_empty() {
+            raw.push_str("&device_id=");
+            raw.push_str(&urlencode(did));
+        }
     }
     Url::parse(&raw).map_err(|e| ConduitError::Connection(e.to_string()))
 }
@@ -1334,6 +1345,7 @@ mod tests {
                 cwd: Some("/home/me/proj".into()),
                 permission_mode: Some("plan".into()),
                 fast_mode: Some(true),
+                ..SpawnOverride::default()
             },
         )
         .unwrap();
@@ -1367,6 +1379,7 @@ mod tests {
                 cwd: Some(String::new()),
                 permission_mode: Some(String::new()),
                 fast_mode: None,
+                ..SpawnOverride::default()
             },
         )
         .unwrap();

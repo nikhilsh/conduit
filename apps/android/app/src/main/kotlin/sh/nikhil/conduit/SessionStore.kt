@@ -1254,7 +1254,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
         viewModelScope.launch {
             try {
                 val newId = withContext(Dispatchers.IO) {
-                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode, fastMode)
+                    c.createSession(original.assistant, original.branch, reasoningEffort, model, null, pickedMode, fastMode, null)
                 }
                 val seed = "Forked from ${original.name} (id $sessionId). Pick up where the previous session left off."
                 // Fire-and-forget seed: not outbox-tracked, but still carries a
@@ -2608,7 +2608,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 val pickedModel = model?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedEffort = reasoningEffort?.trim()?.takeIf { it.isNotEmpty() }
                 val pickedMode = permissionMode?.trim()?.takeIf { it.isNotEmpty() }
-                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode, fastMode) }
+                val id = withContext(Dispatchers.IO) { c.createSession(assistant, branch, pickedEffort, pickedModel, startup, pickedMode, fastMode, null) }
                 Telemetry.breadcrumb("session", "created", mapOf("assistant" to assistant, "id" to id))
                 // Belt-and-suspenders parity with iOS: also propagate stored
                 // agent credentials to this box on session create, so a box
