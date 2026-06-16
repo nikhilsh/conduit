@@ -85,6 +85,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -692,9 +693,10 @@ fun ChatPage(
     ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         // Mirror iOS chatContentMaxWidth (760pt cap on regular/tablet size
-        // class). On phone (< 840dp) use full width; on tablet constrain and
-        // center so the thread doesn't span the full wide display.
-        val isTablet = maxWidth >= 840.dp
+        // class). On phone use full width; on tablet constrain and center
+        // so the thread doesn't span the full wide display.
+        // Gate on sw>=600dp so a phone in landscape (wide but small sw) stays full-width.
+        val isTablet = LocalConfiguration.current.smallestScreenWidthDp >= 600 && maxWidth >= 840.dp
         val chatContentMaxWidth = if (isTablet) 760.dp else maxWidth
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
