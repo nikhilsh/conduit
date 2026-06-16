@@ -111,7 +111,7 @@ class AppearanceStore : ViewModel() {
      * same default ([JetBrainsMono]). [System] keeps the renderer's
      * built-in monospaced face; the rest are bundled TTFs resolved through
      * `R.font.*` (Termux path) and `@font-face` over
-     * `file:///android_asset/terminal/fonts/*` (xterm.js path).
+     * `file:///android_asset/terminal/fonts/<face>.ttf` (xterm.js path).
      *
      * [cssFamily] is the CSS `font-family` name the xterm.js path sets via
      * `window.setFontFamily(...)`; `null` keeps the xterm.js default. The
