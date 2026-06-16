@@ -9,6 +9,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.outlined.Chat
@@ -59,6 +60,9 @@ fun ProjectScreen(
     store: SessionStore,
     session: ProjectSession,
     onOpenDrawer: () -> Unit,
+    // Phone back-chevron: navigates back to Home by deselecting the session.
+    // Null on tablet (no back affordance — the rail is always visible).
+    onBack: (() -> Unit)? = null,
     // Tablet 3-pane centre: chat only (no tab strip); Terminal/Browser/
     // Info live in the sibling NeonTabletRightPane. Phone/default = tabs.
     chatOnly: Boolean = false,
@@ -228,6 +232,7 @@ fun ProjectScreen(
                 },
                 onEndSession = { menuExpanded = false; showEndConfirm = true },
                 onOpenDrawer = onOpenDrawer,
+                onBack = onBack,
                 onShowInfo = { showInfo = true },
                 viewerCount = status?.viewers?.toInt(),
             )
@@ -436,6 +441,8 @@ private fun ControlsRow(
     onToggleMemory: () -> Unit,
     onEndSession: () -> Unit,
     onOpenDrawer: () -> Unit,
+    // Fix 1: phone back chevron (null on tablet where the rail is always visible).
+    onBack: (() -> Unit)? = null,
     onShowInfo: () -> Unit,
     viewerCount: Int?,
 ) {
@@ -447,8 +454,17 @@ private fun ControlsRow(
     ) {
         // Tablet 3-pane centre (chatOnly): the sessions rail is already
         // pinned on the left, so the drawer toggle is a dead button here —
-        // hide it. Phone keeps it (the drawer is the only way to the rail).
+        // hide it. Phone keeps back chevron (primary) + hamburger (secondary).
         if (!chatOnly) {
+            if (onBack != null) {
+                // Fix 1: leading back chevron on phone — mirrors iOS NavigationStack
+                // back button. Tapping returns to Home (store.select(null)).
+                HeaderCircleButton(
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    onClick = onBack,
+                )
+            }
             HeaderCircleButton(icon = Icons.Default.Menu, contentDescription = "Sessions", onClick = onOpenDrawer)
         }
 

@@ -102,8 +102,11 @@ fun AgentPickerSheet(
         ?: savedServers.firstOrNull { it.endpoint == endpoint }?.id
 
     // §6: the new-session surface is a centered modal over the dimmed
-    // two-pane on tablet (≥840dp), and a bottom sheet on phone.
-    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
+    // two-pane on tablet (>=840dp), and a bottom sheet on phone.
+    // Gate on a true tablet (sw>=600dp) so phones in landscape (sw~360-480dp
+    // but landscape width >840dp) stay on the bottom-sheet path.
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    val wide = config.smallestScreenWidthDp >= 600 && config.screenWidthDp >= 840
 
     // Pull the live per-agent model catalog (broker-discovered from the
     // agent CLIs) so the cards' model line and the directory step's
@@ -494,6 +497,8 @@ private fun DirectoryStep(
     var listing by remember { mutableStateOf<RemoteDirectoryListing?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    // Fix 3: bump to retry the directory listing after a failure.
+    var retryKey by remember { mutableStateOf(0) }
     // Part B: whether the browsed dir already has CLAUDE.md / AGENTS.md
     // (null = unknown / not yet checked → don't nag). Dismissible per session.
     var harnessStatus by remember { mutableStateOf<RemoteHarnessStatus?>(null) }
@@ -541,7 +546,7 @@ private fun DirectoryStep(
     var fastMode by remember { mutableStateOf(false) }
     val selectedFastMode = if (forkModelSupportsFastMode(model, catalog)) fastMode else null
 
-    LaunchedEffect(currentPath) {
+    LaunchedEffect(currentPath, retryKey) {
         isLoading = true
         loadError = null
         runCatching { store.listDirectories(currentPath) }
@@ -593,7 +598,9 @@ private fun DirectoryStep(
             // Effort + Mode: side by side on a wide (tablet) modal, stacked
             // on phone (§6 "two columns"). A model with no effort control
             // (haiku) drops the effort block entirely.
-            val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
+            // Use true-tablet gate (sw>=600dp) to avoid phone-landscape false positive.
+            val wideConfig = androidx.compose.ui.platform.LocalConfiguration.current
+            val wide = wideConfig.smallestScreenWidthDp >= 600 && wideConfig.screenWidthDp >= 840
             val effortBlock: @Composable () -> Unit = {
                 if (useDial) {
                     EffortDial(
@@ -673,12 +680,42 @@ private fun DirectoryStep(
                     contentAlignment = Alignment.Center,
                 ) { CircularProgressIndicator(modifier = Modifier.size(22.dp)) }
 
-                loadError != null -> Text(
-                    loadError!!,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = neon.red,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                )
+                loadError != null -> {
+                    // Fix 3: dir-list failure should not hard-block session start.
+                    // Show the error, a Retry button, and a fallback to proceed
+                    // with the broker's default home directory so a transient
+                    // auth/connection hiccup doesn't strand the user.
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            loadError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = neon.red,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            TextButton(
+                                onClick = { retryKey++ },
+                            ) { Text("Retry", color = neon.accent) }
+                            TextButton(
+                                onClick = {
+                                    // Fallback: start in broker home (~). Pass
+                                    // null path = broker default cwd, identical
+                                    // to "Start without a folder" below but
+                                    // explicit about the intent.
+                                    Telemetry.breadcrumb("dir_list", "fallback to home",
+                                        mapOf("error" to (loadError ?: "unknown")))
+                                    onCreate(null, selectedModel, selectedEffort, selectedMode, selectedFastMode, null)
+                                },
+                            ) { Text("Start in home (~)", color = neon.textDim) }
+                        }
+                    }
+                }
 
                 else -> {
                     val folders = listing?.entries.orEmpty().filter { it.isDir }

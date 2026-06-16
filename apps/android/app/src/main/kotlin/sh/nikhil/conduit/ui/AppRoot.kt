@@ -1,5 +1,6 @@
 package sh.nikhil.conduit.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import sh.nikhil.conduit.FeatureFlags
@@ -122,7 +124,13 @@ fun AppRoot(
             // iPad / wide screen: a permanent activity-bar rail + section
             // content (Sessions = ProjectList rail + ProjectScreen). Phone
             // keeps the ModalNavigationDrawer. Mirrors iOS ConduitUI.TabletShell.
-            if (maxWidth >= 840.dp) {
+            // Gate on a TRUE tablet: smallest-width >= 600dp (sw600dp, the
+            // Android tablet breakpoint) AND maxWidth >= 840dp. A phone in
+            // landscape can exceed 840dp but its sw is ~360-480dp, so it stays
+            // in the phone layout. Mirrors iOS which gates on .regular size class
+            // (iPad / Plus-Max) only, never a regular phone in landscape.
+            val isTabletForm = LocalConfiguration.current.smallestScreenWidthDp >= 600 && maxWidth >= 840.dp
+            if (isTabletForm) {
                 val neon = LocalNeonTheme.current
                 // Unified rail (design-reference tablet.jsx): no separate icon
                 // activity bar -- the rail owns brand + search (-> History) +
@@ -175,6 +183,13 @@ fun AppRoot(
                     }
                 }
             } else {
+                // Fix 1: system back on phone returns Home from a session instead
+                // of exiting the app. Mirrors iOS NavigationStack back chevron +
+                // edge-swipe behaviour (ConduitHomeView/ConduitProjectView).
+                BackHandler(enabled = selectedId != null) {
+                    Telemetry.breadcrumb("nav", "back-to-home", mapOf("from" to (selectedId ?: "")))
+                    store.select(null)
+                }
                 ModalNavigationDrawer(
                     drawerState = drawerState,
                     drawerContent = {
@@ -191,6 +206,7 @@ fun AppRoot(
                             store = store,
                             session = selected,
                             onOpenDrawer = { scope.launch { drawerState.open() } },
+                            onBack = { store.select(null) },
                         )
                     } else {
                         HomeScreen(

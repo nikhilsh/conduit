@@ -33,12 +33,18 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -86,7 +92,7 @@ import sh.nikhil.conduit.needsYouBanner
  * ServerTabsStrip + sessions list + BottomActionBar (mic / + / search).
  * Mirrors `apps/ios/Sources/Views/HomeView.swift`.
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     store: SessionStore,
@@ -135,6 +141,15 @@ fun HomeScreen(
     var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
     // SSH re-bootstrap sheet (same pattern as ProjectListScreen).
     var showSshReBoot by remember { mutableStateOf(false) }
+    // Fix 2: snackbar for archive failures.
+    val snackbarHostState = remember { SnackbarHostState() }
+    val archiveError by store.archiveError.collectAsState()
+    LaunchedEffect(archiveError) {
+        val err = archiveError ?: return@LaunchedEffect
+        Telemetry.breadcrumb("session", "archive error surfaced", mapOf("error" to err))
+        snackbarHostState.showSnackbar(err)
+        store.clearArchiveError()
+    }
     // Fix 4: rename dialog state.
     var renameTarget by remember { mutableStateOf<SavedServer?>(null) }
     var renameDraft by remember { mutableStateOf("") }
@@ -181,6 +196,7 @@ fun HomeScreen(
     // bottom action bar + BOXES off the gesture pill / 3-button nav. The app is
     // edge-to-edge (the chat composer already does this), so without it the home
     // footer collided with the system nav.
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 8.dp)) {
         // Top row. Conduit parity put settings behind a hidden long-press
         // on the title — undiscoverable in practice (user feedback
@@ -464,6 +480,39 @@ fun HomeScreen(
                         // surfaceVariant slab.
                         val rowShape = RoundedCornerShape(ConduitHomeRowMetrics.cardCornerRadius.dp)
                         val agentTint = neonAgentColor(session.assistant, neon)
+                        // Fix 2: swipe-left to archive (iOS .swipeActions parity).
+                        // The dismiss state resets after the confirm dialog dismisses
+                        // so the row snaps back if the user cancels.
+                        val swipeState = rememberSwipeToDismissBoxState(
+                            confirmValueChange = { value ->
+                                if (value == SwipeToDismissBoxValue.EndToStart) {
+                                    pendingDelete = SessionDeleteTarget(session.id, rowTitle)
+                                }
+                                false // never auto-dismiss; the dialog handles it
+                            },
+                        )
+                        SwipeToDismissBox(
+                            state = swipeState,
+                            enableDismissFromStartToEnd = false,
+                            enableDismissFromEndToStart = true,
+                            backgroundContent = {
+                                // Red "Archive" reveal background (trailing swipe)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(neon.red.copy(alpha = 0.85f), rowShape)
+                                        .padding(horizontal = 20.dp),
+                                    contentAlignment = Alignment.CenterEnd,
+                                ) {
+                                    Text(
+                                        "Archive",
+                                        color = neon.accentText,
+                                        fontFamily = neon.sans,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                    )
+                                }
+                            },
+                        ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -623,6 +672,7 @@ fun HomeScreen(
                                 }
                             }
                         }
+                        } // end SwipeToDismissBox content
                     }
                 }
             }
@@ -821,6 +871,13 @@ fun HomeScreen(
             CircleActionButton(Icons.Default.Search, "Search", size = 44.dp, onClick = onSearch)
         }
     }
+    // Fix 2: snackbar overlay for archive failures (e.g. network error after
+    // optimistic removal). Floats above the session list content.
+    SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+    )
+    } // end Box
 
     pendingDelete?.let { target ->
         AlertDialog(

@@ -534,6 +534,23 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _sessionCreationError = MutableStateFlow<String?>(null)
     val sessionCreationError: StateFlow<String?> = _sessionCreationError.asStateFlow()
 
+    /**
+     * One-shot error surfaced when [archive] fails so the UI can show a
+     * snackbar. Cleared by the UI after display. Mirrors the pattern used
+     * by [_sessionCreationError].
+     */
+    private val _archiveError = MutableStateFlow<String?>(null)
+    val archiveError: StateFlow<String?> = _archiveError.asStateFlow()
+
+    /**
+     * IDs archived by this session but whose broker tmux may still linger
+     * (#199). Suppressed in [refreshSessions] for [ARCHIVE_SUPPRESS_MS] to
+     * prevent the row from flickering back immediately after archive.
+     * Values are the System.currentTimeMillis() of the archive call.
+     */
+    private val _recentlyArchivedAt = mutableMapOf<String, Long>()
+    private val ARCHIVE_SUPPRESS_MS = 5_000L
+
     private val _terminalBuffer = MutableStateFlow<Map<String, ByteArray>>(emptyMap())
     val terminalBuffer: StateFlow<Map<String, ByteArray>> = _terminalBuffer.asStateFlow()
 
@@ -2365,6 +2382,11 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _sessionCreationError.value = null
     }
 
+    /** Clears the one-shot archive error after the UI has displayed it. */
+    fun clearArchiveError() {
+        _archiveError.value = null
+    }
+
     fun select(sessionId: String?) { _selectedId.value = sessionId }
 
     /**
@@ -2725,10 +2747,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // removed from the live list; markExited() patches the index directly
         // and is idempotent when the row was correctly stamped by the call above.
         markExited(sessionId)
+        // Remember the row in case we need to re-insert it on failure.
+        val optimisticRow = _sessions.value.firstOrNull { it.id == sessionId }
+        val optimisticLifecycle = _sessionLifecycle.value[sessionId]
         // Optimistic removal so the row disappears immediately.
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
         if (_selectedId.value == sessionId) _selectedId.value = null
+        // Suppress this id in refreshSessions for a short window so the broker's
+        // lingering tmux (#199) doesn't make the row flicker back immediately.
+        _recentlyArchivedAt[sessionId] = System.currentTimeMillis()
+        Telemetry.breadcrumb("session", "archive initiated",
+            mapOf("session_id" to sessionId, "endpoint" to _endpoint.value.displayHost))
         viewModelScope.launch {
             // WS `exit` closes the live socket + flushes a checkpoint when a
             // session is attached. Best-effort: an exited session has no live
@@ -2747,6 +2777,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     tags = mapOf("surface" to "android", "phase" to "session_archive"),
                     extras = mapOf("endpoint" to _endpoint.value.displayHost, "session_id" to sessionId),
                 )
+                // Re-insert the optimistically-removed row so the user isn't
+                // silently left with a missing session on failure.
+                if (optimisticRow != null) {
+                    _sessions.value = (_sessions.value + optimisticRow).sortedByDescending {
+                        it.lastActivityAt ?: it.startedAt
+                    }
+                    if (optimisticLifecycle != null) {
+                        updateLifecycle { it + (sessionId to optimisticLifecycle) }
+                    }
+                }
+                // Clear the suppression so the row can be re-fetched normally.
+                _recentlyArchivedAt.remove(sessionId)
+                // Surface the failure to the UI as a one-shot snackbar error.
+                _archiveError.value = "Could not archive session. Please try again."
             }
             refreshSessions()
         }
@@ -4244,7 +4288,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // the list and (because its tmux is live) read as interactive. The
         // tombstone set is the guarantee that delete stays terminal.
         val deleted = _deletedIds.value.toSet()
-        val list = c.listSessions().filterNot { it.id in deleted }
+        // Also suppress recently-archived ids for a short window so the broker's
+        // lingering tmux (#199) doesn't make the row flicker back immediately.
+        val now = System.currentTimeMillis()
+        _recentlyArchivedAt.entries.removeAll { (_, ts) -> now - ts > ARCHIVE_SUPPRESS_MS }
+        val recentlyArchived = _recentlyArchivedAt.keys.toSet()
+        val list = c.listSessions().filterNot { it.id in deleted || it.id in recentlyArchived }
         // Stamp each listed session with the currently-connected box so we
         // can (a) group by box on the home list and (b) gate sends to avoid
         // routing into the wrong broker (UnknownSession root cause).
