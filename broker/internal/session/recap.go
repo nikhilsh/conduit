@@ -31,10 +31,10 @@ import (
 //
 // Invariant — the live session's --resume must stay pristine. The one-shot
 // MUST NOT advance/mutate the transcript the live session will resume:
-//   - claude: `--resume <id> --fork-session --print` branches to a NEW session
-//     id, leaving the original staged <id>.jsonl untouched; the fork's own
-//     transcript is written inside the throwaway agent-home and never read by
-//     the live `--resume <id>` (no fork).
+//   - claude: reads the staged transcript via ExternalTranscript, builds a
+//     bounded tail digest, and runs a fresh throwaway `claude --print <digest>`
+//     with NO `--resume` / `--fork-session`. This avoids the full transcript
+//     re-ingest that caused 45 s timeouts on large sessions (e.g. 172 turns).
 //   - codex: `codex exec resume <id>` would APPEND a turn to the staged rollout
 //     (codex has no --fork-session), polluting the live resume. So codex does
 //     NOT resume — it runs a fresh, throwaway `codex exec --json` over a text
@@ -42,16 +42,15 @@ import (
 //     rollout file. If that one-shot fails, codex falls back to the
 //     deterministic note like claude does.
 //
+// Both paths are now: digest-from-ExternalTranscript + fresh non-resume one-shot.
+//
 // Timing — generateRecap is called SYNCHRONOUSLY in the external-resume setup
 // path before the spawn returns, under a bounded context (recapTimeout). A
-// claude model turn here is a few seconds; codex similar. The bound guarantees
-// session creation is never blocked past the timeout, and on timeout/error we
-// fall back to the instant deterministic note. The recap is written to
-// conversation.jsonl before the spawn returns, so it is present at the app's
-// first hydrate (no async re-hydrate needed). The throwaway one-shot is cheap
-// enough relative to the existing transcript-staging + agent-launch cost that a
-// separate goroutine wasn't worth the extra "recap appears a moment later"
-// complexity.
+// fresh digest-based model turn completes in a few seconds (no transcript
+// re-ingest). The bound guarantees session creation is never blocked past the
+// timeout, and on timeout/error we fall back to the instant deterministic note.
+// The recap is written to conversation.jsonl before the spawn returns, so it is
+// present at the app's first hydrate (no async re-hydrate needed).
 
 // recapTimeout bounds the one-shot recap model turn. On expiry the caller
 // falls back to the deterministic note so resume never blocks/fails.
@@ -227,8 +226,8 @@ func firstUserPrompt(all []ConvEntry) string {
 }
 
 // generateRecapLive runs the bounded one-shot recap model turn. It dispatches
-// per agent; claude resumes (forked) the staged transcript, codex summarizes a
-// text digest. Returns the recap text or an error.
+// per agent; both claude and codex summarize a tail digest of the transcript
+// via a fresh non-resume one-shot. Returns the recap text or an error.
 func generateRecapLive(ctx context.Context, agent, externalID, agentHome, binary string) (string, error) {
 	if strings.TrimSpace(binary) == "" {
 		return "", fmt.Errorf("recap: no %s binary available", agent)
@@ -243,18 +242,28 @@ func generateRecapLive(ctx context.Context, agent, externalID, agentHome, binary
 	}
 }
 
-// claudeRecap runs `HOME=<agentHome> claude --dangerously-skip-permissions
-// --resume <externalID> --fork-session --print "<recapPrompt>"` and returns the
-// printed recap. --fork-session branches to a NEW session id so the live
-// session's own --resume <externalID> (no fork) still loads the clean staged
-// copy; the fork's transcript is written inside the throwaway agent-home.
+// claudeRecap produces a recap WITHOUT resuming the staged transcript. The
+// old `--resume <id> --fork-session` approach caused 45 s timeouts on large
+// sessions (e.g. 172 turns) because claude re-ingests the entire conversation
+// before answering. Instead we read the transcript via ExternalTranscript,
+// build a bounded tail digest (same helper as codexRecap), and run a fresh
+// throwaway `claude --print <digest+prompt>` — no --resume, no fork, no
+// re-ingest. Fast, well under the timeout, and symmetrical with codexRecap.
 func claudeRecap(ctx context.Context, binary, agentHome, externalID string) (string, error) {
+	all, err := ExternalTranscript("claude", externalID)
+	if err != nil || len(all) == 0 {
+		if err != nil {
+			return "", fmt.Errorf("claudeRecap: ExternalTranscript: %w", err)
+		}
+		return "", fmt.Errorf("claudeRecap: empty transcript")
+	}
+	digest := transcriptDigest(all)
+	prompt := "Below is the tail of a coding session. In 2-3 sentences, recap what was being worked on and where it left off, so I can continue. Be concise; no preamble.\n\n" + digest
+
 	argv := []string{
 		binary,
 		"--dangerously-skip-permissions",
-		"--resume", externalID,
-		"--fork-session",
-		"--print", recapPrompt,
+		"--print", prompt,
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = recapEnv(agentHome)

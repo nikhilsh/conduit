@@ -281,3 +281,130 @@ func TestTranscriptDigest(t *testing.T) {
 		t.Errorf("digest kept the oldest turn despite the message cap")
 	}
 }
+
+// writeClaudeTranscriptFile creates a minimal claude JSONL transcript at the
+// expected path under homeDir and returns the session ID used.
+//
+// claudeTranscript reads from $HOME/.claude/projects/<slug>/<id>.jsonl, so
+// this creates a single slug dir with the given session ID.
+func writeClaudeTranscriptFile(t *testing.T, homeDir, sessionID string, entries []ConvEntry) {
+	t.Helper()
+	slugDir := filepath.Join(homeDir, ".claude", "projects", "test-slug")
+	if err := os.MkdirAll(slugDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	fpath := filepath.Join(slugDir, sessionID+".jsonl")
+	f, err := os.Create(fpath)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, e := range entries {
+		// Write in the claude JSONL format claudeTranscript / parseClaudeTranscript expects.
+		role := e.Role
+		if role == "assistant" {
+			// assistant entries need the claude envelope format
+			line := map[string]any{
+				"type":      "assistant",
+				"timestamp": e.Ts,
+				"message": map[string]any{
+					"role": "assistant",
+					"content": []map[string]any{
+						{"type": "text", "text": e.Content},
+					},
+				},
+			}
+			if err := enc.Encode(line); err != nil {
+				t.Fatalf("encode assistant: %v", err)
+			}
+		} else {
+			line := map[string]any{
+				"type":      "user",
+				"timestamp": e.Ts,
+				"message": map[string]any{
+					"role":    "user",
+					"content": e.Content,
+				},
+			}
+			if err := enc.Encode(line); err != nil {
+				t.Fatalf("encode user: %v", err)
+			}
+		}
+	}
+}
+
+// TestClaudeRecap_NoResumeFlag verifies that claudeRecap does NOT pass
+// --resume or --fork-session to the claude binary. It creates a fake claude
+// binary that dumps its argv to a file and outputs a canned recap.
+func TestClaudeRecap_NoResumeFlag(t *testing.T) {
+	dir := t.TempDir()
+
+	// Redirect $HOME so ExternalTranscript("claude", …) reads from our temp dir.
+	t.Setenv("HOME", dir)
+
+	sessionID := "test-session-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	entries := makeEntries(6)
+	writeClaudeTranscriptFile(t, dir, sessionID, entries)
+
+	// Fake claude binary: saves argv to a file, prints canned recap.
+	argvFile := filepath.Join(dir, "argv.txt")
+	fakeClaude := filepath.Join(dir, "claude")
+	script := "#!/usr/bin/env bash\n" +
+		`printf '%s\n' "$@" > ` + argvFile + "\n" +
+		`echo "Working on the recap feature."` + "\n"
+	if err := os.WriteFile(fakeClaude, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	got, err := claudeRecap(ctx, fakeClaude, dir, sessionID)
+	if err != nil {
+		t.Fatalf("claudeRecap: %v", err)
+	}
+	if got != "Working on the recap feature." {
+		t.Errorf("recap = %q, want canned text", got)
+	}
+
+	// Read the argv the fake binary received and assert no --resume.
+	argvData, readErr := os.ReadFile(argvFile)
+	if readErr != nil {
+		t.Fatalf("read argv file: %v", readErr)
+	}
+	argvStr := string(argvData)
+	if strings.Contains(argvStr, "--resume") {
+		t.Errorf("claudeRecap passed --resume to binary (should use digest, not --resume): argv=%q", argvStr)
+	}
+	if strings.Contains(argvStr, "--fork-session") {
+		t.Errorf("claudeRecap passed --fork-session to binary (should use digest): argv=%q", argvStr)
+	}
+	if !strings.Contains(argvStr, "--print") {
+		t.Errorf("claudeRecap missing --print flag: argv=%q", argvStr)
+	}
+}
+
+// TestClaudeRecap_EmptyTranscriptFallsBack verifies claudeRecap returns an
+// error (not a binary-exec error) when the transcript doesn't exist on disk,
+// proving it reads the transcript before attempting the exec.
+func TestClaudeRecap_EmptyTranscriptFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	// No transcript file created — ExternalTranscript should fail.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Use a non-existent binary — if claudeRecap tries to exec before reading
+	// the transcript, we'd get "no such file" instead of the transcript error.
+	_, err := claudeRecap(ctx, "/nonexistent/claude", dir, "no-such-id")
+	if err == nil {
+		t.Fatal("expected error for missing transcript, got nil")
+	}
+	// The error must mention ExternalTranscript, proving the transcript was read
+	// BEFORE attempting any exec. A bare exec error would not contain this string.
+	if !strings.Contains(err.Error(), "ExternalTranscript") && !strings.Contains(err.Error(), "empty transcript") {
+		t.Errorf("expected transcript-read error (ExternalTranscript/empty transcript), got: %v", err)
+	}
+}
