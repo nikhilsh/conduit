@@ -9,6 +9,20 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.167
+
+**UI polish + experiment graduation (iOS+Android, phone+tablet).** PRs #624/#625 (resume sheets, host-key, add-box, SSH theme), #626 (broker recap), #627 (usage anim), #629/#630 (flags). Broker REDEPLOYED (recap). NOTE: agent-written recap currently times out on very large sessions (>~150 turns) and falls back to a generic "Resumed (N turns)" note — a digest-based speedup is queued for v0.0.168.
+
+- **1 · Resume/Branch lands directly in the chat (no leftover sheets)** — after Resume/Branch, the Found-Sessions + Box-Health sheets now auto-dismiss so you land on the chat. Verify: discovery → Resume → you end up in the chat, not stacked sheets. [iOS+Android, on-device]
+- **2 · Resumed chat shows a recap** — the chat opens with a "Resumed from your terminal — picking up where you left off" message (agent-written when fast enough, else a generic note). Verify: resumed chat isn't blank. [broker, live]
+- **3 · Host-key card is opaque + SSH-add matches the app** — the "Verify server identity" card no longer shows the form bleeding through; the Connect/Trust buttons use the neon palette. [iOS+Android, on-device]
+- **4 · Settings: single "Add a box"; Labs/Debug graduated** — "Replay walkthrough" + "Add a machine" gone (one "Add a box"); conversation style is permanently B (Signature); the Labs A/B picker is gone; the Debug menu is hidden behind a 7-tap unlock on the About version; the Agents section always shows in session Info. Verify: Settings is decluttered; tap the version 7× to reveal Debug. [iOS+Android, on-device]
+- **5 · Smooth usage-strip animation** — the Home top usage bar (claude/codex %) expands/collapses smoothly (no jank). Verify: tap it open/closed. [iOS; Android was already smooth]
+
+---
+
+---
+
 ## v0.0.165
 
 **Found Sessions Resume actually works now.** Resume opened an empty chat that never replied — three compounding bugs, all fixed. Broker PRs #620 (stage transcript) + #621 (excerpt), iOS+Android PR #622 (join WS). Broker REDEPLOYED. The WS-join (#622) is app-side → needs v0.0.165 installed.
