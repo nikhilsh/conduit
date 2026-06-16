@@ -40,6 +40,7 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val themeMode by appearance.themeMode.collectAsState()
     val fontFamily by appearance.fontFamily.collectAsState()
+    val terminalFont by appearance.terminalFont.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val neonGlow by appearance.neonGlow.collectAsState()
     val neon = LocalNeonTheme.current
@@ -101,6 +102,15 @@ fun AppearanceSheet(appearance: AppearanceStore, onDismiss: () -> Unit) {
             SettingsSection("Chat font") {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp)) {
                     ChatFontStrip(current = fontFamily, onSelect = { appearance.setFontFamily(it) })
+                }
+            }
+
+            // Terminal font face — separate from the chat pairing above
+            // (mirrors iOS GhosttyFont). Shares [TerminalFontStrip] with the
+            // full Settings screen.
+            SettingsSection("Terminal font") {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp)) {
+                    TerminalFontStrip(current = terminalFont, onSelect = { appearance.setTerminalFont(it) })
                 }
             }
 

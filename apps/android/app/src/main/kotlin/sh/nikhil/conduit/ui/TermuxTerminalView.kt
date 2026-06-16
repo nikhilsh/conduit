@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.res.ResourcesCompat
 import com.termux.terminal.KeyHandler
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -113,6 +114,10 @@ fun TermuxTerminalView(
     // matching iOS).
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val terminalFontSize by appearance.terminalFontSize.collectAsState()
+    // Terminal font FACE (separate from the chat-font pairing above) —
+    // mirrors iOS GhosttyFont. Resolves to a bundled monospaced Typeface
+    // (or MONOSPACE for System) re-applied on change without a remount.
+    val terminalFont by appearance.terminalFont.collectAsState()
     val palette = TerminalPalette.forTheme(terminalTheme)
 
     AndroidView(
@@ -132,6 +137,7 @@ fun TermuxTerminalView(
                     initialPalette = palette,
                     initialFontFamily = fontFamily,
                     initialFontSize = terminalFontSize,
+                    initialTerminalFont = terminalFont,
                 )
             } catch (t: Throwable) {
                 // Catch Errors too (e.g. NoClassDefFoundError if the
@@ -190,9 +196,9 @@ fun TermuxTerminalView(
     // palette or font family. The `applyAppearance` helper is
     // idempotent — same inputs, same view → no-op — so this is cheap
     // and lets a Settings-sheet swap take effect without remounting.
-    LaunchedEffect(palette, fontFamily, terminalFontSize, emulatorReadyTick.intValue) {
+    LaunchedEffect(palette, fontFamily, terminalFontSize, terminalFont, emulatorReadyTick.intValue) {
         val view = mount.terminalView ?: return@LaunchedEffect
-        applyAppearance(view, mount.session, palette, fontFamily, terminalFontSize)
+        applyAppearance(view, mount.session, palette, fontFamily, terminalFontSize, terminalFont)
     }
 
     DisposableEffect(session.id) {
@@ -459,6 +465,7 @@ private fun buildTermuxTerminalView(
     initialPalette: TerminalPalette,
     initialFontFamily: AppearanceStore.FontFamily,
     initialFontSize: Float,
+    initialTerminalFont: AppearanceStore.TerminalFont,
 ): View {
     val view = TerminalView(ctx, /* attributes= */ null).apply {
         setBackgroundColor(initialPalette.defaultBackground)
@@ -519,7 +526,7 @@ private fun buildTermuxTerminalView(
     // initial paint already reads from `AppearanceStore`. Colour table
     // wires through to the emulator on `view.post {}` because the
     // emulator instance isn't live until the first layout pass.
-    applyAppearance(view, /* session = */ null, initialPalette, initialFontFamily, initialFontSize)
+    applyAppearance(view, /* session = */ null, initialPalette, initialFontFamily, initialFontSize, initialTerminalFont)
 
     // Stage 2 banner. `emulator` is null until updateSize runs on
     // the first layout pass — defer the append until then so we
@@ -539,7 +546,7 @@ private fun buildTermuxTerminalView(
             }
             // Re-apply once the emulator is live so the per-colour
             // table sees the user's palette on the first frame.
-            applyAppearance(view, session, initialPalette, initialFontFamily, initialFontSize)
+            applyAppearance(view, session, initialPalette, initialFontFamily, initialFontSize, initialTerminalFont)
             view.invalidate()
         } catch (t: Throwable) {
             Log.w(TAG, "Stage 2 banner inject failed", t)
@@ -575,17 +582,24 @@ internal fun applyAppearance(
     palette: TerminalPalette,
     fontFamily: AppearanceStore.FontFamily,
     fontSize: Float = AppearanceStore.DEFAULT_TERMINAL_FONT_SIZE,
+    terminalFont: AppearanceStore.TerminalFont = AppearanceStore.TerminalFont.JetBrainsMono,
 ) {
     // 1. Background — the view's own backing colour shows through
     //    cells with `defaultBackground` so the palette swap takes
     //    effect even on rows the emulator hasn't repainted yet.
     runCatching { view.setBackgroundColor(palette.defaultBackground) }
 
-    // 2. Typeface. Always a monospaced face — the cell grid renderer in
-    //    Termux assumes fixed-width glyphs. The chat-font pairing does NOT
-    //    apply to the terminal grid (it's a reading font, not a terminal-
-    //    native one), so every pairing resolves to MONOSPACE.
-    runCatching { view.setTypeface(Typeface.MONOSPACE) }
+    // 2. Typeface. The terminal grid renderer in Termux assumes fixed-width
+    //    glyphs, so every option here is a MONOSPACED face. The chat-font
+    //    pairing does NOT apply to the terminal (it's a reading font). The
+    //    user's terminal FONT FACE (mirrors iOS GhosttyFont) selects a
+    //    bundled mono TTF via R.font.*; `System` (or a load failure) keeps
+    //    Typeface.MONOSPACE. ResourcesCompat.getFont is the blocking variant
+    //    (no FontCallback), safe on this main-thread call.
+    val faceTypeface: Typeface = terminalFontResource(terminalFont)
+        ?.let { resId -> runCatching { ResourcesCompat.getFont(view.context, resId) }.getOrNull() }
+        ?: Typeface.MONOSPACE
+    runCatching { view.setTypeface(faceTypeface) }
 
     // 3. Cell text size. Base is the user's Settings terminal font size
     //    (default 10sp, denser than the old 13sp — matches iOS), scaled

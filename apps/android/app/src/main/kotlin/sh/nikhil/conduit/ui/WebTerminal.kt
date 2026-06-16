@@ -43,11 +43,13 @@ fun TerminalPage(store: SessionStore, session: ProjectSession) {
     val appearance = LocalAppearanceStore.current
     val fontSize by appearance.terminalFontSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
+    val terminalFont by appearance.terminalFont.collectAsState()
     WebTerminal(
         sessionID = session.id,
         buffer = raw,
         fontSize = fontSize,
         terminalTheme = terminalTheme,
+        terminalFont = terminalFont,
         onInput = { bytes -> store.sendInput(session.id, bytes) },
         onResize = { rows, cols ->
             store.resize(session.id, rows.toUShort(), cols.toUShort())
@@ -69,6 +71,7 @@ fun WebTerminal(
     buffer: ByteArray,
     fontSize: Float = AppearanceStore.DEFAULT_TERMINAL_FONT_SIZE,
     terminalTheme: AppearanceStore.TerminalTheme = AppearanceStore.TerminalTheme.GhosttyDark,
+    terminalFont: AppearanceStore.TerminalFont = AppearanceStore.TerminalFont.JetBrainsMono,
     onInput: (ByteArray) -> Unit,
     onResize: (Int, Int) -> Unit,
     modifier: Modifier = Modifier,
@@ -112,6 +115,7 @@ fun WebTerminal(
             // than a brief flash of the JS defaults.
             state.fontSize = fontSize
             state.terminalTheme = terminalTheme
+            state.terminalFont = terminalFont
             wv.loadUrl("file:///android_asset/terminal/terminal.html")
             wv
         },
@@ -144,6 +148,9 @@ fun WebTerminal(
     }
     LaunchedEffect(sessionID, terminalTheme) {
         state.applyTheme(terminalTheme)
+    }
+    LaunchedEffect(sessionID, terminalFont) {
+        state.applyFontFamily(terminalFont)
     }
 
     DisposableEffect(sessionID) {
@@ -178,12 +185,24 @@ internal class WebTerminalState {
     @Volatile var fontSize: Float = AppearanceStore.DEFAULT_TERMINAL_FONT_SIZE
     @Volatile var terminalTheme: AppearanceStore.TerminalTheme =
         AppearanceStore.TerminalTheme.GhosttyDark
+    @Volatile var terminalFont: AppearanceStore.TerminalFont =
+        AppearanceStore.TerminalFont.JetBrainsMono
 
     /** Push a new font size to the live terminal (re-fits the grid). */
     @Synchronized
     fun applyFontSize(size: Float) {
         fontSize = size
         if (ready) evalOnMain("window.setFontSize($size)")
+    }
+
+    /** Push a new font FACE to the live terminal (mirrors iOS GhosttyFont).
+     *  Passes the CSS family name (or "monospace" for System) to the JS
+     *  side, which sets the xterm fontFamily option and re-fits once the
+     *  bundled @font-face has loaded. */
+    @Synchronized
+    fun applyFontFamily(font: AppearanceStore.TerminalFont) {
+        terminalFont = font
+        if (ready) evalOnMain("window.setFontFamily('${jsFontArg(font)}')")
     }
 
     /** Push a new color theme to the live terminal. */
@@ -220,6 +239,7 @@ internal class WebTerminalState {
         // about to feed reflows / paints with the right metrics + colors.
         evalOnMain("window.setFontSize($fontSize)")
         evalOnMain("window.setTheme('${TerminalPalette.xtermThemeJson(terminalTheme)}')")
+        evalOnMain("window.setFontFamily('${jsFontArg(terminalFont)}')")
         if (pendingReset) {
             evalOnMain("window.reset()")
             pendingReset = false
@@ -231,6 +251,12 @@ internal class WebTerminalState {
             }
         }
     }
+
+    /** CSS family name for the JS `setFontFamily` arg: the bundled
+     *  @font-face name, or "monospace" for System. Enum cssFamily values
+     *  are static ASCII (no quote/escape concerns). */
+    private fun jsFontArg(font: AppearanceStore.TerminalFont): String =
+        font.cssFamily ?: "monospace"
 
     private fun evalOnMain(js: String) {
         val wv = webView ?: return

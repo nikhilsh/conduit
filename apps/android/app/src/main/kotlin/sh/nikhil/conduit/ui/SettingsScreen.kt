@@ -156,6 +156,7 @@ fun SettingsScreen(
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val terminalFontSize by appearance.terminalFontSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
+    val terminalFont by appearance.terminalFont.collectAsState()
     val neonGlow by appearance.neonGlow.collectAsState()
 
     // Fix 3 breadcrumb: log inferred installed state from brokerReadiness whenever
@@ -359,6 +360,28 @@ fun SettingsScreen(
                         },
                         colors = transparentListItemColors(),
                     )
+
+                    SettingsDivider()
+
+                    // Terminal font — type-forward face strip (NOT the chat
+                    // pairing). Mirrors iOS `terminalFontRow`.
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
+                        verticalArrangement = Arrangement.spacedBy(11.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Terminal font",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontFamily = neon.sans,
+                                fontWeight = FontWeight.SemiBold,
+                                color = neon.text,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(terminalFont.label, fontFamily = neon.mono, fontSize = 13.sp, color = neon.textFaint)
+                        }
+                        TerminalFontStrip(current = terminalFont, onSelect = { appearance.setTerminalFont(it) })
+                    }
 
                     SettingsDivider()
 
@@ -820,6 +843,63 @@ internal fun ChatFontStrip(
                 }
                 Text(
                     family.label,
+                    fontFamily = neon.mono,
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    color = if (selected) neon.accent else neon.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Terminal FONT-FACE strip (iOS parity — mirrors `terminalFontRow`). A
+ * horizontal row of cards, each rendering an `x>` mono sample IN that
+ * face with the name beneath. Separate from the chat-font pairing: this
+ * is the terminal-native monospace shown in the Termux / xterm.js
+ * renderer. One tap selects; selected card gets the accent border + tint.
+ */
+@Composable
+internal fun TerminalFontStrip(
+    current: AppearanceStore.TerminalFont,
+    onSelect: (AppearanceStore.TerminalFont) -> Unit,
+) {
+    val neon = LocalNeonTheme.current
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+        contentPadding = PaddingValues(vertical = 3.dp),
+    ) {
+        items(AppearanceStore.TerminalFont.values().toList()) { face ->
+            val selected = face == current
+            Column(
+                modifier = Modifier
+                    .width(128.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (selected) neon.accent.copy(alpha = 0.08f) else neon.surface2,
+                        RoundedCornerShape(14.dp),
+                    )
+                    .border(
+                        if (selected) 1.6.dp else 1.dp,
+                        if (selected) neon.accent else neon.border,
+                        RoundedCornerShape(14.dp),
+                    )
+                    .clickable { onSelect(face) }
+                    .padding(start = 13.dp, end = 13.dp, top = 13.dp, bottom = 11.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text(
+                    "x>",
+                    fontFamily = terminalPreviewFontFamily(face),
+                    fontSize = 26.sp,
+                    color = neon.text,
+                    maxLines = 1,
+                )
+                Text(
+                    face.label,
                     fontFamily = neon.mono,
                     fontSize = 11.sp,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,

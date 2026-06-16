@@ -425,6 +425,50 @@ object NeonBrandFonts {
     val splineSansMono = androidx.compose.ui.text.font.FontFamily(
         androidx.compose.ui.text.font.Font(R.font.spline_sans_mono, androidx.compose.ui.text.font.FontWeight.Normal),
     )
+
+    // Terminal font-face options (NOT chat) — mirror iOS GhosttyVT.GhosttyFont.
+    // Hack / Fira Code ship static R + B TTFs (added with the terminal
+    // font-face picker). JetBrains Mono / IBM Plex Mono reuse the faces above.
+    val hack = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.hack_regular, androidx.compose.ui.text.font.FontWeight.Normal),
+        androidx.compose.ui.text.font.Font(R.font.hack_bold, androidx.compose.ui.text.font.FontWeight.Bold),
+    )
+    val firaCode = androidx.compose.ui.text.font.FontFamily(
+        androidx.compose.ui.text.font.Font(R.font.fira_code_regular, androidx.compose.ui.text.font.FontWeight.Normal),
+        androidx.compose.ui.text.font.Font(R.font.fira_code_bold, androidx.compose.ui.text.font.FontWeight.Bold),
+    )
+}
+
+/**
+ * `R.font` resource id for a terminal face's regular weight, for the
+ * Termux `Typeface` path ([TermuxTerminalView] via
+ * `ResourcesCompat.getFont`). `null` for [TerminalFont.System] → the
+ * renderer keeps its built-in `Typeface.MONOSPACE`. Mirrors iOS
+ * `GhosttyFont.familyName == nil` for `.system`.
+ */
+fun terminalFontResource(
+    face: sh.nikhil.conduit.AppearanceStore.TerminalFont,
+): Int? = when (face) {
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.System -> null
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.JetBrainsMono -> R.font.jetbrains_mono_regular
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.Hack -> R.font.hack_regular
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.FiraCode -> R.font.fira_code_regular
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.IbmPlexMono -> R.font.ibm_plex_mono_regular
+}
+
+/**
+ * Compose [FontFamily] for rendering a terminal-face PREVIEW card (the
+ * `x>` sample in the Settings strip). [TerminalFont.System] falls back to
+ * the platform monospace. Mirrors iOS `terminalSampleFont`.
+ */
+fun terminalPreviewFontFamily(
+    face: sh.nikhil.conduit.AppearanceStore.TerminalFont,
+): androidx.compose.ui.text.font.FontFamily = when (face) {
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.System -> androidx.compose.ui.text.font.FontFamily.Monospace
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.JetBrainsMono -> NeonBrandFonts.mono
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.Hack -> NeonBrandFonts.hack
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.FiraCode -> NeonBrandFonts.firaCode
+    sh.nikhil.conduit.AppearanceStore.TerminalFont.IbmPlexMono -> NeonBrandFonts.ibmPlexMono
 }
 
 /**

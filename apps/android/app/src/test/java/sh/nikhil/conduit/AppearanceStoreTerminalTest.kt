@@ -127,4 +127,53 @@ class AppearanceStoreTerminalTest {
         store.hydrate(ctx)
         assertEquals(AppearanceStore.TerminalTheme.GhosttyDark, store.terminalTheme.value)
     }
+
+    // ── Terminal font FACE (iOS GhosttyFont parity) ──────────────────────
+
+    @Test
+    fun freshInstall_terminalFont_isJetBrainsMono() {
+        // Default matches iOS `AppearanceStore.terminalFont` fallback.
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val store = AppearanceStore()
+        store.hydrate(ctx)
+        assertEquals(AppearanceStore.TerminalFont.JetBrainsMono, store.terminalFont.value)
+    }
+
+    @Test
+    fun terminalFont_persistsAcrossHydrate() {
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+
+        val first = AppearanceStore()
+        first.hydrate(ctx)
+        first.setTerminalFont(AppearanceStore.TerminalFont.FiraCode)
+
+        val second = AppearanceStore()
+        second.hydrate(ctx)
+        assertEquals(AppearanceStore.TerminalFont.FiraCode, second.terminalFont.value)
+    }
+
+    @Test
+    fun corruptedTerminalFont_fallsBackToJetBrainsMono() {
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        ctx.getSharedPreferences("conduit.appearance", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("terminalFont", "NotARealFace")
+            .commit()
+        val store = AppearanceStore()
+        store.hydrate(ctx)
+        assertEquals(AppearanceStore.TerminalFont.JetBrainsMono, store.terminalFont.value)
+    }
+
+    @Test
+    fun terminalFont_systemFace_persistsAndRoundTrips() {
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+
+        val first = AppearanceStore()
+        first.hydrate(ctx)
+        first.setTerminalFont(AppearanceStore.TerminalFont.System)
+
+        val second = AppearanceStore()
+        second.hydrate(ctx)
+        assertEquals(AppearanceStore.TerminalFont.System, second.terminalFont.value)
+    }
 }
