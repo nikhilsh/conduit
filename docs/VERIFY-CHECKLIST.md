@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.164
+
+**Found Sessions UX fixes** — Resume now actually opens the session, the discovery sheet is instant + has a loading indicator, and the broker caches the scan. iOS PRs #616 (sheet) + #618 (resume open), broker PR #617 (cache, redeployed live). Found via on-device testing.
+
+- **1 · Resume/Branch actually opens the session (iOS)** — resuming or branching a found session created the Conduit session on the broker (discovery count dropped) but the app never opened it: it didn't appear in Active Sessions and the app didn't navigate to its chat (`adoptFound` only set `selectedSessionID` without stamping the box, marking it live, refreshing, or persisting — unlike `createSession`). Now adopt mirrors createSession's full open. Verify: discovery → a session → Resume → after the progress it lands in the chat with full context, and the session shows under "Sessions here" / Active Sessions. [iOS, on-device]
+- **2 · Discovery sheet shows instantly + a loading indicator (iOS)** — tapping the entry card opened a sheet that re-fetched from scratch and showed "0 sessions found" for ~6-10s before populating. Now the sheet is seeded with the list the box-detail card already loaded (instant), refreshes silently, and a cold open shows a spinner + "Scanning sessions on {box}…" instead of the empty state. Verify: tap the card → the list appears immediately (no empty flash); a first-ever open shows a spinner, not "0 found". [iOS, on-device]
+- **3 · Broker caches the discovery scan (45s TTL)** — discovery re-scanned ~238 transcripts (~6s) on every call. The broker now caches the raw scan for 45s (dedup/floor/filter/sort still applied per-call, so adopt reflects immediately). Verified live: cold 6.4s → warm 1.4ms. Verify: the entry card + sheet feel instant on repeat opens. [broker — live now]
+
+---
+
 ## v0.0.163
 
 **Found Sessions discovery actually works on iOS now.** The card was hidden on every connected box because of an iOS URL bug, not the feature. iOS PR #614. App-only — no broker change, no redeploy.
