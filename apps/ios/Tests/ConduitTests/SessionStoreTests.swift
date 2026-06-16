@@ -101,6 +101,41 @@ struct SessionStoreTests {
         #expect(store.pendingChats.entries(for: sessionID).first?.message == "Hi")
     }
 
+    // MARK: - UnknownSession downgrade (broker restart/GC)
+
+    /// When the broker has forgotten a session (restart/redeploy/GC) a queued
+    /// send returns `ConduitError.UnknownSession`. The deliver path must STOP
+    /// retrying (drop the entry so later flushes don't re-hit the dead
+    /// session) and flip the echo to `expired` so the bubble offers Resume,
+    /// instead of burning the retry budget + capturing a Sentry ERROR.
+    @Test func unknownSessionMarksEchoExpiredAndDropsFromQueue() {
+        let store = SessionStore()
+        let sessionID = "test-expired-\(UUID().uuidString)"
+
+        // Seed an optimistic echo (no client -> queued + pending).
+        store.sendChat(sessionID: sessionID, message: "Hi")
+        let localID = store.conversationLog[sessionID]?.first?.id ?? ""
+        #expect(store.pendingChats.isPending(localID, in: sessionID))
+
+        // Drive the UnknownSession handler the deliver catch-branch calls.
+        store.handleExpiredSession(sessionID: sessionID, localID: localID, box: nil)
+
+        // Echo is now `expired` (drives the Resume footer) and the entry is
+        // gone from the queue so flushes won't re-deliver into a dead session.
+        #expect(store.conversationLog[sessionID]?.first?.status == "expired")
+        #expect(store.pendingChats.isPending(localID, in: sessionID) == false)
+    }
+
+    /// The `UnknownSession` detector must match the exact UniFFI case (case 6)
+    /// and reject every other error so genuine failures keep their retry +
+    /// error-capture path.
+    @Test func isUnknownSessionMatchesOnlyThatCase() {
+        let store = SessionStore()
+        #expect(store.isUnknownSession(ConduitError.UnknownSession(message: "gone")) == true)
+        #expect(store.isUnknownSession(ConduitError.Connection(message: "x")) == false)
+        #expect(store.isUnknownSession(ConduitError.NotConnected(message: "x")) == false)
+    }
+
     // MARK: - refreshConversation ordering (bug #3)
 
     /// `refreshConversation` used to append `stillPending` after the
