@@ -19,7 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Article
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FormatSize
@@ -135,8 +134,8 @@ fun SettingsScreen(
     // When true, render inline as a tablet section pane (no bottom-sheet
     // shell) — mirrors iOS ConduitUI.SettingsView(embedded:).
     embedded: Boolean = false,
-    // Fix 1: called with an OnboardingEntry so replay/addMachine never land on Done.
-    // Caller dismisses settings and presents the guide with the correct intent.
+    // Reserved for first-run onboarding gate in AppRoot. Not rendered as a
+    // Settings row -- "Add a box" routes directly to the add-server sheet.
     onOpenOnboarding: ((FeatureFlags.OnboardingEntry) -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -520,29 +519,6 @@ fun SettingsScreen(
                         }
                     },
                 )
-                // Fix 1: "Replay walkthrough" and "Add a machine" entries.
-                if (onOpenOnboarding != null) {
-                    SettingsDivider()
-                    SettingsRow(
-                        icon = Icons.Default.AutoAwesome,
-                        title = "Replay walkthrough",
-                        subtitle = "Start from Welcome and walk through the setup flow",
-                        onClick = {
-                            Telemetry.breadcrumb("settings", "replay_walkthrough_tapped")
-                            onOpenOnboarding(FeatureFlags.OnboardingEntry.replay)
-                        },
-                    )
-                    SettingsDivider()
-                    SettingsRow(
-                        icon = Icons.Filled.AddCircle,
-                        title = "Add a machine",
-                        subtitle = "Install the broker on another box and pair it",
-                        onClick = {
-                            Telemetry.breadcrumb("settings", "add_machine_tapped")
-                            onOpenOnboarding(FeatureFlags.OnboardingEntry.addMachine)
-                        },
-                    )
-                }
                 SettingsDivider()
                 SettingsRow(
                     icon = Icons.Filled.Article,
@@ -777,12 +753,15 @@ private fun ConnectionSection(
 
             SettingsDivider()
 
-            // Add server.
+            // Add a box -- single entry point for direct SSH / QR / LAN add.
             SettingsRow(
                 icon = Icons.Filled.AddCircle,
-                title = "Add server",
+                title = "Add a box",
                 subtitle = null,
-                onClick = onAddServer,
+                onClick = {
+                    Telemetry.breadcrumb("settings", "add_box_tapped")
+                    onAddServer()
+                },
             )
         }
     }

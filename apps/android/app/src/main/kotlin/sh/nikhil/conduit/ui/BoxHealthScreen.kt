@@ -447,9 +447,14 @@ fun BoxHealthScreen(
                 onDismiss = { showFoundSheet = false },
                 onOpenSession = { sessionId ->
                     // Switch to this box (if not already active) so the WS
-                    // routes correctly, then dismiss and let attachLiveSession
-                    // (called inside FoundSessionsSheet before this callback)
-                    // navigate to the joined session via _selectedId.
+                    // routes correctly, then dismiss the whole sheet chain
+                    // (FoundSessionsSheet + BoxHealthScreen) so the user lands
+                    // directly on chat without manual back-taps.
+                    Telemetry.breadcrumb(
+                        "found_sessions",
+                        "adopt dismiss chain",
+                        mapOf("session_id" to sessionId, "box" to server.id),
+                    )
                     store.selectSavedServer(server.id, autoConnect = true)
                     store.select(sessionId)
                     showFoundSheet = false
