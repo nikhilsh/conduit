@@ -21,6 +21,20 @@ type pushNotifyState struct {
 	mu       sync.Mutex
 	notifier push.Notifier
 	identity string
+	// ownerDeviceID is the stable per-install UUID of the device that
+	// created this session (from the WS connect device_id query param).
+	// When non-empty, maybeNotifyTurnEnd and maybeNotifyPendingInput direct
+	// the push to this device's token(s) via NotifyDevice, falling back to
+	// broadcast Notify when the device has no stored token (e.g. token was
+	// registered before device_id was introduced).
+	// Empty for sessions created by old clients → always broadcasts.
+	ownerDeviceID string
+	// registry is the alert token registry, used to resolve ownerDeviceID
+	// to a stored token set. Nil when no registry is wired (broadcast only).
+	registry *push.Registry
+	// dispatcher is the Dispatcher (type-asserting notifier) used when
+	// per-device targeting is possible. Nil when notifier is not a *Dispatcher.
+	dispatcher *push.Dispatcher
 	// lastIdle records when the session last transitioned to idle. Used to
 	// ensure at most one push per idle-transition: a turn that completes and
 	// immediately starts another turn should not deliver two pushes.
@@ -46,6 +60,42 @@ func (s *Session) SetPushNotifier(n push.Notifier, identity string) {
 	s.pushState.notifier = n
 	s.pushState.identity = identity
 	s.pushState.mu.Unlock()
+}
+
+// SetPushOwner records the owning device and wires the registry + dispatcher
+// needed for per-device targeting. Called by the Manager after SetPushNotifier
+// when OwnerDeviceID is non-empty. Safe to skip (no-op / broadcast fallback).
+func (s *Session) SetPushOwner(ownerDeviceID string, reg *push.Registry, d *push.Dispatcher) {
+	s.pushState.mu.Lock()
+	s.pushState.ownerDeviceID = ownerDeviceID
+	s.pushState.registry = reg
+	s.pushState.dispatcher = d
+	s.pushState.mu.Unlock()
+}
+
+// notifyTargeted delivers payload to the session's owner device when one is
+// set AND has a registered token; otherwise it falls back to broadcasting via
+// n.Notify. This is the single dispatch point for both turn-end and
+// pending-input notifications so the broadcast fallback lives in one place.
+//
+// Invariant: never silently drops a push. An owner device with no stored token
+// (e.g. device_id sent on create but token registered before device_id was
+// introduced) falls through to broadcast.
+func (s *Session) notifyTargeted(ctx context.Context, n push.Notifier, identity string, payload push.Payload) error {
+	s.pushState.mu.Lock()
+	ownerDeviceID := s.pushState.ownerDeviceID
+	reg := s.pushState.registry
+	dispatcher := s.pushState.dispatcher
+	s.pushState.mu.Unlock()
+
+	if ownerDeviceID != "" && reg != nil && dispatcher != nil {
+		if matched := reg.TokensForDevice(identity, ownerDeviceID); len(matched) > 0 {
+			return dispatcher.NotifyDevice(ctx, identity, ownerDeviceID, payload)
+		}
+		// No token stored yet for this device_id (old token, race on first
+		// register) — fall through to broadcast so the push is not lost.
+	}
+	return n.Notify(ctx, identity, payload)
 }
 
 // maybeNotifyTurnEnd fires a push notification when a turn just completed
@@ -84,7 +134,7 @@ func (s *Session) maybeNotifyTurnEnd() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := n.Notify(ctx, id, payload); err != nil {
+	if err := s.notifyTargeted(ctx, n, id, payload); err != nil {
 		fmt.Fprintf(os.Stderr, "push: turn-end notify session=%s: %v\n", s.ID, err)
 	}
 }
@@ -139,7 +189,7 @@ func (s *Session) maybeNotifyPendingInput() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := n.Notify(ctx, id, payload); err != nil {
+	if err := s.notifyTargeted(ctx, n, id, payload); err != nil {
 		fmt.Fprintf(os.Stderr, "push: pending-input notify session=%s: %v\n", s.ID, err)
 	}
 }

@@ -255,3 +255,82 @@ func TestRegisterStartToken_DoesNotAffectAlertTokens(t *testing.T) {
 		t.Errorf("StartTokenFor = %q, want start-tok", got)
 	}
 }
+
+// ---- Per-device targeting tests (TokensForDevice + persistence) ----
+
+func tokWithDevice(p Platform, token, deviceID string) DeviceToken {
+	return DeviceToken{Platform: p, Token: token, DeviceID: deviceID}
+}
+
+// (a) Register with device_id stores it; TokensForDevice returns only that device's tokens.
+func TestTokensForDevice_ReturnsOnlyMatchingDevice(t *testing.T) {
+	r := NewRegistry()
+	r.Register("broker", tokWithDevice(PlatformAPNs, "tok-phone-a", "device-a"))
+	r.Register("broker", tokWithDevice(PlatformFCM, "tok-phone-a-fcm", "device-a"))
+	r.Register("broker", tokWithDevice(PlatformAPNs, "tok-phone-b", "device-b"))
+
+	gotA := r.TokensForDevice("broker", "device-a")
+	if len(gotA) != 2 {
+		t.Fatalf("TokensForDevice device-a = %d tokens, want 2", len(gotA))
+	}
+	for _, dt := range gotA {
+		if dt.DeviceID != "device-a" {
+			t.Errorf("token %q has DeviceID %q, want device-a", dt.Token, dt.DeviceID)
+		}
+	}
+
+	gotB := r.TokensForDevice("broker", "device-b")
+	if len(gotB) != 1 || gotB[0].Token != "tok-phone-b" {
+		t.Fatalf("TokensForDevice device-b = %+v, want [tok-phone-b]", gotB)
+	}
+
+	// Unknown device_id returns nil (not an empty slice — callers test len).
+	if got := r.TokensForDevice("broker", "device-unknown"); len(got) != 0 {
+		t.Fatalf("unknown device_id should return empty, got %+v", got)
+	}
+
+	// Empty device_id always returns nil.
+	if got := r.TokensForDevice("broker", ""); len(got) != 0 {
+		t.Fatalf("empty device_id should return empty, got %+v", got)
+	}
+}
+
+// (a) DeviceID persists through load/save round-trip.
+func TestDeviceIDPersistsRoundTrip(t *testing.T) {
+	path := t.TempDir() + "/tokens.json"
+	r1 := NewRegistryWithPersistence(path)
+	r1.Register("broker", tokWithDevice(PlatformAPNs, "tok-abc", "device-uuid-1"))
+	r1.Register("broker", tokWithDevice(PlatformFCM, "tok-fcm", "device-uuid-2"))
+
+	r2 := NewRegistryWithPersistence(path)
+	got := r2.TokensForDevice("broker", "device-uuid-1")
+	if len(got) != 1 || got[0].Token != "tok-abc" || got[0].DeviceID != "device-uuid-1" {
+		t.Fatalf("after reload TokensForDevice device-uuid-1 = %+v, want [{apns tok-abc device-uuid-1}]", got)
+	}
+	got2 := r2.TokensForDevice("broker", "device-uuid-2")
+	if len(got2) != 1 || got2[0].DeviceID != "device-uuid-2" {
+		t.Fatalf("after reload TokensForDevice device-uuid-2 = %+v", got2)
+	}
+}
+
+// (a) Old tokens (no DeviceID) are not returned by TokensForDevice.
+func TestTokensForDevice_ExcludesOldTokens(t *testing.T) {
+	r := NewRegistry()
+	r.Register("broker", tok(PlatformAPNs, "old-tok")) // no DeviceID
+	r.Register("broker", tokWithDevice(PlatformFCM, "new-tok", "device-a"))
+
+	// Old token should NOT appear under any device_id lookup.
+	if got := r.TokensForDevice("broker", ""); len(got) != 0 {
+		t.Fatalf("empty device_id returned tokens: %+v", got)
+	}
+	// Old token does not appear under a real device_id.
+	got := r.TokensForDevice("broker", "device-a")
+	if len(got) != 1 || got[0].Token != "new-tok" {
+		t.Fatalf("TokensForDevice device-a = %+v, want only new-tok", got)
+	}
+	// Old token still appears in TokensFor (broadcast).
+	all := r.TokensFor("broker")
+	if len(all) != 2 {
+		t.Fatalf("TokensFor = %d, want 2 (both old and new)", len(all))
+	}
+}

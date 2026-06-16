@@ -59,6 +59,11 @@ type DeviceToken struct {
 	// no-op, and a device that rotates its token registers the new one
 	// (the stale one is reaped lazily on a failed send by the caller).
 	Token string
+	// DeviceID is the stable per-install UUID the app sends on
+	// register/test/create to enable per-device push targeting.
+	// Optional: empty for tokens registered by old clients; those tokens
+	// participate only in broadcast Notify, never in NotifyDevice.
+	DeviceID string `json:"device_id,omitempty"`
 }
 
 // Payload is the transport-agnostic notification the broker wants
@@ -319,6 +324,31 @@ func (r *Registry) TokensFor(identity string) []DeviceToken {
 	out := make([]DeviceToken, 0, len(set))
 	for _, t := range set {
 		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Platform != out[j].Platform {
+			return out[i].Platform < out[j].Platform
+		}
+		return out[i].Token < out[j].Token
+	})
+	return out
+}
+
+// TokensForDevice returns the device tokens registered for identity whose
+// DeviceID matches deviceID. Returns nil when no match is found. Sorted
+// deterministically (platform, token) like TokensFor.
+func (r *Registry) TokensForDevice(identity, deviceID string) []DeviceToken {
+	if deviceID == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	set := r.byIdentity[identity]
+	var out []DeviceToken
+	for _, t := range set {
+		if t.DeviceID == deviceID {
+			out = append(out, t)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Platform != out[j].Platform {

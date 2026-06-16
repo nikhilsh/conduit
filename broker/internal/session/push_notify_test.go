@@ -9,6 +9,32 @@ import (
 	"github.com/nikhilsh/conduit/broker/internal/push"
 )
 
+// ---- test helpers for per-device targeting ----
+
+// recordingDispatcherSender is a push.Sender that records which tokens were
+// sent. Used to construct a real push.Dispatcher in session targeting tests.
+type recordingDispatcherSender struct {
+	mu    sync.Mutex
+	sends []push.DeviceToken
+}
+
+func (r *recordingDispatcherSender) Send(_ context.Context, tok push.DeviceToken, _ push.Payload) error {
+	r.mu.Lock()
+	r.sends = append(r.sends, tok)
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *recordingDispatcherSender) sentTokens() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, t := range r.sends {
+		out = append(out, t.Token)
+	}
+	return out
+}
+
 // recordingSender captures Sender.Send calls for LA push tests.
 type recordingSender struct {
 	mu      sync.Mutex
@@ -636,5 +662,98 @@ func TestLAEmit_ContentStateKeys(t *testing.T) {
 	}
 	if v, ok := cs["syncedAtMs"].(int64); !ok || v == 0 {
 		t.Errorf("syncedAtMs = %v (type %T), want non-zero int64", cs["syncedAtMs"], cs["syncedAtMs"])
+	}
+}
+
+// ---- Per-device targeting tests (d) ----
+
+// buildTargetedSession creates a bare session wired with a push.Dispatcher so
+// per-device targeting can be exercised end-to-end.
+//
+// Returns the session, the registry (pre-populated with tokens), and the
+// recording sender used by the dispatcher.
+func buildTargetedSession(t *testing.T, sessionID, ownerDeviceID string) (*Session, *push.Registry, *recordingDispatcherSender) {
+	t.Helper()
+	reg := push.NewRegistry()
+	s := bareSession(sessionID)
+	sender := &recordingDispatcherSender{}
+	disp := push.NewDispatcher(reg, map[push.Platform]push.Sender{
+		push.PlatformAPNs: sender,
+		push.PlatformFCM:  sender,
+	})
+	// Wire notifier (dispatcher acts as Notifier too).
+	s.SetPushNotifier(disp, "broker")
+	if ownerDeviceID != "" {
+		s.SetPushOwner(ownerDeviceID, reg, disp)
+	}
+	return s, reg, sender
+}
+
+// (d) Session with ownerDeviceID notifies only the owner device on turn-end.
+func TestSessionNotify_TurnEnd_TargetsOwnerDevice(t *testing.T) {
+	s, reg, sender := buildTargetedSession(t, "sess-target-1", "device-owner")
+
+	// Register two devices.
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-owner", DeviceID: "device-owner"})
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-other", DeviceID: "device-other"})
+
+	s.maybeNotifyTurnEnd()
+
+	sent := sender.sentTokens()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 send (targeted), got %d: %v", len(sent), sent)
+	}
+	if sent[0] != "tok-owner" {
+		t.Errorf("sent to %q, want tok-owner", sent[0])
+	}
+}
+
+// (d) Session with ownerDeviceID notifies only the owner device on pending-input.
+func TestSessionNotify_PendingInput_TargetsOwnerDevice(t *testing.T) {
+	s, reg, sender := buildTargetedSession(t, "sess-target-2", "device-owner")
+
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-owner", DeviceID: "device-owner"})
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformFCM, Token: "tok-bystander", DeviceID: "device-other"})
+
+	s.maybeNotifyPendingInput()
+
+	sent := sender.sentTokens()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 send (targeted), got %d: %v", len(sent), sent)
+	}
+	if sent[0] != "tok-owner" {
+		t.Errorf("sent to %q, want tok-owner", sent[0])
+	}
+}
+
+// (d) Session WITHOUT ownerDeviceID broadcasts to all registered devices.
+func TestSessionNotify_TurnEnd_BroadcastsWhenNoOwner(t *testing.T) {
+	s, reg, sender := buildTargetedSession(t, "sess-broadcast-1", "" /* no owner */)
+
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-a", DeviceID: "device-a"})
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformFCM, Token: "tok-b", DeviceID: "device-b"})
+
+	s.maybeNotifyTurnEnd()
+
+	sent := sender.sentTokens()
+	if len(sent) != 2 {
+		t.Fatalf("expected 2 sends (broadcast), got %d: %v", len(sent), sent)
+	}
+}
+
+// (d) Session with ownerDeviceID but NO stored token for that device falls back
+// to broadcast (no push silently dropped).
+func TestSessionNotify_TurnEnd_FallsBackToBroadcastWhenNoToken(t *testing.T) {
+	s, reg, sender := buildTargetedSession(t, "sess-fallback-1", "device-new")
+
+	// Register old tokens (without device_id — pre-targeting-era tokens).
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-old-a"})
+	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-old-b"})
+
+	s.maybeNotifyTurnEnd()
+
+	sent := sender.sentTokens()
+	if len(sent) != 2 {
+		t.Fatalf("expected 2 sends (broadcast fallback when device has no token), got %d: %v", len(sent), sent)
 	}
 }
