@@ -5,8 +5,15 @@ import SwiftUI
 /// Tapping an exited row in `SessionsScreen` (no live WS to attach to)
 /// fetches `conversation.jsonl` over HTTP via
 /// `SessionStore.fetchConversation` and replays it through the existing
-/// upstream chat renderer (`ConduitUI.ChatView` in read-only mode — the
-/// composer + quick-reply bar are suppressed).
+/// upstream chat renderer (`ConduitUI.ChatView` in `forceReadOnly` mode —
+/// the composer + quick-reply bar are suppressed).
+///
+/// The initial load requests the BOTTOM-ANCHORED tail (`?tail=80`). If the
+/// broker signals `has_more_before: true` the user can scroll up to trigger
+/// additional pages via the normal `ChatView` window-widen path (same as
+/// long live sessions). The items are seeded into the store so `ChatView`
+/// reads from `store.conversationLog` — keeping the pagination code path
+/// identical to the live-session reattach case.
 ///
 /// CAVEAT (broker PR #196): `conversation.jsonl` is only written for
 /// sessions created *after* the broker was redeployed with #196. Older
@@ -23,7 +30,8 @@ struct SavedTranscriptView: View {
 
     enum LoadState: Equatable {
         case loading
-        case loaded([ConversationItem])
+        case loaded
+        case empty
         case notFound
         case failed(String)
     }
@@ -38,12 +46,13 @@ struct SavedTranscriptView: View {
             case .loading:
                 ProgressView()
                     .tint(neon.accent)
-            case .loaded(let items):
-                if items.isEmpty {
-                    emptyTranscript
-                } else {
-                    ConduitUI.ChatView(session: projectSession, readOnlyItems: items)
-                }
+            case .loaded:
+                // Items are seeded into `store.conversationLog[session.id]`
+                // by `load()` so ChatView reads from the store and can trigger
+                // backward pagination via `fetchOlderConversation` on scroll-up.
+                ConduitUI.ChatView(session: projectSession, forceReadOnly: true)
+            case .empty:
+                emptyTranscript
             case .notFound:
                 noTranscript
             case .failed(let message):
@@ -62,7 +71,10 @@ struct SavedTranscriptView: View {
     private func load() async {
         do {
             let items = try await store.fetchConversation(sessionID: session.id)
-            state = .loaded(items)
+            // Seed the store so ChatView reads from conversationLog (enabling
+            // backward pagination). `seedExitedConversation` is idempotent.
+            let seeded = store.seedExitedConversation(sessionID: session.id, items: items)
+            state = seeded.isEmpty ? .empty : .loaded
         } catch is ConversationNotFoundError {
             state = .notFound
         } catch {
