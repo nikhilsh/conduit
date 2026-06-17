@@ -266,10 +266,14 @@ extension ConduitUI {
                     gitDirty: status?.gitDirty ?? s.gitDirty
                 )
             }
+            let placeholders = store.visibleSessions.compactMap { v -> ConduitUI.HomeSnapshotPlaceholder? in
+                guard case .creating(let id) = v else { return nil }
+                return ConduitUI.HomeSnapshotPlaceholder(id: id, label: "Starting session...")
+            }
             return ConduitUI.HomeSnapshot(
                 harness: harness,
                 sessions: sessions,
-                placeholders: [],
+                placeholders: placeholders,
                 selectedSessionID: store.selectedSessionID,
                 endpointDisplayHost: endpointHost
             )

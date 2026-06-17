@@ -206,6 +206,21 @@ extension ConduitUI {
                 } message: { target in
                     Text("Ends \(target.title) on the server and keeps it in History (read-only). Delete it permanently from History.")
                 }
+                .alert(
+                    "Session failed to start",
+                    isPresented: Binding(
+                        get: { store.sessionCreationError != nil },
+                        set: { if !$0 { store.sessionCreationError = nil } }
+                    )
+                ) {
+                    Button("OK", role: .cancel) {
+                        store.sessionCreationError = nil
+                    }
+                } message: {
+                    if let err = store.sessionCreationError {
+                        Text(err)
+                    }
+                }
                 .onChange(of: store.selectedSessionID) { _, new in
                     selectedSessionID = new
                 }
@@ -460,10 +475,14 @@ extension ConduitUI {
                     boxName: hasMultipleBoxes ? store.boxDisplayName(for: s.id) : nil
                 )
             }
+            let placeholders = store.visibleSessions.compactMap { v -> ConduitUI.HomeSnapshotPlaceholder? in
+                guard case .creating(let id) = v else { return nil }
+                return ConduitUI.HomeSnapshotPlaceholder(id: id, label: "Starting session...")
+            }
             return ConduitUI.HomeSnapshot(
                 harness: harness,
                 sessions: sessions,
-                placeholders: [],
+                placeholders: placeholders,
                 selectedSessionID: store.selectedSessionID,
                 endpointDisplayHost: endpointHost
             )
