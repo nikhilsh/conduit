@@ -155,7 +155,7 @@ jobs:
         run: |
           mkdir -p "$HOME/.fyra"
           cat > "$HOME/.fyra/config.yaml" <<EOF
-          server_address: ${FYRA_SERVER:-server.fyra.sh:50051}
+          server_address: ${FYRA_SERVER:-server.fyra.sh:50052}
           token: ${FYRA_TOKEN}
           EOF
 
