@@ -537,10 +537,19 @@ fun HomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .alpha(if (isCurrentBox) 1f else 0.55f)
+                                // OPAQUE fill (surfaceSolid, not the translucent
+                                // `surface`): the SwipeToDismissBox renders the
+                                // red Archive reveal (neon.red #FF5C72 coral)
+                                // behind the FULL row, and a translucent card
+                                // lets it bleed through — navy@66% over coral
+                                // composites to a muddy purple/magenta wash over
+                                // the whole card during swipe (device feedback).
+                                // An opaque fill keeps the red in the swiped gap
+                                // only; the card body stays navy.
                                 .neonCardSurface(
                                     neon = neon,
                                     shape = rowShape,
-                                    fill = neon.surface,
+                                    fill = neon.surfaceSolid,
                                     borderColor = if (isSelected) agentTint.copy(alpha = 0.7f) else neon.border,
                                     glowTint = if (isSelected) agentTint else null,
                                 )
