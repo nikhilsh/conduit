@@ -1,8 +1,10 @@
 package sh.nikhil.conduit.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,15 +15,33 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,8 +50,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.HarnessState
+import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import sh.nikhil.conduit.firstUserMessageOf
 import sh.nikhil.conduit.latestActivityPreviewOf
 
@@ -41,6 +63,7 @@ import sh.nikhil.conduit.latestActivityPreviewOf
 // chip. Reuses the home data + naming/preview helpers. Outcome chips are
 // omitted (no diff/PR/test data to back them).
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
     val neon = LocalNeonTheme.current
@@ -52,6 +75,49 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
     val connected = harness is HarnessState.Live || harness is HarnessState.Linked
+
+    // Rename dialog state (hoisted above the grid so the AlertDialog floats
+    // over the full NeonTabletHome surface, not buried inside a grid cell).
+    var renameTarget by remember { mutableStateOf<SavedServer?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+
+    // Reachability probe: absent key = pending, true = reachable, false = offline.
+    // SSH boxes skip the probe (loopback only listens while the tunnel is up).
+    // Mirrors HomeBoxRow / ServerSwitcherSheet logic from HomeScreen.kt / SettingsScreen.kt.
+    val reachabilityMap = remember { mutableStateMapOf<String, Boolean>() }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(savedServers) {
+        savedServers.forEach { server ->
+            if (server.endpoint == endpoint) return@forEach // active box uses harness state
+            // SSH boxes persist a loopback ws://127.0.0.1:<port> that only
+            // listens while THAT box's russh tunnel is up. Probing at rest
+            // always fails → misleading "offline". Skip; render neutral label.
+            if (server.ssh != null) return@forEach
+            if (reachabilityMap.containsKey(server.id)) return@forEach // already probed
+            scope.launch(Dispatchers.IO) {
+                val reachable = withTimeoutOrNull(4_000L) {
+                    runCatching {
+                        val base = server.endpoint.httpBaseUrl ?: return@runCatching false
+                        val conn = java.net.URL("$base/api/capabilities").openConnection()
+                            as java.net.HttpURLConnection
+                        conn.setRequestProperty("Authorization", "Bearer ${server.endpoint.token}")
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        val code = conn.responseCode
+                        conn.disconnect()
+                        code in 200..299
+                    }.getOrDefault(false)
+                } ?: false
+                reachabilityMap[server.id] = reachable
+                if (!reachable) {
+                    Telemetry.breadcrumb(
+                        "tablet_boxes", "reachability probe offline",
+                        mapOf("server" to server.name),
+                    )
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -116,20 +182,57 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
             GridOf(savedServers.map { it.id }) { sid ->
                 val server = savedServers.first { it.id == sid }
                 val isActive = endpoint == server.endpoint
-                val color = when {
-                    !isActive -> neon.textFaint
-                    connected -> neon.green
-                    harness is HarnessState.Connecting || harness is HarnessState.Reconnecting -> neon.yellow
-                    else -> neon.textFaint
-                }
                 // v151 ITEM C: SSH boxes persist a loopback endpoint; show the real
                 // ssh host:port instead of 127.0.0.1:<ephemeral port>.
                 val sub = server.ssh?.let { "${it.host}:${it.port}" } ?: server.endpoint.displayHost
-                BoxCard(neon, server.name, sub, isActive, color) {
-                    store.selectSavedServer(server.id, autoConnect = true)
-                }
+                BoxCard(
+                    neon = neon,
+                    server = server,
+                    host = sub,
+                    isActive = isActive,
+                    harness = harness,
+                    reachable = reachabilityMap[server.id],
+                    onConnect = {
+                        Telemetry.breadcrumb(
+                            "tablet_boxes", "connect tapped",
+                            mapOf("server" to server.name),
+                        )
+                        store.selectSavedServer(server.id, autoConnect = true)
+                    },
+                    onRename = {
+                        renameTarget = server
+                        renameDraft = server.name
+                    },
+                )
             }
         }
+    }
+
+    // Rename dialog — hoisted above the grid so it overlays correctly.
+    renameTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename box") },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { renameDraft = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (renameDraft.isNotBlank()) {
+                        store.renameSavedServer(target.id, renameDraft)
+                    }
+                    renameTarget = null
+                }) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -213,23 +316,64 @@ private fun SessionCard(
     }
 }
 
+/**
+ * Tablet box card with full ServerSwitcher parity:
+ *   - loopback display-host substitution (already present, retained)
+ *   - reachability status dot + label (probing / reachable / offline / SSH · tap Connect)
+ *   - active vs Connect distinction (checkmark + non-tappable active; Connect badge + tappable inactive)
+ *   - rename via long-press + overflow (3-dot) menu
+ * Mirrors HomeBoxRow from HomeScreen.kt and ServerSwitcherSheet from SettingsScreen.kt.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BoxCard(
     neon: NeonTheme,
-    name: String,
+    server: SavedServer,
     host: String,
     isActive: Boolean,
-    color: Color,
-    onClick: () -> Unit,
+    harness: HarnessState,
+    // Reachability probe result for non-active boxes; null = pending.
+    reachable: Boolean? = null,
+    onConnect: () -> Unit,
+    onRename: () -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val connected = isActive && (harness is HarnessState.Live || harness is HarnessState.Linked)
+
+    // Status dot color + label — mirrors HomeBoxRow / ServerSwitcherSheet.
+    val (statusText, statusColor) = when {
+        isActive && connected -> "connected" to neon.green
+        isActive && harness is HarnessState.Connecting -> "connecting..." to neon.yellow
+        isActive && harness is HarnessState.Reconnecting -> "reconnecting..." to neon.yellow
+        isActive -> "offline" to neon.textFaint
+        // SSH/tunnel boxes: loopback only listens while connected.
+        server.ssh != null -> "SSH - tap Connect" to neon.textFaint
+        reachable == null -> "probing..." to neon.textFaint
+        reachable == true -> "reachable" to neon.green
+        else -> "offline" to neon.textFaint
+    }
+
+    val glyphColor = when {
+        connected -> neon.green
+        isActive -> neon.accent
+        else -> neon.textFaint
+    }
+    val cardFill = if (connected) neon.green.copy(alpha = 0.06f) else neon.surface
+    val borderColor = if (connected) neon.green.copy(alpha = 0.25f) else neon.border
     val shape = RoundedCornerShape((neon.radiusDp - 4).dp)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .neonCardSurface(neon = neon, shape = shape, fill = neon.surface)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 15.dp),
+            .neonCardSurface(neon = neon, shape = shape, fill = cardFill, borderColor = borderColor)
+            // Active box: non-tappable for connect (already connected).
+            // Inactive box: tap opens rename on long-press; short tap handled via Connect button.
+            .combinedClickable(
+                enabled = !isActive,
+                onClick = onConnect,
+                onLongClick = onRename,
+            )
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(13.dp),
     ) {
@@ -237,16 +381,91 @@ private fun BoxCard(
             modifier = Modifier
                 .size(40.dp)
                 .clip(RoundedCornerShape(11.dp))
-                .background(color.copy(alpha = 0.11f))
-                .border(1.dp, color.copy(alpha = 0.22f), RoundedCornerShape(11.dp)),
+                .background(glyphColor.copy(alpha = 0.11f))
+                .border(1.dp, glyphColor.copy(alpha = 0.22f), RoundedCornerShape(11.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Outlined.Dns, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+            Icon(Icons.Outlined.Dns, contentDescription = null, tint = glyphColor, modifier = Modifier.size(18.dp))
         }
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(name, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 14.5.sp, color = neon.text, maxLines = 1)
-            Text(host, fontFamily = neon.mono, fontSize = 10.5.sp, color = neon.textFaint, maxLines = 1)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                server.name,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.5.sp,
+                color = if (connected) neon.green else neon.text,
+                maxLines = 1,
+            )
+            Text(
+                host,
+                fontFamily = neon.mono,
+                fontSize = 10.5.sp,
+                color = neon.textFaint,
+                maxLines = 1,
+            )
+            // Status line: dot + label.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .background(statusColor, CircleShape),
+                )
+                Text(
+                    statusText,
+                    fontFamily = neon.mono,
+                    fontSize = 10.sp,
+                    color = statusColor,
+                    maxLines = 1,
+                )
+            }
         }
-        Text(if (isActive) "active" else "tap", fontFamily = neon.mono, fontSize = 11.sp, color = color)
+        // Active: green checkmark (non-tappable; card itself is disabled).
+        // Inactive: Connect badge (tappable; triggers box switch).
+        if (isActive) {
+            Icon(
+                Icons.Filled.Check,
+                contentDescription = "Active box",
+                tint = neon.green,
+                modifier = Modifier.size(18.dp),
+            )
+        } else {
+            Text(
+                "Connect",
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.sp,
+                color = neon.accent,
+                modifier = Modifier
+                    .clickable(onClick = onConnect)
+                    .background(neon.accent.copy(alpha = 0.13f), CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
+        // Overflow (3-dot) menu: Rename. Long-press is the secondary path.
+        Box {
+            IconButton(
+                onClick = { menuOpen = true },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = "Box options",
+                    modifier = Modifier.size(16.dp),
+                    tint = neon.textFaint,
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    onClick = {
+                        menuOpen = false
+                        onRename()
+                    },
+                )
+            }
+        }
     }
 }
