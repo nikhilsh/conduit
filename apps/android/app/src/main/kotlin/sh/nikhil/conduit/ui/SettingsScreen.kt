@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.DataObject
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.ImportExport
@@ -62,6 +63,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -78,7 +80,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import android.content.Intent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withTimeoutOrNull
 import android.net.Uri
 import sh.nikhil.conduit.AgentReadiness
 import sh.nikhil.conduit.AppearanceStore
@@ -572,6 +577,7 @@ fun SettingsScreen(
         ServerSwitcherSheet(
             savedServers = savedServers,
             activeEndpoint = endpoint,
+            store = store,
             onUse = { store.selectSavedServer(it.id, autoConnect = true); showServerSwitcher = false },
             onForget = { pendingForget = it },
             onRetry = { server ->
@@ -903,14 +909,19 @@ internal fun TerminalFontStrip(
 }
 
 /**
- * Server switcher — reached from Connection's active-server row. Lists saved
- * servers (Use to switch, trash to forget, Default badge + active check) plus
- * the Add Server affordance. Mirrors iOS `ServerSwitcherView`.
+ * Server switcher - reached from Connection's active-server row. Lists saved
+ * servers with parity to iOS ServerSwitcherView:
+ *   - rename via 3-dot overflow menu + AlertDialog
+ *   - per-row reachability probe (non-active, non-SSH boxes only)
+ *   - loopback display-host substitution for SSH-tunnelled boxes
+ *   - active = green checkmark + non-tappable; inactive = Connect badge
+ * Default badge and Delete are preserved.
  */
 @Composable
 private fun ServerSwitcherSheet(
     savedServers: List<SavedServer>,
     activeEndpoint: Endpoint,
+    store: SessionStore,
     onUse: (SavedServer) -> Unit,
     onForget: (SavedServer) -> Unit,
     onRetry: (SavedServer) -> Unit,
@@ -918,13 +929,95 @@ private fun ServerSwitcherSheet(
     onDismiss: () -> Unit,
 ) {
     val neon = LocalNeonTheme.current
+    val scope = rememberCoroutineScope()
+
+    // Rename dialog state.
+    var renameTarget by remember { mutableStateOf<SavedServer?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+
+    // Reachability probe: absent key = pending, true = reachable, false = offline.
+    // SSH boxes skip the probe (loopback only listens while the tunnel is up).
+    val reachabilityMap = remember { mutableStateMapOf<String, Boolean>() }
+    LaunchedEffect(savedServers) {
+        savedServers.forEach { server ->
+            if (server.endpoint == activeEndpoint) return@forEach
+            if (server.ssh != null) return@forEach
+            if (reachabilityMap.containsKey(server.id)) return@forEach
+            scope.launch(Dispatchers.IO) {
+                val reachable = withTimeoutOrNull(4_000L) {
+                    runCatching {
+                        val base = server.endpoint.httpBaseUrl ?: return@runCatching false
+                        val conn = java.net.URL("$base/api/capabilities").openConnection()
+                            as java.net.HttpURLConnection
+                        conn.setRequestProperty("Authorization", "Bearer ${server.endpoint.token}")
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        val code = conn.responseCode
+                        conn.disconnect()
+                        code in 200..299
+                    }.getOrDefault(false)
+                } ?: false
+                reachabilityMap[server.id] = reachable
+                if (!reachable) {
+                    Telemetry.breadcrumb(
+                        "switcher", "reachability probe offline",
+                        mapOf("server" to server.name),
+                    )
+                }
+            }
+        }
+    }
+
+    // Rename AlertDialog.
+    renameTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename server") },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { renameDraft = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (renameDraft.isNotBlank()) {
+                        store.renameSavedServer(target.id, renameDraft)
+                    }
+                    renameTarget = null
+                }) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
+
     PickerSheet(title = "Servers", onDismiss = onDismiss) {
         savedServers.forEach { server ->
             val active = server.endpoint == activeEndpoint
             val isFailed = server.status is SavedServerStatus.Failed
             val failReason = (server.status as? SavedServerStatus.Failed)?.reason
+            var menuOpen by remember { mutableStateOf(false) }
+
+            // Loopback display-host substitution: SSH-tunnelled boxes show
+            // the real SSH host:port instead of 127.0.0.1:<port>.
+            val displayHost = server.ssh?.let { "${it.host}:${it.port}" }
+                ?: server.endpoint.displayHost
+
+            // Status dot color + label (mirrors HomeBoxRow logic).
+            val (statusText, statusColor) = when {
+                active -> "active" to neon.green
+                server.ssh != null -> "SSH - tap Connect" to neon.textDim
+                reachabilityMap[server.id] == null -> "probing..." to neon.textDim
+                reachabilityMap[server.id] == true -> "reachable" to neon.green
+                else -> "offline" to neon.textDim
+            }
+
             ListItem(
-                modifier = Modifier.clickable(enabled = !isFailed) { onUse(server) },
+                modifier = Modifier.clickable(enabled = !isFailed && !active) { onUse(server) },
                 leadingContent = {
                     Icon(
                         Icons.Filled.Apps,
@@ -936,16 +1029,34 @@ private fun ServerSwitcherSheet(
                         },
                     )
                 },
-                headlineContent = { Text(server.name, color = if (isFailed) neon.red else neon.text, fontFamily = neon.sans) },
+                headlineContent = {
+                    Text(server.name, color = if (isFailed) neon.red else neon.text, fontFamily = neon.sans)
+                },
                 supportingContent = {
                     Column {
-                        Text(
-                            if (isFailed) "Add failed" else server.endpoint.displayHost,
-                            fontFamily = neon.sans,
-                            color = if (isFailed) neon.red else neon.textDim,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text(
+                                if (isFailed) "Add failed" else displayHost,
+                                fontFamily = neon.sans,
+                                color = if (isFailed) neon.red else neon.textDim,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (!isFailed) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(statusColor, CircleShape),
+                                )
+                                Text(
+                                    statusText,
+                                    fontFamily = neon.mono,
+                                    fontSize = 11.sp,
+                                    color = statusColor,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                         if (failReason != null) {
                             Text(
                                 failReason,
@@ -980,8 +1091,52 @@ private fun ServerSwitcherSheet(
                                 )
                             }
                         }
-                        IconButton(onClick = { onForget(server) }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Forget", tint = neon.textDim)
+                        // Active: green checkmark. Inactive: Connect badge.
+                        if (active) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = "Active server",
+                                tint = neon.green,
+                            )
+                        } else if (!isFailed) {
+                            Text(
+                                "Connect",
+                                fontFamily = neon.mono,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                color = neon.accent,
+                                modifier = Modifier
+                                    .clickable { onUse(server) }
+                                    .background(neon.accent.copy(alpha = 0.13f), CircleShape)
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                        // 3-dot overflow: Rename + Delete.
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = "Server options",
+                                    tint = neon.textDim,
+                                )
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = {
+                                        menuOpen = false
+                                        renameDraft = server.name
+                                        renameTarget = server
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete", color = neon.red) },
+                                    onClick = {
+                                        menuOpen = false
+                                        onForget(server)
+                                    },
+                                )
+                            }
                         }
                     }
                 },
