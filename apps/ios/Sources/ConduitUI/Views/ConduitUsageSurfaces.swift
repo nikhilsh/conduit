@@ -138,13 +138,20 @@ extension ConduitUI {
                     //    is the LAYOUT driver: it genuinely collapses to 0 when
                     //    closed (no reserved space) and animates to the measured
                     //    height when open — a concrete, interpolatable value.
-                    //  • The visible detail rides in the overlay with opacity
-                    //    0↔1 on the SAME curve, and `.clipped()` keeps it inside
-                    //    the animating height. Content is transparent exactly
-                    //    when height is 0 → no lingering bars, no gap.
+                    //  • The visible detail rides in the overlay with its OWN
+                    //    opacity animation that is DECOUPLED from the height
+                    //    curve: on collapse (expanded=false) the content fades
+                    //    out in ~0.04s (~2 frames) so bars are gone BEFORE the
+                    //    panel visibly shrinks; on expand the content fades in
+                    //    after a small delay once the panel has room. The
+                    //    `.animation(_:value:)` on the overlay content is the
+                    //    INNERMOST modifier for that view, so it takes precedence
+                    //    over the outer `.animation(expandAnim, value: expanded)`
+                    //    which only controls the height frame below.
                     Color.clear
                         .frame(maxWidth: .infinity)
                         .frame(height: expanded ? detailHeight : 0)
+                        .animation(Self.expandAnim, value: expanded)
                         .overlay(alignment: .top) {
                             expandedDetail(agents: agents)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -155,12 +162,23 @@ extension ConduitUI {
                                             value: geo.size.height)
                                     }
                                 )
+                                // Asymmetric opacity: collapse fades out in ~0.04s
+                                // (near-instant, before height shrinks); expand
+                                // fades in gently after a brief delay once the
+                                // panel has opened. This .animation wins over any
+                                // ancestor animation because it is scoped directly
+                                // to this view's opacity change.
                                 .opacity(expanded ? 1 : 0)
+                                .animation(
+                                    expanded
+                                        ? .easeOut(duration: 0.16).delay(0.06)
+                                        : .easeOut(duration: 0.04),
+                                    value: expanded
+                                )
                                 .allowsHitTesting(expanded)
                         }
                         .clipped()
                         .onPreferenceChange(DetailHeightKey.self) { detailHeight = $0 }
-                        .animation(Self.expandAnim, value: expanded)
                         .accessibilityHidden(!expanded)
                 }
                 .padding(.horizontal, 12)
@@ -183,11 +201,16 @@ extension ConduitUI {
                     }
                     let tint = neon.agentTint(forAgent: a.agent)
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 5) {
-                            Circle().fill(tint).frame(width: 5, height: 5)
-                            Text(a.agent)
-                                .font(neon.mono(10.5).weight(.semibold))
-                                .foregroundStyle(tint)
+                        // Only show per-agent header when multiple agents are
+                        // present — with a single agent the glance row already
+                        // shows the name, so the header would be redundant.
+                        if agents.count >= 2 {
+                            HStack(spacing: 5) {
+                                Circle().fill(tint).frame(width: 5, height: 5)
+                                Text(a.agent)
+                                    .font(neon.mono(10.5).weight(.semibold))
+                                    .foregroundStyle(tint)
+                            }
                         }
                         windowRow("5h", pct: a.fivePct, resetsAt: a.fiveResetsAt, tint: tint)
                         windowRow("weekly", pct: a.weekPct, resetsAt: a.weekResetsAt, tint: tint)
@@ -242,15 +265,19 @@ extension ConduitUI {
                     }
                 }
                 .frame(height: 6)
-                Text(pct.map { "\(Int($0.rounded()))%" } ?? "—")
-                    .font(neon.mono(11.5).weight(.bold))
-                    .foregroundStyle(pct == nil ? neon.textFaint : neon.text)
-                    .frame(width: 38, alignment: .trailing)
-                Text(AccountUsageFormat.resetShort(resetsAt, now: now))
-                    .font(neon.mono(10))
-                    .foregroundStyle(neon.textFaint)
-                    .lineLimit(1)
-                    .frame(width: 64, alignment: .trailing)
+                // Compact trailing group: % and reset read as a unit near the
+                // end of the meter rather than pinned to the screen edge.
+                HStack(spacing: 4) {
+                    Text(pct.map { "\(Int($0.rounded()))%" } ?? "—")
+                        .font(neon.mono(11.5).weight(.bold))
+                        .foregroundStyle(pct == nil ? neon.textFaint : neon.text)
+                        .frame(width: 34, alignment: .trailing)
+                    Text(AccountUsageFormat.resetShort(resetsAt, now: now))
+                        .font(neon.mono(10))
+                        .foregroundStyle(neon.textFaint)
+                        .lineLimit(1)
+                        .frame(width: 50, alignment: .trailing)
+                }
             }
         }
     }
