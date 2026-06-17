@@ -96,7 +96,7 @@ extension ConduitUI {
             @Bindable var store = store
             return NavigationSplitView {
                 ConduitUI.SessionsRail()
-                    .navigationSplitViewColumnWidth(min: 256, ideal: 272, max: 320)
+                    .navigationSplitViewColumnWidth(min: 240, ideal: 272, max: 320)
                     .toolbar(.hidden, for: .navigationBar)
             } detail: {
                 if let id = store.selectedSessionID,
@@ -107,16 +107,25 @@ extension ConduitUI {
                     // the right pane reuses the same terminal/browser/info
                     // surfaces. Phone uses ProjectView's full tabs (chatOnly
                     // defaults false).
-                    HStack(spacing: 0) {
-                        ConduitUI.ProjectView(session: session, chatOnly: true)
-                            // Keying on session id forces SwiftUI to
-                            // discard the previous detail's `@State`
-                            // when the user picks a different session.
-                            .id(session.id)
-                        Divider().background(neon.border)
-                        ConduitUI.TabletRightPane(session: session)
-                            .frame(width: 392)
-                            .id(session.id)
+                    //
+                    // GeometryReader makes the right pane proportional to the
+                    // available detail width: ~38% clamped to [300, 392] pt.
+                    // This keeps large iPads at the original 392pt cap while
+                    // preventing the chat column from becoming unusably narrow
+                    // on iPad mini (768pt) or in split-screen multitasking.
+                    GeometryReader { geo in
+                        let paneW = min(392, max(300, geo.size.width * 0.38))
+                        HStack(spacing: 0) {
+                            ConduitUI.ProjectView(session: session, chatOnly: true)
+                                // Keying on session id forces SwiftUI to
+                                // discard the previous detail's `@State`
+                                // when the user picks a different session.
+                                .id(session.id)
+                            Divider().background(neon.border)
+                            ConduitUI.TabletRightPane(session: session)
+                                .frame(width: paneW)
+                                .id(session.id)
+                        }
                     }
                 } else {
                     ConduitUI.EmptyDetail()

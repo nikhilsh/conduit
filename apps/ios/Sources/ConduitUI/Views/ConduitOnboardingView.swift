@@ -73,13 +73,22 @@ extension ConduitUI {
                     if step < Step.done.rawValue {
                         progress
                     }
-                    Group {
-                        switch Step(rawValue: step) ?? .welcome {
-                        case .welcome: welcomeStep
-                        case .install: installStep
-                        case .pair:    pairStep
-                        case .done:    doneStep
+                    // Cap the foreground content at 500pt so it reads as a
+                    // centred column on iPad (phone widths are under 500pt so
+                    // they are visually unchanged). The full-bleed background
+                    // (neon.appBg in the ZStack) is not affected.
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        Group {
+                            switch Step(rawValue: step) ?? .welcome {
+                            case .welcome: welcomeStep
+                            case .install: installStep
+                            case .pair:    pairStep
+                            case .done:    doneStep
+                            }
                         }
+                        .frame(maxWidth: 500, maxHeight: .infinity)
+                        Spacer(minLength: 0)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
