@@ -370,7 +370,7 @@ jobs:
           WAIT_FOR_PROCESSING: ${{ (github.event.inputs.wait_for_processing == 'false') && '0' || '1' }}
           WHAT_TO_TEST_FILE: ${{ runner.temp }}/whats-new.txt
         run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyjwt cryptography
+          python3 -m pip install --quiet --disable-pip-version-check --break-system-packages pyjwt cryptography
           export ASC_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
           python3 apps/ios/scripts/testflight-postprocess.py
 
