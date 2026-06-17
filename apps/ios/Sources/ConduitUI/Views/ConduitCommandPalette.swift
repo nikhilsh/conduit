@@ -71,13 +71,21 @@ extension ConduitUI {
                     searchField
                     Divider().overlay(neon.border)
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            actionsSection
-                            jumpSection
-                            runOnBoxSection
+                        // Cap content width at 560pt and centre it so the
+                        // palette doesn't stretch edge-to-edge on iPad.
+                        // Phone widths are under 560pt so they are unchanged.
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            VStack(alignment: .leading, spacing: 16) {
+                                actionsSection
+                                jumpSection
+                                runOnBoxSection
+                            }
+                            .frame(maxWidth: 560)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 14)
+                            Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 14)
                     }
                     Divider().overlay(neon.border)
                     hintsFooter
