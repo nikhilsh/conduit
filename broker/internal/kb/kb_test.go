@@ -180,6 +180,52 @@ func TestAddWritesFileAndUpdatesIndex(t *testing.T) {
 	}
 }
 
+// TestAddCreatesFreshKBDir verifies that Add creates knowledge/ when it does not
+// exist yet (mkdir-p behavior) and that secret-scrub still fires before any
+// write so the directory is NOT created on a rejected body.
+func TestAddCreatesFreshKBDir(t *testing.T) {
+	wsDir := t.TempDir()
+	store := NewStore(wsDir)
+	kbDir := filepath.Join(wsDir, KnowledgeDir)
+
+	// Precondition: knowledge/ dir does not exist.
+	if _, err := os.Stat(kbDir); !os.IsNotExist(err) {
+		t.Fatal("precondition: knowledge dir should not exist yet")
+	}
+
+	// Secret body should be rejected and the dir should NOT be created.
+	_, err := store.Add(AddRequest{
+		Title: "Secret Entry",
+		Tags:  []string{"broker"},
+		Body:  "CONDUIT_TOKEN=supersecretvalue123",
+	})
+	if err == nil {
+		t.Fatal("secret body should have been rejected")
+	}
+	if !strings.Contains(err.Error(), "secret detected") {
+		t.Errorf("expected secret-detected error, got: %v", err)
+	}
+	if _, statErr := os.Stat(kbDir); !os.IsNotExist(statErr) {
+		t.Error("knowledge dir must not be created when secret-scrub fires")
+	}
+
+	// A clean add should create the dir and write the entry.
+	result, err := store.Add(AddRequest{
+		Title: "Fresh Entry",
+		Tags:  []string{"broker"},
+		Body:  "Normal body content for a fresh KB.",
+	})
+	if err != nil {
+		t.Fatalf("Add on fresh workspace failed: %v", err)
+	}
+	if _, statErr := os.Stat(kbDir); statErr != nil {
+		t.Errorf("knowledge dir was not created: %v", statErr)
+	}
+	if _, statErr := os.Stat(result.Path); statErr != nil {
+		t.Errorf("entry file was not written: %v", statErr)
+	}
+}
+
 // TestSearchHitAndMiss checks that search returns matches and ignores non-matches.
 func TestSearchHitAndMiss(t *testing.T) {
 	dir := t.TempDir()
