@@ -1669,6 +1669,17 @@ final class SessionStore {
     }
 
     func listDirectories(path: String?) async throws -> RemoteDirectoryListing {
+        // Proactive fast-fail: if the SSH tunnel is definitively dead, kick off
+        // self-heal immediately rather than letting the network call hit a
+        // refused loopback port and produce a cryptic error.
+        if let tunnel = sshTunnel, !tunnel.isAlive(),
+           savedServers.first(where: { $0.endpoint == endpoint })?.ssh != nil {
+            Telemetry.breadcrumb("fs", "listDirectories — SSH tunnel dead, triggering self-heal",
+                data: ["path": path ?? "/"])
+            reconnect()
+            throw NSError(domain: "SessionStore", code: 103,
+                userInfo: [NSLocalizedDescriptionKey: "Lost connection to this box. Reconnecting\u{2026}"])
+        }
         guard let base = endpoint.httpBaseURL else {
             throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
         }
@@ -3219,6 +3230,14 @@ final class SessionStore {
                     } else {
                         self.harness = .failed("Pairing expired. Scan a new QR code from the server.")
                     }
+                } else if Self.isConnectionRefused(error),
+                          self.savedServers.first(where: { $0.endpoint == self.endpoint })?.ssh != nil {
+                    // Dead SSH tunnel: box shows connected but broker is unreachable.
+                    // Drive the same SSH self-heal path so harness ends up .reconnecting.
+                    Telemetry.breadcrumb("session", "connection refused on SSH box — triggering self-heal",
+                        data: ["phase": "create_session", "endpoint": self.endpoint.displayHost])
+                    self.harness = .reconnecting(attempt: 1, maxAttempts: 3)
+                    self.attemptSshSelfHeal()
                 }
                 Telemetry.capture(
                     error: error,
@@ -6107,6 +6126,22 @@ final class SessionStore {
         assert(parityOK, "Rust/Swift lifecycle diverged for \(sessionID)")
     }
     #endif
+}
+
+extension SessionStore {
+    /// True when the error is a TCP connection-refused — the SSH tunnel or
+    /// broker is dead but the harness still reports `.live`. Callers use this
+    /// to trigger SSH self-heal instead of showing a cryptic error.
+    static func isConnectionRefused(_ error: Error) -> Bool {
+        let t = String(describing: error).lowercased()
+        if t.contains("connection refused") || t.contains("os error 61") || t.contains("econnrefused") {
+            return true
+        }
+        if let urlErr = error as? URLError, urlErr.code == .cannotConnectToHost {
+            return true
+        }
+        return false
+    }
 }
 
 private extension SessionStore {

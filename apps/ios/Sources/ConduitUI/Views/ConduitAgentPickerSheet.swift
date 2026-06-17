@@ -1294,7 +1294,12 @@ extension ConduitUI {
                 // Best-effort — nil leaves the chip hidden.
                 harnessStatus = await store.harnessStatus(path: result.path)
             } catch {
-                loadError = "Couldn't list this folder."
+                if SessionStore.isConnectionRefused(error) {
+                    loadError = "Lost connection to this box. Reconnecting\u{2026}"
+                    store.reconnect()
+                } else {
+                    loadError = "Couldn't list this folder."
+                }
             }
             isLoading = false
         }
