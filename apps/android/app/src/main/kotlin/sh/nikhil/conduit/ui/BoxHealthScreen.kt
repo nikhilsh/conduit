@@ -29,7 +29,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -120,6 +122,7 @@ fun BoxHealthScreen(
     val harness by store.harness.collectAsState()
     val sessions by store.sessions.collectAsState()
     val statuses by store.statusBySession.collectAsState()
+    val scope = rememberCoroutineScope()
 
     val isActive = endpoint == server.endpoint
     val connected = isActive && harness.canIssueCommands
@@ -134,9 +137,21 @@ fun BoxHealthScreen(
     var features by remember(server.id) { mutableStateOf<SessionStore.BoxFeatures?>(null) }
     var foundSnapshot by remember(server.id) { mutableStateOf<FoundSessionsSnapshot?>(null) }
     var showFoundSheet by remember { mutableStateOf(false) }
+    // 4-state fork probe: Checking while in-flight, Failed on null result,
+    // Ready(sessionFork) once the features object is parsed.
+    var forkProbeState by remember(server.id) { mutableStateOf<ForkProbeState>(ForkProbeState.Checking) }
+
     LaunchedEffect(server.id) {
         Telemetry.breadcrumb("box_health", "open", mapOf("host" to server.endpoint.displayHost))
-        features = store.fetchBoxFeatures(server.endpoint)
+        forkProbeState = ForkProbeState.Checking
+        val probed = store.fetchBoxFeatures(server.endpoint)
+        features = probed
+        forkProbeState = if (probed == null) {
+            Telemetry.breadcrumb("box_health", "fork probe failed (initial)", mapOf("host" to server.endpoint.displayHost))
+            ForkProbeState.Failed
+        } else {
+            ForkProbeState.Ready(probed.sessionFork)
+        }
         if (features?.hostMetrics == true) {
             metrics = store.fetchHostMetrics(server.endpoint)
         }
@@ -459,7 +474,24 @@ fun BoxHealthScreen(
             FoundSessionsSheet(
                 store = store,
                 server = server,
-                sessionFork = features?.sessionFork == true,
+                forkProbe = forkProbeState,
+                onRetryForkProbe = {
+                    scope.launch {
+                        forkProbeState = ForkProbeState.Checking
+                        val probed = store.fetchBoxFeatures(server.endpoint)
+                        features = probed
+                        forkProbeState = if (probed == null) {
+                            Telemetry.breadcrumb(
+                                "box_health",
+                                "fork probe failed (retry)",
+                                mapOf("host" to server.endpoint.displayHost),
+                            )
+                            ForkProbeState.Failed
+                        } else {
+                            ForkProbeState.Ready(probed.sessionFork)
+                        }
+                    }
+                },
                 sessionWatch = features?.sessionWatch == true,
                 onDismiss = { showFoundSheet = false },
                 onOpenSession = { sessionId ->
