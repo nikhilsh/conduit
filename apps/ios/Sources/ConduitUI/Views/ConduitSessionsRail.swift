@@ -48,6 +48,7 @@ extension ConduitUI {
                     showSettings = false
                     showOnboarding = true
                 })
+                .presentationDetents([.medium, .large])
             }
             .fullScreenCover(isPresented: $showOnboarding) {
                 ConduitUI.OnboardingView(onFinish: { showOnboarding = false })
@@ -55,9 +56,11 @@ extension ConduitUI {
             }
             .sheet(isPresented: $showAddServer) {
                 ConduitUI.AddServerSheet()
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showBoxes) {
                 ConduitUI.DiscoveryView()
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showSearch) {
                 SessionSearchView(

@@ -96,6 +96,8 @@ extension ConduitUI {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 18)
+                        .frame(maxWidth: 640)
+                        .frame(maxWidth: .infinity)
                     }
                     .scrollIndicators(.hidden)
                 }
@@ -116,6 +118,7 @@ extension ConduitUI {
                 }
                 .sheet(isPresented: $showAddServer) {
                     ConduitUI.AddServerSheet()
+                        .presentationDetents([.medium, .large])
                 }
                 .sheet(isPresented: $showAgentLogin, onDismiss: {
                     // Re-read the Keychain so a fresh sign-in flips the
@@ -124,6 +127,7 @@ extension ConduitUI {
                     reAuthProvider = nil
                 }) {
                     ConduitUI.AgentLoginSheet(autoStartProvider: reAuthProvider)
+                        .presentationDetents([.medium, .large])
                 }
             }
             // Re-bind \.colorScheme to the AppearanceStore so a runtime
@@ -1280,6 +1284,7 @@ extension ConduitUI {
             .appearanceColorScheme()
             .sheet(isPresented: $showAddServer) {
                 ConduitUI.AddServerSheet()
+                    .presentationDetents([.medium, .large])
             }
             .sheet(item: $retrySSHServer) { server in
                 let iv: SSHLoginSheet.InitialValues = {
@@ -1295,6 +1300,7 @@ extension ConduitUI {
                 }()
                 SSHLoginSheet(initialValues: iv)
                     .environment(store)
+                    .presentationDetents([.medium, .large])
             }
             .alert(
                 "Rename box",

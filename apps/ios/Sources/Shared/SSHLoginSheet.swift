@@ -74,6 +74,8 @@ struct SSHLoginSheet: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
                 }
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)

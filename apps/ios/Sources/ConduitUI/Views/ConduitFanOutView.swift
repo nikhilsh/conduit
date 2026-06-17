@@ -157,6 +157,8 @@ extension ConduitUI {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 18)
+                        .frame(maxWidth: 760)
+                        .frame(maxWidth: .infinity)
                     }
                     .safeAreaInset(edge: .bottom) {
                         if hasLaunched {

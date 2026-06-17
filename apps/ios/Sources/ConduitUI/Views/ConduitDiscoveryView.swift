@@ -50,6 +50,8 @@ extension ConduitUI {
                         // which had cards kissing the screen edge).
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)
+                        .frame(maxWidth: 600)
+                        .frame(maxWidth: .infinity)
                     }
                     .refreshable {
                         browser.restart()

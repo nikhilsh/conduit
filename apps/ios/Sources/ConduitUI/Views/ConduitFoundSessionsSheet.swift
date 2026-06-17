@@ -62,6 +62,8 @@ extension ConduitUI {
                 ZStack {
                     GlassAppBackground()
                     mainContent
+                        .frame(maxWidth: 640)
+                        .frame(maxWidth: .infinity)
                 }
                 .navigationTitle("Found on \(server.name)")
                 .navigationBarTitleDisplayMode(.inline)

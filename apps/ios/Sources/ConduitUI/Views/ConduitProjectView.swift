@@ -180,18 +180,21 @@ extension ConduitUI {
             }
             .sheet(isPresented: $showInfo) {
                 ConduitUI.SessionInfoView(session: session)
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showDiff) {
                 // Diff review for this session. Commit/PR CTAs stay default
                 // no-ops — no backend action exists yet.
                 ConduitUI.DiffReviewView(session: session)
                     .environment(store)
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showRename) {
                 ConduitUI.RenameSessionSheet(
                     session: session,
                     initialDraft: store.displayName(for: session)
                 )
+                .presentationDetents([.medium])
             }
             // Centered `.alert` (not `.confirmationDialog`) for the same
             // reason as SessionInfoView: dialogs anchored to a popover
