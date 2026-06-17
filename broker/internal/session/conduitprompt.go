@@ -126,7 +126,7 @@ func (s *Session) injectConduitAwarenessAgentsMD() error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	updated := upsertConduitAwarenessSection(existing)
+	updated := upsertConduitAwarenessSectionWithKB(existing, dir)
 	if updated == existing {
 		return nil // already current — skip the write (no git churn)
 	}
@@ -140,4 +140,146 @@ func (s *Session) injectConduitAwarenessAgentsMD() error {
 // "the agent didn't know about $PORT" report is diagnosable from box logs.
 func logConduitAwarenessInjected(sessionID, agent, mechanism string) {
 	log.Printf("session %s: conduit-awareness injected (agent=%s mechanism=%s)", sessionID, agent, mechanism)
+}
+
+// kbSection builds the "Knowledge base" section of the conduit-awareness
+// prompt for the given workspace directory. It is included only when the
+// workspace has a knowledge/INDEX.md file (the self-gate).
+//
+// It uses os.Executable() to embed the absolute path to the broker binary so
+// the agent can invoke conduit-broker kb commands regardless of PATH.
+//
+// Returns ("", false) when the workspace has no knowledge/INDEX.md (gate OFF).
+// Returns (section, true) when the section was built successfully.
+func kbSection(workspaceDir string) (string, bool) {
+	if workspaceDir == "" {
+		return "", false
+	}
+	indexPath := filepath.Join(workspaceDir, "knowledge", "INDEX.md")
+	b, err := os.ReadFile(indexPath)
+	if err != nil {
+		// No INDEX.md -- KB gate is OFF for this workspace.
+		return "", false
+	}
+	indexContent := truncateKBIndex(string(b))
+
+	brokerBin := brokerExecutable()
+	var sb strings.Builder
+	sb.WriteString("Knowledge base: this workspace has a knowledge/ directory. Before non-trivial work, consult it.\n")
+	sb.WriteString("- Search: ")
+	sb.WriteString(brokerBin)
+	sb.WriteString(" kb search <query>\n")
+	sb.WriteString("- Read an entry: ")
+	sb.WriteString(brokerBin)
+	sb.WriteString(" kb get <slug>\n")
+	sb.WriteString("- Add a new finding: ")
+	sb.WriteString(brokerBin)
+	sb.WriteString(" kb add --title \"...\" --tags \"tag1,tag2\" --body \"...\"\n")
+	sb.WriteString("- When you learn something durable (a footgun, a decision, a wire fact), add it.\n")
+	sb.WriteString("\nCurrent knowledge/INDEX.md:\n")
+	sb.WriteString("```\n")
+	sb.WriteString(indexContent)
+	if !strings.HasSuffix(indexContent, "\n") {
+		sb.WriteString("\n")
+	}
+	sb.WriteString("```")
+	return sb.String(), true
+}
+
+// truncateKBIndex caps the index content to MaxIndexLines/MaxIndexBytes.
+// Mirrors the logic in the kb package to avoid a circular import.
+const (
+	maxKBIndexLines = 120
+	maxKBIndexBytes = 4096
+)
+
+func truncateKBIndex(raw string) string {
+	if len(raw) <= maxKBIndexBytes {
+		if strings.Count(raw, "\n") <= maxKBIndexLines {
+			return raw
+		}
+	}
+	lines := strings.Split(raw, "\n")
+	var kept []string
+	total := 0
+	truncated := false
+	for i, line := range lines {
+		if i >= maxKBIndexLines {
+			truncated = true
+			break
+		}
+		if total+len(line)+1 > maxKBIndexBytes {
+			truncated = true
+			break
+		}
+		kept = append(kept, line)
+		total += len(line) + 1
+	}
+	result := strings.Join(kept, "\n")
+	if truncated {
+		result += "\n[INDEX truncated]"
+	}
+	return result
+}
+
+// brokerExecutable returns the absolute path to the running broker binary,
+// or "conduit-broker" as a fallback when os.Executable() fails.
+func brokerExecutable() string {
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		return exe
+	}
+	return "conduit-broker"
+}
+
+// conduitAwarenessPromptWithKB returns the conduit-awareness addendum
+// including the KB section when the workspace has a knowledge/INDEX.md.
+// Same as conduitAwarenessPrompt() when the KB gate is OFF.
+func conduitAwarenessPromptWithKB(workspaceDir string) string {
+	base := conduitAwarenessPrompt()
+	section, ok := kbSection(workspaceDir)
+	if !ok {
+		return base
+	}
+	return base + "\n- " + section
+}
+
+// claudeAppendSystemPromptForWorkspace is like claudeAppendSystemPrompt but
+// includes the KB section when the workspace has a knowledge/INDEX.md.
+func claudeAppendSystemPromptForWorkspace(workspaceDir string) string {
+	if !conduitAwarenessEnabled() {
+		return askUserQuestionNudge
+	}
+	return askUserQuestionNudge + "\n\n" + conduitAwarenessPromptWithKB(workspaceDir)
+}
+
+// conduitAwarenessAgentsMDSectionWithKB renders the fenced markdown block
+// written into a codex workspace's AGENTS.md, including the KB section when
+// the workspace has a knowledge/INDEX.md.
+func conduitAwarenessAgentsMDSectionWithKB(workspaceDir string) string {
+	prompt := conduitAwarenessPromptWithKB(workspaceDir)
+	return agentsMDSectionBegin + "\n\n" +
+		"## Running under Conduit\n\n" +
+		prompt + "\n\n" +
+		agentsMDSectionEnd
+}
+
+// upsertConduitAwarenessSectionWithKB returns AGENTS.md content with the
+// managed conduit-awareness block (including KB section) inserted or replaced.
+// Delegates to conduitAwarenessAgentsMDSectionWithKB for the section content.
+func upsertConduitAwarenessSectionWithKB(existing, workspaceDir string) string {
+	section := conduitAwarenessAgentsMDSectionWithKB(workspaceDir)
+	begin := strings.Index(existing, agentsMDSectionBegin)
+	if begin >= 0 {
+		endIdx := strings.Index(existing[begin:], agentsMDSectionEnd)
+		if endIdx >= 0 {
+			end := begin + endIdx + len(agentsMDSectionEnd)
+			return existing[:begin] + section + existing[end:]
+		}
+		return existing[:begin] + section
+	}
+	trimmed := strings.TrimRight(existing, "\n")
+	if trimmed == "" {
+		return section + "\n"
+	}
+	return trimmed + "\n\n" + section + "\n"
 }

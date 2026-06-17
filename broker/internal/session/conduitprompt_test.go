@@ -2,6 +2,7 @@ package session
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -148,5 +149,124 @@ func TestIsCodexProtocol(t *testing.T) {
 		if isCodexProtocol(p) {
 			t.Errorf("isCodexProtocol(%q) = true, want false", p)
 		}
+	}
+}
+
+// TestKBSectionGate verifies the self-gate: kbSection returns ("", false) when
+// no knowledge/INDEX.md exists, and (section, true) when it does.
+func TestKBSectionGate(t *testing.T) {
+	// No knowledge directory at all.
+	dir := t.TempDir()
+	section, ok := kbSection(dir)
+	if ok {
+		t.Errorf("kbSection should be false when no knowledge/INDEX.md; got section: %q", section)
+	}
+
+	// Create knowledge/INDEX.md.
+	kbDir := filepath.Join(dir, "knowledge")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	indexContent := "# KB Index\n\nSome entries.\n"
+	if err := os.WriteFile(filepath.Join(kbDir, "INDEX.md"), []byte(indexContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	section, ok = kbSection(dir)
+	if !ok {
+		t.Error("kbSection should be true when knowledge/INDEX.md exists")
+	}
+	if !strings.Contains(section, "Knowledge base") {
+		t.Errorf("section missing 'Knowledge base' header; got: %q", section)
+	}
+	// The section contains the broker binary path + " kb search" — in tests
+	// os.Executable() returns the test binary path, so check for "kb search".
+	if !strings.Contains(section, "kb search") {
+		t.Errorf("section missing search instruction; got: %q", section)
+	}
+	if !strings.Contains(section, "KB Index") {
+		t.Errorf("section missing index content; got: %q", section)
+	}
+}
+
+// TestConduitAwarenessPromptWithKBGate verifies that the KB section is absent
+// when no knowledge/INDEX.md exists and present when it does.
+func TestConduitAwarenessPromptWithKBGate(t *testing.T) {
+	t.Setenv(conduitAwarenessEnv, "on")
+
+	// No KB: should equal the base prompt.
+	dir := t.TempDir()
+	withKB := conduitAwarenessPromptWithKB(dir)
+	base := conduitAwarenessPrompt()
+	if withKB != base {
+		t.Errorf("no-KB prompt should equal base prompt\nbase: %q\nwithKB: %q", base, withKB)
+	}
+
+	// With KB: should contain the base prompt AND the KB section.
+	kbDir := filepath.Join(dir, "knowledge")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "INDEX.md"), []byte("# KB\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withKB2 := conduitAwarenessPromptWithKB(dir)
+	if !strings.Contains(withKB2, "Knowledge base") {
+		t.Errorf("with-KB prompt should contain 'Knowledge base'; got: %q", withKB2)
+	}
+	if !strings.Contains(withKB2, base) {
+		t.Errorf("with-KB prompt should contain the base prompt")
+	}
+}
+
+// TestClaudeAppendSystemPromptForWorkspaceKBGate verifies that the workspace
+// param drives KB inclusion in the claude --append-system-prompt value.
+func TestClaudeAppendSystemPromptForWorkspaceKBGate(t *testing.T) {
+	t.Setenv(conduitAwarenessEnv, "on")
+
+	dir := t.TempDir()
+	// No KB: should equal the standard claudeAppendSystemPrompt().
+	noKB := claudeAppendSystemPromptForWorkspace(dir)
+	standard := claudeAppendSystemPrompt()
+	if noKB != standard {
+		t.Errorf("no-KB workspace prompt should equal standard prompt\nstandard: %q\nnoKB: %q", standard, noKB)
+	}
+
+	// With KB: should contain KB section.
+	kbDir := filepath.Join(dir, "knowledge")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "INDEX.md"), []byte("# KB\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withKB := claudeAppendSystemPromptForWorkspace(dir)
+	if !strings.Contains(withKB, "Knowledge base") {
+		t.Errorf("with-KB prompt should contain 'Knowledge base'; got: %q", withKB)
+	}
+}
+
+// TestUpsertConduitAwarenessSectionWithKBIdempotent verifies the KB-aware
+// AGENTS.md upsert is idempotent when repeated with the same workspace.
+func TestUpsertConduitAwarenessSectionWithKBIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	kbDir := filepath.Join(dir, "knowledge")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "INDEX.md"), []byte("# KB\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	once := upsertConduitAwarenessSectionWithKB("# P\n\nhi\n", dir)
+	twice := upsertConduitAwarenessSectionWithKB(once, dir)
+	if once != twice {
+		t.Fatalf("not idempotent:\nonce:  %q\ntwice: %q", once, twice)
+	}
+	if strings.Count(twice, agentsMDSectionBegin) != 1 {
+		t.Fatalf("expected exactly one managed block, got %d", strings.Count(twice, agentsMDSectionBegin))
+	}
+	if !strings.Contains(twice, "Knowledge base") {
+		t.Error("KB section missing from AGENTS.md content")
 	}
 }
