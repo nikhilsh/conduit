@@ -32,6 +32,7 @@ import (
 	"github.com/nikhilsh/conduit/broker/internal/auth"
 	"github.com/nikhilsh/conduit/broker/internal/credentials"
 	"github.com/nikhilsh/conduit/broker/internal/discovery"
+	"github.com/nikhilsh/conduit/broker/internal/kb"
 	"github.com/nikhilsh/conduit/broker/internal/oauth"
 	"github.com/nikhilsh/conduit/broker/internal/push"
 	"github.com/nikhilsh/conduit/broker/internal/replay"
@@ -99,7 +100,25 @@ func runUp(args []string) int {
 	agentsDir := fs.String("agents-dir", "", "directory of agent adapter TOMLs (defaults: $XDG_CONFIG_HOME/conduit/agents → ~/.conduit/agents → ./agents → embedded)")
 	replayBase := fs.String("replay-base", defaultReplayBase(), "directory for per-session replay recordings; empty disables recording")
 	credentialsDir := fs.String("credentials-dir", defaultCredentialsDir(), "directory for per-identity OAuth credential blobs (docs/PLAN-AGENT-OAUTH.md); empty disables per-user OAuth materialization")
+	// Phase 3a debug flag, OFF by default. When set (or CONDUIT_KB_EXPERIMENTAL=1),
+	// enables user-box KB behavior: registered-source ingest (pointers only),
+	// box-local .conduit/knowledge/ as the default kb-add target, kb promote, and
+	// injection/search spanning all three origins. OFF == byte-identical Phase 1/2
+	// behavior (KB only via a tracked knowledge/INDEX.md). The flag and the env var
+	// unify on a single source of truth: setting the flag sets the env, which the
+	// kb + session layers read via kb.ExperimentalEnabled().
+	kbExperimental := fs.Bool("kb-experimental", false, "enable experimental user-box knowledge base (ingest pointers + box-local .conduit/knowledge + promote); also CONDUIT_KB_EXPERIMENTAL=1")
 	_ = fs.Parse(args)
+
+	// Unify flag + env: an explicit --kb-experimental sets the env so every
+	// reader (kb package, session package) keys off the single
+	// kb.ExperimentalEnabled() truth. The env alone also works (systemd unit).
+	if *kbExperimental {
+		_ = os.Setenv(kb.ExperimentalEnv, "1")
+	}
+	if kb.ExperimentalEnabled() {
+		log.Printf("kb: EXPERIMENTAL user-box mode ON (ingest pointers + box-local .conduit/knowledge + promote)")
+	}
 
 	// `--local` (no explicit --addr) means "expose me on the LAN so a
 	// phone on the same network can reach me". The secure loopback default

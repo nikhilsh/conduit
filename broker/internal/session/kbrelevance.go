@@ -1,12 +1,15 @@
 package session
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/nikhilsh/conduit/broker/internal/kb"
 )
 
 // This file is Phase 2 of the cross-agent knowledge base (see
@@ -178,6 +181,28 @@ func kbWorkspaceIndex(workspaceDir string) (string, bool) {
 	if workspaceDir == "" {
 		return "", false
 	}
+	// Phase 3a (flag ON): the per-turn hook spans all three origins (tracked,
+	// box-local, source-pointers), self-gated on kb.SourceExists. The merged
+	// content is rendered into the `| [slug](slug.md) | summary |` row form the
+	// pure relevantEntries scorer already understands, so its scoring/threshold
+	// logic is unchanged.
+	if kb.ExperimentalEnabled() {
+		if !kb.SourceExists(workspaceDir) {
+			return "", false
+		}
+		merged := kb.MergedIndexForWorkspace(workspaceDir)
+		if len(merged) == 0 {
+			return "", false
+		}
+		var sb strings.Builder
+		for _, l := range merged {
+			// slug doubles as the link target; the scorer only reads slug+summary.
+			sb.WriteString(fmt.Sprintf("| [%s](%s.md) | %s |\n", l.Slug, l.Slug, l.Summary))
+		}
+		return sb.String(), true
+	}
+
+	// Flag OFF (default): byte-identical to Phase 2 — tracked INDEX.md only.
 	indexPath := filepath.Join(workspaceDir, "knowledge", "INDEX.md")
 	b, err := os.ReadFile(indexPath)
 	if err != nil {
