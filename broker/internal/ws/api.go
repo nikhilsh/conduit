@@ -357,16 +357,40 @@ func (s *Server) serveSessions(w http.ResponseWriter, r *http.Request) {
 
 // sessionConversationResponse is the body of GET
 // /api/session/conversation/<id>. `items` is the persisted transcript in
-// chronological order — the same `{role, content, ts, files}` shape the
-// clients already render for live chat.
+// ascending chronological order — the same `{role, content, ts, files}` shape
+// the clients already render for live chat.
+//
+// Backward-pagination fields (present on every response):
+//
+//	has_more_before — true when older messages exist beyond this page.
+//	oldest_ts       — unix-millisecond timestamp of the earliest item in `items`
+//	                  (0 when items is empty). Use as the next before_ts cursor.
+//	latest_ts       — unix-millisecond timestamp of the newest item in the FULL
+//	                  transcript (0 when empty). Advances the since_ts cursor
+//	                  even when a since_ts request returns no new items.
 type sessionConversationResponse struct {
-	Items []session.ConvEntry `json:"items"`
+	Items         []session.ConvEntry `json:"items"`
+	HasMoreBefore bool                `json:"has_more_before"`
+	OldestTs      int64               `json:"oldest_ts"`
+	LatestTs      int64               `json:"latest_ts"`
 }
 
 // serveSessionConversation returns a session's persisted conversation
 // transcript by id. Works for live AND exited sessions (the broker
 // appends both sides to a per-session conversation.jsonl that survives
 // reap), so the app can reopen a past session read-only.
+//
+// Query params (all optional — omitting all returns the full transcript):
+//
+//	tail=N        — return the most recent N messages (initial bottom-anchor
+//	                load). Ignored when before_ts or since_ts is set.
+//	before_ts=T   — return up to `limit` messages STRICTLY OLDER than T
+//	                (unix milliseconds). Use oldest_ts from the previous
+//	                response as the next cursor. Mutually exclusive with
+//	                since_ts; before_ts takes precedence.
+//	since_ts=T    — return messages STRICTLY NEWER than T (unix milliseconds).
+//	                Forward-delta polling cursor (unchanged from v1).
+//	limit=N       — page size cap; default 80, clamp 1–500.
 func (s *Server) serveSessionConversation(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
@@ -376,12 +400,64 @@ func (s *Server) serveSessionConversation(w http.ResponseWriter, r *http.Request
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "missing session id")
 		return
 	}
-	items, err := s.Sessions.ConversationLog(id)
+	opts, ok := parsePageOpts(w, r)
+	if !ok {
+		return
+	}
+	all, err := s.Sessions.ConversationLog(id)
 	if err != nil {
 		writeAPIError(w, http.StatusNotFound, "not_found", "no conversation for session")
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionConversationResponse{Items: items})
+	page := session.ApplyPagination(all, opts)
+	writeJSON(w, http.StatusOK, sessionConversationResponse{
+		Items:         page.Items,
+		HasMoreBefore: page.HasMoreBefore,
+		OldestTs:      page.OldestTs,
+		LatestTs:      page.LatestTs,
+	})
+}
+
+// parsePageOpts extracts backward-pagination query params from the request.
+// Returns (opts, true) on success; writes a 400 and returns (_, false) on
+// invalid input.
+func parsePageOpts(w http.ResponseWriter, r *http.Request) (session.TranscriptPageOpts, bool) {
+	q := r.URL.Query()
+	var opts session.TranscriptPageOpts
+
+	if raw := strings.TrimSpace(q.Get("since_ts")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 0 {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "since_ts must be a non-negative unix millisecond timestamp")
+			return opts, false
+		}
+		opts.SinceTs = v
+	}
+	if raw := strings.TrimSpace(q.Get("before_ts")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v <= 0 {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "before_ts must be a positive unix millisecond timestamp")
+			return opts, false
+		}
+		opts.BeforeTs = v
+	}
+	if raw := strings.TrimSpace(q.Get("tail")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v <= 0 {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "tail must be a positive integer")
+			return opts, false
+		}
+		opts.Tail = v
+	}
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v <= 0 {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "limit must be a positive integer")
+			return opts, false
+		}
+		opts.Limit = v
+	}
+	return opts, true
 }
 
 // serveSessionDelete terminates and archives a session by id. It is the
@@ -869,14 +945,25 @@ func (s *Server) serveDiscoveredSessions(w http.ResponseWriter, r *http.Request)
 // serveDiscoveredTranscript handles GET /api/sessions/discovered/transcript.
 // Returns the read-only transcript for an external session before adoption.
 //
-// Query params:
+// Required query params:
 //
 //	agent=claude|codex
 //	external_id=<id>
-//	since_ts=<unix_ms>   (optional) — when present, return ONLY items with ts
-//	                     strictly greater than since_ts; full transcript when absent.
-//	                     Always returns latest_ts (max ts in the file) so the
-//	                     client can advance its cursor even when no new items.
+//
+// Optional pagination params (same semantics as /api/session/conversation/<id>):
+//
+//	since_ts=<unix_ms>   — return ONLY items STRICTLY NEWER than this cursor.
+//	                       Preserved from v1; ignored when before_ts is set.
+//	before_ts=<unix_ms>  — return up to `limit` items STRICTLY OLDER than cursor.
+//	tail=N               — return the last N items (initial bottom-anchor load).
+//	limit=N              — page size cap; default 80, clamp 1–500.
+//
+// Response JSON:
+//
+//	items          — page in ascending timestamp order.
+//	has_more_before — true when older messages exist beyond this page.
+//	oldest_ts      — ts of earliest item in page (0 when empty); next before_ts.
+//	latest_ts      — ts of newest item in the FULL transcript (0 when empty).
 func (s *Server) serveDiscoveredTranscript(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
@@ -887,23 +974,17 @@ func (s *Server) serveDiscoveredTranscript(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "agent and external_id are required")
 		return
 	}
-	var sinceMs int64
-	if raw := strings.TrimSpace(r.URL.Query().Get("since_ts")); raw != "" {
-		v, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || v < 0 {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request", "since_ts must be a non-negative unix millisecond timestamp")
-			return
-		}
-		sinceMs = v
+	opts, ok := parsePageOpts(w, r)
+	if !ok {
+		return
 	}
-	result, _ := session.ExternalTranscriptSince(agent, externalID, sinceMs)
-	items := result.Items
-	if items == nil {
-		items = []session.ConvEntry{}
-	}
+	all, _ := session.ExternalTranscript(agent, externalID)
+	page := session.ApplyPagination(all, opts)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":     items,
-		"latest_ts": result.LatestTs,
+		"items":           page.Items,
+		"has_more_before": page.HasMoreBefore,
+		"oldest_ts":       page.OldestTs,
+		"latest_ts":       page.LatestTs,
 	})
 }
 
