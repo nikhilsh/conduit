@@ -652,7 +652,12 @@ func (s *Session) startChatBackend(
 		if err := s.injectConduitAwarenessAgentsMD(); err != nil {
 			fmt.Fprintf(os.Stderr, "session %s: conduit-awareness AGENTS.md: %v (session continues)\n", s.ID, err)
 		} else {
-			logConduitAwarenessInjected(s.ID, adapter.Name, "codex:AGENTS.md")
+			mechanism := "codex:AGENTS.md"
+			_, hasKB := kbSection(s.workspaceDir)
+			if hasKB {
+				mechanism = "codex:AGENTS.md+kb"
+			}
+			logConduitAwarenessInjected(s.ID, adapter.Name, mechanism)
 		}
 	}
 

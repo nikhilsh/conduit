@@ -62,6 +62,8 @@ func main() {
 		os.Exit(runUp(os.Args[2:]))
 	case "memory":
 		os.Exit(runMemory(os.Args[2:]))
+	case "kb":
+		os.Exit(runKB(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -77,6 +79,7 @@ func usage() {
 Commands:
   up        start the HTTP+WebSocket harness
   memory    (task 005) per-session memory CLI
+  kb        knowledge-base CLI (list/get/search/add)
 
 Run "conduit-broker up --help" for options.`)
 }

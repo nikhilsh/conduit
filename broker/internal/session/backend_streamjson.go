@@ -67,10 +67,16 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 
 	// Part A breadcrumb: the conduit-awareness addendum rides claude's
 	// --append-system-prompt (merged with the askUserQuestionNudge in
-	// claudeAppendSystemPrompt). Log once per spawn so a "the agent didn't
-	// know about $PORT" report is diagnosable from box logs.
+	// claudeAppendSystemPromptForWorkspace). Log once per spawn so a "the agent
+	// didn't know about $PORT" report is diagnosable from box logs. The
+	// mechanism suffix notes whether the KB section was included.
 	if conduitAwarenessEnabled() {
-		logConduitAwarenessInjected(s.ID, adapter.Name, "claude:append-system-prompt")
+		mechanism := "claude:append-system-prompt"
+		_, hasKB := kbSection(s.workspaceDir)
+		if hasKB {
+			mechanism = "claude:append-system-prompt+kb"
+		}
+		logConduitAwarenessInjected(s.ID, adapter.Name, mechanism)
 	}
 
 	// Subagent registry handle: declared here (before the fork block) so
@@ -83,7 +89,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 		// drop --dangerously-skip-permissions, so it must wrap the adapter args
 		// before the stream-json flags are appended.
 		baseArgs = applyPermissionModeFromManifest(baseArgs, adapter, s.override.PermissionMode)
-		return claudeStreamCommandFork(adapter.Command, baseArgs, resume, continueLatest, false)
+		return claudeStreamCommandForkWithWorkspace(adapter.Command, baseArgs, resume, continueLatest, false, s.workspaceDir)
 	}
 
 	// Fork path: --resume <external_id> --fork-session branches the
@@ -91,7 +97,7 @@ func (streamjsonBackend) Spawn(s *Session, adapter agents.Adapter, req spawnRequ
 	if req.forkChatSessionID != "" {
 		baseArgs := append(append([]string{}, adapter.Args...), s.override.extraArgsForAdapter(adapter)...)
 		baseArgs = applyPermissionModeFromManifest(baseArgs, adapter, s.override.PermissionMode)
-		forkArgv := claudeStreamCommandFork(adapter.Command, baseArgs, req.forkChatSessionID, false, true)
+		forkArgv := claudeStreamCommandForkWithWorkspace(adapter.Command, baseArgs, req.forkChatSessionID, false, true, s.workspaceDir)
 		// Seed resumeChatSessionID so latchChatSessionID captures the new
 		// fork's session id and respawns resume it going forward.
 		s.mu.Lock()

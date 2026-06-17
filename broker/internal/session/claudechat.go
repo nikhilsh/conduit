@@ -85,6 +85,41 @@ func claudeStreamCommandFork(command, args []string, resumeSessionID string, con
 	return argv
 }
 
+// claudeStreamCommandForkWithWorkspace is like claudeStreamCommandFork but
+// includes the KB section in the --append-system-prompt when the workspace
+// has a knowledge/INDEX.md (the self-gate). Used by backend_streamjson.go
+// where the session's workspaceDir is known.
+func claudeStreamCommandForkWithWorkspace(command, args []string, resumeSessionID string, continueLatest bool, forkSession bool, workspaceDir string) []string {
+	argv := make([]string, 0, len(command)+len(args)+10)
+	argv = append(argv, command...)
+	argv = append(argv, args...)
+	if resumeSessionID != "" {
+		argv = append(argv, "--resume", resumeSessionID)
+		if forkSession {
+			argv = append(argv, "--fork-session")
+		}
+	} else if continueLatest {
+		argv = append(argv, "--continue")
+	}
+	argv = append(argv,
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+		// Route interactive-tool permission asks (AskUserQuestion) to
+		// stdin/stdout control_request/control_response instead of the
+		// headless auto-DENY, so the agent genuinely WAITS for the
+		// phone's answer (see askcontrol.go).
+		"--permission-prompt-tool", "stdio",
+		// Part A + KB: the conduit-awareness addendum (with KB section when
+		// the workspace has a knowledge/INDEX.md) is merged into one
+		// --append-system-prompt flag value.
+		"--append-system-prompt", claudeAppendSystemPromptForWorkspace(workspaceDir),
+	)
+	return argv
+}
+
 // claudeAppendSystemPrompt is the value passed to claude's
 // --append-system-prompt. It is the askUserQuestionNudge, plus the shared
 // conduit-awareness addendum when the kill-switch is ON (default). Kept a pure
