@@ -468,15 +468,7 @@ extension ConduitUI {
         // MARK: - Agent avatar
 
         private func agentAvatar(_ agent: String) -> some View {
-            let tint = neon.agentTint(forAgent: agent)
-            return RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(tint.opacity(0.14))
-                .frame(width: 34, height: 34)
-                .overlay(
-                    Image(systemName: agent == "codex" ? "cpu" : "terminal")
-                        .font(.system(size: 15))
-                        .foregroundStyle(tint)
-                )
+            AgentAvatar(assistant: agent, size: 34)
         }
 
         private func metaLine(_ row: FoundSessionRow) -> String {
@@ -829,16 +821,8 @@ extension ConduitUI {
         }
 
         private var sessionHeader: some View {
-            let tint = neon.agentTint(forAgent: row.agent)
-            return HStack(spacing: 11) {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(tint.opacity(0.14))
-                    .frame(width: 38, height: 38)
-                    .overlay(
-                        Image(systemName: row.agent == "codex" ? "cpu" : "terminal")
-                            .font(.system(size: 16))
-                            .foregroundStyle(tint)
-                    )
+            HStack(spacing: 11) {
+                AgentAvatar(assistant: row.agent, size: 38)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.title)
                         .font(neon.sans(15).weight(.bold))
@@ -1380,16 +1364,8 @@ extension ConduitUI {
         }
 
         private var sessionHeader: some View {
-            let tint = neon.agentTint(forAgent: row.agent)
-            return HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(tint.opacity(0.14))
-                    .frame(width: 34, height: 34)
-                    .overlay(
-                        Image(systemName: row.agent == "codex" ? "cpu" : "terminal")
-                            .font(.system(size: 14))
-                            .foregroundStyle(tint)
-                    )
+            HStack(spacing: 10) {
+                AgentAvatar(assistant: row.agent, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.title)
                         .font(neon.sans(13).weight(.semibold))
