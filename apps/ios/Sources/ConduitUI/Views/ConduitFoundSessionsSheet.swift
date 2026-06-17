@@ -757,8 +757,22 @@ extension ConduitUI {
         /// (branch + found-sessions + box-health) dismisses atomically.
         var onSuccess: () -> Void = {}
 
+        // MARK: - Fork probe tri-state
+        //
+        // Distinguishes three outcomes that `features?.sessionFork` alone cannot:
+        //   .checking  - probe in flight (show spinner, not the "not available" copy)
+        //   .failed    - probe returned nil (transient / unreachable / 401) - offer Retry
+        //   .ready(f)  - probe returned a BoxFeatures struct (f.sessionFork may be true/false)
+        //
+        // This prevents a transient probe failure from looking like an old broker.
+        private enum ForkProbe {
+            case checking
+            case failed
+            case ready(SessionStore.BoxFeatures)
+        }
+
         @State private var isBranching = false
-        private var forkSupported: Bool { features?.sessionFork == true }
+        @State private var forkProbe: ForkProbe = .checking
 
         var body: some View {
             NavigationStack {
@@ -792,6 +806,24 @@ extension ConduitUI {
                 .tint(neon.accent)
             }
             .appearanceColorScheme()
+            .task(id: server.id) { await probeFork() }
+        }
+
+        @MainActor
+        private func probeFork() async {
+            forkProbe = .checking
+            Telemetry.breadcrumb("found_sessions", "branch gate probe",
+                data: ["host": server.endpoint.displayHost])
+            if let f = await store.fetchBoxFeatures(endpoint: server.endpoint) {
+                forkProbe = .ready(f)
+                Telemetry.breadcrumb("found_sessions", "branch gate ready",
+                    data: ["host": server.endpoint.displayHost,
+                           "fork": f.sessionFork ? "true" : "false"])
+            } else {
+                forkProbe = .failed
+                Telemetry.breadcrumb("found_sessions", "branch gate probe failed",
+                    data: ["host": server.endpoint.displayHost])
+            }
         }
 
         private var sessionHeader: some View {
@@ -917,7 +949,64 @@ extension ConduitUI {
 
         private var branchCTA: some View {
             Group {
-                if forkSupported {
+                switch forkProbe {
+                case .checking:
+                    // State 1: probe in flight -- spinner, not the "not available" copy
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .tint(neon.textFaint)
+                            .controlSize(.small)
+                        Text("Checking this box...")
+                            .font(neon.sans(14).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(neon.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(neon.border, lineWidth: 1)
+                    )
+
+                case .failed:
+                    // State 2: transient failure (unreachable/401/decode) -- offer Retry
+                    // Do NOT say "not available yet" which wrongly implies old broker.
+                    VStack(spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.branch")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Branch a copy & open")
+                                .font(neon.sans(14).weight(.semibold))
+                        }
+                        .foregroundStyle(neon.textFaint)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(neon.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(neon.border, lineWidth: 1)
+                        )
+
+                        HStack(spacing: 6) {
+                            Text("Couldn't check this box \u{2014}")
+                                .font(neon.mono(11))
+                                .foregroundStyle(neon.textFaint)
+                            Button {
+                                Task { await probeFork() }
+                            } label: {
+                                Text("Retry")
+                                    .font(neon.mono(11).weight(.bold))
+                                    .foregroundStyle(neon.accent)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .multilineTextAlignment(.center)
+                    }
+
+                case .ready(let f) where f.sessionFork:
+                    // State 4: broker supports fork -- enabled button (unchanged behavior)
                     Button {
                         guard !isBranching else { return }
                         isBranching = true
@@ -969,8 +1058,9 @@ extension ConduitUI {
                     }
                     .buttonStyle(.plain)
                     .disabled(isBranching)
-                } else {
-                    // Branch gated: session_fork == false
+
+                default:
+                    // State 3: probe succeeded but session_fork == false -- honest old-broker copy
                     VStack(spacing: 10) {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.branch")
@@ -988,7 +1078,7 @@ extension ConduitUI {
                                 .stroke(neon.border, lineWidth: 1)
                         )
 
-                        Text("Branch isn't available on this box yet.")
+                        Text("Branching needs a newer broker on this box. Update it to enable.")
                             .font(neon.mono(11))
                             .foregroundStyle(neon.textFaint)
                             .multilineTextAlignment(.center)
