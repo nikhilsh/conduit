@@ -77,6 +77,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.CircularProgressIndicator
 import sh.nikhil.conduit.BrokerVersionStatus
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.MINIMUM_BROKER_VERSION
@@ -86,6 +87,7 @@ import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.VisibleSession
 import sh.nikhil.conduit.brokerVersionStatus
 import sh.nikhil.conduit.needsYouBanner
 
@@ -131,6 +133,10 @@ fun HomeScreen(
     val statuses by store.statusBySession.collectAsState()
     val lifecycle by store.sessionLifecycle.collectAsState()
     val selectedId by store.selectedId.collectAsState()
+    // visibleSessions() merges real sessions + Creating placeholders so the
+    // phone home mirrors the tablet rail's in-flight feedback.
+    val visible = remember(sessions, lifecycle) { store.visibleSessions() }
+    val sessionCreationError by store.sessionCreationError.collectAsState()
     // Broker-update banner (parity with ProjectListScreen + iOS HomeView):
     // shown on both phone and tablet so the update prompt is never lost on
     // the tablet path where the phone drawer (ProjectListScreen) is absent.
@@ -151,6 +157,12 @@ fun HomeScreen(
         Telemetry.breadcrumb("session", "archive error surfaced", mapOf("error" to err))
         snackbarHostState.showSnackbar(err)
         store.clearArchiveError()
+    }
+    LaunchedEffect(sessionCreationError) {
+        val err = sessionCreationError ?: return@LaunchedEffect
+        Telemetry.breadcrumb("session", "creation error surfaced on home", mapOf("error" to err))
+        snackbarHostState.showSnackbar(err)
+        store.clearSessionCreationError()
     }
     // Fix 4: rename dialog state.
     var renameTarget by remember { mutableStateOf<SavedServer?>(null) }
@@ -347,7 +359,8 @@ fun HomeScreen(
 
         // Sessions list
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (sessions.isEmpty()) {
+            val hasCreating = visible.any { it is VisibleSession.Creating }
+            if (sessions.isEmpty() && !hasCreating) {
                 // iOS ConduitHomeView empty-state parity: hero glyph
                 // (sparkles when we can issue commands, cloud.slash when
                 // waiting), headline title, footnote body. Sits a touch
@@ -416,6 +429,11 @@ fun HomeScreen(
                     val currentBoxId = remember(savedServers, endpoint) {
                         savedServers.firstOrNull { it.endpoint == endpoint }?.id
                             ?: endpoint.displayHost
+                    }
+                    // Creating placeholders at the TOP of the list (phone parity
+                    // with tablet rail + iOS "Starting session..." row).
+                    visible.filterIsInstance<VisibleSession.Creating>().forEach { _ ->
+                        CreatingSessionRow(neon = neon)
                     }
                     sortedSessions.forEach { session ->
                         val isSelected = selectedId == session.id
@@ -1179,6 +1197,59 @@ private fun NeedsYouBannerCard(
  * label can never disagree with the alert's body text).
  */
 private data class SessionDeleteTarget(val id: String, val title: String)
+
+/**
+ * Placeholder card shown at the TOP of the phone home session list while a
+ * new session is being created (WS round-trip in flight). Matches the tablet
+ * rail's Creating row (ProjectListScreen.kt:506-511) and iOS
+ * "Starting session..." visual treatment — neon.accent spinner + mono label.
+ */
+@Composable
+private fun CreatingSessionRow(neon: NeonTheme, modifier: Modifier = Modifier) {
+    val rowShape = RoundedCornerShape(ConduitHomeRowMetrics.cardCornerRadius.dp)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .neonCardSurface(
+                neon = neon,
+                shape = rowShape,
+                fill = neon.surface,
+                borderColor = neon.accent.copy(alpha = 0.4f),
+                glowTint = neon.accent,
+            ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(11.dp),
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = neon.accent,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    "Starting session…",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = neon.sans,
+                    fontWeight = FontWeight.SemiBold,
+                    color = neon.text,
+                    maxLines = 1,
+                )
+                Text(
+                    "asking server for a session…",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
 
 /**
  * Row metrics for the upstream-faithful home list, mirror of iOS
