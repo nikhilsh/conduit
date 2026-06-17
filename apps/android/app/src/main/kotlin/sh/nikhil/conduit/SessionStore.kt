@@ -606,6 +606,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val conversationLog: StateFlow<Map<String, List<ConversationItem>>> = _conversationLog.asStateFlow()
 
     /**
+     * Backward-pagination state per session. Populated by [fetchConversation]
+     * (initial tail=80 load) and updated by [fetchOlderConversation]. Only
+     * present for sessions that have been opened as archived transcripts; live
+     * sessions do not set this.
+     */
+    data class ConversationPaginationState(
+        val hasMoreHistory: Boolean,
+        val oldestLoadedTs: Long,
+    )
+
+    private val _paginationState = MutableStateFlow<Map<String, ConversationPaginationState>>(emptyMap())
+    val paginationState: StateFlow<Map<String, ConversationPaginationState>> = _paginationState.asStateFlow()
+
+    /**
      * Per-session optimistic-send queue: messages the user has sent that
      * haven't been acked by a successful WS write yet. Persisted to
      * EncryptedSharedPreferences so a backgrounding-mid-send (or a
@@ -4236,26 +4250,70 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
-     * Fetch a session's persisted transcript read-only over HTTP
-     * (`GET /api/session/conversation/<id>`, broker PR #196). Mirrors
-     * [listDirectories]' direct-HTTP + bearer-auth pattern, and iOS
-     * `fetchConversation`. Used by the Sessions screen to open an
-     * *exited* session: there's no live WS to replay from, so we read
-     * the broker's `conversation.jsonl` instead.
-     *
-     * The persisted rows are role/content/ts/files only; we map them
-     * into [ConversationItem] (kind `message` / `tool`, status `done`)
-     * so the existing chat renderer can display them unchanged.
-     *
-     * Throws [ConversationNotFoundException] on 404 — sessions created
-     * before the #196 redeploy never wrote a `conversation.jsonl`.
+     * Parse a broker conversation-page JSON array into [ConversationItem] list.
+     * Shared between [fetchConversation] (initial tail load) and
+     * [fetchOlderConversation] (older-page loads). Items are assigned the
+     * given [idPrefix] + index so IDs are stable and distinct between pages.
      */
+    private fun parseConversationItems(
+        arr: org.json.JSONArray,
+        sessionID: String,
+        idPrefix: String,
+    ): List<ConversationItem> = buildList {
+        for (i in 0 until arr.length()) {
+            val e = arr.getJSONObject(i)
+            val role = e.optString("role", "")
+            val kind = if (role.lowercase() == "tool") "tool" else "message"
+            val itemContent = stripPendingSentinel(e.optString("content", ""))
+            val filesArr = e.optJSONArray("files") ?: JSONArray()
+            val files = buildList {
+                for (j in 0 until filesArr.length()) {
+                    val f = filesArr.getJSONObject(j)
+                    add(
+                        ViewEventFile(
+                            path = f.optString("path", ""),
+                            rev = f.optString("rev", ""),
+                        )
+                    )
+                }
+            }
+            add(
+                ConversationItem(
+                    id = "$idPrefix-$sessionID-$i",
+                    role = role,
+                    kind = kind,
+                    status = "done",
+                    content = itemContent,
+                    ts = e.optString("ts", ""),
+                    files = files,
+                    toolName = null,
+                    command = null,
+                    exitCode = null,
+                    durationMs = null,
+                    diffSummary = null,
+                    pendingOptions = emptyList(),
+                    sourceAgent = null,
+                    targetAgent = null,
+                    taskText = null,
+                    resultSummary = null,
+                    planSteps = emptyList(),
+                )
+            )
+        }
+    }
+
     suspend fun fetchConversation(sessionID: String): List<ConversationItem> = withContext(Dispatchers.IO) {
         // Dispatchers.IO for the same reason as [listDirectories]: the
         // blocking HttpURLConnection calls below must never run on the Main
         // dispatcher (NetworkOnMainThreadException).
+        //
+        // Uses tail=80 so the broker returns only the most-recent 80 items.
+        // The response envelope also carries has_more_before + oldest_ts so
+        // we can offer backward pagination via [fetchOlderConversation].
+        // Old broker omits has_more_before -> decoded as false (backward-compat).
         val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
-        val url = URL("$base/api/session/conversation/${java.net.URLEncoder.encode(sessionID, "UTF-8")}")
+        val encodedId = java.net.URLEncoder.encode(sessionID, "UTF-8")
+        val url = URL("$base/api/session/conversation/$encodedId?tail=80")
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             setRequestProperty("Authorization", "Bearer ${_endpoint.value.token}")
@@ -4275,54 +4333,87 @@ class SessionStore : ViewModel(), ConduitDelegate {
             val raw = reader.readText()
             val obj = JSONObject(raw)
             val arr = obj.optJSONArray("items") ?: JSONArray()
-            return@withContext buildList {
-                for (i in 0 until arr.length()) {
-                    val e = arr.getJSONObject(i)
-                    val role = e.optString("role", "")
-                    val kind = if (role.lowercase() == "tool") "tool" else "message"
-                    // Strip the broker's pending-input sentinel: the live path
-                    // runs the core classifier (which strips it), but this raw
-                    // HTTP replay does not — so without this the sentinel line
-                    // both shows as raw chat text AND fails to dedupe against
-                    // the live, stripped card (different role+content), leaving
-                    // a duplicate card body under the real card on reattach.
-                    val content = stripPendingSentinel(e.optString("content", ""))
-                    val filesArr = e.optJSONArray("files") ?: JSONArray()
-                    val files = buildList {
-                        for (j in 0 until filesArr.length()) {
-                            val f = filesArr.getJSONObject(j)
-                            add(
-                                ViewEventFile(
-                                    path = f.optString("path", ""),
-                                    rev = f.optString("rev", ""),
-                                )
-                            )
-                        }
-                    }
-                    add(
-                        ConversationItem(
-                            id = "saved-$sessionID-$i",
-                            role = role,
-                            kind = kind,
-                            status = "done",
-                            content = content,
-                            ts = e.optString("ts", ""),
-                            files = files,
-                            toolName = null,
-                            command = null,
-                            exitCode = null,
-                            durationMs = null,
-                            diffSummary = null,
-                            pendingOptions = emptyList(),
-                            sourceAgent = null,
-                            targetAgent = null,
-                            taskText = null,
-                            resultSummary = null,
-                            planSteps = emptyList(),
-                        )
-                    )
-                }
+            val items = parseConversationItems(arr, sessionID, "saved")
+            // Decode pagination envelope (has_more_before absent on old broker -> false).
+            val hasMore = obj.optBoolean("has_more_before", false)
+            val oldestTs = obj.optLong("oldest_ts", 0L)
+            _paginationState.value = _paginationState.value + (sessionID to ConversationPaginationState(
+                hasMoreHistory = hasMore,
+                oldestLoadedTs = oldestTs,
+            ))
+            // Populate the conversationLog so ChatPage can observe it and
+            // trigger paginated loads. Does NOT pollute live session state
+            // because archived sessions carry distinct IDs from active ones.
+            _conversationLog.value = _conversationLog.value + (sessionID to items)
+            Telemetry.breadcrumb(
+                "pagination", "fetch_conversation",
+                mapOf("session" to sessionID, "count" to items.size.toString(), "has_more" to hasMore.toString()),
+            )
+            items
+        }
+    }
+
+    /**
+     * Fetch a page of messages OLDER than [beforeTs] (unix ms) for an
+     * archived transcript. Prepends the new items into [_conversationLog] and
+     * updates [_paginationState]. Returns the new items + updated hasMore, or
+     * null on network failure.
+     *
+     * Callers must guard against concurrent calls (isLoadingOlder flag in the
+     * composable) because this mutates shared state.
+     */
+    suspend fun fetchOlderConversation(
+        sessionID: String,
+        beforeTs: Long,
+    ): Pair<List<ConversationItem>, Boolean>? = withContext(Dispatchers.IO) {
+        val base = _endpoint.value.httpBaseUrl ?: return@withContext null
+        val encodedId = java.net.URLEncoder.encode(sessionID, "UTF-8")
+        val url = URL("$base/api/session/conversation/$encodedId?before_ts=$beforeTs&limit=80")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Authorization", "Bearer ${_endpoint.value.token}")
+            connectTimeout = 7_000
+            readTimeout = 10_000
+        }
+        runCatching {
+            val responseCode = conn.responseCode
+            if (responseCode !in 200..299) {
+                Telemetry.breadcrumb(
+                    "pagination", "fetch_older_error",
+                    mapOf("session" to sessionID, "code" to responseCode.toString()),
+                )
+                return@runCatching null
             }
+            conn.inputStream.bufferedReader().use { reader ->
+                val raw = reader.readText()
+                val obj = JSONObject(raw)
+                val arr = obj.optJSONArray("items") ?: JSONArray()
+                val hasMore = obj.optBoolean("has_more_before", false)
+                val oldestTs = obj.optLong("oldest_ts", 0L)
+                val newItems = parseConversationItems(arr, sessionID, "paged-$beforeTs")
+                // Prepend older items in front of the existing log and re-sort
+                // chronologically so any out-of-order ts values are corrected.
+                val existing = _conversationLog.value[sessionID] ?: emptyList()
+                val merged = (newItems + existing).sortedByConversationTs { it.ts }
+                _conversationLog.value = _conversationLog.value + (sessionID to merged)
+                _paginationState.value = _paginationState.value + (sessionID to ConversationPaginationState(
+                    hasMoreHistory = hasMore,
+                    oldestLoadedTs = oldestTs,
+                ))
+                Telemetry.breadcrumb(
+                    "pagination", "fetch_older_ok",
+                    mapOf(
+                        "session" to sessionID,
+                        "new_count" to newItems.size.toString(),
+                        "total" to merged.size.toString(),
+                        "has_more" to hasMore.toString(),
+                    ),
+                )
+                Pair(newItems, hasMore)
+            }
+        }.getOrElse { e ->
+            Telemetry.breadcrumb("pagination", "fetch_older_exception", mapOf("session" to sessionID, "error" to (e.message ?: "unknown")))
+            null
         }
     }
 

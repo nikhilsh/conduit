@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import sh.nikhil.conduit.ConversationNotFoundException
 import sh.nikhil.conduit.SavedSession
 import sh.nikhil.conduit.SessionStore
+import sh.nikhil.conduit.Telemetry
 import uniffi.conduit_core.ConversationItem
 import uniffi.conduit_core.ProjectSession
 
@@ -49,14 +51,21 @@ import uniffi.conduit_core.ProjectSession
  * suppressed by the existing read-only branch in ChatPage, so the
  * surface reuses the live renderer without conditional layout here.
  *
+ * Backward pagination: the initial [SessionStore.fetchConversation] call
+ * uses `tail=80`, and [ChatPage] watches [SessionStore.paginationState] to
+ * detect when the user scrolls near the top and triggers
+ * [SessionStore.fetchOlderConversation]. Items are accumulated in
+ * [SessionStore.conversationLog] and displayed via the live observe path
+ * (no `readOnlyItems` override) so prepended pages surface automatically.
+ *
  * Caveat (broker PR #196): `conversation.jsonl` is only written for
- * sessions created after that redeploy — older exited rows 404. We
+ * sessions created after that redeploy -- older exited rows 404. We
  * render an explicit "no saved transcript" state so the user knows the
  * row is intentionally empty rather than a failure.
  */
 private sealed class LoadState {
     object Loading : LoadState()
-    data class Loaded(val items: List<ConversationItem>) : LoadState()
+    object Loaded : LoadState()
     object NotFound : LoadState()
     data class Failed(val message: String) : LoadState()
 }
@@ -70,15 +79,24 @@ fun SavedTranscriptScreen(
 ) {
     var state by remember(session.compoundId) { mutableStateOf<LoadState>(LoadState.Loading) }
     BackHandler { onDismiss() }
+
+    // Initial fetch: tail=80 with pagination envelope. Populates
+    // store.conversationLog[session.id] and store.paginationState[session.id]
+    // so ChatPage observes them for both display and the near-top trigger.
     LaunchedEffect(session.compoundId) {
         state = try {
-            LoadState.Loaded(store.fetchConversation(session.id))
+            store.fetchConversation(session.id)
+            LoadState.Loaded
         } catch (_: ConversationNotFoundException) {
             LoadState.NotFound
         } catch (t: Throwable) {
+            Telemetry.breadcrumb("saved_transcript", "load_failed", mapOf("error" to (t.message ?: "unknown")))
             LoadState.Failed(t.message ?: "Unknown error")
         }
     }
+
+    val conversationLog by store.conversationLog.collectAsState()
+    val loadedItems = conversationLog[session.id] ?: emptyList()
 
     val title = session.summary.takeIf { it.isNotBlank() } ?: session.id
 
@@ -110,25 +128,27 @@ fun SavedTranscriptScreen(
         },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (val s = state) {
+            when (state) {
                 LoadState.Loading -> Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
                     CircularProgressIndicator(color = neon.accent)
                 }
-                is LoadState.Loaded -> if (s.items.isEmpty()) {
+                LoadState.Loaded -> if (loadedItems.isEmpty()) {
                     InfoState(
                         icon = Icons.Filled.ChatBubbleOutline,
                         title = "Empty transcript",
                         message = "This session ended without any recorded messages.",
                     )
                 } else {
+                    // Pass null readOnlyItems so ChatPage reads from
+                    // store.conversationLog (populated + updated by pagination).
                     ChatPage(
                         store = store,
                         session = projectSessionFor(session),
                         readOnly = true,
-                        readOnlyItems = s.items,
+                        readOnlyItems = null,
                     )
                 }
                 LoadState.NotFound -> InfoState(
@@ -139,7 +159,7 @@ fun SavedTranscriptScreen(
                 is LoadState.Failed -> InfoState(
                     icon = Icons.Filled.WarningAmber,
                     title = "Couldn't load transcript",
-                    message = s.message,
+                    message = (state as LoadState.Failed).message,
                 )
             }
         }

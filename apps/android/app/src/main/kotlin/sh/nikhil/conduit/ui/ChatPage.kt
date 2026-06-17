@@ -437,6 +437,24 @@ fun ChatPage(
     // `SessionStore.resolvedPendingInputIDs`.
     val resolvedPendingInputIDs by store.resolvedPendingInputIDs.collectAsState()
     val listState = rememberLazyListState()
+
+    // Backward-pagination state. Observe the store's pagination map so the
+    // near-top trigger fires whenever hasMoreHistory becomes true and the user
+    // scrolls up. Only populated for archived sessions (exited transcript view);
+    // live sessions leave this entry absent so the trigger never fires there.
+    val paginationStateMap by store.paginationState.collectAsState()
+    val pagState = paginationStateMap[session.id]
+    val hasMoreHistory = pagState?.hasMoreHistory ?: false
+    val oldestLoadedTs = pagState?.oldestLoadedTs ?: 0L
+
+    // Guard flag: true while a fetchOlderConversation call is in flight.
+    var isLoadingOlder by remember { mutableStateOf(false) }
+    // Settled flag: prevents the near-top trigger from firing during the
+    // initial bottom-anchor scroll. Set to true only after the initial
+    // session-open LaunchedEffect has completed its scroll. Keyed on
+    // session.id so switching sessions resets it.
+    var hasSettledAfterOpen by remember(session.id) { mutableStateOf(false) }
+
     val pinnedContextsMap by store.pinnedContexts.collectAsState()
     val pinnedContexts = pinnedContextsMap[session.id] ?: emptyList()
     var pendingAttachments by remember { mutableStateOf(listOf<ComposerAttachment>()) }
@@ -607,10 +625,13 @@ fun ChatPage(
     // Switching to an already-cached session: streamingSignature may not change
     // (same size/last-length), so the follow effects above don't re-fire and the
     // list opens at the top. Key on the session id to pin the bottom on switch.
+    // Also marks hasSettledAfterOpen so the near-top pagination trigger knows
+    // the initial scroll has completed and user-driven scrolls can be trusted.
     LaunchedEffect(session.id) {
         if (events.isNotEmpty()) {
             scrollToTrueBottom(listState)
         }
+        hasSettledAfterOpen = true
     }
 
     // Android IME handling (task #39): on sdk35 `WindowInsets.isImeVisible`
@@ -623,6 +644,53 @@ fun ChatPage(
             .collect {
                 if (autoScroll.shouldFollow && events.isNotEmpty()) {
                     listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+                }
+            }
+    }
+
+    // Backward-pagination near-top trigger. Fires when the user has
+    // actually scrolled up (firstVisibleItemIndex <= 2) AND the initial
+    // bottom-anchor has already settled (hasSettledAfterOpen) AND there are
+    // more pages AND we're not already loading one. The hasSettledAfterOpen
+    // gate prevents the trigger from misfiring immediately on open because
+    // the list starts at item 0 before scrollToTrueBottom runs.
+    //
+    // Viewport-pin after prepend: capture firstVisibleItemIndex + scrollOffset
+    // before the prepend, then after the new items land, jump to
+    // (firstVisible + newItemCount) to keep the visible message stable.
+    LaunchedEffect(listState, hasMoreHistory, hasSettledAfterOpen) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (visibleIndex, visibleOffset) ->
+                if (!hasSettledAfterOpen) return@collect
+                if (!hasMoreHistory) return@collect
+                if (isLoadingOlder) return@collect
+                if (oldestLoadedTs <= 0L) return@collect
+                if (visibleIndex > 2) return@collect
+                // Trigger: user is near the top and there are older pages.
+                val countBefore = listState.layoutInfo.totalItemsCount
+                isLoadingOlder = true
+                Telemetry.breadcrumb(
+                    "pagination", "older_trigger",
+                    mapOf("session" to session.id, "before_ts" to oldestLoadedTs.toString()),
+                )
+                scope.launch {
+                    try {
+                        val result = store.fetchOlderConversation(session.id, oldestLoadedTs)
+                        if (result != null) {
+                            val (newItems, _) = result
+                            // Pin the viewport so the visible message doesn't jump after
+                            // prepend. New items land at the front; shift by their count.
+                            val addedCount = newItems.size
+                            if (addedCount > 0 && countBefore > 0) {
+                                listState.scrollToItem(
+                                    index = (visibleIndex + addedCount).coerceAtLeast(0),
+                                    scrollOffset = visibleOffset,
+                                )
+                            }
+                        }
+                    } finally {
+                        isLoadingOlder = false
+                    }
                 }
             }
     }
@@ -735,6 +803,35 @@ fun ChatPage(
                     },
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                // "Loading earlier messages..." progress row — shown at the top
+                // of the list while a backward-pagination fetch is in flight.
+                if (isLoadingOlder) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            androidx.compose.foundation.layout.Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = LocalNeonTheme.current.accent,
+                                )
+                                Text(
+                                    text = "Loading earlier messages...",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = LocalNeonTheme.current.textDim,
+                                    fontFamily = LocalNeonTheme.current.sans,
+                                )
+                            }
+                        }
+                    }
+                }
 
                 if (events.isEmpty()) {
                     item { EmptyConversationCard(assistant = session.assistant) }
