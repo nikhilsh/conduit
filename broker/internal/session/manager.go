@@ -244,6 +244,12 @@ type Session struct {
 	// applyPaths runs; appends tolerate concurrent callers.
 	convLog *convLogger
 
+	// kbSurfaced tracks which knowledge-base slugs the per-turn relevance
+	// hook (kbrelevance.go) has already injected into THIS session's prompts,
+	// so a long session never re-surfaces the same hint turn after turn.
+	// Guarded by mu; lazily initialized on first use.
+	kbSurfaced map[string]bool
+
 	// override carries the optional per-session reasoning-effort / model
 	// overrides supplied at creation (the fork-onto-a-different-model
 	// path). Zero value = adapter defaults unchanged. Read-only after
@@ -997,6 +1003,33 @@ func (s *Session) SendChat(msg string) bool {
 		if ar.AnswerApproval(agentMsg) {
 			return true
 		}
+	}
+	// KB Phase 2 per-turn relevance hook (kbrelevance.go): on a NORMAL user
+	// turn (NOT an AskUserQuestion answer or approval decision — those
+	// returned above; mangling them would corrupt the answer), scan the
+	// workspace KB for entries topically matching this prompt and PREPEND a
+	// small, clearly-delineated "possibly relevant" hint block so the right
+	// footgun surfaces exactly when the agent is about to need it. Self-gated
+	// on knowledge/INDEX.md (no KB => no-op); per-session dedup avoids
+	// repeating a hint; never blocks/fails the turn. Applies to BOTH backends
+	// (claude + codex) since both forward agentMsg through s.chat.Send below.
+	s.mu.Lock()
+	seenSnapshot := make(map[string]bool, len(s.kbSurfaced))
+	for slug := range s.kbSurfaced {
+		seenSnapshot[slug] = true
+	}
+	s.mu.Unlock()
+	hintBlock, surfaced := s.kbTurnHint(agentMsg, seenSnapshot)
+	if hintBlock != "" {
+		s.mu.Lock()
+		if s.kbSurfaced == nil {
+			s.kbSurfaced = make(map[string]bool)
+		}
+		for _, slug := range surfaced {
+			s.kbSurfaced[slug] = true
+		}
+		s.mu.Unlock()
+		agentMsg = hintBlock + "\n\n" + agentMsg
 	}
 	err := s.chat.Send(agentMsg)
 	if err != nil && s.chatRespawn != nil {
