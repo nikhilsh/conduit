@@ -69,7 +69,7 @@ The broker spawns each agent as a child process via
 |---|---|
 | `SESSION_UUID` | session id |
 | `AGENT_NAME` | adapter name |
-| `IS_SANDBOX` | `1` — lets claude accept `--dangerously-skip-permissions` under root |
+| `IS_SANDBOX` | `1` — lets claude accept `--dangerously-skip-permissions` under root. **Must also be set for one-shot helper invocations** (e.g. recap via `recapEnv`): `claude --dangerously-skip-permissions` is refused under root when `IS_SANDBOX` is absent. CI passes (non-root) while production (root) silently falls back — always include `IS_SANDBOX=1` in any subprocess env that runs `claude`. |
 | `HOME` | the per-session ephemeral agent home |
 | `PORT` | preview port (3000–3019) |
 | `AGENT_CHAT_PORT` | `PORT + 1000` — for MCP `view_event` bridge |

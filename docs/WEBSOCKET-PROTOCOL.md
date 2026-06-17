@@ -195,6 +195,27 @@ Generation details and guarantees:
 - On the legacy fallback path (adapters with no `chat_mode`), the broker writes
   `msg + "\r"` (CR) into the agent's PTY stdin and the scraper lifts the reply
   back out — fragile, retained only for agents without a structured mode.
+- **Durable-send contract (v0.0.156+):** each client `chat` message carries an
+  optional `client_msg_id` (string, client-generated, recommended: a v4 UUID or
+  a monotonic counter):
+
+  ```json
+  { "type": "chat", "from": "username", "msg": "...", "client_msg_id": "<uuid>" }
+  ```
+
+  The broker dedups by `client_msg_id` with a short TTL — duplicate messages
+  with the same id within the TTL window are dropped (only the first delivery
+  reaches the agent). On successful delivery the broker emits:
+
+  ```json
+  { "type": "chat_ack", "session": "<uuid>", "client_msg_id": "<uuid>" }
+  ```
+
+  Clients should implement a retry-with-backoff on reconnect until they receive
+  `chat_ack` for each outstanding `client_msg_id`. When a NEW-app client sends
+  durable messages to an OLD-broker that lacks dedup, the broker may deliver
+  duplicates — broker redeploy is a hard gate before enabling durable send on
+  the client.
 
 `set_agent_credentials` notes (Stage 1 of [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md)):
 - `provider` must be `"anthropic"` or `"openai"`. Anything else is rejected with a `view_event { view: "chat", role: "tool", tool_name: "set_agent_credentials" }` carrying a human-readable reason; the socket stays open.
@@ -205,6 +226,15 @@ Generation details and guarantees:
 - The encrypted credential is keyed by **a hash of the broker's bearer token**, not per-session — subsequent sessions started by the same phone reuse the stored credential. The broker materializes it into a per-session ephemeral `$HOME` (with `CODEX_HOME` set for codex) at session spawn time; missing-credential sessions fall back to the legacy host-mirror behaviour exactly as before.
 
 `set_agent_credentials` is **deprecated** in favour of the v2 server-side login flow below. v1 PRs (#100, #104, #110, #112) shipped the wire but both providers reject the phone-generated `conduit://` custom-scheme redirect URI at the authorize endpoint, so the existing path is dead code. Stage 4 of [PLAN-AGENT-OAUTH.md](archive/PLAN-AGENT-OAUTH.md) removes it.
+
+**Per-box agent-credential model (v0.0.152+):** agent credentials are
+**per-box** (per-broker-instance), not device-global. The v2 path stores the
+credential blob via `POST /api/agent/credentials` (clear via `POST
+/api/agent/credentials/clear`). The blob is a **JSON object** (not a
+JSON-stringified string) matched to the broker by its bearer token. A sign-in
+on one box does NOT automatically propagate to other boxes — the app must
+re-authenticate on each box. Sessions on boxes without a stored credential fall
+back to the legacy host-mirror behaviour.
 
 #### v2 agent-login control messages
 

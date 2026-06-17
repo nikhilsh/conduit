@@ -21,11 +21,13 @@ Add these too for release-time symbol and source uploads:
 - iOS reads `SentryDSN` from the app bundle at build time.
 - Android reads `BuildConfig.SENTRY_DSN` at build time.
 - If the DSN is empty, telemetry is a no-op.
-- If the DSN is present, handled errors from:
-  - broker connect
-  - session creation
-  - agent switching
-  are captured with endpoint, assistant, and session context.
+- If the DSN is present, breadcrumbs and events are emitted throughout the app
+  per the standing instrumentation order in `CLAUDE.md`: every meaningful step
+  of connection, session creation/resume, OAuth, agent-credential flows, chat
+  send/receive, and browser-preview load gets a breadcrumb; failure terminuses
+  get a captured ERROR event. The breadcrumb ring is lightweight and attached to
+  the next event rather than flushed individually, so it is scattered freely
+  across all flows.
 - iOS release builds upload dSYMs to Sentry with `sentry-cli`.
 - Android release builds use the Sentry Android Gradle plugin to upload JVM source context and native symbols.
 
@@ -62,5 +64,5 @@ The current implementation already uses that boundary pragmatically: the apps ca
 
 For day-to-day issue triage from this server, use:
 
-- [docs/SENTRY-OPS.md](/root/developer/projects/kitty-swe/docs/SENTRY-OPS.md:1)
+- [docs/SENTRY-OPS.md](SENTRY-OPS.md)
 - `scripts/sentry-check.sh`

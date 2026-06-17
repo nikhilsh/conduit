@@ -1,3 +1,5 @@
+> ARCHIVED 2026-06-17 — shipped; see docs/VERIFY-CHECKLIST.md / docs/DONE.md
+
 # Credential auto-propagate + per-box control — app implementation spec
 
 Broker half shipped on branch `broker-credential-propagate`. This file is the

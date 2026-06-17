@@ -127,6 +127,10 @@ Re-run the job before touching either.
 3. **Always give implementer agents their own worktree.** An agent without an
    isolated worktree commits into the shared checkout and leaks files (bit us
    twice).
+4. **Verify the push landed.** Agent-tool `isolation:worktree` has silently left
+   the remote at a stale commit (work lost, #645 124k tokens). After any agent
+   push, confirm with `git ls-remote origin <branch>` or `gh pr view --json
+   files` before trusting the result.
 
 **Roadmap verification pipeline** — four docs, four states:
 
