@@ -1,5 +1,8 @@
 package sh.nikhil.conduit.ui
 
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
@@ -159,4 +162,149 @@ object ConduitTheme {
     /** iOS: 22. Use a [androidx.compose.foundation.shape.RoundedCornerShape] of this radius. */
     const val cardCornerRadiusDp: Float = 22f
     const val smallCornerRadiusDp: Float = 14f
+}
+
+/**
+ * Build a Material3 [ColorScheme] whose accent / container / surface slots
+ * are driven by the resolved Neon Terminal palette ([neon]) instead of
+ * Material's stock purple/lavender defaults.
+ *
+ * Why this exists: `MaterialTheme(colorScheme = darkColorScheme())` ships
+ * Material's reference *purple* tones into every component that does NOT set
+ * an explicit color (FilledTonalButton, FilterChip, Switch, RadioButton,
+ * Slider, ProgressIndicator, default menu/dialog/dropdown/snackbar surfaces,
+ * SwipeToDismiss). Those purples are visibly off-theme against the neon app.
+ * This maps each accent/container/surface slot onto a concrete neon [Color]
+ * with a CONTRASTING paired on-color, so the defaults read as neon, not
+ * lavender. Components that set explicit colors (per-component `neon.*` reads,
+ * FoundSessions Resume=green/Branch=yellow #667) override the scheme and are
+ * unaffected.
+ *
+ * Invariant: every container/surface slot has a legible paired on-color.
+ * Never leave a slot at the Material purple default.
+ *
+ * The neon tokens already resolve light vs dark internally (via
+ * `NeonTheme.resolve(dark = ...)`), so callers pass the resolved theme and
+ * pick the matching [darkColorScheme]/[lightColorScheme] base for the few
+ * slots we intentionally leave at sensible Material neutrals (e.g. scrim,
+ * inverse*). [conduitColorScheme] dispatches on `neon.dark`.
+ */
+fun conduitColorScheme(neon: NeonTheme): ColorScheme =
+    if (neon.dark) conduitDarkColorScheme(neon) else conduitLightColorScheme(neon)
+
+/**
+ * Dark neon [ColorScheme]. Surfaces are the dark navy neon panels; the
+ * accent is the bright palette accent (legible dark text on top). The
+ * default tonal container ([secondaryContainer]) is a NEUTRAL elevated neon
+ * surface — NOT bright green — because FilledTonalButtons that want green set
+ * it explicitly (#667); the default must be a calm neon surface, not lavender.
+ */
+fun conduitDarkColorScheme(neon: NeonTheme): ColorScheme {
+    // Opaque siblings of the alpha-blended neon surfaces, so Material popups
+    // (menus/dialogs/dropdowns) that paint a SOLID surface read as neon-dark
+    // rather than letting a translucent fill wash to grey over whatever sits
+    // behind them.
+    val surfaceSolid = neon.surfaceSolid              // 0xFF0A1120
+    val surfaceElevated = Color(0xFF12203A)           // opaque sibling of surface2
+    val accentMuted = neon.accent.copy(alpha = 0.16f) // translucent accent fill
+    val errorContainer = Color(0xFF3A1620)            // deep desaturated red panel
+    return darkColorScheme(
+        primary = neon.accent,
+        onPrimary = neon.accentText,                  // near-black on bright accent
+        primaryContainer = accentMuted,
+        onPrimaryContainer = neon.text,
+        inversePrimary = neon.accent,
+
+        secondary = neon.accent2,
+        onSecondary = neon.accentText,
+        secondaryContainer = surfaceElevated,         // the FilledTonalButton slot
+        onSecondaryContainer = neon.text,
+
+        tertiary = neon.codex,                         // brand cyan
+        onTertiary = neon.accentText,
+        tertiaryContainer = surfaceElevated,
+        onTertiaryContainer = neon.text,
+
+        error = neon.red,
+        onError = Color(0xFF1A0307),                   // near-black on bright coral
+        errorContainer = errorContainer,
+        onErrorContainer = neon.red,                   // bright red text on deep panel
+
+        background = neon.bg,
+        onBackground = neon.text,
+        surface = surfaceSolid,
+        onSurface = neon.text,
+        surfaceVariant = surfaceElevated,
+        onSurfaceVariant = neon.textDim,
+        surfaceTint = neon.accent,
+        inverseSurface = neon.text,
+        inverseOnSurface = neon.bg,
+
+        surfaceBright = surfaceElevated,
+        surfaceDim = neon.bg,
+        surfaceContainerLowest = neon.bg,
+        surfaceContainerLow = surfaceSolid,
+        surfaceContainer = surfaceSolid,
+        surfaceContainerHigh = surfaceElevated,
+        surfaceContainerHighest = surfaceElevated,
+
+        outline = neon.borderStrong,
+        outlineVariant = neon.border,
+    )
+}
+
+/**
+ * Light neon [ColorScheme]. Surfaces are the near-white neon panels; the
+ * accent is the deepened light-mode accent (white text on top). Same slot
+ * contract as [conduitDarkColorScheme]; only the resolved [neon] values
+ * differ (light side of every AdaptiveColor).
+ */
+fun conduitLightColorScheme(neon: NeonTheme): ColorScheme {
+    val surfaceSolid = neon.surfaceSolid              // 0xFFFFFFFF
+    val surfacePanel = neon.panel                     // 0xFFF4F7FC subtle elevated
+    val accentMuted = neon.accent.copy(alpha = 0.14f)
+    val errorContainer = Color(0xFFFCE4E8)            // soft red panel
+    return lightColorScheme(
+        primary = neon.accent,                         // deepened teal in light
+        onPrimary = neon.accentText,                   // white on deep teal
+        primaryContainer = accentMuted,
+        onPrimaryContainer = neon.text,
+        inversePrimary = neon.accentBright,
+
+        secondary = neon.accent2,
+        onSecondary = neon.accentText,
+        secondaryContainer = surfacePanel,             // the FilledTonalButton slot
+        onSecondaryContainer = neon.text,
+
+        tertiary = neon.codex,
+        onTertiary = Color(0xFFFFFFFF),
+        tertiaryContainer = surfacePanel,
+        onTertiaryContainer = neon.text,
+
+        error = neon.red,                              // 0xFFD83048
+        onError = Color(0xFFFFFFFF),                   // white on deep red
+        errorContainer = errorContainer,
+        onErrorContainer = Color(0xFF7A101F),          // deep red text on soft panel
+
+        background = neon.bg,
+        onBackground = neon.text,
+        surface = surfaceSolid,
+        onSurface = neon.text,
+        surfaceVariant = surfacePanel,
+        onSurfaceVariant = neon.textDim,
+        surfaceTint = neon.accent,
+        inverseSurface = neon.text,
+        inverseOnSurface = surfaceSolid,
+
+        surfaceBright = surfaceSolid,
+        surfaceDim = neon.bg,
+        surfaceContainerLowest = surfaceSolid,
+        surfaceContainerLow = surfacePanel,
+        surfaceContainer = surfacePanel,
+        surfaceContainerHigh = surfacePanel,
+        surfaceContainerHighest = neon.bg,
+
+        outline = neon.borderStrong,
+        outlineVariant = neon.border,
+    )
 }
