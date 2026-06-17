@@ -1777,6 +1777,13 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // while disconnected (reconnect window / backgrounded
                 // mid-send / killed before the WS flushed).
                 flushPendingChats()
+                // Re-discover sessions that were running on the broker before
+                // this app process launched (app update / cold restart). The
+                // Rust core's in-memory session map is empty on a fresh
+                // ConduitClient, so refreshSessions() returns nothing even
+                // though the broker still owns live sessions. Mirror of iOS
+                // reconcileLiveSessions(). Fire-and-forget; never fails connect.
+                viewModelScope.launch { reconcileLiveSessions() }
                 // Fix: the tunnelAlive fast path in reconnect()/selectSavedServer()
                 // bounces only the WS, so the bootstrap script's broker
                 // version-update (reuse path) never runs on a reconnect. Probe the
@@ -1795,6 +1802,139 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     extras = mapOf("endpoint" to _endpoint.value.displayHost, "detail" to detail),
                 )
             }
+        }
+    }
+
+    /**
+     * Re-discover sessions that are still running on the broker after a cold
+     * app launch (update / process restart). The Rust core's in-memory session
+     * map is empty on a freshly-constructed ConduitClient, so [refreshSessions]
+     * returns nothing even though the broker still owns live sessions. This
+     * mirrors iOS [reconcileLiveSessions]:
+     *
+     * 1. HTTP GET /api/sessions to learn what the broker is actually running.
+     * 2. For each running session not already in our local set, stamp its box,
+     *    seed [SessionLifecycle.Creating] so the home row appears immediately,
+     *    hydrate the terminal buffer from scrollback, call [joinSession] to
+     *    open the live WS, then seed chat via [fetchConversation].
+     * 3. Demote saved-LIVE rows for THIS box that the broker no longer lists.
+     * 4. [refreshSessions] to reflect the joined rows.
+     *
+     * Best-effort: any exception breadcrumbs and returns — never blocks connect.
+     * Called once per connect (the single chokepoint covering reconnect /
+     * selectSavedServer / SSH paths).
+     */
+    private suspend fun reconcileLiveSessions() {
+        val base = _endpoint.value.httpBaseUrl ?: return
+        val token = _endpoint.value.token
+        val serverID = savedHistoryServerId()
+        Telemetry.breadcrumb("session", "reconcile_live_begin", mapOf("server" to serverID))
+        try {
+            if (!waitUntilCommandReady()) {
+                Telemetry.breadcrumb("session", "reconcile_live_not_ready", mapOf("server" to serverID))
+                return
+            }
+            val c = client ?: return
+
+            // -- 1. Fetch the broker's live session list --
+            val raw = withContext(Dispatchers.IO) {
+                val url = URL("$base/api/sessions")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    setRequestProperty("Authorization", "Bearer $token")
+                    connectTimeout = 7_000
+                    readTimeout = 7_000
+                }
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    val body = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    conn.disconnect()
+                    error("GET /api/sessions replied $code: ${body.take(200)}")
+                }
+                conn.inputStream.bufferedReader().use { it.readText() }
+            }
+            val obj = JSONObject(raw)
+            val sessions = obj.optJSONArray("sessions") ?: JSONArray()
+
+            val aliveIDs = mutableSetOf<String>()
+            val deleted = _deletedIds.value
+
+            // -- 2. Join each running session not already live locally --
+            var joined = 0
+            for (i in 0 until sessions.length()) {
+                val item = sessions.getJSONObject(i)
+                val running = item.optBoolean("running", false)
+                if (!running) continue
+                val id = item.optString("id", "") .takeIf { it.isNotEmpty() } ?: continue
+                val assistant = item.optString("assistant", "claude")
+                aliveIDs += id
+                if (id in deleted) continue
+                if (_sessions.value.any { it.id == id }) continue
+                // Stamp box before joining so home-list grouping is correct.
+                _sessionBox.value = _sessionBox.value + (id to serverID)
+                if (_sessionLifecycle.value[id] == null) {
+                    updateLifecycle { it + (id to SessionLifecycle.Creating) }
+                }
+                // Seed terminal scrollback so the row paints before the WS
+                // broker snapshot arrives (same as attachLiveSession).
+                hydrateTerminalBuffer(id)
+                try {
+                    withContext(Dispatchers.IO) { c.joinSession(id, assistant) }
+                    joined++
+                    // Seed chat from HTTP transcript — the Rust core's
+                    // listConversationItems is empty until status frames arrive,
+                    // so seed via fetchConversation now; the live WS will
+                    // append deltas on top. fetchConversation populates
+                    // _conversationLog directly and is idempotent on the
+                    // pagination state.
+                    viewModelScope.launch {
+                        try {
+                            fetchConversation(id)
+                        } catch (t: Throwable) {
+                            Telemetry.breadcrumb("session", "reconcile_chat_seed_failed",
+                                mapOf("session" to id, "err" to (t.message ?: "unknown")))
+                        }
+                    }
+                } catch (t: Throwable) {
+                    // A rotated token / UnknownSession on one entry must not
+                    // abort the rest of the loop.
+                    if (_sessionLifecycle.value[id] is SessionLifecycle.Creating) {
+                        updateLifecycle { it - id }
+                    }
+                    Telemetry.breadcrumb("session", "reconcile_join_failed",
+                        mapOf("session" to id, "err" to (t.message ?: "unknown")))
+                }
+            }
+            Telemetry.breadcrumb("session", "reconcile_live_joined",
+                mapOf("server" to serverID, "joined" to joined.toString()))
+
+            // -- 3. Demote saved-LIVE rows for THIS box the broker no longer has --
+            val savedLive = _savedSessions.value.filter {
+                it.serverId == serverID && it.status == SavedSessionStatus.LIVE
+            }
+            var demoted = 0
+            for (saved in savedLive) {
+                if (saved.id !in aliveIDs) {
+                    markExited(saved.id)
+                    if (_sessionLifecycle.value[saved.id] == null) {
+                        updateLifecycle { it + (saved.id to SessionLifecycle.Exited(0)) }
+                    }
+                    demoted++
+                }
+            }
+            if (demoted > 0) {
+                Telemetry.breadcrumb("session", "reconcile_live_demoted",
+                    mapOf("server" to serverID, "count" to demoted.toString()))
+            }
+
+            // -- 4. Sync the live-session list --
+            refreshSessions()
+        } catch (t: Throwable) {
+            // Older broker without /api/sessions, transient network failure,
+            // or auth error. Leave saved LIVE rows untouched — user can resume
+            // them on tap. Never propagates to connect().
+            Telemetry.breadcrumb("session", "reconcile_live_unavailable",
+                mapOf("server" to serverID, "err" to (t.message ?: "unknown")))
         }
     }
 
