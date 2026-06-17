@@ -84,6 +84,25 @@ import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
 
 /**
+ * 4-state gate for the "Branch a copy" capability.
+ *
+ * Distinguishes in-flight probe from transient failure vs. confirmed-old-broker
+ * so the UI can show a retry path instead of the dead-end "unavailable" copy.
+ *
+ * States:
+ *   Checking -- probe in flight; show spinner + "Checking this box..."
+ *   Failed   -- probe returned null (network error, 401, unreachable); show retry
+ *   Ready    -- probe returned a parsed features object; sessionFork drives enable/disable
+ *               Ready(true)  -> "Branch a copy" enabled
+ *               Ready(false) -> broker old; show "needs a newer broker" (no retry)
+ */
+sealed interface ForkProbeState {
+    object Checking : ForkProbeState
+    object Failed : ForkProbeState
+    data class Ready(val sessionFork: Boolean) : ForkProbeState
+}
+
+/**
  * Found Sessions -- discovery sheet for sessions started outside Conduit.
  *
  * Presented as a ModalBottomSheet from BoxHealthScreen when the box
@@ -104,7 +123,8 @@ import sh.nikhil.conduit.Telemetry
 fun FoundSessionsSheet(
     store: SessionStore,
     server: SavedServer,
-    sessionFork: Boolean,
+    forkProbe: ForkProbeState,
+    onRetryForkProbe: () -> Unit,
     sessionWatch: Boolean,
     onDismiss: () -> Unit,
     onOpenSession: (sessionId: String) -> Unit,
@@ -197,7 +217,8 @@ fun FoundSessionsSheet(
                     val branch = shownBranch ?: return@Box
                     BranchCopySheet(
                         session = branch,
-                        sessionFork = sessionFork,
+                        forkProbe = forkProbe,
+                        onRetryForkProbe = onRetryForkProbe,
                         neon = neon,
                         store = store,
                         server = server,
@@ -209,7 +230,8 @@ fun FoundSessionsSheet(
                     val transcript = shownTranscript ?: return@Box
                     TranscriptViewSheet(
                         session = transcript,
-                        sessionFork = sessionFork,
+                        forkProbe = forkProbe,
+                        onRetryForkProbe = onRetryForkProbe,
                         neon = neon,
                         store = store,
                         server = server,
@@ -253,7 +275,8 @@ fun FoundSessionsSheet(
                     val watchSession = shownWatch ?: return@Box
                     WatchLiveSheet(
                         session = watchSession,
-                        sessionFork = sessionFork,
+                        forkProbe = forkProbe,
+                        onRetryForkProbe = onRetryForkProbe,
                         neon = neon,
                         store = store,
                         server = server,
@@ -936,7 +959,8 @@ private fun FoundSessionRowItem(
 @Composable
 private fun BranchCopySheet(
     session: SessionStore.DiscoveredSession,
-    sessionFork: Boolean,
+    forkProbe: ForkProbeState,
+    onRetryForkProbe: () -> Unit,
     neon: NeonTheme,
     store: SessionStore,
     server: SavedServer,
@@ -1054,49 +1078,78 @@ private fun BranchCopySheet(
             )
         }
 
-        // CTA
-        FilledTonalButton(
-            onClick = {
-                if (!sessionFork) return@FilledTonalButton
-                scope.launch {
-                    branching = true
-                    Telemetry.breadcrumb("found_sessions", "branch attempt", mapOf("external_id" to session.externalId))
-                    val sessionId = store.adoptFound(
-                        endpoint = server.endpoint,
-                        agent = session.agent,
-                        externalId = session.externalId,
-                        cwd = session.cwd,
-                        mode = "fork",
-                    )
-                    branching = false
-                    if (sessionId != null) {
-                        // Stamp box ownership then join over WS so the resumed
-                        // agent streams in and chat send works (mirrors iOS fix).
-                        Telemetry.breadcrumb("found_sessions", "adopt attach",
-                            mapOf("session_id" to sessionId, "mode" to "fork", "box" to server.id))
-                        store.stampSessionBox(sessionId, server.id)
-                        store.attachLiveSession(sessionId, session.agent)
-                        onOpenSession(sessionId)
+        // CTA -- 4-state gate: Checking / Failed / Ready(false) / Ready(true)
+        when (forkProbe) {
+            is ForkProbeState.Checking -> {
+                FilledTonalButton(
+                    onClick = {},
+                    enabled = false,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Checking this box...", fontFamily = neon.sans, fontSize = 13.sp)
+                }
+            }
+            is ForkProbeState.Failed -> {
+                FilledTonalButton(
+                    onClick = {
+                        Telemetry.breadcrumb("found_sessions", "fork probe retry", mapOf("surface" to "branch_sheet"))
+                        onRetryForkProbe()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Couldn't check this box -- Retry", fontFamily = neon.sans, fontSize = 13.sp)
+                }
+            }
+            is ForkProbeState.Ready -> {
+                val forkEnabled = forkProbe.sessionFork
+                FilledTonalButton(
+                    onClick = {
+                        if (!forkEnabled) return@FilledTonalButton
+                        scope.launch {
+                            branching = true
+                            Telemetry.breadcrumb("found_sessions", "branch attempt", mapOf("external_id" to session.externalId))
+                            val sessionId = store.adoptFound(
+                                endpoint = server.endpoint,
+                                agent = session.agent,
+                                externalId = session.externalId,
+                                cwd = session.cwd,
+                                mode = "fork",
+                            )
+                            branching = false
+                            if (sessionId != null) {
+                                // Stamp box ownership then join over WS so the resumed
+                                // agent streams in and chat send works (mirrors iOS fix).
+                                Telemetry.breadcrumb("found_sessions", "adopt attach",
+                                    mapOf("session_id" to sessionId, "mode" to "fork", "box" to server.id))
+                                store.stampSessionBox(sessionId, server.id)
+                                store.attachLiveSession(sessionId, session.agent)
+                                onOpenSession(sessionId)
+                            } else {
+                                errorMsg = "The box dropped while forking. Your terminal session keeps running, untouched."
+                            }
+                        }
+                    },
+                    enabled = forkEnabled && !branching,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (branching) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Forking ${session.turnCount} turns into a Conduit copy...", fontFamily = neon.sans, fontSize = 13.sp)
+                    } else if (!forkEnabled) {
+                        Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text("Branching needs a newer broker on this box. Update it to enable.", fontFamily = neon.sans, fontSize = 13.sp)
                     } else {
-                        errorMsg = "The box dropped while forking. Your terminal session keeps running, untouched."
+                        Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text("Branch a copy & open", fontFamily = neon.sans, fontSize = 13.sp)
                     }
                 }
-            },
-            enabled = sessionFork && !branching,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (branching) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.size(8.dp))
-                Text("Forking ${session.turnCount} turns into a Conduit copy...", fontFamily = neon.sans, fontSize = 13.sp)
-            } else if (!sessionFork) {
-                Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.size(6.dp))
-                Text("Branch a copy -- unavailable on this box yet", fontFamily = neon.sans, fontSize = 13.sp)
-            } else {
-                Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.size(6.dp))
-                Text("Branch a copy & open", fontFamily = neon.sans, fontSize = 13.sp)
             }
         }
 
@@ -1130,7 +1183,8 @@ private fun CopyStartsWithRow(neon: NeonTheme, label: String, value: String) {
 @Composable
 private fun TranscriptViewSheet(
     session: SessionStore.DiscoveredSession,
-    sessionFork: Boolean,
+    forkProbe: ForkProbeState,
+    onRetryForkProbe: () -> Unit,
     neon: NeonTheme,
     store: SessionStore,
     server: SavedServer,
@@ -1256,17 +1310,46 @@ private fun TranscriptViewSheet(
         ) {
             when {
                 session.isRunning -> {
-                    FilledTonalButton(
-                        onClick = { onBranch(session) },
-                        enabled = sessionFork,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.size(6.dp))
-                        Text(
-                            if (sessionFork) "Branch a copy" else "Branch a copy -- unavailable on this box yet",
-                            fontFamily = neon.sans,
-                        )
+                    when (forkProbe) {
+                        is ForkProbeState.Checking -> {
+                            FilledTonalButton(
+                                onClick = {},
+                                enabled = false,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.size(6.dp))
+                                Text("Checking this box...", fontFamily = neon.sans)
+                            }
+                        }
+                        is ForkProbeState.Failed -> {
+                            FilledTonalButton(
+                                onClick = {
+                                    Telemetry.breadcrumb("found_sessions", "fork probe retry", mapOf("surface" to "transcript_sheet"))
+                                    onRetryForkProbe()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.size(6.dp))
+                                Text("Couldn't check this box -- Retry", fontFamily = neon.sans)
+                            }
+                        }
+                        is ForkProbeState.Ready -> {
+                            FilledTonalButton(
+                                onClick = { onBranch(session) },
+                                enabled = forkProbe.sessionFork,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.size(6.dp))
+                                Text(
+                                    if (forkProbe.sessionFork) "Branch a copy"
+                                    else "Branching needs a newer broker on this box. Update it to enable.",
+                                    fontFamily = neon.sans,
+                                )
+                            }
+                        }
                     }
                 }
                 else -> {
@@ -1559,7 +1642,8 @@ private fun relativeTime(ms: Long): String {
 @Composable
 private fun WatchLiveSheet(
     session: SessionStore.DiscoveredSession,
-    sessionFork: Boolean,
+    forkProbe: ForkProbeState,
+    onRetryForkProbe: () -> Unit,
     neon: NeonTheme,
     store: SessionStore,
     server: SavedServer,
@@ -1835,7 +1919,7 @@ private fun WatchLiveSheet(
             }
         }
 
-        // -- Pinned bottom CTA: Branch a copy to take control --
+        // -- Pinned bottom CTA: Branch a copy to take control -- 4-state gate
         Column(
             Modifier
                 .fillMaxWidth()
@@ -1844,25 +1928,54 @@ private fun WatchLiveSheet(
                 .windowInsetsPadding(WindowInsets.navigationBars),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            FilledTonalButton(
-                onClick = {
-                    Telemetry.breadcrumb(
-                        "found_sessions",
-                        "watch branch",
-                        mapOf("id" to session.externalId),
-                    )
-                    onBranch(session)
-                },
-                enabled = sessionFork,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.size(6.dp))
-                Text(
-                    if (sessionFork) "Branch a copy to take control" else "Branch a copy -- unavailable on this box yet",
-                    fontFamily = neon.sans,
-                    fontSize = 13.sp,
-                )
+            when (forkProbe) {
+                is ForkProbeState.Checking -> {
+                    FilledTonalButton(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(6.dp))
+                        Text("Checking this box...", fontFamily = neon.sans, fontSize = 13.sp)
+                    }
+                }
+                is ForkProbeState.Failed -> {
+                    FilledTonalButton(
+                        onClick = {
+                            Telemetry.breadcrumb("found_sessions", "fork probe retry", mapOf("surface" to "watch_sheet"))
+                            onRetryForkProbe()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text("Couldn't check this box -- Retry", fontFamily = neon.sans, fontSize = 13.sp)
+                    }
+                }
+                is ForkProbeState.Ready -> {
+                    FilledTonalButton(
+                        onClick = {
+                            Telemetry.breadcrumb(
+                                "found_sessions",
+                                "watch branch",
+                                mapOf("id" to session.externalId),
+                            )
+                            onBranch(session)
+                        },
+                        enabled = forkProbe.sessionFork,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            if (forkProbe.sessionFork) "Branch a copy to take control"
+                            else "Branching needs a newer broker on this box. Update it to enable.",
+                            fontFamily = neon.sans,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
             }
             Text(
                 "Watching never changes the session -- branch to drive your own copy",
