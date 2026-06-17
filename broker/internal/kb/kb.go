@@ -458,6 +458,11 @@ func (s *Store) checkDedup(slug, title string) (string, error) {
 	normalizedNew := normalizeTitle(title)
 	slugs, err := s.ListEntries()
 	if err != nil {
+		// If the knowledge dir does not exist yet there are no entries to
+		// conflict with — treat as empty (Add will mkdir it later).
+		if os.IsNotExist(err) {
+			return "", nil
+		}
 		return "", err
 	}
 	for _, existing := range slugs {

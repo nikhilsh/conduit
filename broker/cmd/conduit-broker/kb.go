@@ -13,11 +13,16 @@ import (
 // runKB dispatches the `conduit-broker kb <sub> ...` subcommand tree.
 // It operates on a workspace's knowledge/ directory. The default workspace
 // is the current working directory; --dir / --workspace overrides this.
+//
+// --dir / --workspace may appear BEFORE or AFTER the subcommand name; each
+// subcommand parses its own FlagSet so flags in any position are recognized.
 func runKB(args []string) int {
-	fs := flag.NewFlagSet("kb", flag.ContinueOnError)
-	dir := fs.String("dir", "", "workspace directory (default: cwd)")
-	workspace := fs.String("workspace", "", "alias for --dir")
-	fs.Usage = func() {
+	// Top-level FlagSet: parse flags that appear BEFORE the subcommand word.
+	// This handles `kb --dir X list` style.
+	topFS := flag.NewFlagSet("kb", flag.ContinueOnError)
+	topDir := topFS.String("dir", "", "workspace directory (default: cwd)")
+	topWorkspace := topFS.String("workspace", "", "alias for --dir")
+	topFS.Usage = func() {
 		fmt.Fprintln(os.Stderr, `conduit-broker kb — knowledge-base CLI
 
 Usage:
@@ -28,55 +33,81 @@ Subcommands:
   get <slug>        print knowledge/<slug>.md
   search <query>    case-insensitive search over entries
   add               add a new entry (use --title, --tags, --scope, --body)
+  lint              validate structural integrity of the knowledge base
 
 Options:`)
-		fs.PrintDefaults()
+		topFS.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := topFS.Parse(args); err != nil {
 		return 2
 	}
-	remaining := fs.Args()
+	remaining := topFS.Args()
 	if len(remaining) == 0 {
-		fs.Usage()
+		topFS.Usage()
 		return 2
 	}
 
-	// Resolve workspace directory.
-	wsDir := *dir
-	if wsDir == "" {
-		wsDir = *workspace
-	}
-	if wsDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "kb: cannot determine cwd: %v\n", err)
-			return 1
+	// resolveDir picks from top-level flags first, then falls back to the
+	// per-subcommand dir value (passed in after sub-FlagSet parsing).
+	resolveDir := func(subDir string) (string, int) {
+		wsDir := *topDir
+		if wsDir == "" {
+			wsDir = *topWorkspace
 		}
-		wsDir = cwd
+		if wsDir == "" {
+			wsDir = subDir
+		}
+		if wsDir == "" {
+			cwd, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "kb: cannot determine cwd: %v\n", err)
+				return "", 1
+			}
+			wsDir = cwd
+		}
+		return wsDir, 0
 	}
-
-	store := kb.NewStore(wsDir)
 
 	sub := remaining[0]
 	subArgs := remaining[1:]
 
 	switch sub {
 	case "list":
-		return kbList(store, subArgs)
+		return kbList(subArgs, resolveDir)
 	case "get":
-		return kbGet(store, subArgs)
+		return kbGet(subArgs, resolveDir)
 	case "search":
-		return kbSearch(store, subArgs)
+		return kbSearch(subArgs, resolveDir)
 	case "add":
-		return kbAdd(store, subArgs)
+		return kbAdd(subArgs, resolveDir)
+	case "lint":
+		return kbLint(subArgs, resolveDir)
 	default:
 		fmt.Fprintf(os.Stderr, "kb: unknown subcommand %q\n", sub)
 		return 2
 	}
 }
 
-func kbList(store *kb.Store, args []string) int {
-	_ = args // no flags for list
+// dirResolver is a function that takes a subcommand-level dir string and
+// returns the resolved workspace dir + exit code (0 = ok).
+type dirResolver func(subDir string) (string, int)
+
+func kbList(args []string, resolve dirResolver) int {
+	fs := flag.NewFlagSet("kb list", flag.ContinueOnError)
+	dir := fs.String("dir", "", "workspace directory (default: cwd)")
+	workspace := fs.String("workspace", "", "alias for --dir")
+	_ = fs.Parse(args)
+
+	subDir := *dir
+	if subDir == "" {
+		subDir = *workspace
+	}
+	wsDir, code := resolve(subDir)
+	if code != 0 {
+		return code
+	}
+	store := kb.NewStore(wsDir)
+
 	if !store.Exists() {
 		fmt.Fprintln(os.Stderr, "kb: no knowledge/INDEX.md found in workspace (knowledge base not initialized)")
 		return 1
@@ -90,12 +121,28 @@ func kbList(store *kb.Store, args []string) int {
 	return 0
 }
 
-func kbGet(store *kb.Store, args []string) int {
-	if len(args) == 0 {
+func kbGet(args []string, resolve dirResolver) int {
+	fs := flag.NewFlagSet("kb get", flag.ContinueOnError)
+	dir := fs.String("dir", "", "workspace directory (default: cwd)")
+	workspace := fs.String("workspace", "", "alias for --dir")
+	_ = fs.Parse(args)
+
+	subDir := *dir
+	if subDir == "" {
+		subDir = *workspace
+	}
+	wsDir, code := resolve(subDir)
+	if code != 0 {
+		return code
+	}
+	store := kb.NewStore(wsDir)
+
+	remaining := fs.Args()
+	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "kb get: requires a slug argument")
 		return 2
 	}
-	slug := args[0]
+	slug := remaining[0]
 	e, err := store.ReadEntry(slug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kb get: %v\n", err)
@@ -113,12 +160,28 @@ func kbGet(store *kb.Store, args []string) int {
 	return 0
 }
 
-func kbSearch(store *kb.Store, args []string) int {
-	if len(args) == 0 {
+func kbSearch(args []string, resolve dirResolver) int {
+	fs := flag.NewFlagSet("kb search", flag.ContinueOnError)
+	dir := fs.String("dir", "", "workspace directory (default: cwd)")
+	workspace := fs.String("workspace", "", "alias for --dir")
+	_ = fs.Parse(args)
+
+	subDir := *dir
+	if subDir == "" {
+		subDir = *workspace
+	}
+	wsDir, code := resolve(subDir)
+	if code != 0 {
+		return code
+	}
+	store := kb.NewStore(wsDir)
+
+	remaining := fs.Args()
+	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "kb search: requires a query argument")
 		return 2
 	}
-	query := strings.Join(args, " ")
+	query := strings.Join(remaining, " ")
 	if !store.Exists() {
 		fmt.Fprintln(os.Stderr, "kb: no knowledge/INDEX.md found in workspace")
 		return 1
@@ -138,8 +201,10 @@ func kbSearch(store *kb.Store, args []string) int {
 	return 0
 }
 
-func kbAdd(store *kb.Store, args []string) int {
+func kbAdd(args []string, resolve dirResolver) int {
 	fs := flag.NewFlagSet("kb add", flag.ContinueOnError)
+	dir := fs.String("dir", "", "workspace directory (default: cwd)")
+	workspace := fs.String("workspace", "", "alias for --dir")
 	title := fs.String("title", "", "entry title (required)")
 	tagsStr := fs.String("tags", "", "comma-separated tags (required, e.g. broker,ops)")
 	scope := fs.String("scope", "repo", "scope: repo or session")
@@ -149,6 +214,7 @@ func kbAdd(store *kb.Store, args []string) int {
 
 Usage:
   conduit-broker kb add --title "..." --tags "tag1,tag2" [--scope repo] [--body "..."]
+  conduit-broker kb add --dir /path/to/workspace --title "..." --tags "tag1,tag2"
 
 If --body is omitted, the entry body is read from stdin.`)
 		fs.PrintDefaults()
@@ -156,6 +222,16 @@ If --body is omitted, the entry body is read from stdin.`)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+
+	subDir := *dir
+	if subDir == "" {
+		subDir = *workspace
+	}
+	wsDir, code := resolve(subDir)
+	if code != 0 {
+		return code
+	}
+	store := kb.NewStore(wsDir)
 
 	entryBody := *body
 	if strings.TrimSpace(entryBody) == "" {
@@ -192,5 +268,60 @@ If --body is omitted, the entry body is read from stdin.`)
 		return 0
 	}
 	fmt.Printf("Entry: %s\n", result.Path)
+	return 0
+}
+
+func kbLint(args []string, resolve dirResolver) int {
+	fs := flag.NewFlagSet("kb lint", flag.ContinueOnError)
+	dir := fs.String("dir", "", "workspace directory (default: cwd)")
+	workspace := fs.String("workspace", "", "alias for --dir")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `conduit-broker kb lint — validate knowledge base structural integrity
+
+Usage:
+  conduit-broker kb lint [--dir <workspace>]
+
+Checks:
+  - INDEX.md sync: every entry file appears in INDEX.md and every INDEX reference has a file.
+  - Valid frontmatter: title, >=1 tag, status (hard errors).
+  - No duplicate slugs (case-insensitive).
+  - No broken relative cross-links ([TEXT](X.md) pointing at missing entries).
+  - WARN: entries with heavily-overlapping titles+tags (structural heuristic only;
+    semantic/contradiction detection is out of scope -- needs an LLM pass).
+
+Exits non-zero on hard errors. Warnings are informational only.`)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	subDir := *dir
+	if subDir == "" {
+		subDir = *workspace
+	}
+	wsDir, code := resolve(subDir)
+	if code != 0 {
+		return code
+	}
+
+	res, err := kb.Lint(wsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kb lint: %v\n", err)
+		return 1
+	}
+
+	for _, w := range res.Warnings {
+		fmt.Fprintf(os.Stdout, "WARN  %s\n", w)
+	}
+	for _, e := range res.Errors {
+		fmt.Fprintf(os.Stderr, "ERROR %s\n", e)
+	}
+
+	fmt.Printf("\nkb lint: %s\n", res.Summary())
+
+	if !res.OK() {
+		return 1
+	}
 	return 0
 }

@@ -50,6 +50,13 @@ jobs:
         with:
           working-directory: broker
           version: latest
+      - name: kb lint
+        if: steps.detect.outputs.skip != 'true'
+        working-directory: broker
+        # Pure file-system check — no network, non-flaky.
+        # Fails the job on hard errors (missing INDEX sync, broken cross-links,
+        # bad frontmatter, dup slugs). Warnings are informational only.
+        run: go run ./cmd/conduit-broker kb lint --dir ..
 
   core:
     name: core (rust)
