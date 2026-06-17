@@ -2594,7 +2594,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
         hydrateTerminalBuffer(sessionID)
         viewModelScope.launch {
             try {
-                if (!waitUntilCommandReady()) return@launch
+                if (!waitUntilCommandReady()) {
+                    Telemetry.capture(
+                        error = IllegalStateException("harness never ready"),
+                        message = "attach live session: harness never ready",
+                        tags = mapOf("surface" to "android", "phase" to "attach_session"),
+                        extras = mapOf("endpoint" to _endpoint.value.displayHost, "session_id" to sessionID),
+                    )
+                    return@launch
+                }
                 val c = client ?: return@launch
                 // Mark creating so the home list shows the row attaching
                 // rather than vanishing during the round-trip.
