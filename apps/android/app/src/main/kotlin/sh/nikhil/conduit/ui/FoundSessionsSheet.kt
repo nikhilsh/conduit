@@ -43,6 +43,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -463,6 +464,14 @@ private fun DiscoveryListContent(
                     selected = filter == f,
                     onClick = { onFilterChange(f) },
                     shape = SegmentedButtonDefaults.itemShape(index = idx, count = FoundFilter.values().size),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = neon.accent.copy(alpha = 0.18f),
+                        activeContentColor = neon.text,
+                        activeBorderColor = neon.accent,
+                        inactiveContainerColor = Color.Transparent,
+                        inactiveContentColor = neon.textDim,
+                        inactiveBorderColor = neon.border,
+                    ),
                     label = {
                         Text(
                             filterLabels[idx],
@@ -645,7 +654,13 @@ private fun OfflineEmptyState(
             fontSize = 12.sp,
             color = neon.textFaint,
         )
-        FilledTonalButton(onClick = onAction) {
+        FilledTonalButton(
+            onClick = onAction,
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = neon.accent,
+                contentColor = neon.accentText,
+            ),
+        ) {
             Icon(
                 if (isOffline) Icons.Default.Refresh else Icons.Default.Refresh,
                 contentDescription = null,
@@ -717,6 +732,10 @@ fun FoundSessionErrorComposable(
         FilledTonalButton(
             onClick = onPrimary,
             modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = neon.accent,
+                contentColor = neon.accentText,
+            ),
         ) {
             Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.size(6.dp))
@@ -908,6 +927,10 @@ private fun FoundSessionRowItem(
                         FilledTonalButton(
                             onClick = onResume,
                             modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = neon.accent,
+                                contentColor = neon.accentText,
+                            ),
                         ) {
                             Text("Resume", fontFamily = neon.sans, fontSize = 12.sp)
                         }
@@ -919,6 +942,10 @@ private fun FoundSessionRowItem(
                         FilledTonalButton(
                             onClick = onBranch,
                             modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = neon.yellow,
+                                contentColor = neon.accentText,
+                            ),
                         ) {
                             Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.size(4.dp))
@@ -1085,6 +1112,12 @@ private fun BranchCopySheet(
                     onClick = {},
                     enabled = false,
                     modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = neon.yellow,
+                        contentColor = neon.accentText,
+                        disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                        disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                    ),
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.size(8.dp))
@@ -1098,6 +1131,10 @@ private fun BranchCopySheet(
                         onRetryForkProbe()
                     },
                     modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = neon.accent,
+                        contentColor = neon.accentText,
+                    ),
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.size(6.dp))
@@ -1135,6 +1172,12 @@ private fun BranchCopySheet(
                     },
                     enabled = forkEnabled && !branching,
                     modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = neon.yellow,
+                        contentColor = neon.accentText,
+                        disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                        disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                    ),
                 ) {
                     if (branching) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -1316,6 +1359,12 @@ private fun TranscriptViewSheet(
                                 onClick = {},
                                 enabled = false,
                                 modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = neon.yellow,
+                                    contentColor = neon.accentText,
+                                    disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                                    disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                                ),
                             ) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(Modifier.size(6.dp))
@@ -1329,6 +1378,10 @@ private fun TranscriptViewSheet(
                                     onRetryForkProbe()
                                 },
                                 modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = neon.accent,
+                                    contentColor = neon.accentText,
+                                ),
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.size(6.dp))
@@ -1340,6 +1393,12 @@ private fun TranscriptViewSheet(
                                 onClick = { onBranch(session) },
                                 enabled = forkProbe.sessionFork,
                                 modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = neon.yellow,
+                                    contentColor = neon.accentText,
+                                    disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                                    disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                                ),
                             ) {
                                 Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.size(6.dp))
@@ -1356,6 +1415,10 @@ private fun TranscriptViewSheet(
                     FilledTonalButton(
                         onClick = { onResume(session) },
                         modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = neon.accent,
+                            contentColor = neon.accentText,
+                        ),
                     ) {
                         Text("Resume in Conduit with full context", fontFamily = neon.sans)
                     }
@@ -1934,6 +1997,12 @@ private fun WatchLiveSheet(
                         onClick = {},
                         enabled = false,
                         modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = neon.yellow,
+                            contentColor = neon.accentText,
+                            disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                            disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                        ),
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(6.dp))
@@ -1947,6 +2016,10 @@ private fun WatchLiveSheet(
                             onRetryForkProbe()
                         },
                         modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = neon.accent,
+                            contentColor = neon.accentText,
+                        ),
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.size(6.dp))
@@ -1965,6 +2038,12 @@ private fun WatchLiveSheet(
                         },
                         enabled = forkProbe.sessionFork,
                         modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = neon.yellow,
+                            contentColor = neon.accentText,
+                            disabledContainerColor = neon.yellow.copy(alpha = 0.38f),
+                            disabledContentColor = neon.accentText.copy(alpha = 0.60f),
+                        ),
                     ) {
                         Icon(Icons.Outlined.ForkRight, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.size(6.dp))
