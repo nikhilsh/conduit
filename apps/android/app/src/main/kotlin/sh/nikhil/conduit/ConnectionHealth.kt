@@ -151,10 +151,8 @@ fun readinessCheckItems(
         }
         items.add(ReadinessCheckItem(id = key, label = displayName, status = status, loginProvider = provider, autoInstalls = true))
     }
-    // Infra rows — only when absent.
-    if (!readiness.nodePresent) {
-        items.add(ReadinessCheckItem(id = "node", label = "node", status = ReadinessStatus.Absent, loginProvider = null))
-    }
+    // Infra rows — only when absent. node is intentionally omitted: it is a
+    // terminal-scrollback sidecar and does not block running any agent.
     if (!readiness.tmuxPresent) {
         items.add(ReadinessCheckItem(id = "tmux", label = "tmux", status = ReadinessStatus.Absent, loginProvider = null))
     }

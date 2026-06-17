@@ -85,11 +85,10 @@ class ConnectionHealthTest {
         assertTrue(readinessCheckItems(readiness(), emptyMap()).isEmpty())
     }
 
-    @Test fun missingNodeAppendsAbsentRow() {
+    @Test fun missingNodeProducesNoRow() {
+        // node is a terminal-scrollback sidecar; absence must not block the picker.
         val items = readinessCheckItems(readiness(nodePresent = false), emptyMap())
-        assertEquals(1, items.size)
-        assertEquals("node", items[0].id)
-        assertEquals(ReadinessStatus.Absent, items[0].status)
+        assertTrue(items.none { it.id == "node" })
     }
 
     @Test fun missingTmuxAppendsAbsentRow() {
@@ -99,11 +98,10 @@ class ConnectionHealthTest {
     }
 
     @Test fun bothInfraAbsent() {
+        // node absence is suppressed; only tmux should appear.
         val items = readinessCheckItems(readiness(nodePresent = false, tmuxPresent = false), emptyMap())
-        assertEquals(2, items.size)
-        val ids = items.map { it.id }
-        assertTrue(ids.contains("node"))
-        assertTrue(ids.contains("tmux"))
+        assertEquals(1, items.size)
+        assertEquals("tmux", items[0].id)
     }
 
     @Test fun missingGitAppendsAbsentRow() {
@@ -180,14 +178,15 @@ class ConnectionHealthTest {
     }
 
     @Test fun agentRowsBeforeInfraRows() {
+        // node is suppressed; with tmux absent the infra row appears after agents.
         val r = readiness(
-            nodePresent = false,
+            tmuxPresent = false,
             agents = mapOf("claude" to AgentReadiness(true, true, null)),
         )
         val items = readinessCheckItems(r, emptyMap())
         assertEquals(2, items.size)
         assertEquals("claude", items[0].id)
-        assertEquals("node", items[1].id)
+        assertEquals("tmux", items[1].id)
     }
 
     // ------------------------------------------------------------------
