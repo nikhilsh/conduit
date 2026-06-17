@@ -301,6 +301,8 @@ async function build() {
         builtAt: r.publishedAt || "",
         ios: {
             manifestUrl: r.ipa ? manifestUrl : "",
+            // Stable public TestFlight join link — the recommended iOS path.
+            testflightUrl: "https://testflight.apple.com/join/KkcgMdcm",
             minOS: "iOS 16+",
             size: mb(r.ipa?.size),
         },
