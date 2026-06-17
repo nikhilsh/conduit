@@ -2913,6 +2913,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     } else {
                         _harness.value = HarnessState.Failed("Pairing expired. Scan a new QR code from the server.")
                     }
+                } else if (isConnectionRefused(t) &&
+                           _savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null) {
+                    // Dead SSH tunnel: box shows connected but broker is unreachable.
+                    // Drive the same SSH self-heal path so harness ends up Reconnecting.
+                    Telemetry.breadcrumb("session", "connection refused on SSH box — triggering self-heal",
+                        mapOf("phase" to "create_session", "endpoint" to _endpoint.value.displayHost))
+                    _harness.value = HarnessState.Reconnecting(1u, 3u)
+                    attemptSshSelfHeal()
                 }
                 Telemetry.capture(
                     error = t,
@@ -3801,6 +3809,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
         // message — which AgentPickerSheet rendered as the bare "Couldn't
         // list this folder." (no broker detail), making the folder browser
         // look broken on Android while iOS (async URLSession) worked fine.
+        //
+        // Proactive fast-fail: if the SSH tunnel is definitively dead, kick off
+        // self-heal on the Main thread before hitting the refused loopback port.
+        val tunnel = sshTunnel
+        if (tunnel != null && !tunnel.isAlive() &&
+            _savedServers.value.firstOrNull { it.endpoint == _endpoint.value }?.ssh != null) {
+            Telemetry.breadcrumb("fs", "listDirectories — SSH tunnel dead, triggering self-heal",
+                mapOf("path" to (path ?: "/")))
+            withContext(Dispatchers.Main) { reconnect() }
+            error("Lost connection to this box. Reconnecting…")
+        }
         val base = _endpoint.value.httpBaseUrl ?: error("Invalid endpoint URL")
         val url = if (path.isNullOrBlank()) {
             URL("$base/api/fs/list")
@@ -5262,6 +5281,14 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private fun isAuth(t: Throwable): Boolean {
         val text = (t.message ?: t.toString()).lowercase()
         return text.contains("auth(") || text == "auth" || text.contains("unauthorized")
+    }
+
+    /** True when the error is a TCP connection-refused — the SSH tunnel or
+     *  broker is dead but harness still reports Live. Callers trigger
+     *  SSH self-heal instead of surfacing a cryptic error. */
+    fun isConnectionRefused(t: Throwable): Boolean {
+        val text = (t.message ?: t.toString()).lowercase()
+        return text.contains("connection refused") || text.contains("os error 61") || text.contains("econnrefused")
     }
 
     private fun connectionReasonCode(reason: String): String {
