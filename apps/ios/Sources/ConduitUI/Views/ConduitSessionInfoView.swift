@@ -81,6 +81,8 @@ extension ConduitUI {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
+                    .frame(maxWidth: embedded ? .infinity : 600)
+                    .frame(maxWidth: .infinity)
                 }
             }
             .sheet(isPresented: $showRename) {
@@ -88,12 +90,14 @@ extension ConduitUI {
                     session: session,
                     initialDraft: store.displayName(for: session)
                 )
+                .presentationDetents([.medium])
             }
             .sheet(isPresented: $showFork) {
                 ConduitUI.ForkSheet(
                     session: session,
                     currentEffort: store.statusBySession[session.id]?.reasoningEffort ?? session.reasoningEffort
                 )
+                .presentationDetents([.medium, .large])
             }
             // A centered `.alert` (not `.confirmationDialog`): inside a
             // presentation-detent sheet the action sheet rendered as a

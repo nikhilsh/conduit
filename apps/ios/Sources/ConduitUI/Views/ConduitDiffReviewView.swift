@@ -74,6 +74,8 @@ extension ConduitUI {
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
                     .padding(.bottom, 12)
+                    .frame(maxWidth: embedded ? .infinity : 760)
+                    .frame(maxWidth: .infinity)
                 }
                 .safeAreaInset(edge: .bottom) { commitBar }
             }

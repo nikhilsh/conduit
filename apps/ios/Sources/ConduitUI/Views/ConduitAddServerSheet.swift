@@ -76,6 +76,8 @@ extension ConduitUI {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 18)
+                        .frame(maxWidth: 600)
+                        .frame(maxWidth: .infinity)
                     }
                     .scrollIndicators(.hidden)
                 }
@@ -102,11 +104,13 @@ extension ConduitUI {
                     ConduitUI.DiscoveryView()
                         .environment(store)
                         .onDisappear { if store.endpoint.isComplete { dismiss() } }
+                        .presentationDetents([.medium, .large])
                 }
                 .sheet(isPresented: $showSshLogin) {
                     SSHLoginSheet()
                         .environment(store)
                         .onDisappear { if store.endpoint.isComplete { dismiss() } }
+                        .presentationDetents([.medium, .large])
                 }
                 .sheet(isPresented: $showManual) {
                     ConduitManualPairSheet()

@@ -87,9 +87,11 @@ extension ConduitUI {
                         showSettings = false
                         showOnboarding = true
                     })
+                    .presentationDetents([.medium, .large])
                 }
                 .sheet(isPresented: $showAddServer) {
                     ConduitUI.AddServerSheet()
+                        .presentationDetents([.medium, .large])
                 }
                 .sheet(isPresented: $showAgentPicker, onDismiss: { voicePrompt = nil }) {
                     ConduitUI.AgentPickerSheet(initialPrompt: voicePrompt)
@@ -146,6 +148,7 @@ extension ConduitUI {
                         }
                     )
                     .environment(store)
+                    .presentationDetents([.medium, .large])
                 }
                 .sheet(isPresented: $showApprovals) {
                     // Approvals inbox — every action opens the session's chat
@@ -159,6 +162,7 @@ extension ConduitUI {
                         }
                     )
                     .environment(store)
+                    .presentationDetents([.medium, .large])
                 }
                 .sheet(item: $selectedBox) { server in
                     // Per-box health detail. Reconnect reuses the same
@@ -171,11 +175,13 @@ extension ConduitUI {
                         onOpenedSession: { selectedBox = nil }
                     )
                     .environment(store)
+                    .presentationDetents([.medium, .large])
                 }
                 // WS-H.2: SSH re-bootstrap sheet, triggered from the broker-update banner.
                 .sheet(isPresented: $showSshReBoot) {
                     SSHLoginSheet()
                         .environment(store)
+                        .presentationDetents([.medium, .large])
                 }
                 // Onboarding guide — re-opened from the no-boxes CTA or Settings.
                 .fullScreenCover(isPresented: $showOnboarding) {

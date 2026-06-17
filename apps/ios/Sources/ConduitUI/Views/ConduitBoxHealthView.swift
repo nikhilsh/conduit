@@ -153,6 +153,8 @@ extension ConduitUI {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
+                    .frame(maxWidth: 600)
+                    .frame(maxWidth: .infinity)
                 }
             }
             .task(id: server.id) {
@@ -191,6 +193,7 @@ extension ConduitUI {
                         onOpenedSession()
                     }
                 )
+                .presentationDetents([.medium, .large])
             }
         }
 

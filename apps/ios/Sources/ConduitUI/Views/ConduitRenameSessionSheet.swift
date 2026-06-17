@@ -51,6 +51,8 @@ extension ConduitUI {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
+                    .frame(maxWidth: 520)
+                    .frame(maxWidth: .infinity)
                 }
                 .navigationTitle("Rename session")
                 .navigationBarTitleDisplayMode(.inline)

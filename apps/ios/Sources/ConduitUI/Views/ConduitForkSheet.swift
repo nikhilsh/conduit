@@ -145,6 +145,8 @@ extension ConduitUI {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 18)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
                 }
                 .navigationTitle("Fork session")
                 .navigationBarTitleDisplayMode(.inline)
