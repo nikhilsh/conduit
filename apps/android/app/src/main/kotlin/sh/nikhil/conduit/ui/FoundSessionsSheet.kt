@@ -836,18 +836,7 @@ private fun FoundSessionRowItem(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // Agent avatar
-            Box(
-                Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(tint.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    session.agent.take(1).uppercase(),
-                    fontFamily = neon.mono,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = tint.copy(alpha = alpha),
-                )
-            }
+            AgentAvatar(assistant = session.agent, size = 30.dp)
             // Title
             Text(
                 session.title,
@@ -1030,13 +1019,7 @@ private fun BranchCopySheet(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val tint = neonAgentColor(session.agent, neon)
-            Box(
-                Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)).background(tint.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(session.agent.take(1).uppercase(), fontFamily = neon.mono, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = tint)
-            }
+            AgentAvatar(assistant = session.agent, size = 34.dp)
             Column(Modifier.weight(1f)) {
                 Text(session.title, fontFamily = neon.sans, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = neon.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("${session.cwd} · ${session.gitBranch} · ${session.turnCount} turns", fontFamily = neon.mono, fontSize = 10.sp, color = neon.textFaint)
