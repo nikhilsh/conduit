@@ -228,6 +228,33 @@ struct RemoteConversation: Codable, Equatable {
     var items: [RemoteConversationItem]
 }
 
+/// Extended paginated response shape for
+/// `GET /api/session/conversation/<id>?tail=N` and
+/// `GET /api/session/conversation/<id>?before_ts=T&limit=N`.
+/// Old brokers omit `has_more_before` and `oldest_ts` — they decode to
+/// `false` / `0` so pagination never fires against an un-redeployed broker.
+struct RemoteConversationPage: Codable {
+    var items: [RemoteConversationItem]
+    /// `false` means start of history reached; missing field on old brokers
+    /// decodes as `false`.
+    var hasMoreBefore: Bool
+    /// Epoch-millisecond timestamp of items[0]; 0 if items is empty.
+    var oldestTs: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case hasMoreBefore = "has_more_before"
+        case oldestTs = "oldest_ts"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = try c.decode([RemoteConversationItem].self, forKey: .items)
+        hasMoreBefore = (try? c.decode(Bool.self, forKey: .hasMoreBefore)) ?? false
+        oldestTs = (try? c.decode(Int64.self, forKey: .oldestTs)) ?? 0
+    }
+}
+
 /// Wire shape of `GET /api/sessions` — the broker's authoritative
 /// in-memory live-session set. Mirrors `broker/internal/session.LiveSessionInfo`.
 /// A reconnecting client reconciles against this: only `running` rows
@@ -863,6 +890,22 @@ final class SessionStore {
     /// sticky base that `refreshConversation` always merges under the live
     /// (Rust-core) items, so a new turn can't wipe the restored history.
     private var hydratedChat: [String: [ConversationItem]] = [:]
+
+    // MARK: - Backward-pagination state
+
+    /// Whether more history pages exist BEFORE the oldest currently-loaded
+    /// item for a session. `false` = start of transcript reached OR old
+    /// broker (no `has_more_before` field). Keyed by sessionID.
+    /// Exposed for `ChatView` to gate the "load older" trigger.
+    var hasMoreHistoryBySession: [String: Bool] = [:]
+
+    /// Oldest epoch-millisecond timestamp loaded so far per session.
+    /// Passed as `before_ts` to the next `fetchOlderConversation` call.
+    private var oldestLoadedTsBySession: [String: Int64] = [:]
+
+    /// True while a `fetchOlderConversation` network request is in flight
+    /// for the given session. Prevents overlapping fetches.
+    var isLoadingOlderBySession: [String: Bool] = [:]
 
     /// AI-generated quick replies per session (task #233). The broker
     /// emits a `view:"quick_replies"` view_event when an assistant turn
@@ -2256,24 +2299,32 @@ final class SessionStore {
     }
 
     /// Fetch a session's persisted transcript read-only over HTTP
-    /// (`GET /api/session/conversation/<id>`, broker PR #196). Mirrors
-    /// `listDirectories`' direct-HTTP + bearer-auth pattern. Used by the
-    /// Sessions screen to open an *exited* session — there's no live WS
-    /// to replay from, so we read the broker's `conversation.jsonl`
-    /// instead.
+    /// (`GET /api/session/conversation/<id>?tail=80`, broker PR #196+#657).
+    /// Mirrors `listDirectories`' direct-HTTP + bearer-auth pattern. Used by
+    /// the Sessions screen to open an *exited* session — there's no live WS
+    /// to replay from, so we read the broker's `conversation.jsonl` instead.
     ///
-    /// The persisted rows are role/content/ts/files only; we map them
-    /// into `ConversationItem` (kind `message` / `tool`, status `done`)
-    /// so the existing chat renderer can display them unchanged.
+    /// Returns the BOTTOM-ANCHORED tail (most recent 80 items) and records
+    /// pagination state (`hasMoreHistoryBySession`, `oldestLoadedTsBySession`)
+    /// so `ChatView` can trigger `fetchOlderConversation` on scroll-up.
     ///
-    /// Throws `ConversationNotFoundError` on 404 — sessions created
-    /// before the #196 redeploy never wrote a `conversation.jsonl`.
+    /// The persisted rows are role/content/ts/files only; we map them into
+    /// `ConversationItem` (kind `message` / `tool`, status `done`) so the
+    /// existing chat renderer can display them unchanged.
+    ///
+    /// Throws `ConversationNotFoundError` on 404 — sessions created before
+    /// the #196 redeploy never wrote a `conversation.jsonl`.
     func fetchConversation(sessionID: String) async throws -> [ConversationItem] {
         guard let base = endpoint.httpBaseURL else {
             throw NSError(domain: "SessionStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint URL"])
         }
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
         components?.path = "/api/session/conversation/\(sessionID)"
+        // Bottom-anchored initial load: request the most recent 80 messages
+        // so opening a long session is fast and does not download the entire
+        // transcript. `has_more_before` in the response tells us whether
+        // there is more history to page in on scroll-up.
+        components?.queryItems = [URLQueryItem(name: "tail", value: "80")]
         guard let url = components?.url else {
             throw NSError(domain: "SessionStore", code: 103, userInfo: [NSLocalizedDescriptionKey: "Failed to build conversation URL"])
         }
@@ -2289,43 +2340,170 @@ final class SessionStore {
         guard (200..<300).contains(http.statusCode) else {
             throw NSError(domain: "SessionStore", code: 104, userInfo: [NSLocalizedDescriptionKey: "Conversation fetch failed (\(http.statusCode))"])
         }
-        let decoded = try JSONDecoder().decode(RemoteConversation.self, from: data)
-        return decoded.items.enumerated().map { index, raw in
-            let role = raw.role.lowercased()
-            let kind = role == "tool" ? "tool" : "message"
-            let files = (raw.files ?? []).map {
-                ViewEventFile(path: $0.path, rev: $0.rev ?? "")
-            }
-            // Strip the pending-input sentinel the broker persists with an
-            // AskUserQuestion / codex approval card. The live path runs the
-            // core classifier (which strips it); this raw HTTP replay does
-            // not, so without this the sentinel-bearing line both shows as
-            // raw chat text AND fails to dedupe against the live, stripped
-            // card (different role+content fingerprint) — a duplicate card
-            // body under the real card on reattach. Byte-identical to the
-            // broker constant.
-            let content = Self.stripPendingSentinel(raw.content)
-            return ConversationItem(
-                id: "saved-\(sessionID)-\(index)",
-                role: raw.role,
-                kind: kind,
-                status: "done",
-                content: content,
-                ts: raw.ts ?? "",
-                files: files,
-                toolName: nil,
-                command: nil,
-                exitCode: nil,
-                durationMs: nil,
-                diffSummary: nil,
-                pendingOptions: [],
-                sourceAgent: nil,
-                targetAgent: nil,
-                taskText: nil,
-                resultSummary: nil,
-                planSteps: []
-            )
+        // Try the new paginated shape first; fall back to the legacy flat
+        // array so old brokers that haven't shipped #657 still work.
+        let items: [RemoteConversationItem]
+        var hasMoreBefore = false
+        var oldestTs: Int64 = 0
+        if let page = try? JSONDecoder().decode(RemoteConversationPage.self, from: data) {
+            items = page.items
+            hasMoreBefore = page.hasMoreBefore
+            oldestTs = page.oldestTs
+        } else {
+            let legacy = try JSONDecoder().decode(RemoteConversation.self, from: data)
+            items = legacy.items
         }
+        // Store pagination state so ChatView can trigger further fetches.
+        hasMoreHistoryBySession[sessionID] = hasMoreBefore
+        if hasMoreBefore { oldestLoadedTsBySession[sessionID] = oldestTs }
+        Telemetry.breadcrumb("pagination", "initial load", data: [
+            "session": sessionID,
+            "count": String(items.count),
+            "has_more": String(hasMoreBefore),
+            "oldest_ts": String(oldestTs),
+        ])
+        return items.enumerated().map { index, raw in
+            Self.mapRemoteItem(raw, sessionID: sessionID, idPrefix: "saved", index: index)
+        }
+    }
+
+    /// Fetch a page of messages OLDER than `beforeTs` (epoch milliseconds).
+    /// Issues `GET /api/session/conversation/<id>?before_ts=T&limit=80`.
+    /// Prepends the returned items into `hydratedChat[sessionID]` (the sticky
+    /// base) so `applyRefreshedConversation` / `refreshConversation` keep them
+    /// visible after the next live turn. Updates `hasMoreHistoryBySession` and
+    /// `oldestLoadedTsBySession` from the response.
+    ///
+    /// Returns the prepended items on success, empty array if nothing new.
+    /// Guards against overlapping fetches via `isLoadingOlderBySession`.
+    @discardableResult
+    func fetchOlderConversation(sessionID: String) async -> [ConversationItem] {
+        guard !(isLoadingOlderBySession[sessionID] ?? false) else { return [] }
+        guard hasMoreHistoryBySession[sessionID] == true else { return [] }
+        guard let beforeTs = oldestLoadedTsBySession[sessionID], beforeTs > 0 else { return [] }
+        guard let base = endpoint.httpBaseURL else { return [] }
+
+        isLoadingOlderBySession[sessionID] = true
+        defer { isLoadingOlderBySession[sessionID] = false }
+
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/session/conversation/\(sessionID)"
+        components?.queryItems = [
+            URLQueryItem(name: "before_ts", value: String(beforeTs)),
+            URLQueryItem(name: "limit", value: "80"),
+        ]
+        guard let url = components?.url else { return [] }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            Telemetry.capture(
+                error: NSError(domain: "chat_pagination", code: 1,
+                               userInfo: [NSLocalizedDescriptionKey: "older-page fetch failed"]),
+                message: "chat pagination fetch failed",
+                tags: ["surface": "ios", "phase": "pagination"],
+                extras: ["session": sessionID, "before_ts": String(beforeTs)]
+            )
+            return []
+        }
+
+        guard let page = try? JSONDecoder().decode(RemoteConversationPage.self, from: data) else {
+            Telemetry.capture(
+                error: NSError(domain: "chat_pagination", code: 2,
+                               userInfo: [NSLocalizedDescriptionKey: "older-page decode failed"]),
+                message: "chat pagination decode failed",
+                tags: ["surface": "ios", "phase": "pagination"],
+                extras: ["session": sessionID]
+            )
+            return []
+        }
+
+        // Items are returned in ascending chronological order; they must be
+        // prepended BEFORE the existing hydratedChat base.
+        let existingBase = hydratedChat[sessionID] ?? []
+        // Offset index by the number of new pages already prepended so ids
+        // never collide with `saved-<id>-<index>` items from `fetchConversation`.
+        let baseOffset = existingBase.count
+        let newItems = page.items.enumerated().map { index, raw in
+            Self.mapRemoteItem(raw, sessionID: sessionID, idPrefix: "paged",
+                               index: baseOffset + index,
+                               extraTag: String(beforeTs))
+        }
+        if !newItems.isEmpty {
+            // Prepend: older items come before the previously-loaded base.
+            hydratedChat[sessionID] = newItems + existingBase
+            // For reattached live sessions `refreshConversation` re-runs the
+            // Rust-core list and merges `hydratedChat` under it. For EXITED
+            // sessions (no live client) that path silently no-ops, so we also
+            // call `mergeHydrationIntoConversationLog` which directly splices
+            // `hydratedChat` into `conversationLog` — the live client path is
+            // harmlessly redundant (applyRefreshedConversation does the same
+            // merge after the Rust list).
+            refreshConversation(sessionID: sessionID)
+            mergeHydrationIntoConversationLog(sessionID: sessionID)
+        }
+
+        // Update pagination cursors.
+        hasMoreHistoryBySession[sessionID] = page.hasMoreBefore
+        if page.hasMoreBefore { oldestLoadedTsBySession[sessionID] = page.oldestTs }
+
+        Telemetry.breadcrumb("pagination", "loaded older page", data: [
+            "session": sessionID,
+            "fetched": String(newItems.count),
+            "has_more": String(page.hasMoreBefore),
+            "oldest_ts": String(page.oldestTs),
+        ])
+        return newItems
+    }
+
+    /// Map a raw `RemoteConversationItem` to a `ConversationItem`, stripping
+    /// the pending-input sentinel. Shared by `fetchConversation` and
+    /// `fetchOlderConversation` to keep id-scheme logic in one place.
+    ///
+    /// `idPrefix` is `"saved"` for the initial tail load and `"paged"` for
+    /// older pages, so ids never collide between loads. `extraTag` (the
+    /// before_ts cursor) further namespaces paged-item ids so two back-to-back
+    /// page loads don't share an id space even if `index` overlaps.
+    nonisolated private static func mapRemoteItem(
+        _ raw: RemoteConversationItem,
+        sessionID: String,
+        idPrefix: String,
+        index: Int,
+        extraTag: String = ""
+    ) -> ConversationItem {
+        let role = raw.role.lowercased()
+        let kind = role == "tool" ? "tool" : "message"
+        let files = (raw.files ?? []).map {
+            ViewEventFile(path: $0.path, rev: $0.rev ?? "")
+        }
+        // Strip the pending-input sentinel — see fetchConversation's inline
+        // comment for the full rationale.
+        let content = Self.stripPendingSentinel(raw.content)
+        let id = extraTag.isEmpty
+            ? "\(idPrefix)-\(sessionID)-\(index)"
+            : "\(idPrefix)-\(sessionID)-\(extraTag)-\(index)"
+        return ConversationItem(
+            id: id,
+            role: raw.role,
+            kind: kind,
+            status: "done",
+            content: content,
+            ts: raw.ts ?? "",
+            files: files,
+            toolName: nil,
+            command: nil,
+            exitCode: nil,
+            durationMs: nil,
+            diffSummary: nil,
+            pendingOptions: [],
+            sourceAgent: nil,
+            targetAgent: nil,
+            taskText: nil,
+            resultSummary: nil,
+            planSteps: []
+        )
     }
 
     /// Terminate AND remove a session on the broker over HTTP
@@ -4635,6 +4813,46 @@ final class SessionStore {
         return (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
     }
 
+    /// Directly splice `hydratedChat[sessionID]` into `conversationLog`
+    /// WITHOUT requiring a live Rust client. Used by `fetchOlderConversation`
+    /// to surface paginated older history for EXITED sessions (where
+    /// `refreshConversation` silently no-ops because there is no live
+    /// `ConduitClient`). For reattached live sessions this is a harmless
+    /// no-op because `refreshConversation` → `applyRefreshedConversation`
+    /// does the equivalent merge immediately after.
+    ///
+    /// Only touches `conversationLog[sessionID]` if there IS a hydrated base
+    /// AND no live items are currently present (i.e. it is truly exited). If
+    /// `conversationLog[sessionID]` is already non-empty (live session), we
+    /// leave the normal merge path to handle it.
+    private func mergeHydrationIntoConversationLog(sessionID: String) {
+        guard let hydrated = hydratedChat[sessionID], !hydrated.isEmpty else { return }
+        // If there are already live Rust-core items in conversationLog we
+        // skip — `applyRefreshedConversation` will merge them on the next
+        // Rust-core list callback.
+        let existing = conversationLog[sessionID] ?? []
+        let hasLiveItems = existing.contains { !$0.id.hasPrefix("saved-") && !$0.id.hasPrefix("paged-") && !$0.id.hasPrefix("local-") }
+        if !hasLiveItems {
+            conversationLog[sessionID] = hydrated
+        }
+    }
+
+    // MARK: - Backward-pagination accessors (for ChatView)
+
+    /// Returns `true` if there are older messages available to load for
+    /// `sessionID`. `false` when the start of history is reached OR when
+    /// the broker did not include the `has_more_before` field (old broker
+    /// backward-compat: pagination never fires).
+    func hasMoreHistory(_ sessionID: String) -> Bool {
+        hasMoreHistoryBySession[sessionID] ?? false
+    }
+
+    /// Returns `true` while a backward-pagination network fetch is in-flight
+    /// for `sessionID`. Guards `ChatView` against overlapping fetches.
+    func isLoadingOlderHistory(_ sessionID: String) -> Bool {
+        isLoadingOlderBySession[sessionID] ?? false
+    }
+
     /// Remove the broker's pending-input sentinel line from raw transcript
     /// content (the HTTP `fetchConversation` replay bypasses the core
     /// classifier, which strips it on the live path). Byte-identical to the
@@ -4660,6 +4878,27 @@ final class SessionStore {
               !items.isEmpty else { return }
         hydratedChat[sessionID] = items
         refreshConversation(sessionID: sessionID)
+    }
+
+    /// Seed `hydratedChat` + `conversationLog` for an EXITED session whose
+    /// transcript was fetched over HTTP (used by `SavedTranscriptView` to
+    /// route the exited-session read-only path through the store so that
+    /// `ChatView` can trigger backward pagination via `fetchOlderConversation`).
+    ///
+    /// Idempotent: if a hydrated base already exists for this session the call
+    /// is a no-op (prevents clobbering in-progress pagination). Returns the
+    /// items so callers can check emptiness without a second store read.
+    @discardableResult
+    func seedExitedConversation(sessionID: String, items: [ConversationItem]) -> [ConversationItem] {
+        guard hydratedChat[sessionID] == nil else {
+            return conversationLog[sessionID] ?? []
+        }
+        guard !items.isEmpty else { return [] }
+        hydratedChat[sessionID] = items
+        // Directly populate conversationLog — no live Rust client for exited
+        // sessions, so `refreshConversation` would silently no-op here.
+        conversationLog[sessionID] = items
+        return items
     }
 
     // `internal` (not `fileprivate`) so ConduitTests can drive this

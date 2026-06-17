@@ -108,6 +108,12 @@ extension ConduitUI {
         /// True while an infinite-scroll widen is in flight (spinner
         /// visible, repeated onAppear triggers coalesce).
         @State private var isWideningWindow = false
+        /// True while a backward-pagination network fetch is in-flight.
+        /// Used to show the "Loading earlier messages" spinner even after
+        /// the local window covers all in-memory rows (network is lagging).
+        /// Mirrors `store.isLoadingOlderBySession[session.id]` but is a
+        /// local `@State` so the view is always on the main thread.
+        @State private var isLoadingOlderNetwork = false
         // Composer attachments (#240 cross-surface): files picked via the
         // "+" menu sit here as removable chips until send. On send each
         // is uploaded via core `send_file` (0x01 frame → broker writes
@@ -433,38 +439,74 @@ extension ConduitUI {
         /// previous top row is pinned back to the viewport top so the
         /// user's place is kept (content inserted above would otherwise
         /// shove the transcript down).
+        ///
+        /// BACKWARD PAGINATION: once the local window covers ALL in-memory
+        /// rows (`chatRows.count <= visibleRowWindow`) AND the store has
+        /// signalled more history exists (`store.hasMoreHistory(sessionID)`),
+        /// a network fetch is triggered to prepend an older page. The anchor
+        /// is re-pinned after the prepend so the viewport does not jump.
         private func widenRowWindow(proxy: ScrollViewProxy, anchorRowID: String?) {
             guard !isWideningWindow else { return }
             guard autoScroll.userScrolledUp else { return }
-            guard chatRows.count > visibleRowWindow else { return }
-            isWideningWindow = true
-            // Perf telemetry (CLAUDE.md standing order): long-chat
-            // hang/overheat is invisible without a device, so record the
-            // scale of each widen — visible-window size + total rows — so
-            // a hitch/ANR in Sentry carries the context to explain it.
-            Telemetry.breadcrumb("chat_perf", "widen window", data: [
-                "visible": String(visibleRowWindow),
-                "next": String(visibleRowWindow + Self.rowWidenStep),
-                "total_rows": String(chatRows.count),
-                "events": String(events.count),
-            ])
-            // Brief defer so the spinner paints before the main-thread
-            // row parse/layout burst.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                visibleRowWindow += Self.rowWidenStep
-                DispatchQueue.main.async {
-                    if let anchorRowID {
-                        proxy.scrollTo(anchorRowID, anchor: .top)
-                    }
-                    isWideningWindow = false
-                    // LazyVStack resolves the inserted rows' heights
-                    // lazily, so the first pin can land while content
-                    // above is still growing; re-pin once more after
-                    // layout settles (same trick as scrollToBottomOnOpen).
-                    if let anchorRowID {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+
+            // ---- local window widen ----
+            if chatRows.count > visibleRowWindow {
+                isWideningWindow = true
+                // Perf telemetry (CLAUDE.md standing order): long-chat
+                // hang/overheat is invisible without a device, so record the
+                // scale of each widen — visible-window size + total rows — so
+                // a hitch/ANR in Sentry carries the context to explain it.
+                Telemetry.breadcrumb("chat_perf", "widen window", data: [
+                    "visible": String(visibleRowWindow),
+                    "next": String(visibleRowWindow + Self.rowWidenStep),
+                    "total_rows": String(chatRows.count),
+                    "events": String(events.count),
+                ])
+                // Brief defer so the spinner paints before the main-thread
+                // row parse/layout burst.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    visibleRowWindow += Self.rowWidenStep
+                    DispatchQueue.main.async {
+                        if let anchorRowID {
                             proxy.scrollTo(anchorRowID, anchor: .top)
                         }
+                        isWideningWindow = false
+                        // LazyVStack resolves the inserted rows' heights
+                        // lazily, so the first pin can land while content
+                        // above is still growing; re-pin once more after
+                        // layout settles (same trick as scrollToBottomOnOpen).
+                        if let anchorRowID {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                proxy.scrollTo(anchorRowID, anchor: .top)
+                            }
+                        }
+                    }
+                }
+                return
+            }
+
+            // ---- network backward-pagination ----
+            // The local window already covers all in-memory rows. If the
+            // store knows there is older history on the broker, kick off a
+            // fetch. Guard against overlapping fetches; user gate is already
+            // checked above (userScrolledUp).
+            let sid = session.id
+            guard store.hasMoreHistory(sid) else { return }
+            guard !isLoadingOlderNetwork, !store.isLoadingOlderHistory(sid) else { return }
+            isLoadingOlderNetwork = true
+            Telemetry.breadcrumb("pagination", "trigger older page", data: [
+                "session": sid,
+                "total_rows": String(chatRows.count),
+            ])
+            Task { @MainActor in
+                await store.fetchOlderConversation(sessionID: sid)
+                isLoadingOlderNetwork = false
+                // Re-pin the anchor so prepended rows don't shove the
+                // viewport down. Two passes to handle lazy height resolution.
+                if let anchorRowID {
+                    proxy.scrollTo(anchorRowID, anchor: .top)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        proxy.scrollTo(anchorRowID, anchor: .top)
                     }
                 }
             }
@@ -514,7 +556,19 @@ extension ConduitUI {
                         // outruns the prefetch they land on this spinner,
                         // which widens on appear — then they can keep
                         // scrolling into the loaded history.
-                        if rows.count < allRows.count {
+                        //
+                        // BACKWARD PAGINATION: the spinner also shows while a
+                        // network older-page is in-flight (`isLoadingOlderNetwork`)
+                        // even after the local window covers all in-memory rows,
+                        // so there is no blank moment between the end of local
+                        // history and the first broker page arriving. The
+                        // `onAppear` handler fires in that case too and calls
+                        // `widenRowWindow`, which detects the network path and
+                        // starts the fetch.
+                        let showSpinner = rows.count < allRows.count
+                            || isLoadingOlderNetwork
+                            || (rows.count == allRows.count && store.hasMoreHistory(session.id))
+                        if showSpinner {
                             HStack(spacing: 8) {
                                 ProgressView()
                                     .controlSize(.small)
