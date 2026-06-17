@@ -50,7 +50,21 @@ extension ConduitUI {
             case ended
         }
 
+        // Tri-state gate for the Branch-a-copy CTA (parity with FoundBranchSheet).
+        //
+        //   .checking  - capabilities probe in flight
+        //   .failed    - probe returned nil (transient/unreachable/401) - offer Retry
+        //   .ready(f)  - probe returned BoxFeatures (f.sessionFork may be true/false)
+        //
+        // Keeps "probe failed" distinct from "broker genuinely lacks session_fork".
+        private enum ForkProbe {
+            case checking
+            case failed
+            case ready(SessionStore.BoxFeatures)
+        }
+
         @State private var watchState: WatchState = .loading
+        @State private var forkProbe: ForkProbe = .checking
         @State private var items: [ConversationItem] = []
         @State private var latestTs: Int64 = 0
         /// Tracks how many consecutive ticks returned 0 new items.
@@ -317,40 +331,31 @@ extension ConduitUI {
             VStack(spacing: 0) {
                 Divider().background(neon.border)
 
-                if features?.sessionFork == true {
-                    Button {
-                        Telemetry.breadcrumb("found_watch", "branch from watch",
-                            data: ["id": row.externalID])
-                        stopPolling()
-                        dismiss()
-                        onBranch(row)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "arrow.branch")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("Branch a copy to take control")
-                                .font(neon.sans(14).weight(.semibold))
-                        }
-                        .foregroundStyle(neon.bg)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(neon.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                switch forkProbe {
+                case .checking:
+                    // State 1: probe in flight -- spinner, never "not available" copy
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .tint(neon.textFaint)
+                            .controlSize(.small)
+                        Text("Checking this box...")
+                            .font(neon.sans(14).weight(.semibold))
+                            .foregroundStyle(neon.textFaint)
                     }
-                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(neon.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(neon.border, lineWidth: 1)
+                    )
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .background(.ultraThinMaterial)
 
-                    Text("watching never changes the session -- branch to drive your own copy")
-                        .font(neon.mono(10))
-                        .foregroundStyle(neon.textFaint)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 12)
-                        .background(.ultraThinMaterial)
-                } else {
-                    // Branch not yet available on this box
+                case .failed:
+                    // State 2: transient failure -- offer Retry, not "not available yet"
                     VStack(spacing: 6) {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.branch")
@@ -369,7 +374,81 @@ extension ConduitUI {
                         )
                         .padding(.horizontal, 16)
 
-                        Text("Branch isn't available on this box yet.")
+                        HStack(spacing: 6) {
+                            Text("Couldn't check this box \u{2014}")
+                                .font(neon.mono(10))
+                                .foregroundStyle(neon.textFaint)
+                            Button {
+                                Task { await probeFork() }
+                            } label: {
+                                Text("Retry")
+                                    .font(neon.mono(10).weight(.bold))
+                                    .foregroundStyle(neon.accent)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .multilineTextAlignment(.center)
+                    }
+                    .padding(.vertical, 12)
+                    .background(.ultraThinMaterial)
+
+                case .ready(let f) where f.sessionFork:
+                    // State 4: broker supports fork -- enabled button
+                    VStack(spacing: 0) {
+                        Button {
+                            Telemetry.breadcrumb("found_watch", "branch from watch",
+                                data: ["id": row.externalID])
+                            stopPolling()
+                            dismiss()
+                            onBranch(row)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.branch")
+                                    .font(.system(size: 14, weight: .semibold))
+                                Text("Branch a copy to take control")
+                                    .font(neon.sans(14).weight(.semibold))
+                            }
+                            .foregroundStyle(neon.bg)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(neon.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(.ultraThinMaterial)
+
+                        Text("watching never changes the session -- branch to drive your own copy")
+                            .font(neon.mono(10))
+                            .foregroundStyle(neon.textFaint)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 12)
+                            .background(.ultraThinMaterial)
+                    }
+
+                default:
+                    // State 3: probe succeeded but session_fork == false -- honest old-broker copy
+                    VStack(spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.branch")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Branch a copy to take control")
+                                .font(neon.sans(14).weight(.semibold))
+                        }
+                        .foregroundStyle(neon.textFaint)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(neon.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(neon.border, lineWidth: 1)
+                        )
+                        .padding(.horizontal, 16)
+
+                        Text("Branching needs a newer broker on this box. Update it to enable.")
                             .font(neon.mono(10))
                             .foregroundStyle(neon.textFaint)
                             .multilineTextAlignment(.center)
@@ -383,9 +462,30 @@ extension ConduitUI {
         // MARK: - Watch lifecycle
 
         @MainActor
+        private func probeFork() async {
+            forkProbe = .checking
+            Telemetry.breadcrumb("found_watch", "branch gate probe",
+                data: ["host": server.endpoint.displayHost])
+            if let f = await store.fetchBoxFeatures(endpoint: server.endpoint) {
+                forkProbe = .ready(f)
+                Telemetry.breadcrumb("found_watch", "branch gate ready",
+                    data: ["host": server.endpoint.displayHost,
+                           "fork": f.sessionFork ? "true" : "false"])
+            } else {
+                forkProbe = .failed
+                Telemetry.breadcrumb("found_watch", "branch gate probe failed",
+                    data: ["host": server.endpoint.displayHost])
+            }
+        }
+
+        @MainActor
         private func startWatch() async {
             Telemetry.breadcrumb("found_watch", "watch opened",
                 data: ["id": row.externalID, "agent": row.agent])
+
+            // Run the fork-gate probe concurrently with the transcript fetch so
+            // the CTA is ready by the time content appears.
+            Task { await probeFork() }
 
             // Load full transcript first to get the initial cursor
             let fullItems = await store.fetchDiscoveredTranscript(
