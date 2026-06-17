@@ -73,10 +73,22 @@ extension ConduitUI {
         @Environment(SessionStore.self) private var store
         @Environment(\.neonTheme) private var neon
         @State private var expanded = false
+        /// Natural (unconstrained) height of the expanded detail, measured by a
+        /// transparent overlay copy so the visible copy's height can be animated
+        /// between 0 (collapsed) and this value (expanded).
+        @State private var detailHeight: CGFloat = 0
         private let now = Date()
 
         /// Single source of truth for the expand transition.
         private static let expandAnim: Animation = .easeInOut(duration: 0.28)
+
+        /// Preference key carrying the expanded detail's measured natural height.
+        private struct DetailHeightKey: PreferenceKey {
+            static var defaultValue: CGFloat = 0
+            static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+                value = max(value, nextValue())
+            }
+        }
 
         var body: some View {
             let agents = store.accountUsageByAgent.filter { $0.hasData }
@@ -86,7 +98,7 @@ extension ConduitUI {
                         // Plain assignment — the `.animation(value: expanded)`
                         // modifiers below own the transition so every animated
                         // property (chevron rotation, detail opacity, detail
-                        // scale) runs on the SAME transaction/curve with no
+                        // height) runs on the SAME transaction/curve with no
                         // second `withAnimation` racing them.
                         expanded.toggle()
                     } label: {
@@ -106,36 +118,48 @@ extension ConduitUI {
                         }
                     }
                     .buttonStyle(.plain)
-                    // FIX (symmetric expand+collapse): the detail is ALWAYS
-                    // built so the List never sees an insert/remove and never
-                    // races its own row-height animation against a SwiftUI
-                    // .transition. Instead:
+                    // FIX (permanently-open regression): the previous rev used
+                    // `scaleEffect(y:)` to "collapse" the detail. scaleEffect is
+                    // a RENDER transform, not a layout change — it shrinks the
+                    // drawn pixels but the view keeps its full layout height, so
+                    // when collapsed the strip reserved a tall empty panel (the
+                    // permanently-open look). `clipped()` only clips drawing,
+                    // not layout, so it couldn't fix it.
                     //
-                    //  • scaleEffect(y:, anchor: .top): compresses the detail
-                    //    to zero height at the top anchor on collapse; grows to
-                    //    full height on expand. Because scale is a continuous
-                    //    animatable property (not a view-tree mutation), the
-                    //    List row height tracks it frame-by-frame — no gap.
-                    //
-                    //  • clipped(): keeps the vertically-scaled content inside
-                    //    its shrinking/growing frame so nothing overflows the
-                    //    cell boundary at any point in the animation.
-                    //
-                    //  • opacity: drives 0..1 in lockstep with the scale on
-                    //    the SAME .animation(value:) curve in BOTH directions
-                    //    — expand: grow+fade-in together; collapse: shrink+
-                    //    fade-out together. Content is invisible exactly when
-                    //    the frame height is 0 (no lingering bars over a
-                    //    collapsed container, no gap before content appears).
-                    //
-                    //  All three share the single `expandAnim` curve via
-                    //  `.animation(Self.expandAnim, value: expanded)` so they
-                    //  are guaranteed in-lockstep in both directions.
-                    expandedDetail(agents: agents)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .scaleEffect(y: expanded ? 1 : 0.001, anchor: .top)
-                        .opacity(expanded ? 1 : 0)
+                    // A real height collapse instead:
+                    //  • A zero-impact overlay copy of the detail measures its
+                    //    NATURAL height (it ignores the 0-height proposal and
+                    //    lays out at its ideal size; its `.background`
+                    //    GeometryReader reports that true height via
+                    //    DetailHeightKey). The overlay never contributes to
+                    //    layout, so measuring it is free of the constraint we
+                    //    apply to the visible copy.
+                    //  • `Color.clear.frame(height: expanded ? detailHeight : 0)`
+                    //    is the LAYOUT driver: it genuinely collapses to 0 when
+                    //    closed (no reserved space) and animates to the measured
+                    //    height when open — a concrete, interpolatable value.
+                    //  • The visible detail rides in the overlay with opacity
+                    //    0↔1 on the SAME curve, and `.clipped()` keeps it inside
+                    //    the animating height. Content is transparent exactly
+                    //    when height is 0 → no lingering bars, no gap.
+                    Color.clear
+                        .frame(maxWidth: .infinity)
+                        .frame(height: expanded ? detailHeight : 0)
+                        .overlay(alignment: .top) {
+                            expandedDetail(agents: agents)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: DetailHeightKey.self,
+                                            value: geo.size.height)
+                                    }
+                                )
+                                .opacity(expanded ? 1 : 0)
+                                .allowsHitTesting(expanded)
+                        }
                         .clipped()
+                        .onPreferenceChange(DetailHeightKey.self) { detailHeight = $0 }
                         .animation(Self.expandAnim, value: expanded)
                         .accessibilityHidden(!expanded)
                 }
@@ -145,10 +169,11 @@ extension ConduitUI {
             }
         }
 
-        /// Always-built expanded detail (two windows per agent). Revealed via
-        /// scaleEffect(y:)+opacity in `body` (see animation fix note) so the
-        /// `List` row eases open/closed in both directions without lingering
-        /// content or a gap between the card and what follows it.
+        /// Expanded detail (two windows per agent). Revealed via an animated
+        /// height collapse + opacity in `body` (see the animation fix note) so
+        /// the row eases open/closed in both directions without lingering
+        /// content, a gap, or — the regression this replaced — a permanently
+        /// reserved empty panel when collapsed.
         @ViewBuilder
         private func expandedDetail(agents: [SessionStore.AgentUsageSnapshot]) -> some View {
             VStack(alignment: .leading, spacing: 10) {
