@@ -165,7 +165,9 @@ func (s *Store) ListEntries() ([]string, error) {
 			continue
 		}
 		slug := strings.TrimSuffix(name, ".md")
-		if slug == "INDEX" {
+		if slug == "INDEX" || slug == "SOURCES" {
+			// INDEX.md is the generated index; SOURCES.md is the box-local
+			// registered-sources registry (Phase 3a) — neither is an entry.
 			continue
 		}
 		slugs = append(slugs, slug)

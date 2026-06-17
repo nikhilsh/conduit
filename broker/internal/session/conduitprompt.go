@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nikhilsh/conduit/broker/internal/kb"
 )
 
 // This file is PART A of the "harness bootstrap" marquee feature: a concise
@@ -155,6 +157,15 @@ func kbSection(workspaceDir string) (string, bool) {
 	if workspaceDir == "" {
 		return "", false
 	}
+	// Phase 3a (flag ON): KB is active if the workspace has ANY source —
+	// tracked entries, box-local entries, OR ingestable docs ("useful day one
+	// on any repo"). Injection spans all three, clearly labeled by origin.
+	if kb.ExperimentalEnabled() {
+		return kbSectionExperimental(workspaceDir)
+	}
+
+	// Flag OFF (default): byte-identical to Phase 1/2 — inject only when the
+	// workspace has a tracked knowledge/INDEX.md.
 	indexPath := filepath.Join(workspaceDir, "knowledge", "INDEX.md")
 	b, err := os.ReadFile(indexPath)
 	if err != nil {
@@ -177,6 +188,54 @@ func kbSection(workspaceDir string) (string, bool) {
 	sb.WriteString(" kb add --title \"...\" --tags \"tag1,tag2\" --body \"...\"\n")
 	sb.WriteString("- When you learn something durable (a footgun, a decision, a wire fact), add it.\n")
 	sb.WriteString("\nCurrent knowledge/INDEX.md:\n")
+	sb.WriteString("```\n")
+	sb.WriteString(indexContent)
+	if !strings.HasSuffix(indexContent, "\n") {
+		sb.WriteString("\n")
+	}
+	sb.WriteString("```")
+	return sb.String(), true
+}
+
+// kbSectionExperimental builds the KB section for the flag-ON (Phase 3a) path.
+// It gates on kb.SourceExists (any of tracked / box-local / ingestable docs)
+// and injects a merged, origin-labeled index. It also runs ingest as part of
+// the refresh so registered-source pointers exist and the box-local gitignore
+// is in place — never touching any user-authored file. Returns ("", false)
+// when the workspace has no KB source at all.
+func kbSectionExperimental(workspaceDir string) (string, bool) {
+	// Refresh registered-source pointers (pointers only; never edits sources)
+	// and ensure the box-local store is gitignored. Best-effort: a failure here
+	// must never suppress an otherwise-present KB.
+	if _, err := kb.Ingest(workspaceDir); err != nil {
+		log.Printf("kb: ingest refresh failed for %s: %v (continuing)", workspaceDir, err)
+	}
+	if !kb.SourceExists(workspaceDir) {
+		return "", false
+	}
+	merged := kb.MergedIndexForWorkspace(workspaceDir)
+	if len(merged) == 0 {
+		return "", false
+	}
+	indexContent := truncateKBIndex(kb.RenderMergedIndex(merged))
+
+	brokerBin := brokerExecutable()
+	var sb strings.Builder
+	sb.WriteString("Knowledge base: this workspace has indexed knowledge (tracked entries, box-local notes, and pointers into existing docs). Before non-trivial work, consult it.\n")
+	sb.WriteString("- Search: ")
+	sb.WriteString(brokerBin)
+	sb.WriteString(" kb search <query>\n")
+	sb.WriteString("- Read an entry: ")
+	sb.WriteString(brokerBin)
+	sb.WriteString(" kb get <slug>\n")
+	sb.WriteString("- Add a finding (saved box-local, NOT committed): ")
+	sb.WriteString(brokerBin)
+	sb.WriteString(" kb add --title \"...\" --tags \"tag1,tag2\" --body \"...\"\n")
+	sb.WriteString("- Share a box-local finding with the team (commit it): ")
+	sb.WriteString(brokerBin)
+	sb.WriteString(" kb promote <slug>\n")
+	sb.WriteString("- Origin column: tracked = shared in repo; box-local = private to this box; source-pointer = an existing doc (read it, do not assume conduit owns it).\n")
+	sb.WriteString("\nKnowledge index (merged):\n")
 	sb.WriteString("```\n")
 	sb.WriteString(indexContent)
 	if !strings.HasSuffix(indexContent, "\n") {

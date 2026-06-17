@@ -29,11 +29,13 @@ Usage:
   conduit-broker kb [--dir <workspace>] <sub> [args...]
 
 Subcommands:
-  list              print INDEX.md
-  get <slug>        print knowledge/<slug>.md
+  list              print the knowledge index
+  get <slug>        print knowledge/<slug>.md (or .conduit/knowledge/<slug>.md)
   search <query>    case-insensitive search over entries
   add               add a new entry (use --title, --tags, --scope, --body)
   lint              validate structural integrity of the knowledge base
+  ingest            register existing docs (README/docs/CLAUDE.md/...) as pointers [experimental]
+  promote <slug>    move a box-local entry into the tracked knowledge/ dir [experimental]
 
 Options:`)
 		topFS.PrintDefaults()
@@ -82,6 +84,10 @@ Options:`)
 		return kbAdd(subArgs, resolveDir)
 	case "lint":
 		return kbLint(subArgs, resolveDir)
+	case "ingest":
+		return kbIngest(subArgs, resolveDir)
+	case "promote":
+		return kbPromote(subArgs, resolveDir)
 	default:
 		fmt.Fprintf(os.Stderr, "kb: unknown subcommand %q\n", sub)
 		return 2
@@ -106,8 +112,19 @@ func kbList(args []string, resolve dirResolver) int {
 	if code != 0 {
 		return code
 	}
-	store := kb.NewStore(wsDir)
 
+	// Phase 3a (flag ON): list spans all three origins, clearly labeled.
+	if kb.ExperimentalEnabled() {
+		if !kb.SourceExists(wsDir) {
+			fmt.Fprintln(os.Stderr, "kb: no knowledge sources found in workspace (no tracked entries, box-local entries, or ingestable docs)")
+			return 1
+		}
+		merged := kb.MergedIndexForWorkspace(wsDir)
+		fmt.Print(kb.RenderMergedIndex(merged))
+		return 0
+	}
+
+	store := kb.NewStore(wsDir)
 	if !store.Exists() {
 		fmt.Fprintln(os.Stderr, "kb: no knowledge/INDEX.md found in workspace (knowledge base not initialized)")
 		return 1
@@ -135,7 +152,6 @@ func kbGet(args []string, resolve dirResolver) int {
 	if code != 0 {
 		return code
 	}
-	store := kb.NewStore(wsDir)
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
@@ -143,21 +159,23 @@ func kbGet(args []string, resolve dirResolver) int {
 		return 2
 	}
 	slug := remaining[0]
-	e, err := store.ReadEntry(slug)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "kb get: %v\n", err)
-		return 1
+
+	// Phase 3a (flag ON): a slug may live in the tracked store OR the box-local
+	// store. Prefer tracked (curated/shared), fall back to box-local.
+	stores := []*kb.Store{kb.NewStore(wsDir)}
+	if kb.ExperimentalEnabled() {
+		stores = append(stores, kb.NewBoxLocalStore(wsDir))
 	}
-	// Re-read the raw file for faithful output (includes frontmatter).
-	raw, err := os.ReadFile(store.EntryPath(slug))
-	if err != nil {
-		// Fall back to reconstructed output.
-		fmt.Printf("# %s\n\n", e.Title)
-		fmt.Print(e.Body)
+	for _, store := range stores {
+		raw, err := os.ReadFile(store.EntryPath(slug))
+		if err != nil {
+			continue
+		}
+		fmt.Print(string(raw))
 		return 0
 	}
-	fmt.Print(string(raw))
-	return 0
+	fmt.Fprintf(os.Stderr, "kb get: entry %q not found\n", slug)
+	return 1
 }
 
 func kbSearch(args []string, resolve dirResolver) int {
@@ -182,6 +200,39 @@ func kbSearch(args []string, resolve dirResolver) int {
 		return 2
 	}
 	query := strings.Join(remaining, " ")
+
+	// Phase 3a (flag ON): search spans tracked + box-local entries AND the
+	// registered-source pointers, each labeled by origin.
+	if kb.ExperimentalEnabled() {
+		var out []string
+		if m, err := kb.NewStore(wsDir).Search(query); err == nil {
+			for _, line := range m {
+				out = append(out, "[tracked] "+line)
+			}
+		}
+		if m, err := kb.NewBoxLocalStore(wsDir).Search(query); err == nil {
+			for _, line := range m {
+				out = append(out, "[box-local] "+line)
+			}
+		}
+		lq := strings.ToLower(query)
+		if ptrs, err := kb.ScanSources(wsDir); err == nil {
+			for _, p := range ptrs {
+				if strings.Contains(strings.ToLower(p.RelPath+" "+p.Summary), lq) {
+					out = append(out, "[source-pointer] "+p.RelPath+" — "+p.Summary)
+				}
+			}
+		}
+		if len(out) == 0 {
+			fmt.Println("(no matches)")
+			return 0
+		}
+		for _, line := range out {
+			fmt.Println(line)
+		}
+		return 0
+	}
+
 	if !store.Exists() {
 		fmt.Fprintln(os.Stderr, "kb: no knowledge/INDEX.md found in workspace")
 		return 1
@@ -231,7 +282,20 @@ If --body is omitted, the entry body is read from stdin.`)
 	if code != 0 {
 		return code
 	}
-	store := kb.NewStore(wsDir)
+	// Phase 3a (flag ON): agent-written entries default to the box-local,
+	// gitignored .conduit/knowledge/ store so they are NEVER auto-committed to
+	// the user's repo. The user opts in to sharing via `kb promote`. Flag OFF:
+	// writes to the tracked knowledge/ dir exactly as Phase 1.
+	var store *kb.Store
+	if kb.ExperimentalEnabled() {
+		store = kb.NewBoxLocalStore(wsDir)
+		if err := kb.EnsureBoxLocalGitignore(wsDir); err != nil {
+			fmt.Fprintf(os.Stderr, "kb add: ensure .conduit gitignore: %v\n", err)
+			return 1
+		}
+	} else {
+		store = kb.NewStore(wsDir)
+	}
 
 	entryBody := *body
 	if strings.TrimSpace(entryBody) == "" {
@@ -323,5 +387,78 @@ Exits non-zero on hard errors. Warnings are informational only.`)
 	if !res.OK() {
 		return 1
 	}
+	return 0
+}
+
+// kbIngest (Phase 3a) scans the workspace for existing knowledge docs and
+// registers each as a POINTER (path + auto summary) under the box-local store.
+// It NEVER edits a source file. Available only when the experimental flag is
+// ON; gated here so OFF behavior is unchanged.
+func kbIngest(args []string, resolve dirResolver) int {
+	fs := flag.NewFlagSet("kb ingest", flag.ContinueOnError)
+	dir := fs.String("dir", "", "workspace directory (default: cwd)")
+	workspace := fs.String("workspace", "", "alias for --dir")
+	_ = fs.Parse(args)
+
+	if !kb.ExperimentalEnabled() {
+		fmt.Fprintln(os.Stderr, "kb ingest: experimental user-box KB is OFF (set --kb-experimental / CONDUIT_KB_EXPERIMENTAL=1)")
+		return 1
+	}
+
+	subDir := *dir
+	if subDir == "" {
+		subDir = *workspace
+	}
+	wsDir, code := resolve(subDir)
+	if code != 0 {
+		return code
+	}
+	res, err := kb.Ingest(wsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kb ingest: %v\n", err)
+		return 1
+	}
+	fmt.Printf("registered %d source pointer(s) (pointers only — no source file modified)\n", len(res.Pointers))
+	for _, p := range res.Pointers {
+		fmt.Printf("  %s — %s\n", p.RelPath, p.Summary)
+	}
+	fmt.Printf("registry: %s\n", res.Path)
+	return 0
+}
+
+// kbPromote (Phase 3a) moves a box-local entry into the tracked knowledge/ dir
+// — the user's explicit opt-in to share/commit it. Available only when the
+// experimental flag is ON.
+func kbPromote(args []string, resolve dirResolver) int {
+	fs := flag.NewFlagSet("kb promote", flag.ContinueOnError)
+	dir := fs.String("dir", "", "workspace directory (default: cwd)")
+	workspace := fs.String("workspace", "", "alias for --dir")
+	_ = fs.Parse(args)
+
+	if !kb.ExperimentalEnabled() {
+		fmt.Fprintln(os.Stderr, "kb promote: experimental user-box KB is OFF (set --kb-experimental / CONDUIT_KB_EXPERIMENTAL=1)")
+		return 1
+	}
+
+	subDir := *dir
+	if subDir == "" {
+		subDir = *workspace
+	}
+	wsDir, code := resolve(subDir)
+	if code != 0 {
+		return code
+	}
+	remaining := fs.Args()
+	if len(remaining) == 0 {
+		fmt.Fprintln(os.Stderr, "kb promote: requires a slug argument")
+		return 2
+	}
+	res, err := kb.Promote(wsDir, remaining[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kb promote: %v\n", err)
+		return 1
+	}
+	fmt.Printf("promoted %s: %s -> %s\n", res.Slug, res.From, res.To)
+	fmt.Println("(now tracked; commit it to share with your team)")
 	return 0
 }
