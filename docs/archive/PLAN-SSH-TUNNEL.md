@@ -1,3 +1,5 @@
+> ARCHIVED 2026-06-17 — shipped; see docs/VERIFY-CHECKLIST.md / docs/DONE.md
+
 # PLAN-SSH-TUNNEL — keep the bootstrap SSH session alive and forward the broker port
 
 Status: core implemented (this PR). App wiring is a follow-up (checklist at the

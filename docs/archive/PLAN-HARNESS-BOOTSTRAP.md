@@ -1,3 +1,5 @@
+> ARCHIVED 2026-06-17 — shipped; see docs/VERIFY-CHECKLIST.md / docs/DONE.md
+
 # Harness bootstrap
 
 The marquee differentiator: agents that **know** they run under Conduit, plus a

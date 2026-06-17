@@ -35,7 +35,9 @@ terminal = shell).
 | Agent | `chat_mode` | How it runs |
 |---|---|---|
 | claude | `stream-json` | `claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose`; composer → stdin `user` events; stdout → chat events. Parser `claudestream.go`, mappers `claudechat.go`. |
-| codex | `codex-exec` | `codex exec --json` for the first turn (captures `thread_id`), then `codex exec resume <thread_id> --json` per message. Parser `codexstream.go`. |
+| codex | `codex-app-server` | Long-lived `codex app-server` JSON-RPC process (JSONL over stdin/stdout). Broker manages one subprocess per session; turns go via `turn/start` / `turn/steer` / `turn/interrupt`. See [CODEX-APPSERVER-PROTOCOL.md](CODEX-APPSERVER-PROTOCOL.md). |
+| opencode | `opencode-server` | Long-lived `opencode` HTTP+SSE server; broker connects over loopback. See [OPENCODE-PROTOCOL.md](OPENCODE-PROTOCOL.md). |
+| acp / gemini-cli | `acp` | ACP JSONL protocol. See [ACP-PROTOCOL.md](ACP-PROTOCOL.md). |
 
 `chat_mode` is an embedded default per adapter. An unexpected agent exit
 publishes a `role: "system"` chat notice rather than going silent.
@@ -48,6 +50,4 @@ for adapters that don't declare a structured mode. The scraper was *not* deleted
 
 ## Open follow-ups
 
-- codex tool-item (`command_execution`) cards
-- codex approval / sandbox-bypass for chat
-- partial-message live typing
+- opencode and ACP adapter feature parity with the claude/codex path (quick replies, tool cards)

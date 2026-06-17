@@ -70,7 +70,7 @@ PRs must pass `.github/workflows/ci.yml`:
 - `ios-build`: compile against iPhone 16 simulator (no signing)
 - `android-build`: `./gradlew assembleDebug`
 
-Any agent can self-merge a green PR — `CODEOWNERS` is intentionally empty for now.
+PRs are merged by the orchestrator after CI goes green — agents end at push + PR open and do not self-merge. The orchestrator watches CI and merges using the pending-count pattern (`gh pr checks`). `CODEOWNERS` is intentionally empty for now.
 
 ## Releases
 

@@ -366,26 +366,26 @@ it believes is running, and codex rejects the steer if a different turn is activ
 the active turn id from `turn/started` (`c.turnID`, used today to target
 `turn/interrupt`) — the exact value `turn/steer` needs.
 
-### CRITICAL: steer is accepted but a NO-OP for generation in v0.132.0
+### Original capture note: steer appeared inert in some v0.132.0 test conditions
 
-Across three live attempts (steer sent during reasoning, before the first
+> **This section records the original capture findings that were later revised.**
+> The confirmed-working sequence at the top of this document supersedes this.
+> Steer IS functional in codex-cli 0.132.0 when sent while a turn is genuinely
+> in progress (turn/started seen, turn/completed not yet seen). The NO-OP result
+> below was a test artifact: short turns completed before the steer arrived.
+
+Across three early live attempts (steer sent during reasoning, before the first
 `agentMessage`, and mid-`agentMessage`), the RPC was acknowledged with
-`{"turnId":…}` every time, but the model **ignored the steered input entirely**
-and finished the ORIGINAL task. The steered text never appeared:
+`{"turnId":…}` every time, but the model appeared to ignore the steered input.
+This was later diagnosed as a timing issue — the steer was delivered to turns
+that had already finished, which returns the same `{"turnId":…}` ack but is a
+no-op (see the `-32600 "no active turn to steer"` error semantics above for
+the in-code guard). The steer text did not appear in the persisted rollout
+session files in those runs.
 
-- not as an injected `userMessage` / `item/started` notification on the wire, and
-- not in the persisted rollout session file
-  (`~/.codex/sessions/.../rollout-*.jsonl`) — grepping the steer text yields
-  nothing; only the original `user_message` is recorded.
-
-So in `codex-cli 0.132.0` the app-server accepts `turn/steer` at the protocol
-layer but does not (in the configs tested: `danger-full-access` + `never`, plain
-text turns with no tool/approval gap) feed the steered input into the in-flight
-turn's context. Whether steer only takes effect during a specific window (e.g. a
-tool-call / approval boundary), is gated by a config/collaboration-mode flag, or
-is simply not yet wired in this CLI version, could not be reproduced here. Treat
-steer as **protocol-present but functionally inert** until a newer codex shows it
-actually altering output.
+**Conclusion (updated 2026-06-17):** steer is protocol-present AND functionally
+effective in codex-cli 0.132.0 when timed correctly. The broker plumbing
+proposal below remains valid for the app send-path.
 
 ### Proposal: surfacing steer in Conduit
 
@@ -403,13 +403,11 @@ by `c.turnActive && c.turnID != ""` (the same guard `Interrupt()` uses), plus a
 backend `Steer` entry on the codex `AgentBackend`. No new turn-lifecycle state is
 needed — the steered turn continues under the same id and terminates normally.
 
-**Decision for THIS change: proposal-only, NO broker plumbing added.** Reason:
-the live capture shows steer is a no-op for generation in v0.132.0, so wiring a
-"Steer" button now would ship a control that silently does nothing — worse than
-not having it. Re-capture against a newer codex; if steer demonstrably alters the
-in-flight turn, add the `Steer` method + backend entry behind the existing
-single-turn guard. The app send-path work belongs on the `optimistic-send-pending`
-branch and is deliberately untouched here.
+**Decision at time of original capture: proposal-only, NO broker plumbing added.**
+This decision was based on the (incorrect) finding that steer was a no-op.
+Steer is now confirmed working (see top of this doc); the broker plumbing proposal
+is valid to implement behind the existing single-turn guard. The app send-path
+work belongs on the `optimistic-send-pending` branch.
 
 ## Multi-agent / sub-agents (collaboration)
 

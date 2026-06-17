@@ -1,3 +1,5 @@
+> ARCHIVED 2026-06-17 — shipped; see docs/VERIFY-CHECKLIST.md / docs/DONE.md
+
 # PLAN — Push-to-Start Live Activity (G1)
 
 **Goal (G1):** Start the Turn Live Activity from a remote push when the iOS app

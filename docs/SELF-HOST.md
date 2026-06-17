@@ -49,6 +49,14 @@ systemctl --user status conduit-broker
 journalctl --user -u conduit-broker -f
 ```
 
+> **PATH footgun:** the generated systemd unit does not inherit the login-shell
+> `PATH`, so agent CLIs installed under `~/.local/bin/` (the default for
+> `curl | bash` installs of `claude` and `codex`) will not be found — the broker
+> starts but every session spawn fails with "exec claude: not found in \$PATH".
+> Fix: add `Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin`
+> (or the equivalent for root) to the `[Service]` section of the unit file, then
+> `systemctl --user daemon-reload && systemctl --user restart conduit-broker`.
+
 ### Agent-CLI auto-install
 
 If neither `claude` nor `codex` is on `PATH` when the bootstrap script runs,
@@ -80,9 +88,12 @@ CONDUIT_AUTOINSTALL_AGENT=0 remote-bootstrap.sh "$TOKEN"
 ## Install the broker
 
 ```bash
-# Install the broker binary (from the GitHub Release):
+# Install the broker binary (from the GitHub Release).
+# All conduit releases are pre-releases, so /releases/latest/ returns 404.
+# Use the versioned URL instead — set CONDUIT_VERSION to the desired tag:
+export CONDUIT_VERSION=v0.0.171   # replace with the current release tag
 curl -sLo /usr/local/bin/conduit-broker \
-  https://github.com/nikhilsh/conduit/releases/latest/download/conduit-broker-linux-amd64
+  "https://github.com/nikhilsh/conduit/releases/download/${CONDUIT_VERSION}/conduit-broker-linux-amd64"
 chmod +x /usr/local/bin/conduit-broker
 
 # Install agent CLIs *natively* (NOT via npm for claude — re-running

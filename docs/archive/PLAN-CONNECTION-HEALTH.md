@@ -1,3 +1,5 @@
+> ARCHIVED 2026-06-17 — shipped; see docs/VERIFY-CHECKLIST.md / docs/DONE.md
+
 Title: Connection health & freshness — smoother onboarding for both flows.
 
 WS-H.1 (THIS PR): the /api/capabilities readiness block — broker-only, mergeable+redeployable independently.
