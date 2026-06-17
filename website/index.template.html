@@ -116,7 +116,10 @@
   .hero-note{margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:8px;align-items:center;}
   .hero-note b{color:var(--green);font-weight:600;}
 
-  .phone-stage{position:relative;}
+  /* Cap the phone mockup so it stays a phone-sized device in the 2-column
+     hero too — without this it stretched to the full grid column on tablet
+     / wide viewports (only the <=880px stacked layout had a cap). */
+  .phone-stage{position:relative;max-width:380px;margin-inline:auto;}
   .phone-stage::before{content:"";position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);
     width:118%;height:88%;border-radius:50%;
     background:radial-gradient(closest-side,rgba(34,211,238,0.20),rgba(62,240,160,0.08) 50%,transparent 75%);
