@@ -606,6 +606,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
     val conversationLog: StateFlow<Map<String, List<ConversationItem>>> = _conversationLog.asStateFlow()
 
     /**
+     * Sticky HTTP-fetched history base per session. Seeded once by
+     * [hydrateChatConversation] (idempotent) and never overwritten by the
+     * live [refreshConversation] path. On cold restart the Rust core's
+     * [listConversationItems] returns empty until status frames arrive;
+     * without this base [refreshConversation] would clobber the HTTP-fetched
+     * history with an empty list. [refreshConversation] merges UNDER this
+     * base so past items always survive. Mirror of iOS
+     * [SessionStore.hydratedChat].
+     */
+    private val _hydratedChat = mutableMapOf<String, List<ConversationItem>>()
+
+    /**
      * Backward-pagination state per session. Populated by [fetchConversation]
      * (initial tail=80 load) and updated by [fetchOlderConversation]. Only
      * present for sessions that have been opened as archived transcripts; live
@@ -1881,15 +1893,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 try {
                     withContext(Dispatchers.IO) { c.joinSession(id, assistant) }
                     joined++
-                    // Seed chat from HTTP transcript — the Rust core's
-                    // listConversationItems is empty until status frames arrive,
-                    // so seed via fetchConversation now; the live WS will
-                    // append deltas on top. fetchConversation populates
-                    // _conversationLog directly and is idempotent on the
-                    // pagination state.
+                    // Seed chat via the sticky hydration path so a fresh Rust
+                    // core (empty listConversationItems) can never overwrite
+                    // the HTTP-fetched history on first refresh. Uses
+                    // hydrateChatConversation instead of bare fetchConversation
+                    // so the _hydratedChat base is set before the live
+                    // refreshConversation loop runs.
                     viewModelScope.launch {
                         try {
-                            fetchConversation(id)
+                            hydrateChatConversation(id)
                         } catch (t: Throwable) {
                             Telemetry.breadcrumb("session", "reconcile_chat_seed_failed",
                                 mapOf("session" to id, "err" to (t.message ?: "unknown")))
@@ -2750,6 +2762,20 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     updateLifecycle { it + (sessionID to SessionLifecycle.Creating) }
                 }
                 withContext(Dispatchers.IO) { c.joinSession(sessionID, assistant) }
+                // Hydrate chat from HTTP transcript so the Rust core's
+                // empty listConversationItems on cold restart can never
+                // wipe history. Fire-and-forget; idempotent if reconcile
+                // already seeded this session.
+                viewModelScope.launch {
+                    try {
+                        hydrateChatConversation(sessionID)
+                    } catch (t: Throwable) {
+                        Telemetry.breadcrumb(
+                            "chat_hydration", "attach_hydrate_failed",
+                            mapOf("session" to sessionID, "err" to (t.message ?: "unknown")),
+                        )
+                    }
+                }
                 refreshSessions()
                 // Poll briefly for the joined session to surface in
                 // listSessions(); status frames can lag the WS open.
@@ -2966,6 +2992,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
         if (_selectedId.value == sessionId) _selectedId.value = null
+        // Clear sticky hydration base so a reused id can't show stale history.
+        _hydratedChat.remove(sessionId)
         // Suppress this id in refreshSessions for a short window so the broker's
         // lingering tmux (#199) doesn't make the row flicker back immediately.
         _recentlyArchivedAt[sessionId] = System.currentTimeMillis()
@@ -3029,6 +3057,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         updateLifecycle { it - sessionId }
         if (_selectedId.value == sessionId) _selectedId.value = null
+        // Clear sticky hydration base so a reused id can't show stale history.
+        _hydratedChat.remove(sessionId)
         viewModelScope.launch {
             client?.let { c -> runCatching { withContext(Dispatchers.IO) { c.exitSession(sessionId) } } }
             runCatching { deleteSession(sessionId) }.onFailure { t ->
@@ -4697,26 +4727,71 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // `on_chat_event`, so the user's `local-*` echo lives
                 // forever in `stillPending`. Appending it *after* `items`
                 // would render the assistant's reply above the user's
-                // prompt — confusing. Splice by timestamp so the order stays
+                // prompt -- confusing. Splice by timestamp so the order stays
                 // chronological. Mirror of iOS `SessionStore.refreshConversation`.
                 val existing = _conversationLog.value[sessionId] ?: emptyList()
                 val serverFingerprints = items.map { "${it.role}|${it.content}" }.toSet()
                 val stillPending = existing.filter {
                     it.id.startsWith("local-") && "${it.role}|${it.content}" !in serverFingerprints
                 }
-                // Splice the local user echo into the server log in true
-                // chronological order. Carry-forward sort: an item whose ts
-                // we can't parse keeps its arrival position instead of
-                // collapsing to 0L and jumping above the user turn that
-                // preceded it (device bug: agent reply rendered before the
-                // user's prompt). See [sortedByConversationTs].
-
-                val merged = (items + stillPending).sortedByConversationTs { it.ts }
+                // Merge under the sticky HTTP-fetched base (iOS parity).
+                // On cold restart listConversationItems returns EMPTY until
+                // status frames arrive; without this guard the empty live list
+                // would overwrite the HTTP-fetched history and wipe the chat.
+                // Items already present in the live set (same role|content
+                // fingerprint) are deduplicated so history never double-shows.
+                val past = _hydratedChat[sessionId] ?: emptyList()
+                val liveFp = serverFingerprints
+                val pastNotInLive = past.filter { "${it.role}|${it.content}" !in liveFp }
+                // Splice the local user echo and sticky past items into the
+                // server log in true chronological order. See [sortedByConversationTs].
+                val merged = (pastNotInLive + items + stillPending).sortedByConversationTs { it.ts }
                 _conversationLog.value = _conversationLog.value + (sessionId to merged)
             }
         // Fix 9: if this session has the per-session auto-approve grant and the
         // refreshed transcript now ends on a pending approval, auto-resolve it.
         maybeAutoApprove(sessionId)
+    }
+
+    /**
+     * Seed the sticky HTTP-fetched history base for [sessionID] (idempotent).
+     * Fetches the tail-80 conversation from the broker over HTTP, stores it in
+     * [_hydratedChat], then calls [refreshConversation] so the live log is
+     * immediately merged against the base. Subsequent calls are no-ops (the
+     * idempotency guard returns early once the base is set).
+     *
+     * On cold restart the Rust core's listConversationItems is empty until
+     * status frames arrive; hydrating from HTTP first and merging live items
+     * ON TOP prevents refreshConversation from clobbering the fetched history
+     * with an empty list. Mirror of iOS [SessionStore.hydrateChatConversation].
+     *
+     * Caller must be on the main dispatcher (or viewModelScope). The inner
+     * [fetchConversation] call does its own withContext(Dispatchers.IO).
+     */
+    private suspend fun hydrateChatConversation(sessionID: String) {
+        // Idempotency guard -- only hydrate once per session per process lifetime.
+        if (_hydratedChat[sessionID] != null) return
+        Telemetry.breadcrumb("chat_hydration", "hydrate start", mapOf("session" to sessionID))
+        val items = try {
+            fetchConversation(sessionID)
+        } catch (t: Throwable) {
+            Telemetry.breadcrumb(
+                "chat_hydration", "hydrate fetch failed",
+                mapOf("session" to sessionID, "err" to (t.message ?: t.javaClass.simpleName)),
+            )
+            return
+        }
+        if (items.isEmpty()) {
+            Telemetry.breadcrumb("chat_hydration", "hydrate empty -- skipping base", mapOf("session" to sessionID))
+            return
+        }
+        _hydratedChat[sessionID] = items
+        Telemetry.breadcrumb(
+            "chat_hydration", "hydrate seeded",
+            mapOf("session" to sessionID, "count" to items.size.toString()),
+        )
+        // Merge the live state on top of the newly-seeded base.
+        refreshConversation(sessionID)
     }
 
     private fun updateLifecycle(transform: (Map<String, SessionLifecycle>) -> Map<String, SessionLifecycle>) {
