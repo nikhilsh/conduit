@@ -10,8 +10,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -24,6 +22,7 @@ import sh.nikhil.conduit.ui.AppRoot
 import sh.nikhil.conduit.ui.LocalNeonTheme
 import sh.nikhil.conduit.ui.LocalUseDarkTheme
 import sh.nikhil.conduit.ui.NeonTheme
+import sh.nikhil.conduit.ui.conduitColorScheme
 
 class MainActivity : ComponentActivity() {
     private val store: SessionStore by viewModels()
@@ -109,7 +108,7 @@ class MainActivity : ComponentActivity() {
                 LocalUseDarkTheme provides useDark,
                 LocalNeonTheme provides neonTheme,
             ) {
-                MaterialTheme(colorScheme = if (useDark) darkColorScheme() else lightColorScheme()) {
+                MaterialTheme(colorScheme = conduitColorScheme(neonTheme)) {
                     AppRoot(
                         store = store,
                         pushStore = pushStore,
