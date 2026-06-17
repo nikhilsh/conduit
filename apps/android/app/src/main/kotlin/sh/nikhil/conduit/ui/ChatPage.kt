@@ -1346,28 +1346,69 @@ private fun ConversationEventRow(
         }
         ConversationRole.Tool -> ConversationToolCard(ev)
         ConversationRole.System -> {
-            val neon = LocalNeonTheme.current
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Outlined.Info,
-                    contentDescription = null,
-                    tint = neon.textFaint,
-                    modifier = Modifier.size(12.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    ev.content,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = neon.sans,
-                    color = neon.textFaint,
-                    maxLines = 2,
-                )
+            if (ev.content.contains("Resumed from your terminal")) {
+                RecapBanner(ev.content)
+            } else {
+                val neon = LocalNeonTheme.current
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.Info,
+                        contentDescription = null,
+                        tint = neon.textFaint,
+                        modifier = Modifier.size(12.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        ev.content,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.sans,
+                        color = neon.textFaint,
+                        maxLines = 2,
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * Prominent banner for the broker-seeded resume-recap system entry.
+ *
+ * The broker seeds a recap entry with role "system" whenever the user
+ * resumes a terminal/found session. Its content always begins with the
+ * marker "Resumed from your terminal". Unlike short system notices
+ * (session-expired footer, /help) which render as a 2-line faint stub,
+ * this entry can be multi-paragraph and must read clearly as a
+ * "here is where you left off" summary. We render it as a full-width
+ * card with a left accent border, matching the iOS treatment.
+ *
+ * Detection: [content] contains "Resumed from your terminal" (the
+ * stable broker-side prefix; robust to the leading U+21A9 char).
+ */
+@Composable
+private fun RecapBanner(content: String) {
+    val neon = LocalNeonTheme.current
+    Telemetry.breadcrumb("chat", "recap_banner_render", mapOf("contentLen" to content.length.toString()))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .background(neon.surface, shape = RoundedCornerShape(8.dp))
+            .drawBehind {
+                drawLine(
+                    color = neon.accent2,
+                    start = Offset(0f, 0f),
+                    end = Offset(0f, size.height),
+                    strokeWidth = 3.dp.toPx(),
+                )
+            }
+            .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+    ) {
+        MarkdownBlock(content, ConversationRole.Assistant)
     }
 }
 
