@@ -495,16 +495,34 @@ fun BoxHealthScreen(
                 sessionWatch = features?.sessionWatch == true,
                 onDismiss = { showFoundSheet = false },
                 onOpenSession = { sessionId ->
-                    // Switch to this box (if not already active) so the WS
-                    // routes correctly, then dismiss the whole sheet chain
-                    // (FoundSessionsSheet + BoxHealthScreen) so the user lands
-                    // directly on chat without manual back-taps.
+                    // Do NOT call selectSavedServer(autoConnect=true) here.
+                    // That path calls disconnect()+connect(), tearing down the
+                    // WS while attachLiveSession (already launched by
+                    // FoundSessionsSheet) is mid-joinSession. The join then
+                    // throws, the session is never added to _sessions, and
+                    // _selectedId becomes a dangling pointer -> AppRoot renders
+                    // HomeScreen instead of the resumed session. attachLiveSession
+                    // owns the joinSession + _selectedId write; this callback
+                    // must not race it. Matches iOS, which never calls
+                    // selectSavedServer in its adopt-success path.
+                    //
+                    // If the target box is already active: just dismiss and let
+                    // attachLiveSession complete the nav.
+                    // If the target box is NOT active: update the default-server
+                    // pointer only (autoConnect=false = no disconnect/reconnect).
+                    // NOTE: resuming a session on a non-active box is a known
+                    // pre-existing gap (connect-before-adopt ordering) -- the
+                    // active-box case (the common case and the bug) is fixed here.
                     Telemetry.breadcrumb(
                         "found_sessions",
-                        "adopt dismiss chain",
+                        "adopt open",
                         mapOf("session_id" to sessionId, "box" to server.id),
                     )
-                    store.selectSavedServer(server.id, autoConnect = true)
+                    val activeEndpoint = store.endpoint.value
+                    val target = store.savedServers.value.firstOrNull { it.id == server.id }
+                    if (target != null && target.endpoint != activeEndpoint) {
+                        store.selectSavedServer(server.id, autoConnect = false)
+                    }
                     store.select(sessionId)
                     showFoundSheet = false
                     onDismiss()
