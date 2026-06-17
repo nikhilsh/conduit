@@ -23,10 +23,12 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,9 +53,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.nikhil.conduit.HarnessState
 import sh.nikhil.conduit.SavedServer
+import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionNaming
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.VisibleSession
 import sh.nikhil.conduit.firstUserMessageOf
 import sh.nikhil.conduit.latestActivityPreviewOf
 
@@ -68,6 +72,8 @@ import sh.nikhil.conduit.latestActivityPreviewOf
 fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
     val neon = LocalNeonTheme.current
     val sessions by store.sessions.collectAsState()
+    val lifecycle by store.sessionLifecycle.collectAsState()
+    val visible = remember(sessions, lifecycle) { store.visibleSessions() }
     val displayNames by store.displayNames.collectAsState()
     val conversationLog by store.conversationLog.collectAsState()
     val statuses by store.statusBySession.collectAsState()
@@ -149,7 +155,8 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
         }
         Spacer(Modifier.size(16.dp))
 
-        if (sessions.isEmpty()) {
+        val creatingItems = visible.filterIsInstance<VisibleSession.Creating>()
+        if (sessions.isEmpty() && creatingItems.isEmpty()) {
             SectionLabel("Active sessions", neon)
             Text(
                 if (connected) "No sessions yet — start one from the Sessions tab." else "Waiting for the server.",
@@ -158,6 +165,10 @@ fun NeonTabletHome(store: SessionStore, onOpenSession: (String) -> Unit) {
             )
         } else {
             SectionLabel("Active sessions", neon)
+            // Creating placeholders at the TOP (parity with phone home + iOS).
+            creatingItems.forEach { _ ->
+                TabletCreatingSessionRow(neon = neon, modifier = Modifier.padding(bottom = 8.dp))
+            }
             GridOf(sessions.map { it.id }) { id ->
                 val session = sessions.first { it.id == id }
                 val phase = statuses[id]?.phase
@@ -466,6 +477,49 @@ private fun BoxCard(
                     },
                 )
             }
+        }
+    }
+}
+
+/**
+ * Full-width placeholder row shown in the tablet Home "Active sessions" section
+ * while a new session create is in-flight. Mirrors CreatingSessionRow in
+ * HomeScreen.kt (phone) and the tablet rail's CircularProgressIndicator in
+ * ProjectListScreen.kt. Wording matches iOS: "Starting session...".
+ */
+@Composable
+private fun TabletCreatingSessionRow(neon: NeonTheme, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(neon.surface)
+            .border(1.dp, neon.accent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = neon.accent,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                "Starting session…",
+                style = MaterialTheme.typography.titleSmall,
+                fontFamily = neon.sans,
+                fontWeight = FontWeight.SemiBold,
+                color = neon.text,
+                maxLines = 1,
+            )
+            Text(
+                "asking server for a session…",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = neon.mono,
+                color = neon.textDim,
+                maxLines = 1,
+            )
         }
     }
 }
