@@ -575,9 +575,8 @@ func readinessCheckItems(
         ))
     }
     // Infra rows — only flag when absent (they are subtle secondary rows).
-    if !readiness.nodePresent {
-        items.append(ReadinessCheckItem(id: "node", label: "node", status: .absent, loginProvider: nil))
-    }
+    // node is intentionally omitted: it is a terminal-scrollback sidecar and
+    // does not block running any agent.
     if !readiness.tmuxPresent {
         items.append(ReadinessCheckItem(id: "tmux", label: "tmux", status: .absent, loginProvider: nil))
     }

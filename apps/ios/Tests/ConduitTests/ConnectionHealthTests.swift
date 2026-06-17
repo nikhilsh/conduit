@@ -99,11 +99,10 @@ struct ReadinessCheckItemsTests {
         #expect(items.isEmpty)
     }
 
-    @Test func missingNodeAppendsAbsentRow() {
+    @Test func missingNodeProducesNoRow() {
+        // node is a terminal-scrollback sidecar; absence must not block the picker.
         let items = readinessCheckItems(readiness: makeReadiness(nodePresent: false), descriptors: [:])
-        #expect(items.count == 1)
-        #expect(items[0].id == "node")
-        #expect(items[0].status == .absent)
+        #expect(!items.contains(where: { $0.id == "node" }))
     }
 
     @Test func missingTmuxAppendsAbsentRow() {
@@ -114,14 +113,13 @@ struct ReadinessCheckItemsTests {
     }
 
     @Test func bothInfraAbsent() {
+        // node absence is suppressed; only tmux should appear.
         let items = readinessCheckItems(
             readiness: makeReadiness(nodePresent: false, tmuxPresent: false),
             descriptors: [:]
         )
-        #expect(items.count == 2)
-        let ids = items.map(\.id)
-        #expect(ids.contains("node"))
-        #expect(ids.contains("tmux"))
+        #expect(items.count == 1)
+        #expect(items[0].id == "tmux")
     }
 
     @Test func missingGitAppendsAbsentRow() {
@@ -213,13 +211,14 @@ struct ReadinessCheckItemsTests {
     }
 
     @Test func agentRowsBeforeInfraRows() {
+        // node is suppressed; with tmux absent the infra row appears after agents.
         let r = makeReadiness(
-            nodePresent: false,
+            tmuxPresent: false,
             agents: ["claude": AgentReadiness(cliPresent: true, signedIn: true)]
         )
         let items = readinessCheckItems(readiness: r, descriptors: [:])
         #expect(items.count == 2)
         #expect(items[0].id == "claude")
-        #expect(items[1].id == "node")
+        #expect(items[1].id == "tmux")
     }
 }
