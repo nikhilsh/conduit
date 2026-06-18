@@ -886,6 +886,15 @@ extension ConduitUI {
                         subtitle: "Tap when a reply starts and finishes",
                         isOn: $flags.replyHaptics
                     )
+                    Divider()
+                        .background(neon.border)
+                        .padding(.leading, 46)
+                    ConduitUI.toggleRow(
+                        icon: "chevron.left.forwardslash.chevron.right",
+                        title: "Show command detail",
+                        subtitle: "Show each command the agent runs (off shows a compact summary)",
+                        isOn: $flags.showCommandDetail
+                    )
                 }
             }
         }

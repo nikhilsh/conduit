@@ -14,10 +14,18 @@ private struct ChatArmKey: EnvironmentKey {
     static let defaultValue: FeatureFlags.ChatArm = .a
 }
 
+private struct CommandDetailEnabledKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
 extension EnvironmentValues {
     var chatArm: FeatureFlags.ChatArm {
         get { self[ChatArmKey.self] }
         set { self[ChatArmKey.self] = newValue }
+    }
+    var commandDetailEnabled: Bool {
+        get { self[CommandDetailEnabledKey.self] }
+        set { self[CommandDetailEnabledKey.self] = newValue }
     }
 }
 
@@ -224,6 +232,7 @@ extension ConduitUI {
                 // inject it for the row tree to read. Log the exposure event
                 // the first time the chat shell mounts (idempotent).
                 .environment(\.chatArm, flags.resolvedChatArm)
+                .environment(\.commandDetailEnabled, flags.showCommandDetail)
                 .task { flags.logChatExposureIfNeeded() }
         }
 
@@ -254,7 +263,8 @@ extension ConduitUI {
             conversation: [ConversationItem],
             chatLog: [ChatEvent],
             readOnly: Bool,
-            chatArm: String = "a"
+            chatArm: String = "a",
+            showCommandDetail: Bool = false
         ) -> Int {
             var hasher = Hasher()
             hasher.combine(readOnly)
@@ -262,6 +272,9 @@ extension ConduitUI {
             hasher.combine(chatLog.count)
             // Include the arm so switching A<->B in Labs re-groups rows.
             hasher.combine(chatArm)
+            // Include showCommandDetail so toggling the setting invalidates
+            // the memo and re-folds rows into the correct grouping.
+            hasher.combine(showCommandDetail)
             for item in conversation {
                 hasher.combine(item.id)
                 hasher.combine(item.status)
@@ -281,7 +294,8 @@ extension ConduitUI {
             let chatLog = readOnlyItems == nil ? (store.chatLog[session.id] ?? []) : []
             let key = Self.transcriptFingerprint(
                 conversation: conversation, chatLog: chatLog, readOnly: readOnlyItems != nil,
-                chatArm: flags.resolvedChatArm.rawValue
+                chatArm: flags.resolvedChatArm.rawValue,
+                showCommandDetail: flags.showCommandDetail
             )
             if transcriptMemo.fingerprint == key {
                 return (transcriptMemo.events, transcriptMemo.rows)
@@ -304,17 +318,28 @@ extension ConduitUI {
             // run is "adjacent tool calls with no assistant prose between
             // them": any non-tool event closes the current bundle.
             //
-            // Tool grouping is arm B (Signature) only: arm A (Breathe)
-            // keeps every tool card as a standalone .single row so the
-            // de-cramped layout isn't obscured by a collapsed bundle.
-            let isGroupingArm = flags.resolvedChatArm == .b
-            let rows = isGroupingArm
-                ? ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
+            // When showCommandDetail is OFF (the default), collapse ALL tool
+            // runs (even singletons, minRun:1) regardless of arm — every
+            // contiguous tool sequence becomes a compact footnote. When ON,
+            // restore today's arm-specific behaviour: arm B groups runs of 2+,
+            // arm A renders every card standalone.
+            let hideCommands = !flags.showCommandDetail
+            let rows: [ConduitUI.ChatRow]
+            if hideCommands {
+                rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 1) { ev in
                     ev.role.lowercased() == "tool"
                         && ev.status.lowercased() != "swapping"
                         && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
-                  }
-                : events.map { ConduitUI.ChatRow.single($0) }
+                }
+            } else if flags.resolvedChatArm == .b {
+                rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
+                    ev.role.lowercased() == "tool"
+                        && ev.status.lowercased() != "swapping"
+                        && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
+                }
+            } else {
+                rows = events.map { ConduitUI.ChatRow.single($0) }
+            }
             transcriptMemo.fingerprint = key
             transcriptMemo.events = events
             transcriptMemo.rows = rows
@@ -2639,6 +2664,9 @@ private struct ConduitToolBundleCard: View {
     /// chat-shell-v2 arm (§2). Arm B drops the grouped card and renders each
     /// tool as a recessive one-line spine row.
     @Environment(\.chatArm) private var arm
+    /// When false (the default), render the compact footnote instead of the
+    /// full card surface. Injected from the chat shell.
+    @Environment(\.commandDetailEnabled) private var commandDetailEnabled
 
     init(items: [ConversationItem], sessionID: String = "") {
         self.items = items
@@ -2717,11 +2745,59 @@ private struct ConduitToolBundleCard: View {
     }
 
     var body: some View {
-        if arm == .b {
+        if !commandDetailEnabled {
+            compactBody
+        } else if arm == .b {
             signatureBody
         } else {
             breatheBody
         }
+    }
+
+    /// Compact mode (showCommandDetail OFF): a single muted footnote line
+    /// with a chevron. No border, no card surface. Tapping toggles expanded
+    /// to reveal the full ConduitSpineToolRow items. Failures auto-expand
+    /// and use fail tint (failures never hide).
+    private var compactBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(failCount > 0 ? ConduitBundleTint.fail : neon.textFaint)
+                Text(compactLabelText)
+                    .font(neon.mono(11.5))
+                    .foregroundStyle(failCount > 0 ? ConduitBundleTint.fail : neon.textFaint)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(compactLabelText)
+            .accessibilityAddTraits(.isButton)
+            if expanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(displayItems, id: \.id) { item in
+                        ConduitSpineToolRow(event: item)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 4)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var compactLabelText: String {
+        let n = items.count
+        let word = n == 1 ? "command" : "commands"
+        if anyRunning { return "running \(n) \(word)..." }
+        if failCount > 0 { return "ran \(n) \(word) \u{00B7} \(failCount) failed" }
+        return "ran \(n) \(word)"
     }
 
     /// Signature arm: collapsible cluster that defaults collapsed.
