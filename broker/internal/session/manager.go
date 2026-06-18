@@ -212,6 +212,13 @@ type Session struct {
 	// create time so the handle can safely acquire mu without nil checks.
 	subagents *subagentRegistry
 
+	// connectedOwnerCount tracks how many WS clients whose device_id equals
+	// this session's OwnerDeviceID are currently connected. Guarded by mu.
+	// Used by the push-gate: suppress alert push only when the owner device
+	// is actively watching (not when any arbitrary subscriber is present).
+	// Zero for sessions with no OwnerDeviceID (legacy path uses SubscriberCount).
+	connectedOwnerCount int
+
 	// pushState holds the per-session push-notification state (notifier,
 	// identity, and debounce latches). See push_notify.go. Has its own
 	// mutex so the push path never nests under s.mu.
@@ -766,6 +773,42 @@ func (s *Session) SubscriberCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.subs)
+}
+
+// OwnerDeviceID returns the stable per-install UUID of the device that created
+// this session. Empty for sessions created by old clients (no device_id param).
+func (s *Session) OwnerDeviceID() string {
+	s.pushState.mu.Lock()
+	defer s.pushState.mu.Unlock()
+	return s.pushState.ownerDeviceID
+}
+
+// OwnerDeviceConnected reports whether at least one WS client whose device_id
+// matches this session's OwnerDeviceID is currently connected. Used by the
+// push gate (push_notify.go) to suppress alert pushes only when the owner's
+// device is actively watching.
+func (s *Session) OwnerDeviceConnected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connectedOwnerCount > 0
+}
+
+// IncOwnerConnected increments the connected-owner counter. Called by the WS
+// handler on connect when the connecting device_id matches OwnerDeviceID.
+func (s *Session) IncOwnerConnected() {
+	s.mu.Lock()
+	s.connectedOwnerCount++
+	s.mu.Unlock()
+}
+
+// DecOwnerConnected decrements the connected-owner counter. Called by the WS
+// handler's cleanup defer when an owner-device client disconnects.
+func (s *Session) DecOwnerConnected() {
+	s.mu.Lock()
+	if s.connectedOwnerCount > 0 {
+		s.connectedOwnerCount--
+	}
+	s.mu.Unlock()
 }
 
 // Dimensions returns the current PTY rows and cols. Used by the

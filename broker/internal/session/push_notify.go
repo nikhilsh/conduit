@@ -99,16 +99,23 @@ func (s *Session) notifyTargeted(ctx context.Context, n push.Notifier, identity 
 }
 
 // maybeNotifyTurnEnd fires a push notification when a turn just completed
-// AND no client is currently attached to this session (subscriber count == 0).
+// AND no owner-device client is currently attached to this session.
 // It debounces: at most one push per idlePushWindow per session. Safe for
 // concurrent callers (the accumulateUsage / onTurnEnd sites may race with
 // a re-attaching client).
+//
+// Gate semantics (Option A, §3 of PLAN-SSH-CHAT-TAKEOVER.md):
+//   - Legacy (OwnerDeviceID == ""): suppress when SubscriberCount() > 0.
+//     Byte-identical to the previous behavior — any viewer suppresses.
+//   - Modern (OwnerDeviceID != ""): suppress only when the owner device
+//     is currently connected. A non-owner subscriber (e.g. the SSH CLI)
+//     carries no matching device_id and is invisible to this gate.
 func (s *Session) maybeNotifyTurnEnd() {
 	// LA update: always emit (not gated on subscriber count) with event:"end".
 	s.notifyLATurnEnd()
 
-	if s.SubscriberCount() > 0 {
-		return // someone is watching — don't notify
+	if s.ownerPresenceGate() {
+		return // owner device is watching — don't alert
 	}
 	s.pushState.mu.Lock()
 	n := s.pushState.notifier
@@ -140,7 +147,7 @@ func (s *Session) maybeNotifyTurnEnd() {
 }
 
 // maybeNotifyPendingInput fires a push notification when the agent is now
-// blocked on an AskUserQuestion and no client is currently attached.
+// blocked on an AskUserQuestion and no owner-device client is currently attached.
 // Uses a separate debounce latch from turn-end so a pending-input doesn't
 // suppress a subsequent turn-end push or vice-versa.
 //
@@ -149,11 +156,13 @@ func (s *Session) maybeNotifyTurnEnd() {
 // summary as the body (truncated to 120 chars) so iOS/Android can render an
 // actionable approval notification without opening the app. Generic pending
 // input (AskUserQuestion, elicitation, etc.) carries Category="input".
+//
+// Gate semantics: same owner-presence logic as maybeNotifyTurnEnd (see above).
 func (s *Session) maybeNotifyPendingInput() {
 	// LA update: emit for pending-input (choice/permission interrupt).
 	s.notifyLAPendingInput()
 
-	if s.SubscriberCount() > 0 {
+	if s.ownerPresenceGate() {
 		return
 	}
 	s.pushState.mu.Lock()
@@ -192,6 +201,24 @@ func (s *Session) maybeNotifyPendingInput() {
 	if err := s.notifyTargeted(ctx, n, id, payload); err != nil {
 		fmt.Fprintf(os.Stderr, "push: pending-input notify session=%s: %v\n", s.ID, err)
 	}
+}
+
+// ownerPresenceGate returns true when the push should be suppressed because
+// the device that should receive it is currently connected and watching.
+//
+// Two-path logic (Option A, PLAN-SSH-CHAT-TAKEOVER.md §3):
+//   - Legacy (OwnerDeviceID == ""): suppress when any PTY subscriber is present,
+//     exactly as before. Preserves byte-identical behavior for old clients.
+//   - Modern (OwnerDeviceID != ""): suppress only when an owner-device WS client
+//     is connected. Non-owner subscribers (SSH CLI, future PTY viewers that are
+//     not the owner phone) do NOT suppress the owner phone's alert pushes.
+func (s *Session) ownerPresenceGate() bool {
+	if s.OwnerDeviceID() == "" {
+		// Legacy path: any subscriber suppresses (unchanged behavior).
+		return s.SubscriberCount() > 0
+	}
+	// Modern path: only owner-device presence suppresses.
+	return s.OwnerDeviceConnected()
 }
 
 // truncatePushBody truncates s to at most maxLen runes, appending "…" when
