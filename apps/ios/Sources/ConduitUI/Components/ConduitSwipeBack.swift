@@ -66,6 +66,20 @@ extension ConduitUI {
                 && nav.transitionCoordinator == nil
         }
 
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            // Allow the screen-edge pop gesture to begin alongside the chat
+            // scroll view and any SwiftUI DragGesture. Without this, the
+            // scroll view / DragGesture captures the horizontal pan first and
+            // the pop never fires. The pop recognizer is constrained to the
+            // left screen edge via gestureRecognizerShouldBegin above, so a
+            // mid-screen vertical scroll does not accidentally trigger a pop.
+            Telemetry.breadcrumb("nav", "swipe-back simultaneous recognition", ["other": "\(type(of: other))"])
+            return true
+        }
+
         @objc private func popGestureChanged(_ recognizer: UIGestureRecognizer) {
             // Fire a light haptic when the interactive pop COMMITS (the
             // finger crossed the threshold) — not when it springs back.
