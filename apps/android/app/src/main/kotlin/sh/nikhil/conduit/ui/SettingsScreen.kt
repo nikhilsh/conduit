@@ -159,6 +159,7 @@ fun SettingsScreen(
     val themeMode by appearance.themeMode.collectAsState()
     val collapseTurns by appearance.collapseTurns.collectAsState()
     val replyHaptics by appearance.replyHaptics.collectAsState()
+    val showCommandDetail by appearance.showCommandDetail.collectAsState()
     val bodyPointSize by appearance.bodyPointSize.collectAsState()
     val terminalTheme by appearance.terminalTheme.collectAsState()
     val terminalFont by appearance.terminalFont.collectAsState()
@@ -451,6 +452,13 @@ fun SettingsScreen(
                     subtitle = "Tap when a reply starts and finishes",
                     isOn = replyHaptics,
                     onChange = { appearance.setReplyHaptics(it) },
+                )
+                ToggleRow(
+                    icon = Icons.Filled.Code,
+                    title = "Show command detail",
+                    subtitle = "Show each command the agent runs (off shows a compact summary)",
+                    isOn = showCommandDetail,
+                    onChange = { appearance.setShowCommandDetail(it) },
                 )
             }
 
