@@ -493,11 +493,26 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	// best-effort — a slow/absent OAuth endpoint never blocks the connect. The
 	// explicit refresh button re-fires the same fetch (ws "account_usage").
 	go sess.RefreshAccountUsage()
+
+	// Push-gate: track whether this client is the session's owner device.
+	// ownerDeviceID is the device_id from the connect URL; if it matches the
+	// session's stored OwnerDeviceID, this client counts as "owner connected"
+	// and alert pushes are suppressed while it's attached (Option A, §3).
+	// A non-owner or legacy client (no device_id / no OwnerDeviceID) never
+	// increments this counter so it cannot suppress the phone's pushes.
+	isOwnerClient := ownerDeviceID != "" && ownerDeviceID == sess.OwnerDeviceID()
+	if isOwnerClient {
+		sess.IncOwnerConnected()
+	}
+
 	// Defer cleanup ordering matters: unsubscribe FIRST so the
 	// SubscriberCount reflects the post-leave total when we
 	// broadcast. tied to function return; gorilla's read/write loops
 	// both exit via c.close() which ripples back here.
 	defer func() {
+		if isOwnerClient {
+			sess.DecOwnerConnected()
+		}
 		sess.Unsubscribe(sub)
 		sess.UnsubscribeText(textSub)
 		emitViewerStatus(sess)
