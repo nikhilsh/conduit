@@ -1867,6 +1867,15 @@ class SessionStore : ViewModel(), ConduitDelegate {
             }
             val obj = JSONObject(raw)
             val sessions = obj.optJSONArray("sessions") ?: JSONArray()
+            // Cold sessions the broker can respawn on /ws open (not currently
+            // running but recoverable on attach). Present on broker >= #700;
+            // absent on older brokers (null treated as empty).
+            val recoverableArr = obj.optJSONArray("recoverable") ?: JSONArray()
+            val recoverableIDs = mutableSetOf<String>()
+            for (ri in 0 until recoverableArr.length()) {
+                val rid = recoverableArr.getJSONObject(ri).optString("id", "")
+                if (rid.isNotEmpty()) recoverableIDs += rid
+            }
 
             val aliveIDs = mutableSetOf<String>()
             val deleted = _deletedIds.value
@@ -1920,19 +1929,98 @@ class SessionStore : ViewModel(), ConduitDelegate {
             Telemetry.breadcrumb("session", "reconcile_live_joined",
                 mapOf("server" to serverID, "joined" to joined.toString()))
 
-            // -- 3. Demote saved-LIVE rows for THIS box the broker no longer has --
+            // -- 3. Decide fate of saved-LIVE rows the broker is NOT running --
+            //
+            // Three-way decision (mirrors the iOS parity contract):
+            //   a. In aliveIDs             -> already handled above; skip.
+            //   b. In recoverableIDs       -> broker can respawn on /ws open
+            //      (e.g. a broker restart that killed the process but kept
+            //      the session on-disk, per PR #700). Auto-rejoin: set
+            //      Creating (transient, not Exited), join + hydrate chat.
+            //      On success the session stays Active. On failure -> demote.
+            //   c. In neither set          -> genuinely gone; demote to History.
+            //
+            // SCOPE GUARD: only auto-rejoin sessions already in the app's
+            // LOCAL active (LIVE) store. Never mass-join every recoverable
+            // session the broker returns (the box can have dozens).
+            //
+            // ANTI-THRASH: autoRejoinedIDs prevents a second rejoin attempt
+            // for the same session inside this reconcile cycle.
             val savedLive = _savedSessions.value.filter {
                 it.serverId == serverID && it.status == SavedSessionStatus.LIVE
             }
             var demoted = 0
+            var autoRejoined = 0
+            val autoRejoinedIDs = mutableSetOf<String>()
             for (saved in savedLive) {
-                if (saved.id !in aliveIDs) {
+                if (saved.id in aliveIDs) continue // already running; skip
+
+                if (saved.id in recoverableIDs && saved.id !in autoRejoinedIDs
+                        && saved.id !in deleted) {
+                    // -- (b) Recoverable: auto-rejoin so session stays Active --
+                    autoRejoinedIDs += saved.id
+                    val assistant = run {
+                        // Prefer the assistant from the recoverable array; fall
+                        // back to what the saved session recorded.
+                        var found = "claude"
+                        for (ri in 0 until recoverableArr.length()) {
+                            val robj = recoverableArr.getJSONObject(ri)
+                            if (robj.optString("id", "") == saved.id) {
+                                found = robj.optString("assistant", "claude")
+                                break
+                            }
+                        }
+                        found
+                    }
+                    Telemetry.breadcrumb("session", "reconcile_auto_rejoin_start",
+                        mapOf("session" to saved.id, "server" to serverID))
+                    // Stamp box and set transient Creating state so the home
+                    // row stays visible (not demoted) during the rejoin.
+                    _sessionBox.value = _sessionBox.value + (saved.id to serverID)
+                    updateLifecycle { it + (saved.id to SessionLifecycle.Creating) }
+                    hydrateTerminalBuffer(saved.id)
+                    try {
+                        withContext(Dispatchers.IO) { c.joinSession(saved.id, assistant) }
+                        autoRejoined++
+                        Telemetry.breadcrumb("session", "reconcile_auto_rejoin_success",
+                            mapOf("session" to saved.id))
+                        viewModelScope.launch {
+                            try {
+                                hydrateChatConversation(saved.id)
+                            } catch (t: Throwable) {
+                                Telemetry.breadcrumb("session", "reconcile_auto_rejoin_chat_failed",
+                                    mapOf("session" to saved.id, "err" to (t.message ?: "unknown")))
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        // Rejoin failed (rotated token, broker race, etc.) ->
+                        // fall through to demote so the session lands in History
+                        // rather than being stuck in a phantom Creating state.
+                        Telemetry.capture(
+                            error = t,
+                            message = "reconcile_auto_rejoin_failed",
+                            extras = mapOf("session" to saved.id))
+                        if (_sessionLifecycle.value[saved.id] is SessionLifecycle.Creating) {
+                            updateLifecycle { it - saved.id }
+                        }
+                        markExited(saved.id)
+                        if (_sessionLifecycle.value[saved.id] == null) {
+                            updateLifecycle { it + (saved.id to SessionLifecycle.Exited(0)) }
+                        }
+                        demoted++
+                    }
+                } else {
+                    // -- (c) Genuinely gone: demote to History --
                     markExited(saved.id)
                     if (_sessionLifecycle.value[saved.id] == null) {
                         updateLifecycle { it + (saved.id to SessionLifecycle.Exited(0)) }
                     }
                     demoted++
                 }
+            }
+            if (autoRejoined > 0) {
+                Telemetry.breadcrumb("session", "reconcile_auto_rejoined",
+                    mapOf("server" to serverID, "count" to autoRejoined.toString()))
             }
             if (demoted > 0) {
                 Telemetry.breadcrumb("session", "reconcile_live_demoted",
