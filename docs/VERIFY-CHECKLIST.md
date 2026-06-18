@@ -9,6 +9,20 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.182
+
+**Chat-noise + keyboard + SSH-chat-takeover + broker-restart-chat round.** PRs #693/#694 (Show command detail toggle, iOS+Android), #699 (plan-card misclassification, core+Android), #697 (iOS keyboard), #698 (iOS edge-swipe-back), #695 (broker `conduit-broker chat` Phase 1), #696 (broker owner-presence push-gate Phase 2), #700 (broker replays chat transcript on WS reattach). Broker REDEPLOYED.
+
+- **1 · Agent commands hidden by default ("Show command detail")** — chat collapses every contiguous tool/command run (incl. lone commands) into a muted "ran N commands" footnote; tap to expand, or flip Settings → Conversation → "Show command detail" on for full command cards. Failures still surface (`ran N commands · M failed`, fail tint, auto-expand). Verify on iOS + Android (phone + tablet). [iOS+Android phone+tablet, on-device]
+- **2 · Commands with a checklist body no longer render as PLAN cards** — a `gh pr create` whose body has a markdown checklist (`- [x]`) was wrongly shown as a PLAN card (looked like a duplicate on retry). Now only genuine plan/todo tools or assistant prose become plan cards. Verify: a command whose output has a `- [ ]` list shows as a normal command. [iOS+Android, on-device]
+- **3 · Keyboard tracks the system spring + keeps last message visible** — composer animates with the keyboard's real spring curve (was easeInOut → laggy) and scrolls the last message into view on keyboard-up. Verify on iOS. [iOS, on-device]
+- **4 · Edge-swipe-back works from the chat messages area** — PR #698. Verify on iOS: swipe from the left edge in a chat → navigates back. [iOS, on-device]
+- **5 · `conduit-broker chat <session-id>` CLI (SSH chat takeover, Phase 1)** — view + drive a live session's chat from an SSH terminal on the box. Verify on the box: `conduit-broker chat <id>` attaches and can send. [broker — live]
+- **6 · Owner-presence push-gate (Phase 2)** — alert pushes suppressed only when an owner-device client is attached, not any subscriber (e.g. the SSH chat CLI). Verify: a backgrounded phone still gets pushes while a non-owner SSH client is attached; no double-notify for the single-phone case. [broker — live; app-side on-device]
+- **7 · Chat history survives a broker restart** — on WS reattach the broker now replays the persisted transcript (last 200 msgs) to the client, so reopening a session after a broker restart shows the prior conversation instead of an empty chat. Ships via broker redeploy (no app update). Verify: after a broker restart, reopen a session → the previous conversation is there. [broker — live]
+
+---
+
 ## v0.0.168
 
 **Android stabilization + mDNS multicast + resume recap fix.** PRs #628 (Android mDNS permissions + usage-strip), #632 (Android stabilization), #633/#638 (broker recap digest + IS_SANDBOX), #634 (CI test stabilization). Broker REDEPLOYED (recap is broker-side, live now). Website redeployed to conduit.kaopeh.com with v0.0.168 links.
