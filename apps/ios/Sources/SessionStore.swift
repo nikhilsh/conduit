@@ -5767,26 +5767,108 @@ final class SessionStore {
                 Task { @MainActor in await self.hydrateChatConversation(sid) }
             }
 
-            // 2. Demote saved `.live` rows the broker no longer has → History.
-            //    Their agent died (broker restart / GC / exit) while we were
-            //    gone; showing them as ACTIVE was the lie the user called out.
+            // 2. For each locally-saved `.live` session the broker did NOT
+            //    return as running, decide keep-vs-demote:
+            //
+            //    a) Recoverable (broker restart, cold session that will
+            //       respawn on /ws open): auto-rejoin so it stays Active.
+            //       Scope guard: only sessions already in OUR local active
+            //       store -- never mass-join the broker's full recoverable
+            //       list (it can contain dozens of unrelated sessions).
+            //    b) Genuinely gone (not recoverable): demote to History as
+            //       before.
+            //
+            //    recoverableSessionIDs is populated as a side-effect of
+            //    fetchLiveSessions() just above.
             let savedLive = SavedSessionsStore.shared.sessions.filter {
                 $0.serverID == serverID && $0.status == .live
             }
             var demoted = 0
+            var rejoining = 0
             for saved in savedLive where !aliveIDs.contains(saved.id) {
-                SavedSessionsStore.shared.markExited(id: saved.id, serverID: serverID)
-                // If a stale local row exists, reflect the death so it reads
-                // read-only rather than interactive.
-                if sessions.contains(where: { $0.id == saved.id }),
-                   sessionLifecycle[saved.id] == nil {
-                    sessionLifecycle[saved.id] = .exited(0)
+                guard !SavedSessionsStore.shared.isTombstoned(id: saved.id) else {
+                    // Tombstoned -- treat as gone, don't touch SavedSessionsStore.
+                    continue
                 }
-                demoted += 1
+                if recoverableSessionIDs.contains(saved.id) {
+                    // Anti-thrash: skip if a join for this session is already
+                    // live or in progress from step 1.
+                    let lc = sessionLifecycle[saved.id]
+                    if case .live = lc {
+                        // Already live -- nothing to do; skip the demote too.
+                        continue
+                    }
+                    if lc == .creating {
+                        // Already being created this cycle -- don't issue a
+                        // second join. Skip the demote.
+                        rejoining += 1
+                        continue
+                    }
+                    // Stamp the box and put the session into a transient
+                    // rejoining state (.creating is the correct non-terminal
+                    // lifecycle for an in-progress attach) so it appears as
+                    // reconnecting rather than vanishing from the Active list.
+                    sessionBox[saved.id] = serverID
+                    sessionLifecycle[saved.id] = .creating
+                    hydrateTerminalBuffer(saved.id)
+                    Telemetry.breadcrumb("session", "reconcile_rejoin_start", data: [
+                        "session": saved.id,
+                        "assistant": saved.agent,
+                    ])
+                    let rejoinID = saved.id
+                    let rejoinAssistant = saved.agent
+                    Task { @MainActor in
+                        do {
+                            try await client.joinSession(
+                                sessionId: rejoinID,
+                                assistant: rejoinAssistant
+                            )
+                            // Hydrate chat: broker replays terminal snapshot on
+                            // reattach (#700) but chat is HTTP-fetched separately.
+                            await self.hydrateChatConversation(rejoinID)
+                            Telemetry.breadcrumb("session", "reconcile_rejoin_success", data: [
+                                "session": rejoinID,
+                            ])
+                        } catch {
+                            // Join failed -- demote NOW so the row doesn't stay
+                            // stuck as an un-joined `.creating` placeholder.
+                            if self.sessionLifecycle[rejoinID] == .creating {
+                                self.sessionLifecycle[rejoinID] = .exited(0)
+                            }
+                            SavedSessionsStore.shared.markExited(
+                                id: rejoinID,
+                                serverID: serverID
+                            )
+                            Telemetry.capture(
+                                error: error,
+                                message: "iOS reconcile auto-rejoin failed",
+                                tags: ["surface": "ios", "phase": "reconcile_rejoin"],
+                                extras: ["session_id": rejoinID, "assistant": rejoinAssistant]
+                            )
+                        }
+                        self.refreshSessions()
+                    }
+                    rejoining += 1
+                } else {
+                    // Genuinely gone: demote to History as before.
+                    SavedSessionsStore.shared.markExited(id: saved.id, serverID: serverID)
+                    // If a stale local row exists, reflect the death so it
+                    // reads read-only rather than interactive.
+                    if sessions.contains(where: { $0.id == saved.id }),
+                       sessionLifecycle[saved.id] == nil {
+                        sessionLifecycle[saved.id] = .exited(0)
+                    }
+                    demoted += 1
+                }
             }
             if demoted > 0 {
                 Telemetry.breadcrumb("session", "reconcile_live_demoted", data: [
                     "count": "\(demoted)",
+                ])
+            }
+            if rejoining > 0 {
+                Telemetry.breadcrumb("session", "reconcile_live_rejoining", data: [
+                    "count": "\(rejoining)",
                 ])
             }
             refreshSessions()
