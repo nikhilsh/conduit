@@ -76,7 +76,8 @@ extension ConduitUI {
             // the pop never fires. The pop recognizer is constrained to the
             // left screen edge via gestureRecognizerShouldBegin above, so a
             // mid-screen vertical scroll does not accidentally trigger a pop.
-            Telemetry.breadcrumb("nav", "swipe-back simultaneous recognition", ["other": "\(type(of: other))"])
+            // (No breadcrumb here — this is called repeatedly during gesture
+            // arbitration and would flood the ring buffer.)
             return true
         }
 
