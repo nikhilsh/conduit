@@ -62,6 +62,7 @@ final class FeatureFlags {
         static let onboardingFurthestStep = "conduit.flags.onboarding.furthestStep"
         static let onboardingGuide = "conduit.flags.onboarding.guide"
         static let replyHaptics = "conduit.flags.chat.replyHaptics"
+        static let showCommandDetail = "conduit.flags.chat.showCommandDetail"
         static let sshTunnelTransport = "conduit.flags.transport.sshTunnel"
         static let showSubagentPanel = "conduit.flags.debug.showSubagentPanel"
         static let concurrentMultiBox = "conduit.flags.transport.concurrentMultiBox"
@@ -165,6 +166,18 @@ final class FeatureFlags {
         didSet { defaults.set(replyHaptics, forKey: Keys.replyHaptics) }
     }
 
+    // MARK: - Show command detail — default OFF
+
+    /// When ON, each agent command/tool card is shown individually in chat
+    /// (today's full-detail behavior). When OFF (the default), contiguous
+    /// tool runs — including lone single commands — are collapsed into a
+    /// compact muted footnote ("ran N commands", tap to expand). Failures
+    /// always surface regardless of this flag. Surfaced in Settings →
+    /// Conversation.
+    var showCommandDetail: Bool {
+        didSet { defaults.set(showCommandDetail, forKey: Keys.showCommandDetail) }
+    }
+
     /// Last reasoning-effort the user picked on the effort dial (§3
     /// acceptance: "persists the last choice"). Empty until first use, in
     /// which case the sheet falls back to the agent's default. Stored as the
@@ -235,6 +248,7 @@ final class FeatureFlags {
         self.onboardingGuide = defaults.object(forKey: Keys.onboardingGuide) as? Bool ?? true
 
         self.replyHaptics = defaults.object(forKey: Keys.replyHaptics) as? Bool ?? true
+        self.showCommandDetail = defaults.object(forKey: Keys.showCommandDetail) as? Bool ?? false
         self.sshTunnelTransport = defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
         self.showSubagentPanel = defaults.object(forKey: Keys.showSubagentPanel) as? Bool ?? false
         self.concurrentMultiBox = defaults.object(forKey: Keys.concurrentMultiBox) as? Bool ?? false
