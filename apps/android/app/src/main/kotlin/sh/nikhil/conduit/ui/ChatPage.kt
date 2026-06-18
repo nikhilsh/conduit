@@ -564,6 +564,7 @@ fun ChatPage(
 
     val appearanceStore = sh.nikhil.conduit.LocalAppearanceStore.current
     val replyHapticsEnabled by appearanceStore.replyHaptics.collectAsState()
+    val showCommandDetail by appearanceStore.showCommandDetail.collectAsState()
     // Fix 10: arm-B (Signature) coalesces consecutive tool turns into clusters.
     val chatStylePref by appearanceStore.chatStylePreference.collectAsState()
     val chatExperimentKilled by appearanceStore.chatExperimentKilled.collectAsState()
@@ -838,11 +839,21 @@ fun ChatPage(
                 } else {
                     // Fix 10: in arm B, fold runs of 2+ consecutive tool turns
                     // into one cluster unit; arm A and lone tools stay inline.
-                    val renderUnits = groupChatUnits(events.map { it.role }, signatureArm)
+                    // When command detail is hidden, ALL contiguous tool runs
+                    // (including lone single commands) collapse into a cluster.
+                    val hideCommands = !showCommandDetail
+                    val renderUnits = groupChatUnits(
+                        roles = events.map { it.role },
+                        signature = signatureArm,
+                        hideCommands = hideCommands,
+                    )
                     items(renderUnits.size) { unitIndex ->
                         when (val unit = renderUnits[unitIndex]) {
                             is ChatRenderUnit.ToolCluster ->
-                                ToolClusterCard(unit.indices.map { events[it] })
+                                ToolClusterCard(
+                                    items = unit.indices.map { events[it] },
+                                    compact = hideCommands,
+                                )
                             is ChatRenderUnit.Single -> {
                                 val index = unit.index
                                 val previousRole = if (index > 0) events[index - 1].role else null
@@ -1071,13 +1082,28 @@ private sealed class ChatRenderUnit {
 }
 
 /**
- * Coalesce consecutive tool-role events into clusters for arm B (Signature)
- * ONLY. Arm A and a lone tool call pass through as [ChatRenderUnit.Single],
- * so the existing inline rendering is untouched. Pure + index-based so it is
- * unit-testable and keeps the continuation/key logic intact.
+ * Coalesce consecutive tool-role events into clusters.
+ *
+ * When [hideCommands] is true (Show command detail OFF), ALL contiguous tool
+ * runs — including lone single commands — collapse into a [ToolCluster] so
+ * they render as a compact muted footnote line. This applies regardless of the
+ * [signature] arm.
+ *
+ * When [hideCommands] is false and [signature] is true (arm B), only runs of
+ * 2+ consecutive tool turns collapse; a lone tool stays inline.
+ *
+ * When [hideCommands] is false and [signature] is false (arm A), every event
+ * is rendered inline (no clustering).
+ *
+ * Pure + index-based so it is unit-testable and keeps the continuation/key
+ * logic intact.
  */
-private fun groupChatUnits(roles: List<String>, signature: Boolean): List<ChatRenderUnit> {
-    if (!signature) return roles.indices.map { ChatRenderUnit.Single(it) }
+private fun groupChatUnits(
+    roles: List<String>,
+    signature: Boolean,
+    hideCommands: Boolean = false,
+): List<ChatRenderUnit> {
+    if (!hideCommands && !signature) return roles.indices.map { ChatRenderUnit.Single(it) }
     val units = mutableListOf<ChatRenderUnit>()
     var i = 0
     while (i < roles.size) {
@@ -1085,9 +1111,13 @@ private fun groupChatUnits(roles: List<String>, signature: Boolean): List<ChatRe
             var j = i
             while (j < roles.size && roles[j].lowercase() == "tool") j++
             val run = (i until j).toList()
-            // Only 2+ consecutive tool turns collapse; a single one stays inline.
-            if (run.size >= 2) units.add(ChatRenderUnit.ToolCluster(run))
-            else units.add(ChatRenderUnit.Single(run[0]))
+            when {
+                // hideCommands: collapse even a single tool turn into a cluster.
+                hideCommands -> units.add(ChatRenderUnit.ToolCluster(run))
+                // signature arm B: only 2+ consecutive tool turns collapse.
+                run.size >= 2 -> units.add(ChatRenderUnit.ToolCluster(run))
+                else -> units.add(ChatRenderUnit.Single(run[0]))
+            }
             i = j
         } else {
             units.add(ChatRenderUnit.Single(i))
@@ -2606,17 +2636,50 @@ private fun clusterRowLabel(ev: ConversationItem): String {
  * one-line command rows. Collapsed (default) shows header + rows; tapping the
  * header expands to the full inline tool cards for each call. A single tool
  * call never reaches here (see [groupChatUnits]) so the inline path is intact.
+ *
+ * When [compact] is true (Show command detail is OFF), renders as a minimal
+ * muted footnote line instead of the full bordered card: a small chevron + dim
+ * text ("ran N commands"). Tapping toggles expansion; when expanded, shows the
+ * same per-row cluster rows as the non-compact collapsed state. Failures surface
+ * in the label even in compact mode.
  */
 @Composable
-private fun ToolClusterCard(items: List<ConversationItem>) {
+private fun ToolClusterCard(items: List<ConversationItem>, compact: Boolean = false) {
     val neon = LocalNeonTheme.current
-    var expanded by remember { mutableStateOf(false) }
     val worstExit = remember(items) { clusterWorstExit(items) }
     val anyFailed = items.any { it.status.equals("failed", true) } ||
         (worstExit != null && worstExit != 0)
+    val n = items.size
+    val noun = if (n == 1) "command" else "commands"
+
+    // In compact mode, auto-expand failures so errors are never buried.
+    // Seed the initial state once per (items, compact) pair; user can collapse manually.
+    var expanded by remember(items, compact) { mutableStateOf(compact && anyFailed) }
+
+    // Compact footnote label: "running N command(s)...", failure, or muted summary.
+    val allFinished = items.all {
+        it.status.isNotBlank() && !it.status.equals("running", true)
+    }
+    val compactLabel = remember(items, worstExit, anyFailed, allFinished) {
+        when {
+            !allFinished -> "running $n $noun..."
+            worstExit != null && worstExit != 0 -> {
+                val failed = items.count {
+                    val e = it.exitCode?.toInt()
+                    it.status.equals("failed", true) || (e != null && e != 0)
+                }
+                "ran $n $noun · $failed failed"
+            }
+            anyFailed -> {
+                val failed = items.count { it.status.equals("failed", true) }
+                "ran $n $noun · $failed failed"
+            }
+            else -> "ran $n $noun"
+        }
+    }
+
+    // Full-card summary label (non-compact mode).
     val summary = remember(items, worstExit, anyFailed) {
-        val n = items.size
-        val noun = if (n == 1) "command" else "commands"
         when {
             worstExit == null && !anyFailed -> "$n $noun"
             worstExit == 0 && !anyFailed -> "$n $noun · all exit 0"
@@ -2624,6 +2687,35 @@ private fun ToolClusterCard(items: List<ConversationItem>) {
             else -> "$n $noun · failed"
         }
     }
+
+    if (compact && !expanded) {
+        // Compact footnote: a single muted line with a chevron, no card chrome.
+        Row(
+            modifier = Modifier
+                .clickable { expanded = true }
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Expand commands",
+                tint = neon.textFaint,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                compactLabel,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = if (anyFailed) neon.red else neon.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        return
+    }
+
+    // Expanded compact mode or full-card non-compact mode: render the bordered card.
     val chevron by androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
         label = "clusterChevron",
@@ -2653,7 +2745,7 @@ private fun ToolClusterCard(items: List<ConversationItem>) {
             }
             Spacer(Modifier.width(10.dp))
             Text(
-                summary,
+                if (compact) compactLabel else summary,
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = neon.sans,
                 fontWeight = FontWeight.SemiBold,

@@ -154,6 +154,17 @@ class AppearanceStore : ViewModel() {
     val replyHaptics: StateFlow<Boolean> = _replyHaptics.asStateFlow()
 
     /**
+     * Show command detail: when true, every agent tool/command card is
+     * rendered individually (today's behavior). When false (the default),
+     * contiguous tool runs — including lone single commands — are collapsed
+     * into a compact muted footnote line ("ran N commands", tap to expand).
+     * Failures always surface even when collapsed. Mirrors iOS
+     * `AppearanceStore.showCommandDetail`.
+     */
+    private val _showCommandDetail = MutableStateFlow(false)
+    val showCommandDetail: StateFlow<Boolean> = _showCommandDetail.asStateFlow()
+
+    /**
      * Terminal renderer selector. `true` (the default) uses the native
      * Termux `terminal-view` path ([TermuxTerminalView]); `false` falls
      * back to the legacy xterm.js WebView ([WebTerminal]). Mirrors iOS
@@ -289,6 +300,7 @@ class AppearanceStore : ViewModel() {
             ?: ThemeMode.System
         _collapseTurns.value = p.getBoolean(KEY_COLLAPSE, false)
         _replyHaptics.value = p.getBoolean(KEY_REPLY_HAPTICS, true)
+        _showCommandDetail.value = p.getBoolean(KEY_SHOW_COMMAND_DETAIL, false)
         _experimentalNativeTerminal.value = p.getBoolean(KEY_EXPERIMENTAL_NATIVE_TERMINAL, true)
         _bodyPointSize.value = p.getFloat(KEY_BODY_POINT_SIZE, DEFAULT_BODY_POINT_SIZE)
             .coerceIn(BODY_POINT_SIZE_RANGE)
@@ -418,6 +430,11 @@ class AppearanceStore : ViewModel() {
         prefs?.edit()?.putBoolean(KEY_REPLY_HAPTICS, value)?.apply()
     }
 
+    fun setShowCommandDetail(value: Boolean) {
+        _showCommandDetail.value = value
+        prefs?.edit()?.putBoolean(KEY_SHOW_COMMAND_DETAIL, value)?.apply()
+    }
+
     fun setExperimentalNativeTerminal(value: Boolean) {
         _experimentalNativeTerminal.value = value
         prefs?.edit()?.putBoolean(KEY_EXPERIMENTAL_NATIVE_TERMINAL, value)?.apply()
@@ -491,6 +508,7 @@ class AppearanceStore : ViewModel() {
         private const val KEY_THEME = "theme"
         private const val KEY_COLLAPSE = "collapseTurns"
         private const val KEY_REPLY_HAPTICS = "replyHaptics"
+        private const val KEY_SHOW_COMMAND_DETAIL = "showCommandDetail"
         private const val KEY_EXPERIMENTAL_NATIVE_TERMINAL = "experimentalNativeTerminal"
         private const val KEY_BODY_POINT_SIZE = "bodyPointSize"
         private const val KEY_TERMINAL_FONT_SIZE = "terminalFontSize"
