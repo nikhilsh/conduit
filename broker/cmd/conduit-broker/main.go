@@ -65,6 +65,8 @@ func main() {
 		os.Exit(runMemory(os.Args[2:]))
 	case "kb":
 		os.Exit(runKB(os.Args[2:]))
+	case "chat":
+		os.Exit(runChat(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -81,6 +83,7 @@ Commands:
   up        start the HTTP+WebSocket harness
   memory    (task 005) per-session memory CLI
   kb        knowledge-base CLI (list/get/search/add)
+  chat      attach to a running session's chat channel
 
 Run "conduit-broker up --help" for options.`)
 }
