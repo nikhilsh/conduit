@@ -86,11 +86,10 @@ func TestBuildSend_Empty_Nil(t *testing.T) {
 	if buildSend("") != nil {
 		t.Fatal("empty line should return nil")
 	}
-	if buildSend("   ") != nil {
-		// Note: buildSend trims \r\n but not spaces per spec —
-		// a line of spaces is technically valid input to forward.
-		// spaces-only actually builds a chat frame (not nil).
-		// So skip the space case; only truly empty strings are nil.
+	// buildSend trims \r\n but not spaces: a spaces-only line is valid input
+	// and builds a chat frame (only truly-empty strings return nil).
+	if buildSend("   ") == nil {
+		t.Fatal("spaces-only line should build a chat frame, not nil")
 	}
 }
 

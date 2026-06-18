@@ -364,7 +364,7 @@ func handleFrame(payload []byte, latestTs *int64) (bool, error) {
 		case "chat":
 			var ev chatEvent
 			if err := json.Unmarshal(env.Event, &ev); err == nil {
-				renderEntry(convEntry{Role: ev.Role, Content: ev.Content, Ts: ev.Ts})
+				renderEntry(convEntry(ev))
 				if ts := parseTsMillis(ev.Ts); ts > *latestTs {
 					*latestTs = ts
 				}
