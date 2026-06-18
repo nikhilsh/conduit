@@ -7,12 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-- **SSH chat takeover** — `conduit-broker chat <session-id>` CLI to view + drive
-  a live session's chat from an SSH terminal on the box (plan:
-  `docs/PLAN-SSH-CHAT-TAKEOVER.md`). Phase 1 (CLI) branch `feat/ssh-chat-cli`
-  PR #695; Phase 2 (owner-presence push-gate fix) branch
-  `fix/push-gate-owner-presence` PR #696. Phase 2 needs on-device verify
-  (backgrounded phone still gets pushes while SSH attached) + broker redeploy.
+- (nothing actively building)
 
 ## Deferred (not active)
 
