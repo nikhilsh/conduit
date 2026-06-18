@@ -48,6 +48,12 @@ const (
 	// never pushes a legitimate max-size file past the connection read
 	// limit; overflow returns a clean tool-event error, not a panic.
 	maxUploadBytes = 60 << 20 // 60 MiB
+
+	// reattachReplayTail is the maximum number of persisted conversation
+	// entries replayed to a reattaching client. Bounds the on-connect
+	// payload for very long sessions; the app can paginate older history
+	// via GET /api/session/conversation/<id>.
+	reattachReplayTail = 200
 )
 
 // Keep-alive tuning. Vars (not consts) so the keep-alive regression
@@ -482,6 +488,40 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 					"files":   []any{},
 				},
 			})
+		}
+
+		// Replay the persisted conversation transcript to this client only.
+		// On broker restart the agent's tmux session (and its in-process
+		// context) survive, but the broker's in-memory chat state is gone.
+		// Without this replay the reattaching client sees an empty chat pane
+		// even though the agent still holds its full context. Each entry is
+		// sent as a direct write (not PublishText) so it is NOT re-persisted
+		// to conversation.jsonl and NOT broadcast to other connected clients.
+		// Best-effort: a missing or unreadable transcript is silently skipped.
+		if entries, err := s.Sessions.ConversationLog(sess.ID); err == nil && len(entries) > 0 {
+			tail := entries
+			if len(tail) > reattachReplayTail {
+				tail = tail[len(tail)-reattachReplayTail:]
+			}
+			for _, e := range tail {
+				files := e.Files
+				var filesVal any
+				if len(files) > 0 {
+					filesVal = files
+				} else {
+					filesVal = []any{}
+				}
+				_ = c.writeJSON(map[string]any{
+					"type": "view_event",
+					"view": "chat",
+					"event": map[string]any{
+						"role":    e.Role,
+						"content": e.Content,
+						"ts":      e.Ts,
+						"files":   filesVal,
+					},
+				})
+			}
 		}
 	}
 
