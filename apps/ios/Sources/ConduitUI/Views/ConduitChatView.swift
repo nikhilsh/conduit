@@ -950,6 +950,11 @@ extension ConduitUI {
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
                     let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
                     applyKeyboardInset(frame, animation: keyboardAnimation(note))
+                    if autoScroll.shouldFollowNewMessage {
+                        withAnimation(keyboardAnimation(note)) {
+                            proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                        }
+                    }
                     logKeyboardDiag("keyboard will show", keyboardFrame: frame)
                 }
                 // willChangeFrame catches the predictive/QuickType bar resizing
@@ -1001,6 +1006,7 @@ extension ConduitUI {
             case Int(UIView.AnimationCurve.easeIn.rawValue): return .easeIn(duration: duration)
             case Int(UIView.AnimationCurve.easeOut.rawValue): return .easeOut(duration: duration)
             case Int(UIView.AnimationCurve.linear.rawValue): return .linear(duration: duration)
+            case 7: return .spring(response: duration, dampingFraction: 1.0)
             default: return .easeInOut(duration: duration)
             }
         }
