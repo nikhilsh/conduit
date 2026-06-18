@@ -231,10 +231,24 @@ fun parseNeonDiffStat(diffSummary: String?, body: String?): NeonDiffStat? {
  * its tool name contains "todo"/"plan" OR its content reads as a
  * checkbox list (`- [ ]` / `- [x]` lines). Pure so the (currently
  * unwired) PlanCard can be gated cleanly without fabricating data.
+ *
+ * Mirror of core `looks_like_plan` (core/src/conversation.rs) and the iOS
+ * `kind == "plan"` gate. Role/command exclusion: the content-shaped
+ * checkbox heuristic must NOT fire for a tool/command event whose command
+ * string or output merely embeds a markdown checklist (e.g. `gh pr create`
+ * with a "## Test plan" body). Here that maps to excluding the known
+ * shell/file command tools (Bash/Read/Edit/Write/Grep/Glob/...) — they stay
+ * normal tool/command events. The genuine TodoWrite / update_plan tool is
+ * still caught by the "todo"/"plan" name branch above.
  */
 fun isNeonPlanShaped(toolName: String?, content: String?): Boolean {
     val n = toolName?.lowercase().orEmpty()
     if ("todo" in n || "plan" in n) return true
+    // A shell/file command event is never plan-shaped from content alone — a
+    // checklist in its command/output (e.g. a PR "## Test plan" body) is not a
+    // plan card. Mirrors core's role == "tool" content-path exclusion.
+    val commandTools = setOf("bash", "read", "edit", "write", "grep", "glob", "ls", "shell")
+    if (n in commandTools) return false
     val c = content.orEmpty()
     return Regex("""(?m)^\s*[-*]\s*\[[ xX]\]""").containsMatchIn(c)
 }

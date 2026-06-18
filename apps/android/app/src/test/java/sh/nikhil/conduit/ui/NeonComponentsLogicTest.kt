@@ -78,5 +78,14 @@ class NeonComponentsLogicTest {
         assertTrue(isNeonPlanShaped("mystery", "- [ ] step one\n- [x] step two"))
         assertFalse(isNeonPlanShaped("bash", "ls -la"))
         assertFalse(isNeonPlanShaped(null, "- a plain bullet"))
+        // A shell/file command event whose CONTENT embeds a markdown checklist
+        // (e.g. `gh pr create` with a "## Test plan" body) must NOT be
+        // plan-shaped — mirrors core's role == "tool" content-path exclusion.
+        assertFalse(
+            isNeonPlanShaped(
+                "Bash",
+                "gh pr create --body '## Test plan\n- [x] gofmt clean\n- [x] tests',",
+            ),
+        )
     }
 }
