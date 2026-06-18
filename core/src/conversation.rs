@@ -171,7 +171,7 @@ fn classify_kind(role: &str, content: &str, has_diff: bool, tool_name: Option<&s
     if looks_like_pending_input(content) {
         return "pending_input".to_string();
     }
-    if looks_like_plan(content, tool_name) {
+    if looks_like_plan(role, content, tool_name) {
         return "plan".to_string();
     }
     if looks_like_handoff(content) {
@@ -413,12 +413,32 @@ fn looks_like_handoff(text: &str) -> bool {
 /// iOS `ConduitChatView`): a tool name containing "todo"/"plan", or content
 /// with a markdown checkbox line (`- [ ]` / `- [x]`). Kept in lock-step so
 /// core and the shells agree on what counts as a plan.
-fn looks_like_plan(content: &str, tool_name: Option<&str>) -> bool {
+///
+/// Role/command exclusion: the content-shaped checkbox heuristic applies ONLY
+/// to assistant/user messages. A tool/command event (role == "tool") whose
+/// command string or output embeds a markdown checklist (e.g. `gh pr create`
+/// with a "## Test plan" body) must NOT be promoted to a PLAN card — it stays
+/// a normal tool/command event. The genuine TodoWrite / update_plan TOOL is
+/// still caught by the tool_name branch even when role == "tool".
+///
+/// Shells mirror this exclusion: iOS gates the PLAN card purely on core's
+/// `kind == "plan"` (so it inherits this fix), and Android's
+/// `isNeonPlanShaped` skips the content path for shell/file command tools
+/// (Bash/Read/Edit/Write/Grep/Glob/...).
+fn looks_like_plan(role: &str, content: &str, tool_name: Option<&str>) -> bool {
     if let Some(name) = tool_name {
         let lower = name.to_ascii_lowercase();
         if lower.contains("todo") || lower.contains("plan") {
-            return true;
+            return true; // genuine TodoWrite / update_plan tool — a real plan
         }
+    }
+    // Content-shaped plan detection (an agent emitting a plan as prose with
+    // markdown checkboxes) applies ONLY to assistant/user messages. A tool /
+    // command event whose command string or output embeds a markdown
+    // checklist (e.g. `gh pr create` with a "## Test plan" body) must NOT be
+    // promoted to a PLAN card — it stays a normal tool/command event.
+    if role == "tool" {
+        return false;
     }
     content.lines().any(|line| checkbox_state(line).is_some())
 }
@@ -1033,6 +1053,46 @@ mod tests {
         let item = item_from_chat_event(&ev("assistant", "- a plain bullet\n- another"), 0);
         assert_ne!(item.kind, "plan");
         assert!(item.plan_steps.is_empty());
+    }
+
+    #[test]
+    fn tool_command_with_checklist_body_is_not_plan() {
+        // Regression: a `gh pr create` whose body embeds a "## Test plan"
+        // markdown checklist arrives as a tool event (role == "tool",
+        // tool_name == "Bash"). It must stay a tool/command event, NOT be
+        // promoted to a PLAN card just because its content has checkboxes.
+        let item = item_from_chat_event(
+            &ev(
+                "tool",
+                "Bash: gh pr create --title x --body '## Test plan\n- [x] gofmt clean\n- [x] 9 new tests'",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "tool");
+        assert!(item.plan_steps.is_empty());
+    }
+
+    #[test]
+    fn todowrite_tool_is_still_plan() {
+        // The genuine TodoWrite tool (role == "tool", tool_name "TodoWrite")
+        // is still a plan via the tool_name branch — unchanged by the fix.
+        let item = item_from_chat_event(&ev("tool", "TodoWrite: updating the task list"), 0);
+        assert_eq!(item.kind, "plan");
+    }
+
+    #[test]
+    fn assistant_checkbox_prose_is_still_plan() {
+        // Content-shaped plan from an assistant message — unchanged by the fix.
+        let item = item_from_chat_event(&ev("assistant", "- [ ] step one\n- [x] step two"), 0);
+        assert_eq!(item.kind, "plan");
+    }
+
+    #[test]
+    fn user_checkbox_prose_is_still_plan() {
+        // role == "user" with a checkbox keeps its prior (plan) classification;
+        // the fix only changes role == "tool".
+        let item = item_from_chat_event(&ev("user", "- [ ] do a thing"), 0);
+        assert_eq!(item.kind, "plan");
     }
 
     #[test]
