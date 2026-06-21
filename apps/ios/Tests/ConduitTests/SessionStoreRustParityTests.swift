@@ -22,6 +22,9 @@ struct SessionStoreRustParityTests {
         store.ingestChat(sessionID, ChatEvent(role: "assistant", content: "thinking", ts: "t2", files: []))
         store.ingestChat(sessionID, ChatEvent(role: "tool", content: "ran cargo test", ts: "t3", files: []))
 
+        // applyChat runs on rustApplyQueue (background) — drain it before reading.
+        store.rustApplyQueue.sync {}
+
         let swiftEvents = store.chatLog[sessionID] ?? []
         let rustEvents = store.rustStore.get(sessionId: sessionID)?.chat.events ?? []
         #expect(swiftEvents.count == rustEvents.count)

@@ -478,13 +478,19 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		// already show it. Keys off the live pending ask, so an
 		// already-answered question correctly stays gone.
 		if content, ok := sess.PendingAskChatContent(); ok {
+			// Use the original ts so the client's apply_chat (role,content,ts)
+			// dedup treats this replay as the same event rather than a new one.
+			ts := sess.PendingAskChatTs()
+			if ts == "" {
+				ts = time.Now().UTC().Format(time.RFC3339Nano)
+			}
 			_ = c.writeJSON(map[string]any{
 				"type": "view_event",
 				"view": "chat",
 				"event": map[string]any{
 					"role":    "assistant",
 					"content": content,
-					"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+					"ts":      ts,
 					"files":   []any{},
 				},
 			})

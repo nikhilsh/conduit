@@ -34,11 +34,15 @@ func conduitConversationTsString(epoch: Double) -> String {
 extension Array {
     /// Stable chronological sort by an epoch-normalized `ts` accessor. Equal
     /// keys preserve arrival order (mirrors Android's index tie-break).
+    ///
+    /// Uses a decorate-sort-undecorate (Schwartzian) transform so
+    /// `conduitConversationTsEpoch` (ISO8601 parse) runs O(n) rather than
+    /// O(n log n). With 100+ items this was the top hang source: date parsing
+    /// fired on every comparator call inside the sort.
     func sortedByConversationTs(_ ts: (Element) -> String) -> [Element] {
-        enumerated().sorted { a, b in
-            let ea = conduitConversationTsEpoch(ts(a.element))
-            let eb = conduitConversationTsEpoch(ts(b.element))
-            return ea != eb ? ea < eb : a.offset < b.offset
+        let decorated = enumerated().map { (offset: $0.offset, element: $0.element, epoch: conduitConversationTsEpoch(ts($0.element))) }
+        return decorated.sorted { a, b in
+            a.epoch != b.epoch ? a.epoch < b.epoch : a.offset < b.offset
         }.map { $0.element }
     }
 }
@@ -1051,6 +1055,9 @@ final class SessionStore {
     /// maps, (3) port the same shadow-write into Android `SessionStore.kt`.
     private let useRustStore = true
     let rustStore = SessionStoreCore()
+    /// Serial queue for fire-and-forget Rust shadow-writes. Serial so a
+    /// `rustApplyQueue.sync {}` barrier in tests drains all pending writes.
+    let rustApplyQueue = DispatchQueue(label: "sh.nikhil.conduit.rust-apply", qos: .utility)
 
     /// View-layer coordinator wired in by `ConduitApp` so `ingestChat`
     /// can hand each terminal-shaped chat event to the streaming
@@ -4646,10 +4653,18 @@ final class SessionStore {
         refreshConversation(sessionID: sessionID)
         if useRustStore {
             ensureRustSessionPresent(sessionID)
-            _ = rustStore.applyChat(sessionId: sessionID, event: event)
-            #if DEBUG
-            assertRustChatLogParity(sessionID)
-            #endif
+            // applyChat returns the full ProjectSessionState over FFI — on a
+            // large session this deserializes hundreds of ConversationItems, which
+            // blocked the main thread for up to 28 s (CONDUIT-IOS-2P). The return
+            // value is discarded; the Rust store is an async cache that the next
+            // refreshConversation will pick up. Fire and forget on a background
+            // queue so the main actor stays responsive.
+            let store = rustStore
+            let sid = sessionID
+            let ev = event
+            rustApplyQueue.async {
+                _ = store.applyChat(sessionId: sid, event: ev)
+            }
         }
         // Notify the streaming renderer that an assistant turn landed.
         // The harness delivers `ChatEvent`s whole (no per-token deltas
@@ -4828,7 +4843,16 @@ final class SessionStore {
         let pastNotInLive = past.filter {
             !liveFingerprints.contains("\($0.role)|\($0.content)")
         }
-        return (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
+        let combined = (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
+        // Defensive dedup: the broker replays a pending AskUserQuestion on
+        // reconnect with a fresh timestamp, so apply_chat stores it as a second
+        // Rust conversation item (same role+content, different ts → not deduped
+        // by the (role,content,ts) check). Both items appear in `live`, and since
+        // liveFingerprints is a Set one entry covers both, so pastNotInLive is
+        // empty — but both live copies survive into the combined output and render
+        // as duplicate bubbles. Keep only the first occurrence by role|content.
+        var seen = Set<String>()
+        return combined.filter { seen.insert("\($0.role)|\($0.content)").inserted }
     }
 
     /// Directly splice `hydratedChat[sessionID]` into `conversationLog`
