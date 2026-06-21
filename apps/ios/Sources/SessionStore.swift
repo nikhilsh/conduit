@@ -1055,6 +1055,9 @@ final class SessionStore {
     /// maps, (3) port the same shadow-write into Android `SessionStore.kt`.
     private let useRustStore = true
     let rustStore = SessionStoreCore()
+    /// Serial queue for fire-and-forget Rust shadow-writes. Serial so a
+    /// `rustApplyQueue.sync {}` barrier in tests drains all pending writes.
+    let rustApplyQueue = DispatchQueue(label: "sh.nikhil.conduit.rust-apply", qos: .utility)
 
     /// View-layer coordinator wired in by `ConduitApp` so `ingestChat`
     /// can hand each terminal-shaped chat event to the streaming
@@ -4659,7 +4662,7 @@ final class SessionStore {
             let store = rustStore
             let sid = sessionID
             let ev = event
-            DispatchQueue.global(qos: .utility).async {
+            rustApplyQueue.async {
                 _ = store.applyChat(sessionId: sid, event: ev)
             }
         }
