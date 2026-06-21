@@ -436,6 +436,7 @@ fun ChatPage(
     // to answered without waiting for the broker echo. Mirror of iOS
     // `SessionStore.resolvedPendingInputIDs`.
     val resolvedPendingInputIDs by store.resolvedPendingInputIDs.collectAsState()
+    val credentialSourceMap by store.credentialSource.collectAsState()
     val listState = rememberLazyListState()
 
     // Backward-pagination state. Observe the store's pagination map so the
@@ -830,6 +831,33 @@ fun ChatPage(
                                     fontFamily = LocalNeonTheme.current.sans,
                                 )
                             }
+                        }
+                    }
+                }
+
+                // Credential-source banner: shown when the broker is using the
+                // app-forwarded credential because the box is not logged in.
+                if (credentialSourceMap[session.id] == "app_forwarded") {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f))
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                text = "Using your app login — box credential missing",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            )
                         }
                     }
                 }
