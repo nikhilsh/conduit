@@ -1686,6 +1686,35 @@ func (m *Manager) SetCredentialStore(s *credentials.Store) {
 	m.mu.Unlock()
 }
 
+// RefreshAllSessionCredentials immediately re-materializes the just-stored
+// credential blob (for provider) into every live session that needs it.
+// Called synchronously after credentials.Store.Set succeeds — both from the
+// HTTP endpoint (serveAgentCredentials) and the WS control message
+// (handleSetAgentCredentials) — so the credential is available before the
+// next agent turn, without waiting for the 60-second watchdog tick.
+//
+// The per-session refreshStaleAgentCredentials logic handles both cases:
+//   - session has no credential file (app blob arrived after spawn): materialize it
+//   - session has an expired credential file: re-mirror from the host login
+//
+// Only sessions matching provider are touched; other sessions are skipped.
+func (m *Manager) RefreshAllSessionCredentials(provider string) {
+	m.mu.RLock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.RUnlock()
+
+	for _, s := range sessions {
+		if s.agentCredProvider != provider {
+			continue
+		}
+		log.Printf("session %s: immediate credential re-materialization triggered for provider %s", s.ID, provider)
+		s.refreshStaleAgentCredentials()
+	}
+}
+
 // SetPushNotifier wires the push Notifier (and single-operator identity
 // bucket) into the Manager so every NEW session receives it. Existing
 // sessions are NOT retroactively updated — the manager creates sessions

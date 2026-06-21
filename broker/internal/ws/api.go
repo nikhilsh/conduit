@@ -799,6 +799,10 @@ func (s *Server) serveAgentCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("credentials: stored pushed %s blob via HTTP (session-less)", provider)
+	// Immediately propagate the fresh credential into any live sessions that
+	// spawned without one — don't wait for the 60-second watchdog tick.
+	// The 401 fires within the same connect sequence, before the watchdog fires.
+	s.Sessions.RefreshAllSessionCredentials(provider)
 	writeJSON(w, http.StatusOK, map[string]any{"stored": true, "provider": provider})
 }
 
