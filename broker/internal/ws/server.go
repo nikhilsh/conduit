@@ -1120,6 +1120,10 @@ func (c *client) handleSetAgentCredentials(provider, kind string, credential jso
 		c.emitCredentialsToolEvent("set_agent_credentials failed: " + err.Error())
 		return
 	}
+	// Immediately propagate the fresh credential into any live sessions that
+	// spawned without one — don't wait for the 60-second watchdog tick.
+	// The 401 fires within the same connect sequence, before the watchdog fires.
+	server.Sessions.RefreshAllSessionCredentials(provider)
 	// Success path: broadcast a status mirror so every viewer learns
 	// the credential landed. Routed through the session's text
 	// fan-out so multi-viewer surfaces stay consistent.
