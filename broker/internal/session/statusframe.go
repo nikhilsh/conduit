@@ -112,6 +112,9 @@ func (s *Session) StatusPayload() map[string]any {
 		payload["account_7d_pct"] = a.SevenDayPct
 		payload["account_7d_resets_at"] = a.SevenDayResetsAt
 	}
+	if s.credentialSource != "" {
+		payload["credential_source"] = s.credentialSource
+	}
 	// Live git state — computed against the session's workspace directory
 	// using a short per-session cache so back-to-back status broadcasts
 	// don't each shell out. All git fields are gated on Branch being
