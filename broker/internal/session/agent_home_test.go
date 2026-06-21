@@ -428,6 +428,92 @@ func TestMirrorHostCredentials_OpencodeNoFiles(t *testing.T) {
 	}
 }
 
+// TestStatusPayload_CredentialSource verifies credential_source is emitted
+// in the status frame when set, and omitted when empty.
+func TestStatusPayload_CredentialSource(t *testing.T) {
+	// "box" → field present with value "box".
+	s := &Session{ID: "s1", credentialSource: "box"}
+	p := s.StatusPayload()
+	if got, ok := p["credential_source"]; !ok || got != "box" {
+		t.Fatalf("credential_source = %v (ok=%v), want \"box\"", got, ok)
+	}
+
+	// "app_forwarded" → field present with value "app_forwarded".
+	s2 := &Session{ID: "s2", credentialSource: "app_forwarded"}
+	p2 := s2.StatusPayload()
+	if got, ok := p2["credential_source"]; !ok || got != "app_forwarded" {
+		t.Fatalf("credential_source = %v (ok=%v), want \"app_forwarded\"", got, ok)
+	}
+
+	// empty → field absent entirely.
+	s3 := &Session{ID: "s3"}
+	p3 := s3.StatusPayload()
+	if _, ok := p3["credential_source"]; ok {
+		t.Fatalf("credential_source should be absent when empty, got %v", p3["credential_source"])
+	}
+}
+
+// TestCredentialSourceDetection_BoxAndAppForwarded verifies that the spawn
+// path sets credentialSource="box" when only host creds are present and
+// "app_forwarded" when the app blob was materialized.
+func TestCredentialSourceDetection_BoxAndAppForwarded(t *testing.T) {
+	root := testRoot(t)
+
+	// Set up a host home with anthropic credentials so "box" path triggers.
+	hostHome := t.TempDir()
+	t.Setenv("CONDUIT_HOST_HOME", hostHome)
+	if err := os.MkdirAll(filepath.Join(hostHome, ".claude"), 0o700); err != nil {
+		t.Fatalf("mkdir host .claude: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, ".claude", ".credentials.json"), []byte(`{"r":"v0"}`), 0o600); err != nil {
+		t.Fatalf("write host creds: %v", err)
+	}
+
+	reg := testRegistry(t, root, map[string]string{
+		"claude": idleScript("credsrc-ready"),
+	})
+	m := NewManager(reg)
+	t.Cleanup(m.Close)
+
+	s, _, err := m.GetOrCreate("credsrc-box", "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	if s.credentialSource != "box" {
+		t.Fatalf("credentialSource = %q, want \"box\"", s.credentialSource)
+	}
+	if got := s.StatusPayload()["credential_source"]; got != "box" {
+		t.Fatalf("StatusPayload credential_source = %v, want \"box\"", got)
+	}
+}
+
+// TestCredentialSourceDetection_NoCreds verifies credentialSource stays empty
+// when neither app blob nor host credential exists.
+func TestCredentialSourceDetection_NoCreds(t *testing.T) {
+	root := testRoot(t)
+
+	// Empty host home → no credentials.
+	hostHome := t.TempDir()
+	t.Setenv("CONDUIT_HOST_HOME", hostHome)
+
+	reg := testRegistry(t, root, map[string]string{
+		"claude": idleScript("credsrc-nocreds"),
+	})
+	m := NewManager(reg)
+	t.Cleanup(m.Close)
+
+	s, _, err := m.GetOrCreate("credsrc-nocreds", "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	if s.credentialSource != "" {
+		t.Fatalf("credentialSource = %q, want \"\" when no creds", s.credentialSource)
+	}
+	if _, ok := s.StatusPayload()["credential_source"]; ok {
+		t.Fatalf("credential_source key should be absent in status payload when empty")
+	}
+}
+
 // TestMirrorHostCredentials_OpencodeConfigOnly verifies that having only the
 // opencode.jsonc config (but no auth.json) is still treated as "something
 // mirrored" — the config can specify a provider, and the auth may arrive via

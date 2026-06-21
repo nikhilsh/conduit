@@ -279,6 +279,12 @@ type Session struct {
 	// spawn before the session is shared; read-only after — drives the
 	// watchdog's stale-credential re-mirror (credfresh.go).
 	agentCredProvider string
+	// credentialSource records which credential was used at spawn time:
+	// "box" when the host login (~/.claude/.credentials.json etc.) was
+	// used, "app_forwarded" when the app-pushed OAuth blob was
+	// materialized. Empty when no credential is present at all. Set once
+	// at spawn before the session is shared; read-only after.
+	credentialSource string
 
 	// modelCatalog returns the Manager's discovered model catalog snapshot
 	// (Manager.ModelCatalog), used to pick the smallest codex model for the
@@ -473,6 +479,19 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 				// Non-fatal: agent will see an empty HOME and prompt
 				// for login. Clean error path; no race with peers.
 				fmt.Fprintf(os.Stderr, "session %s: mirrorHostCredentials(%s): %v (agent will prompt for login)\n", s.ID, provider, err)
+			}
+		}
+		// Detect which credential was actually used so the app can show a
+		// banner when it is supplying the credential as a fallback.
+		if provider != "" {
+			if populated {
+				s.credentialSource = "app_forwarded"
+				log.Printf("session %s: credential_source=app_forwarded (provider=%s)", s.ID, provider)
+			} else if hf := hostCredentialFile(provider); hf != "" {
+				if _, err := os.Stat(hf); err == nil {
+					s.credentialSource = "box"
+					log.Printf("session %s: credential_source=box (provider=%s)", s.ID, provider)
+				}
 			}
 		}
 		// The interactive Terminal tab runs under this SAME ephemeral HOME.
