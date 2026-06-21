@@ -2,11 +2,14 @@ package session
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nikhilsh/conduit/broker/internal/credentials"
 )
 
 func anthropicBlob(expiresAt int64) []byte {
@@ -165,4 +168,47 @@ func TestRefreshStaleAgentCredentials_ExpiredEverywhereLeavesCopy(t *testing.T) 
 	if string(got) != string(want) {
 		t.Fatal("copy replaced by a staler host file")
 	}
+}
+
+func TestRefreshStaleAgentCredentials_MaterializesAppBlobIntoSessionSpawnedWithout(t *testing.T) {
+	// Simulates the live 401 bug: session spawned when no app credential
+	// existed, so agentHomeDir has no credential file. App later pushes
+	// a blob. On the next watchdog tick the blob must be materialized.
+	now := time.Now().UnixMilli()
+
+	storeDir := t.TempDir()
+	store := credentials.NewStore(storeDir, nil)
+	blob := anthropicBlob(now + 3*time.Hour.Milliseconds())
+	if err := store.Set("anthropic", json.RawMessage(blob)); err != nil {
+		t.Fatalf("store.Set: %v", err)
+	}
+
+	ephemeral := t.TempDir()
+	credPath := filepath.Join(ephemeral, ".claude", ".credentials.json")
+	// Do NOT write credPath — session spawned with no credential.
+
+	s := &Session{
+		ID:                "t",
+		agentHomeDir:      ephemeral,
+		agentCredProvider: "anthropic",
+		agentCredStore:    store,
+	}
+	s.refreshStaleAgentCredentials()
+
+	got, err := os.ReadFile(credPath)
+	if err != nil {
+		t.Fatalf("credential not materialized: %v", err)
+	}
+	if exp, ok := credentialExpiryMillis("anthropic", got); !ok || exp != now+3*time.Hour.Milliseconds() {
+		t.Fatalf("materialized blob has wrong expiry: (%d,%v)", exp, ok)
+	}
+}
+
+func TestRefreshStaleAgentCredentials_NoStoreNoCredentialIsNoop(t *testing.T) {
+	// Session spawned with no credential and no store wired — should be
+	// a safe no-op, not a panic or error.
+	ephemeral := t.TempDir()
+	// No credPath written, no store.
+	s := &Session{ID: "t", agentHomeDir: ephemeral, agentCredProvider: "anthropic"}
+	s.refreshStaleAgentCredentials() // must not panic
 }
