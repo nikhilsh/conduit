@@ -189,7 +189,7 @@ func encodeClaudeUserMessage(text string) ([]byte, error) {
 // generator (task: ai-session-titles) which mints/refines the session
 // name from the conversation. gen / titleGen may be nil (feature disabled
 // / non-claude), in which case turn-end is a no-op for that one.
-func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle) error {
+func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickReplyGenerator, titleGen *titleGenerator, onUsage func(usageDelta), onControl func(controlRequest, string), onInit func(string), onTurnEnd func(), onSubagent *subagentRegistryHandle) error {
 	sc := bufio.NewScanner(r)
 	// Assistant turns can be large; raise the line cap well past bufio's
 	// 64KB default.
@@ -198,6 +198,12 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 	// turn so the turn-end `result` can hand the generator the message it
 	// should base chips on (and an id the apps tie the chips to).
 	var lastAssistantText, lastAssistantTS string
+	// lastAskTS captures the ts of the most recently published AskUserQuestion
+	// chat event. Passed to onControl so handleAskControl can store it in
+	// pendingAsk, enabling reconnect replays to use the original ts and thus
+	// match the Rust apply_chat (role,content,ts) dedup instead of creating a
+	// second entry in the conversation store.
+	var lastAskTS string
 	// Current context-window occupancy, latched from each assistant
 	// message's per-call usage. The turn-end `result` usage is a SUM across
 	// every API call in the turn, so it overcounts context badly on
@@ -215,10 +221,11 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 		}
 		// Control protocol (--permission-prompt-tool stdio): a blocked
 		// can_use_tool request. Routed to the session's bridge — never
-		// rendered as chat content.
+		// rendered as chat content. Pass lastAskTS so handleAskControl can
+		// store the original event timestamp for reconnect replays.
 		if req, ok := parseControlRequest(line); ok {
 			if onControl != nil {
-				onControl(req)
+				onControl(req, lastAskTS)
 			}
 			continue
 		}
@@ -306,6 +313,9 @@ func processClaudeStreamOutput(r io.Reader, publish func([]byte), gen *quickRepl
 			ts := claudeChatNow().UTC().Format(time.RFC3339Nano)
 			if role == "assistant" {
 				lastAssistantText, lastAssistantTS = content, ts
+				if e.ToolName == "AskUserQuestion" {
+					lastAskTS = ts
+				}
 			}
 			payload, err := json.Marshal(map[string]any{
 				"type": "view_event",

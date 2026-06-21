@@ -459,6 +459,20 @@ struct MergeConversationTests {
         let merged = SessionStore.mergeConversation(past: [], live: live, pending: [])
         #expect(merged.map(\.content) == ["one", "two"])
     }
+
+    @Test func liveWithDuplicateRoleContentCollapsedToOne() {
+        // Broker replays a pending AskUserQuestion on reconnect with a fresh ts;
+        // apply_chat stores it again (different ts, same role+content) so
+        // listConversationItems returns two entries. mergeConversation must keep
+        // only the first (earliest-ts) copy so the UI doesn't render a duplicate.
+        let live = [
+            item("orig", "assistant", "Pick one", "2026-06-05T10:00:00Z"),
+            item("replay", "assistant", "Pick one", "2026-06-05T10:00:05Z"),
+        ]
+        let merged = SessionStore.mergeConversation(past: [], live: live, pending: [])
+        #expect(merged.count == 1)
+        #expect(merged.first?.id == "orig")
+    }
 }
 
 @Suite("SessionStore.stripPendingSentinel — HTTP replay matches the live path")

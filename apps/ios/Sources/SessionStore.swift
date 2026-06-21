@@ -4828,7 +4828,16 @@ final class SessionStore {
         let pastNotInLive = past.filter {
             !liveFingerprints.contains("\($0.role)|\($0.content)")
         }
-        return (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
+        let combined = (pastNotInLive + live + pending).sortedByConversationTs { $0.ts }
+        // Defensive dedup: the broker replays a pending AskUserQuestion on
+        // reconnect with a fresh timestamp, so apply_chat stores it as a second
+        // Rust conversation item (same role+content, different ts → not deduped
+        // by the (role,content,ts) check). Both items appear in `live`, and since
+        // liveFingerprints is a Set one entry covers both, so pastNotInLive is
+        // empty — but both live copies survive into the combined output and render
+        // as duplicate bubbles. Keep only the first occurrence by role|content.
+        var seen = Set<String>()
+        return combined.filter { seen.insert("\($0.role)|\($0.content)").inserted }
     }
 
     /// Directly splice `hydratedChat[sessionID]` into `conversationLog`

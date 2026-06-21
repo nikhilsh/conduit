@@ -174,6 +174,7 @@ type pendingAsk struct {
 	input     json.RawMessage
 	cp        *chatProcess
 	timer     *time.Timer
+	ts        string // original chat-event ts; preserved for reconnect replay
 }
 
 // handleAskControl stashes a blocked AskUserQuestion so the user's next
@@ -181,13 +182,13 @@ type pendingAsk struct {
 // prior un-answered stash is superseded silently (its timer stopped) —
 // the CLI can only have one blocked request per turn, so a leftover
 // means the agent was respawned underneath it.
-func (s *Session) handleAskControl(req controlRequest, cp *chatProcess) {
+func (s *Session) handleAskControl(req controlRequest, cp *chatProcess, ts string) {
 	timer := time.AfterFunc(askAnswerTimeout, func() { s.expirePendingAsk(req.RequestID) })
 	s.mu.Lock()
 	if prev := s.pendingAsk; prev != nil && prev.timer != nil {
 		prev.timer.Stop()
 	}
-	s.pendingAsk = &pendingAsk{requestID: req.RequestID, input: req.Input, cp: cp, timer: timer}
+	s.pendingAsk = &pendingAsk{requestID: req.RequestID, input: req.Input, cp: cp, timer: timer, ts: ts}
 	s.mu.Unlock()
 	// Notify the device that the agent is waiting for input. Only fires
 	// when no client is currently attached (maybeNotifyPendingInput guards
@@ -222,6 +223,21 @@ func (s *Session) PendingAskChatContent() (string, bool) {
 		return rs.PendingApprovalCard()
 	}
 	return "", false
+}
+
+// PendingAskChatTs returns the original chat-event timestamp that was assigned
+// when the AskUserQuestion was first published as a view_event. Empty when no
+// ask is pending or the ts wasn't captured (codex path). Used by the reconnect
+// resend path so apply_chat's (role,content,ts) dedup treats the replay as the
+// same event rather than storing a second copy.
+func (s *Session) PendingAskChatTs() string {
+	s.mu.Lock()
+	ask := s.pendingAsk
+	s.mu.Unlock()
+	if ask != nil {
+		return ask.ts
+	}
+	return ""
 }
 
 // approvalCardResurfacer is the OPTIONAL backend capability that lets a

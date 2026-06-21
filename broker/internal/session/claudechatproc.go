@@ -55,7 +55,7 @@ func startChatProcess(
 	gen *quickReplyGenerator,
 	titleGen *titleGenerator,
 	onUsage func(usageDelta),
-	onAsk func(controlRequest, *chatProcess),
+	onAsk func(controlRequest, *chatProcess, string),
 	onInit func(string),
 	onSubagent *subagentRegistryHandle,
 ) (*chatProcess, error) {
@@ -85,9 +85,9 @@ func startChatProcess(
 	// unchanged input right here, preserving the
 	// --dangerously-skip-permissions semantics the rest of the harness
 	// assumes. See askcontrol.go.
-	onControl := func(req controlRequest) {
+	onControl := func(req controlRequest, ts string) {
 		if req.ToolName == "AskUserQuestion" && onAsk != nil {
-			onAsk(req, cp)
+			onAsk(req, cp, ts)
 			return
 		}
 		_ = cp.SendRaw(encodeControlAllow(req.RequestID, req.Input))
