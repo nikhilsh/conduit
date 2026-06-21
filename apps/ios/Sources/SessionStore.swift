@@ -917,6 +917,13 @@ final class SessionStore {
     /// sends or a fresh assistant turn arrives.
     var quickReplies: [String: AIQuickReplies] = [:]
 
+    /// Credential source per session. Populated when the broker emits a
+    /// `view:"credential_source"` view_event indicating which credential
+    /// path was used. Value is "box" (box-local login) or "app_forwarded"
+    /// (the box is not logged in; the app credential is being forwarded).
+    /// The chat view shows a subtle inline banner for "app_forwarded".
+    var credentialSource: [String: String] = [:]
+
     /// IDs of `pending_input` conversation items that have been resolved via
     /// an out-of-band path (ConduitApprovalsView, lock-screen intent) and
     /// should render as ANSWERED in the inline chat card immediately —
@@ -5506,6 +5513,17 @@ final class SessionStore {
         }
     }
 
+    /// Ingest a `credential_source` view_event from the broker. Stores the
+    /// source ("box" or "app_forwarded") so the chat view can show a subtle
+    /// banner when the app credential is being used as a fallback because the
+    /// box is not logged in locally.
+    func ingestCredentialSource(_ sessionID: String, payload: [String: String]) {
+        guard let source = payload["source"], !source.isEmpty else { return }
+        credentialSource[sessionID] = source
+        Telemetry.breadcrumb("credential", "credential_source_received",
+            data: ["source": source, "session": sessionID])
+    }
+
     /// Friendly, user-facing name for a session. NEVER returns the raw
     /// UUID. Priority (see `SessionNaming`):
     ///   1. A genuine user-set custom name — one the user typed, never a
@@ -6622,6 +6640,8 @@ final class StoreDelegate: ConduitDelegate {
                 s.ingestSessionTitle(sessionId, payload: payload)
             } else if kind == "agents" {
                 s.ingestAgents(sessionId, payload: payload)
+            } else if kind == "credential_source" {
+                s.ingestCredentialSource(sessionId, payload: payload)
             } else {
                 s.routeAgentLoginViewEvent(kind: kind, payload: payload)
             }

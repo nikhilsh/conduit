@@ -881,6 +881,16 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _subagentRoster = MutableStateFlow<Map<String, List<SubagentEntry>>>(emptyMap())
     val subagentRoster: StateFlow<Map<String, List<SubagentEntry>>> = _subagentRoster.asStateFlow()
 
+    /**
+     * Per-session credential source. Populated when the broker emits a
+     * `view:"credential_source"` view_event. Value is "box" (box-local
+     * credential) or "app_forwarded" (the app credential is being forwarded
+     * because the box is not logged in). The chat view shows a subtle inline
+     * banner for "app_forwarded". Mirror of iOS `SessionStore.credentialSource`.
+     */
+    private val _credentialSource = MutableStateFlow<Map<String, String>>(emptyMap())
+    val credentialSource: StateFlow<Map<String, String>> = _credentialSource.asStateFlow()
+
     private val _previews = MutableStateFlow<Map<String, PreviewInfo>>(emptyMap())
     val previews: StateFlow<Map<String, PreviewInfo>> = _previews.asStateFlow()
 
@@ -5091,6 +5101,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             "quick_replies" -> ingestQuickReplies(sessionId, payload)
             "session_title" -> ingestSessionTitle(sessionId, payload)
             "agents" -> ingestSubagents(sessionId, payload)
+            "credential_source" -> ingestCredentialSource(sessionId, payload)
             else -> routeAgentLoginViewEvent(kind, payload)
         }
     }
@@ -5143,6 +5154,23 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 mapOf("session" to sessionId, "count" to entries.size.toString()),
             )
         }
+    }
+
+    /**
+     * Ingest a `credential_source` view_event from the broker. Stores the
+     * source ("box" or "app_forwarded") so the chat view can show a subtle
+     * banner when the app credential is being forwarded as a fallback because
+     * the box is not logged in locally. Mirror of iOS
+     * `SessionStore.ingestCredentialSource`.
+     */
+    fun ingestCredentialSource(sessionId: String, payload: Map<String, String>) {
+        val source = payload["source"]?.takeIf { it.isNotEmpty() } ?: return
+        _credentialSource.value = _credentialSource.value.toMutableMap().also { it[sessionId] = source }
+        Telemetry.breadcrumb(
+            "credential",
+            "credential_source_received",
+            mapOf("source" to source, "session" to sessionId),
+        )
     }
 
     /** Clear a session's AI quick-reply chips (on send / fresh turn). */

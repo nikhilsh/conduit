@@ -608,6 +608,22 @@ extension ConduitUI {
                                 widenRowWindow(proxy: proxy, anchorRowID: rows.first?.id)
                             }
                         }
+                        // Credential-source banner: shown when the broker is
+                        // using the app-forwarded credential because the box
+                        // is not logged in locally.
+                        if store.credentialSource[session.id] == "app_forwarded" {
+                            HStack(spacing: 6) {
+                                Image(systemName: "key.slash")
+                                    .foregroundStyle(.orange)
+                                Text("Using your app login \u{2014} box credential missing")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.orange.opacity(0.1))
+                        }
                         ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
                             Group {
                                 switch row {
