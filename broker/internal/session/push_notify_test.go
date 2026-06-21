@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -162,11 +164,11 @@ func TestPushNotifyTurnEnd_NoClient(t *testing.T) {
 	if p.SessionID != "sess-1" {
 		t.Errorf("session id = %q, want %q", p.SessionID, "sess-1")
 	}
-	if p.Body != "Turn finished" {
-		t.Errorf("body = %q, want \"Turn finished\"", p.Body)
+	if p.Body != "Turn complete" {
+		t.Errorf("body = %q, want \"Turn complete\"", p.Body)
 	}
 	if p.Title != "claude" {
-		t.Errorf("title = %q, want \"claude\" (assistant name)", p.Title)
+		t.Errorf("title = %q, want \"claude\" (assistant name, no session name)", p.Title)
 	}
 }
 
@@ -346,8 +348,8 @@ func TestPushNotifyNoNotifier(t *testing.T) {
 	s.maybeNotifyPendingInput()
 }
 
-// TestPushNotifyDisplayName verifies that a renamed session uses displayName
-// as the notification title.
+// TestPushNotifyDisplayName verifies that a renamed session includes both the
+// agent name and the display name in the notification title.
 func TestPushNotifyDisplayName(t *testing.T) {
 	n := &recordingNotifier{}
 	s := bareSession("sess-7")
@@ -362,8 +364,117 @@ func TestPushNotifyDisplayName(t *testing.T) {
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification, got %d", n.count())
 	}
-	if n.last().Title != "My Project" {
-		t.Errorf("title = %q, want \"My Project\"", n.last().Title)
+	want := "claude \xc2\xb7 My Project" // "claude · My Project" (U+00B7 middle dot)
+	if n.last().Title != want {
+		t.Errorf("title = %q, want %q", n.last().Title, want)
+	}
+}
+
+// TestPushNotifyAITitle verifies that a session with an AI-generated title
+// (but no manual display name) uses "agent · aiTitle" as the notification title.
+func TestPushNotifyAITitle(t *testing.T) {
+	n := &recordingNotifier{}
+	s := bareSession("sess-8")
+	s.SetPushNotifier(n, "broker")
+
+	s.mu.Lock()
+	s.aiTitle = "Refactor auth flow"
+	s.mu.Unlock()
+
+	s.maybeNotifyTurnEnd()
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification, got %d", n.count())
+	}
+	want := "claude \xc2\xb7 Refactor auth flow"
+	if n.last().Title != want {
+		t.Errorf("title = %q, want %q", n.last().Title, want)
+	}
+}
+
+// TestPushNotifyDisplayNameWinsOverAITitle verifies that a manual display name
+// takes priority over the AI-generated title in the notification title.
+func TestPushNotifyDisplayNameWinsOverAITitle(t *testing.T) {
+	n := &recordingNotifier{}
+	s := bareSession("sess-9")
+	s.SetPushNotifier(n, "broker")
+
+	s.mu.Lock()
+	s.displayName = "My Work"
+	s.aiTitle = "Should not appear"
+	s.mu.Unlock()
+
+	s.maybeNotifyTurnEnd()
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification, got %d", n.count())
+	}
+	want := "claude \xc2\xb7 My Work"
+	if n.last().Title != want {
+		t.Errorf("title = %q, want %q", n.last().Title, want)
+	}
+}
+
+// TestPushNotifyLastAssistantMessage verifies that when a convLog has an
+// assistant message, the push body is that message (truncated).
+func TestPushNotifyLastAssistantMessage(t *testing.T) {
+	n := &recordingNotifier{}
+	s := bareSession("sess-conv-1")
+	s.SetPushNotifier(n, "broker")
+
+	// Write a fake conversation log.
+	dir := t.TempDir()
+	logPath := dir + "/conversation.jsonl"
+	s.convLog = newConvLogger(logPath)
+	s.convLog.appendUser("Hello, what is 2+2?")
+	// Append an assistant message via appendRaw (mirrors the real publish path).
+	entry, _ := json.Marshal(ConvEntry{
+		Role:    "assistant",
+		Content: "The answer is 4.",
+		Ts:      "2026-06-21T00:00:00Z",
+	})
+	s.convLog.appendRaw(entry)
+
+	s.maybeNotifyTurnEnd()
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification, got %d", n.count())
+	}
+	if n.last().Body != "The answer is 4." {
+		t.Errorf("body = %q, want last assistant message", n.last().Body)
+	}
+}
+
+// TestPushNotifyLastAssistantMessageTruncated verifies long messages are capped.
+func TestPushNotifyLastAssistantMessageTruncated(t *testing.T) {
+	n := &recordingNotifier{}
+	s := bareSession("sess-conv-2")
+	s.SetPushNotifier(n, "broker")
+
+	dir := t.TempDir()
+	logPath := dir + "/conversation.jsonl"
+	s.convLog = newConvLogger(logPath)
+	long := strings.Repeat("a", 120)
+	entry, _ := json.Marshal(ConvEntry{
+		Role:    "assistant",
+		Content: long,
+		Ts:      "2026-06-21T00:00:00Z",
+	})
+	s.convLog.appendRaw(entry)
+
+	s.maybeNotifyTurnEnd()
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification, got %d", n.count())
+	}
+	// 100 rune cap + ellipsis character.
+	got := n.last().Body
+	runes := []rune(got)
+	if len(runes) > 101 { // 100 chars + "…"
+		t.Errorf("body too long: %d runes (want <=101)", len(runes))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("body should end with ellipsis when truncated, got %q", got)
 	}
 }
 
