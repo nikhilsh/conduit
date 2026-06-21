@@ -279,6 +279,11 @@ type Session struct {
 	// spawn before the session is shared; read-only after — drives the
 	// watchdog's stale-credential re-mirror (credfresh.go).
 	agentCredProvider string
+	// agentCredStore is the credential store used at spawn time. Retained
+	// so the watchdog can re-materialize an app-pushed blob into sessions
+	// that spawned BEFORE the app credential arrived (credfresh.go).
+	// nil when no store was wired (legacy host-mirror path).
+	agentCredStore *credentials.Store
 	// credentialSource records which credential was used at spawn time:
 	// "box" when the host login (~/.claude/.credentials.json etc.) was
 	// used, "app_forwarded" when the app-pushed OAuth blob was
@@ -450,6 +455,7 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 	} else {
 		s.agentHomeDir = ephemeral
 		s.agentCredProvider = provider
+		s.agentCredStore = opts.credStore
 		populated := false
 		if opts.credStore != nil && provider != "" && opts.credStore.Has(provider) {
 			// Stale-blob guard (credfresh.go): an app-pushed blob whose

@@ -164,9 +164,11 @@ func useHostOverAppBlob(provider string, blob []byte) (skip bool, blobExp, hostE
 }
 
 // refreshStaleAgentCredentials re-mirrors the host credential file over
-// the session's private copy once the copy has expired. Called from the
-// watchdog tick, so the account-usage / quick-reply / title fetchers
-// (which re-read the file per call) heal within one tick; the
+// the session's private copy once the copy has expired. Also handles
+// the "app blob arrived after spawn" case: if the session's credential
+// file is absent and the store now has a blob, materialize it. Called
+// from the watchdog tick, so the account-usage / quick-reply / title
+// fetchers (which re-read the file per call) heal within one tick; the
 // long-lived chat/PTY agent picks the fresh copy up at its next spawn.
 // No-op unless the host copy is strictly fresher — a copy the agent
 // refreshed itself is the newest lineage and must not be clobbered.
@@ -178,8 +180,20 @@ func (s *Session) refreshStaleAgentCredentials() {
 	path := sessionCredentialFile(provider, home)
 	copyData, err := os.ReadFile(path)
 	if err != nil {
-		// Nothing materialized (agent is in "please /login" mode) —
-		// spawn already made that call; don't second-guess it here.
+		// No credential file in the session's ephemeral HOME. Two cases:
+		//   a) Spawn had no credential at all (agent will prompt /login) —
+		//      nothing to do, spawn already made that call.
+		//   b) App pushed a credential blob AFTER this session spawned —
+		//      the watchdog is our only chance to materialize it in time.
+		// Distinguish by checking the store: if a blob now exists, write
+		// it in so the next turn (and any live fetchers) picks it up.
+		if s.agentCredStore != nil && s.agentCredStore.Has(provider) {
+			if err := s.agentCredStore.Materialize(provider, home); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: watchdog re-materialize %s credentials: %v\n", s.ID, provider, err)
+				return
+			}
+			log.Printf("session %s: watchdog materialized app %s credential into session that spawned without one", s.ID, provider)
+		}
 		return
 	}
 	copyExp, copyOK := credentialExpiryMillis(provider, copyData)
