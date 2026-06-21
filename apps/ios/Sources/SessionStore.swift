@@ -2465,7 +2465,7 @@ final class SessionStore {
             // `hydratedChat` into `conversationLog` — the live client path is
             // harmlessly redundant (applyRefreshedConversation does the same
             // merge after the Rust list).
-            refreshConversation(sessionID: sessionID)
+            refreshConversationOffMain(sessionID: sessionID)
             mergeHydrationIntoConversationLog(sessionID: sessionID)
         }
 
@@ -4657,7 +4657,7 @@ final class SessionStore {
         // chips — clear them so stale suggestions don't linger. The
         // broker emits the new set after the assistant turn completes.
         quickReplies[sessionID] = nil
-        refreshConversation(sessionID: sessionID)
+        refreshConversationOffMain(sessionID: sessionID)
         if useRustStore {
             ensureRustSessionPresent(sessionID)
             // applyChat returns the full ProjectSessionState over FFI — on a
@@ -4789,6 +4789,7 @@ final class SessionStore {
     /// but isn't `Sendable`, hence the explicit unsafe capture; the result rides
     /// back across the actor hop inside a `@unchecked Sendable` box.
     private func refreshConversationOffMain(sessionID: String) {
+        Telemetry.breadcrumb("perf", "refresh_conversation_off_main", data: ["session": sessionID])
         guard let client = clientForSession(sessionID) else { return }
         nonisolated(unsafe) let capturedClient = client
         Task.detached(priority: .utility) { [weak self] in
@@ -4926,7 +4927,7 @@ final class SessionStore {
         guard let items = try? await fetchConversation(sessionID: sessionID),
               !items.isEmpty else { return }
         hydratedChat[sessionID] = items
-        refreshConversation(sessionID: sessionID)
+        refreshConversationOffMain(sessionID: sessionID)
     }
 
     /// Seed `hydratedChat` + `conversationLog` for an EXITED session whose
