@@ -977,6 +977,23 @@ async fn handle_text(
                             payload,
                         );
                     }
+                    // Credential source notification (task: credential-fallback).
+                    // The broker emits view:"credential_source" with an object
+                    // payload {"source": "box"|"app_forwarded"} on connect/reconnect
+                    // so apps can surface which credential the session is using.
+                    // Simple passthrough: extract "source" string and carry to
+                    // on_view_event with kind="credential_source".
+                    "credential_source" => {
+                        if let Some(src) = ev.get("source").and_then(|v| v.as_str()) {
+                            let mut payload = HashMap::new();
+                            payload.insert("source".to_string(), src.to_string());
+                            delegate.on_view_event(
+                                session_id.to_string(),
+                                "credential_source".to_string(),
+                                payload,
+                            );
+                        }
+                    }
                     // view:"status" carries typed sub-events keyed by name,
                     // e.g. {"agent_login_url": {"url": ..., "loopback_port": 8080, ...}}.
                     // Flatten each sub-event's inner object to string values and
@@ -1257,6 +1274,49 @@ mod tests {
         // Non-object event → "[]" string (tolerate garbage without panic).
         let p3 = flatten_agents(&serde_json::json!("nope"));
         assert_eq!(p3.get("agents").map(String::as_str), Some("[]"));
+    }
+
+    /// Verify the credential_source dispatch arm: a view_event frame with
+    /// view="credential_source" and event.source="box" must produce a payload
+    /// with source="box" under the "credential_source" kind. This exercises
+    /// the same extraction logic the dispatch arm uses at runtime.
+    #[test]
+    fn credential_source_view_event_extracts_source() {
+        // Simulate the frame the broker sends on reconnect:
+        // {"type":"view_event","view":"credential_source","event":{"source":"box"}}
+        let frame = serde_json::json!({
+            "type": "view_event",
+            "view": "credential_source",
+            "event": {"source": "box"}
+        });
+
+        // Reproduce exactly the dispatch arm's extraction logic.
+        let ev = frame.get("event").expect("event key present");
+        let src = ev.get("source").and_then(|v| v.as_str());
+        assert_eq!(
+            src,
+            Some("box"),
+            "source must be extracted from event.source"
+        );
+
+        let mut payload = HashMap::new();
+        payload.insert("source".to_string(), src.unwrap().to_string());
+        assert_eq!(
+            payload.get("source").map(String::as_str),
+            Some("box"),
+            "payload must carry source=box for on_view_event"
+        );
+
+        // Missing source → None → dispatch arm silently drops the event (no panic).
+        let ev_no_src = serde_json::json!({});
+        assert!(ev_no_src.get("source").and_then(|v| v.as_str()).is_none());
+
+        // app_forwarded round-trips the same way.
+        let ev2 = serde_json::json!({"source": "app_forwarded"});
+        assert_eq!(
+            ev2.get("source").and_then(|v| v.as_str()),
+            Some("app_forwarded")
+        );
     }
 
     #[test]

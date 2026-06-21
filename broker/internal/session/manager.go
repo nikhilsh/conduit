@@ -1339,6 +1339,17 @@ func (s *Session) ReasoningEffort() string {
 	return s.override.effectiveEffortForAdapter(s.adapter)
 }
 
+// CredentialSource returns the credential source recorded at spawn time:
+// "box" when the host login credentials were used, "app_forwarded" when
+// the app-pushed OAuth blob was materialized, or "" when no credential
+// was present. Read-only after spawn; mu held for consistency with other
+// accessors.
+func (s *Session) CredentialSource() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.credentialSource
+}
+
 // DisplayName returns the human-readable session label set by the most
 // recent `rename_session` JSON control. Empty string when no rename has
 // been applied — clients should fall back to the session id or

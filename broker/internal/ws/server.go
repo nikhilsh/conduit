@@ -468,6 +468,19 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 		c.snapshotRows, c.snapshotCols = initRows, initCols
 		c.snapshotSent = true
 
+		// Re-surface the credential_source for a reattaching client so the
+		// app learns which credential the session used without waiting for
+		// the next status broadcast. Sent as a view_event frame (not through
+		// PublishText) so it is private to this client and not re-broadcast.
+		if cs := sess.CredentialSource(); cs != "" {
+			_ = c.writeJSON(map[string]any{
+				"type":    "view_event",
+				"session": sess.ID,
+				"view":    "credential_source",
+				"event":   map[string]any{"source": cs},
+			})
+		}
+
 		// Re-surface an outstanding interactive question (AskUserQuestion) to
 		// the reattaching client. The pending-input card arrived as a live
 		// chat event that died with the dropped socket; the broker doesn't
