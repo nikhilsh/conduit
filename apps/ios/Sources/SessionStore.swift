@@ -34,11 +34,15 @@ func conduitConversationTsString(epoch: Double) -> String {
 extension Array {
     /// Stable chronological sort by an epoch-normalized `ts` accessor. Equal
     /// keys preserve arrival order (mirrors Android's index tie-break).
+    ///
+    /// Uses a decorate-sort-undecorate (Schwartzian) transform so
+    /// `conduitConversationTsEpoch` (ISO8601 parse) runs O(n) rather than
+    /// O(n log n). With 100+ items this was the top hang source: date parsing
+    /// fired on every comparator call inside the sort.
     func sortedByConversationTs(_ ts: (Element) -> String) -> [Element] {
-        enumerated().sorted { a, b in
-            let ea = conduitConversationTsEpoch(ts(a.element))
-            let eb = conduitConversationTsEpoch(ts(b.element))
-            return ea != eb ? ea < eb : a.offset < b.offset
+        let decorated = enumerated().map { (offset: $0.offset, element: $0.element, epoch: conduitConversationTsEpoch(ts($0.element))) }
+        return decorated.sorted { a, b in
+            a.epoch != b.epoch ? a.epoch < b.epoch : a.offset < b.offset
         }.map { $0.element }
     }
 }
@@ -4646,10 +4650,18 @@ final class SessionStore {
         refreshConversation(sessionID: sessionID)
         if useRustStore {
             ensureRustSessionPresent(sessionID)
-            _ = rustStore.applyChat(sessionId: sessionID, event: event)
-            #if DEBUG
-            assertRustChatLogParity(sessionID)
-            #endif
+            // applyChat returns the full ProjectSessionState over FFI — on a
+            // large session this deserializes hundreds of ConversationItems, which
+            // blocked the main thread for up to 28 s (CONDUIT-IOS-2P). The return
+            // value is discarded; the Rust store is an async cache that the next
+            // refreshConversation will pick up. Fire and forget on a background
+            // queue so the main actor stays responsive.
+            let store = rustStore
+            let sid = sessionID
+            let ev = event
+            DispatchQueue.global(qos: .utility).async {
+                _ = store.applyChat(sessionId: sid, event: ev)
+            }
         }
         // Notify the streaming renderer that an assistant turn landed.
         // The harness delivers `ChatEvent`s whole (no per-token deltas
