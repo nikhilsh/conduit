@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,10 +135,12 @@ func (s *Session) maybeNotifyTurnEnd() {
 	s.pushState.lastIdle = now
 	s.pushState.mu.Unlock()
 
-	name := s.displayOrAssistant()
+	title := s.pushTitleForSession()
+	body := s.lastAssistantMessagePreview(100)
+	log.Printf("push: turn-end session=%s title=%q body=%q", s.ID, title, body)
 	payload := push.Payload{
-		Title:     name,
-		Body:      "Turn finished",
+		Title:     title,
+		Body:      body,
 		SessionID: s.ID,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -241,6 +245,68 @@ func (s *Session) displayOrAssistant() string {
 		return name
 	}
 	return s.Assistant
+}
+
+// pushTitleForSession returns the notification title for turn-end pushes.
+// Format: "{AgentName} · {SessionName}" when a session name exists,
+// otherwise just "{AgentName}". Session name priority: manual displayName >
+// AI-generated aiTitle. The middle dot (U+00B7) is the same separator used
+// in the iOS status bar for compound labels.
+func (s *Session) pushTitleForSession() string {
+	s.mu.Lock()
+	agent := s.Assistant
+	display := s.displayName
+	ai := s.aiTitle
+	s.mu.Unlock()
+
+	sessionName := display
+	if sessionName == "" {
+		sessionName = ai
+	}
+	if sessionName == "" {
+		return agent
+	}
+	return agent + " · " + sessionName
+}
+
+// lastAssistantMessagePreview reads the most recent assistant message from the
+// session's conversation log and returns its text truncated to maxLen runes.
+// Returns "Turn complete" when no assistant message is found (new session,
+// convLog missing, or only non-text messages).
+func (s *Session) lastAssistantMessagePreview(maxLen int) string {
+	s.mu.Lock()
+	logPath := ""
+	if s.convLog != nil {
+		logPath = s.convLog.path
+	}
+	s.mu.Unlock()
+
+	if logPath == "" {
+		return "Turn complete"
+	}
+
+	entries, err := readConvLog(logPath)
+	if err != nil {
+		return "Turn complete"
+	}
+
+	// Walk backwards to find the last assistant message.
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Role != "assistant" {
+			continue
+		}
+		text := strings.TrimSpace(e.Content)
+		if text == "" {
+			continue
+		}
+		// Strip any pending-input sentinel prefix so it's never surfaced raw.
+		if strings.HasPrefix(text, pendingInputSentinel) {
+			continue
+		}
+		return truncatePushBody(text, maxLen)
+	}
+	return "Turn complete"
 }
 
 // pushNow is the clock for push notification timestamps; overridable in tests.
