@@ -7,6 +7,18 @@ package sh.nikhil.conduit.ui
  * core flattens the options into one array, so we recover the grouping
  * from `content`. Mirror of iOS `ConduitUI.PendingQuestion`.
  */
+
+/**
+ * The resolution state decoded from a persisted pending-input card. Carries
+ * whether the user actually answered and, when they did, which option they
+ * chose. Mirror of iOS `ConduitUI.ChatViewModel.PendingResolution`.
+ */
+data class PendingResolution(
+    /** True when the user answered (a tap or typed text). False for timed-out / no-answer. */
+    val answered: Boolean,
+    /** The chosen option text, or null when there is no answer. */
+    val answer: String?,
+)
 data class PendingQuestion(
     val prompt: String,
     val options: List<String>,
@@ -28,7 +40,7 @@ object PendingQuestions {
     /**
      * The exact marker the broker's `askUserQuestionContent` appends to a
      * multi-select question's prompt line (see `broker/internal/session/
-     * askcontrol.go`). Carried inside the text so no broker → core → app
+     * askcontrol.go`). Carried inside the text so no broker -> core -> app
      * schema change was needed. Byte-identical to the broker / iOS constant.
      */
     const val MULTI_SELECT_MARKER = " (select all that apply)"
@@ -41,17 +53,63 @@ object PendingQuestions {
     const val PENDING_INPUT_SENTINEL = "[[conduit:needs-input]]"
 
     /**
+     * Leading token of the resolution marker the broker appends to an
+     * answered pending-input card's content right after the sentinel. The
+     * full line looks like:
+     *   `[[conduit:resolved]]{"answered":true,"answer":"Option A"}`
+     * Core strips it on the live path (display_content); we strip it
+     * defensively here so it never renders as question prose on the
+     * HTTP-fetch (archived/saved-transcript) path. Byte-identical to the
+     * broker and iOS `ConduitUI.ChatViewModel.pendingResolvedMarker`.
+     */
+    const val PENDING_RESOLVED_MARKER = "[[conduit:resolved]]"
+
+    /**
+     * Decode the resolution state from a persisted pending-input card's
+     * content by scanning for the [PENDING_RESOLVED_MARKER] line. Returns
+     * null when no marker is present — an unanswered card or a legacy
+     * transcript written before this feature (backward-compatible). Mirror
+     * of iOS `ConduitUI.ChatViewModel.parsePendingResolution`.
+     */
+    fun parsePendingResolution(content: String): PendingResolution? {
+        for (raw in content.split("\n")) {
+            val line = raw.trim()
+            if (!line.startsWith(PENDING_RESOLVED_MARKER)) continue
+            val json = line.removePrefix(PENDING_RESOLVED_MARKER)
+            return try {
+                val obj = org.json.JSONObject(json)
+                val answered = obj.optBoolean("answered", false)
+                val answer = obj.optString("answer", "").takeIf { it.isNotEmpty() }
+                PendingResolution(answered = answered, answer = answer)
+            } catch (e: Exception) {
+                null
+            }
+        }
+        return null
+    }
+
+    /**
      * Recover per-question groups from a pending-input `content` body.
      * Blocks are separated by blank lines; within a block the leading prose
      * is the question and the numbered/bulleted lines are its options. A
      * trailing multi-select marker on the prompt is stripped into
      * [PendingQuestion.multiSelect].
+     *
+     * Defensively drops both the [PENDING_INPUT_SENTINEL] and any
+     * [PENDING_RESOLVED_MARKER] lines — core strips both on the live path;
+     * this covers the HTTP-fetch (archive/transcript) path. Mirror of iOS
+     * `parsePendingQuestions`.
      */
     fun parse(content: String): List<PendingQuestion> {
-        // Defensively drop the broker sentinel line if it survived to the
-        // client (core strips it on the typed path).
+        // Defensively drop the broker sentinel line AND any resolution-marker
+        // line if either survived to the client (core strips them on the live
+        // path; the HTTP-fetch path may carry the resolved marker so the card
+        // can rehydrate its state, but the marker must never render as prose).
         val cleaned = content.split("\n")
-            .filter { it.trim() != PENDING_INPUT_SENTINEL }
+            .filter {
+                val t = it.trim()
+                t != PENDING_INPUT_SENTINEL && !t.startsWith(PENDING_RESOLVED_MARKER)
+            }
             .joinToString("\n")
         val result = mutableListOf<PendingQuestion>()
         for (block in cleaned.split("\n\n")) {
