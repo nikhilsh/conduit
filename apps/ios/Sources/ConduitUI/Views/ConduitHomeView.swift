@@ -42,8 +42,13 @@ extension ConduitUI {
         @State private var showSshReBoot = false
         /// Voice dictation (bottom mic). On a transcript we stash it here
         /// and open the agent picker seeded with it as the first prompt.
+        /// Also reused by the command-palette "Run on box" action (same seed-prompt path).
         @State private var showVoiceDictation = false
         @State private var voicePrompt: String?
+        /// Set to true when the command palette's "Run on box" action fires so
+        /// we can defer presenting the agent picker until AFTER the palette
+        /// sheet fully dismisses (avoids the iOS double-sheet race).
+        @State private var pendingRunOnBox = false
         @State private var selectedSessionID: String?
         /// Confirmation alert state for the session-row swipe-to-delete.
         /// `.alert(item:)` needs an Identifiable, so we wrap the target
@@ -119,10 +124,21 @@ extension ConduitUI {
                     })
                     .environment(store)
                 }
-                .sheet(isPresented: $showCommandPalette) {
+                .sheet(isPresented: $showCommandPalette, onDismiss: {
+                    // "Run on box" defers opening the agent picker until the
+                    // palette sheet finishes dismissing to avoid the iOS
+                    // double-sheet presentation race.
+                    if pendingRunOnBox {
+                        pendingRunOnBox = false
+                        showAgentPicker = true
+                    }
+                }) {
                     // ⌘K quick switcher. Reuses the same new-session /
                     // add-server / select-session paths the rest of Home uses.
                     // "Fan out a task" chains into the Fan-out surface.
+                    // "Run on box" seeds a new session with the typed text as
+                    // the first message, via the agent picker (same path as
+                    // voice dictation).
                     ConduitUI.CommandPaletteSheet(
                         onNewSession: {
                             if store.harness.canIssueCommands { showAgentPicker = true } else { showAddServer = true }
@@ -131,6 +147,17 @@ extension ConduitUI {
                         onOpenSession: { id in
                             store.selectedSessionID = id
                             selectedSessionID = id
+                        },
+                        onRunOnBox: { text in
+                            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !t.isEmpty else { return }
+                            Telemetry.breadcrumb("palette", "run_on_box_tapped", data: ["has_text": "true"])
+                            if store.harness.canIssueCommands {
+                                voicePrompt = t      // reuse the shared seed-prompt state
+                                pendingRunOnBox = true
+                            } else {
+                                showAddServer = true
+                            }
                         },
                         onFanOut: { showFanOut = true }
                     )
