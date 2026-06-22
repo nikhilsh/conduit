@@ -155,6 +155,14 @@ type pendingInputHooker interface {
 	setPendingInputHook(fn func())
 }
 
+// turnStartHooker fires a callback when the backend begins a new turn (before
+// any tool/command fires). Used to start the Live Activity card as early as
+// possible so the card is visible for the whole turn. Implemented by all
+// structured backends.
+type turnStartHooker interface {
+	setTurnStartHook(fn func())
+}
+
 // backendRegistry maps adapter.Protocol → AgentBackend. Populated in init() by
 // each implementation file via registerBackend. Resolution is by protocol key
 // only; an empty protocol (legacy TUI-scrape adapters) resolves to no backend

@@ -149,6 +149,8 @@ type acpProcess struct {
 	onTurnIdle func()
 	// onPendingInput fires when a permission card is stashed (push notify).
 	onPendingInput func()
+	// onTurnStart fires when a turn begins (push notify / LA start).
+	onTurnStart func()
 
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
@@ -415,7 +417,13 @@ func (c *acpProcess) Send(text string) error {
 	c.turnLastAssistant = ""
 	c.turnLastTS = ""
 	c.beginWatchdogLocked()
+	startHook := c.onTurnStart
 	c.mu.Unlock()
+
+	// Fire turn-start hook outside the lock so it doesn't nest under c.mu.
+	if startHook != nil {
+		startHook()
+	}
 
 	fmt.Fprintf(os.Stderr, "acp: prompt (session %s, id %d)\n", sid, id)
 	if err := c.writeRequest(id, "session/prompt", acpPromptParams(sid, text)); err != nil {
@@ -504,6 +512,14 @@ func (c *acpProcess) setTurnIdleHook(fn func()) {
 func (c *acpProcess) setPendingInputHook(fn func()) {
 	c.mu.Lock()
 	c.onPendingInput = fn
+	c.mu.Unlock()
+}
+
+// setTurnStartHook installs the turn-start callback (turnStartHooker interface).
+// Called once at wiring time before any Send.
+func (c *acpProcess) setTurnStartHook(fn func()) {
+	c.mu.Lock()
+	c.onTurnStart = fn
 	c.mu.Unlock()
 }
 
