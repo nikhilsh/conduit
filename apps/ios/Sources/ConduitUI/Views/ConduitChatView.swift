@@ -77,93 +77,121 @@ private final class KeyboardLiveInsetTracker: ObservableObject {
         Telemetry.breadcrumb("keyboard", "live tracker engaged")
     }
 
-    /// Stop tracking, zero the inset, and remove the window-level host view.
+    /// Stop tracking and zero the inset. The VC's view lifecycle is managed
+    /// by the UIViewControllerRepresentable -- we only need to kill the
+    /// displayLink here.
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
-        hostView?.removeFromSuperview()
         if liveInset != 0 { liveInset = 0 }
     }
 
     deinit {
         displayLink?.invalidate()
-        hostView?.removeFromSuperview()
     }
 
     private func tick() {
         guard let view = hostView, let window = view.window else { return }
-        // keyboardLayoutGuide.layoutFrame in the tracker view's coordinate
-        // space. Because the tracker view fills the window, its coordinate
-        // space equals window space. minY is the keyboard top edge.
-        let kbFrame = view.keyboardLayoutGuide.layoutFrame
-        let inset = max(0, window.bounds.maxY - kbFrame.minY - window.safeAreaInsets.bottom)
+        // The VC view does NOT fill the window (unlike the old full-window
+        // approach), so keyboardLayoutGuide.layoutFrame is in the VC view's
+        // local coordinate space. Convert to window coordinates before
+        // computing the inset.
+        let local = view.keyboardLayoutGuide.layoutFrame
+        let inWindow = view.convert(local, to: nil) // nil = window coords
+        let inset = max(0, window.bounds.maxY - inWindow.minY - window.safeAreaInsets.bottom)
         // Gate writes: only update Published when the value actually changed
         // by more than half a point so 60fps ticks during an at-rest keyboard
         // do not thrash SwiftUI's change detection.
         if abs(inset - liveInset) > 0.5 {
             liveInset = inset
         }
-        // Telemetry breadcrumb: emit when crossing 0<=>positive boundary or
-        // shifting by >=20pt. Throttled so we never fire 60 times per second;
-        // allows remote diagnosis of resting inset correctness from Sentry.
+        // Telemetry breadcrumb: emit on first sample, 0<=>positive crossings,
+        // or shifts >= 20pt. Throttled so we never fire 60 times per second.
+        // Includes full geometry so Sentry can diagnose guide tracking failures
+        // without a device (the missing signal that made previous iterations
+        // of this fix guesswork).
         let crossedZero = (inset == 0) != (lastLoggedInset == 0)
         let bigShift = abs(inset - lastLoggedInset) >= 20
         if lastLoggedInset < 0 || crossedZero || bigShift {
             lastLoggedInset = inset
-            Telemetry.breadcrumb("keyboard", "live inset", data: ["inset": String(format: "%.1f", inset)])
+            Telemetry.breadcrumb("keyboard", "live inset", data: [
+                "inset": String(format: "%.1f", inset),
+                "inWindowMinY": String(format: "%.1f", inWindow.minY),
+                "windowMaxY": String(format: "%.1f", window.bounds.maxY),
+                "safeBottom": String(format: "%.1f", window.safeAreaInsets.bottom),
+            ])
         }
     }
 }
 
-/// Zero-size UIViewRepresentable. On first layout it installs a full-window
-/// tracking UIView into the key window so UIKeyboardLayoutGuide coordinates
-/// match window space exactly (the guide's layoutFrame is in the host view's
-/// local coordinate system -- a 0x0 view would give garbage coordinates).
-private struct KeyboardTrackerHost: UIViewRepresentable {
+// MARK: - KeyboardTrackingViewController
+//
+// Hosts the UIKeyboardLayoutGuide so it is managed by a UIViewController's
+// view hierarchy. The guide only tracks reliably (moving layoutFrame off its
+// resting safe-area value) when read from a VC-managed view -- a window-direct-
+// child view (the approach used in PRs #712 and #715) is not in any VC subtree
+// and therefore never receives the VC-lifecycle-driven layout update that moves
+// the guide. This is the root cause all three prior attempts missed.
+
+private final class KeyboardTrackingViewController: UIViewController {
     let tracker: KeyboardLiveInsetTracker
 
-    func makeUIView(context: Context) -> UIView {
-        // This placeholder is 0x0 and exists only to trigger updateUIView
-        // once the SwiftUI host is in the window hierarchy (so we can
-        // access the window and add the real tracker view there).
-        let placeholder = UIView()
-        placeholder.isUserInteractionEnabled = false
-        placeholder.backgroundColor = .clear
-        return placeholder
+    init(tracker: KeyboardLiveInsetTracker) {
+        self.tracker = tracker
+        super.init(nibName: nil, bundle: nil)
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard tracker.hostView == nil, let window = uiView.window else { return }
-        // Add a window-filling tracking view so keyboardLayoutGuide.layoutFrame
-        // is expressed in window coordinate space (its local == window space).
-        let host = UIView(frame: window.bounds)
-        host.isUserInteractionEnabled = false
-        host.backgroundColor = .clear
-        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        window.addSubview(host)
+    required init?(coder: NSCoder) { fatalError("not used") }
 
-        // UIKeyboardLayoutGuide.layoutFrame is only continuously updated when
-        // at least one ACTIVE Auto Layout constraint references the guide.
-        // Without a constraint the guide is "unengaged" at rest and returns
-        // the collapsed (bottom) frame, making keyboardInset collapse to ~0
-        // while the keyboard is presented at rest. Adding a zero-size invisible
-        // anchor view constrained to the guide's topAnchor keeps the guide
-        // engaged at all times (rest, animation, and interactive drag), so
-        // layoutFrame is always correct. The anchor is never drawn and has no
-        // user interaction.
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+
+        // usesBottomSafeArea = false: the guide tracks the raw keyboard top
+        // edge rather than the safe-area-adjusted bottom, so the inset we
+        // compute is the true distance from the keyboard top to the window
+        // bottom minus only the home-indicator safe area -- not doubly adjusted.
+        if #available(iOS 17, *) {
+            view.keyboardLayoutGuide.usesBottomSafeArea = false
+        }
+
+        // A zero-size hidden anchor constrained to the guide's topAnchor
+        // keeps the guide ENGAGED at all times (rest, animation, and
+        // interactive drag). Without at least one active constraint referencing
+        // the guide it collapses to the resting bottom position and layoutFrame
+        // stays at the safe-area value -- the "inset = 0 at rest" bug.
         let anchor = UIView()
         anchor.isUserInteractionEnabled = false
         anchor.backgroundColor = .clear
         anchor.translatesAutoresizingMaskIntoConstraints = false
-        host.addSubview(anchor)
+        view.addSubview(anchor)
         NSLayoutConstraint.activate([
-            anchor.bottomAnchor.constraint(equalTo: host.keyboardLayoutGuide.topAnchor),
-            anchor.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            anchor.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+            anchor.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             anchor.widthAnchor.constraint(equalToConstant: 0),
             anchor.heightAnchor.constraint(equalToConstant: 0),
         ])
 
-        tracker.start(hostView: host)
+        tracker.start(hostView: view)
+        Telemetry.breadcrumb("keyboard", "vc guide mounted")
+    }
+}
+
+/// UIViewControllerRepresentable that hosts KeyboardTrackingViewController so
+/// UIKeyboardLayoutGuide is managed by a UIViewController's view hierarchy.
+/// The VC's view does not fill the window; tick() converts guide coordinates
+/// to window space before computing the inset.
+private struct KeyboardTrackerHost: UIViewControllerRepresentable {
+    let tracker: KeyboardLiveInsetTracker
+
+    func makeUIViewController(context: Context) -> KeyboardTrackingViewController {
+        KeyboardTrackingViewController(tracker: tracker)
+    }
+
+    func updateUIViewController(_ uiViewController: KeyboardTrackingViewController, context: Context) {
+        // No-op: the VC configures itself in viewDidLoad; SwiftUI manages
+        // its presentation/dismissal lifecycle.
     }
 }
 
