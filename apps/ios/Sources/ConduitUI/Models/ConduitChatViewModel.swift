@@ -168,6 +168,23 @@ extension ConduitUI {
             let answer: String?
         }
 
+        /// Strip the control lines (`pendingInputSentinel` and any
+        /// `pendingResolvedMarker`-prefixed line) from a pending-input card's
+        /// content, then trim whitespace. The result is a normalized key that
+        /// is identical for the original (marker-free) and the resolved
+        /// (marker-carrying) versions of the same card, so dedup can collapse
+        /// them to one logical prompt.
+        static func pendingInputStrippedKey(_ content: String) -> String {
+            content
+                .components(separatedBy: "\n")
+                .filter {
+                    let t = $0.trimmingCharacters(in: .whitespaces)
+                    return t != pendingInputSentinel && !t.hasPrefix(pendingResolvedMarker)
+                }
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
         /// Decode the resolution from a persisted pending-input card's
         /// content by scanning for the `pendingResolvedMarker` line. Returns
         /// nil when no marker is present — an unanswered card, or a legacy
@@ -271,9 +288,12 @@ extension ConduitUI {
             // Different prompt text or different options stays distinct so two
             // legitimately different questions are never merged.
             let deduped = dedupePendingInputCards(items)
+            // Build the body set using STRIPPED keys so a resolved-marker card
+            // and its plain echo both match the same normalized body, preventing
+            // the raw marker text from surviving as a visible plain bubble.
             let pending = deduped
                 .filter { $0.kind == "pending_input" }
-                .map { $0.content.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map { pendingInputStrippedKey($0.content) }
                 .filter { $0.count >= 8 }
             guard !pending.isEmpty else { return deduped }
             return deduped.filter { item in
@@ -285,18 +305,53 @@ extension ConduitUI {
         }
 
         /// Collapse consecutive-or-not duplicate `pending_input` items that
-        /// share the same prompt text + options to a single card. Order is
-        /// preserved and the first occurrence wins.
+        /// share the same stripped prompt + options to a single card. Order is
+        /// preserved (the survivor occupies the FIRST occurrence's position).
+        /// Among duplicates the RESOLVED card (one whose content carries a
+        /// `parsePendingResolution` result) wins over the raw/unanswered
+        /// original, so the answered state is never lost. When no duplicate
+        /// exists the lone card is kept as-is. Distinct prompts (different
+        /// stripped content or different options) are never merged.
         static func dedupePendingInputCards(_ items: [ConversationItem]) -> [ConversationItem] {
-            var seen: Set<String> = []
-            return items.filter { item in
-                guard item.kind == "pending_input" else { return true }
-                let prompt = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                let key = prompt + "\u{1f}" + item.pendingOptions.joined(separator: "\u{1f}")
-                if seen.contains(key) { return false }
-                seen.insert(key)
-                return true
+            // Two-pass: first find the winning item per key, then rebuild the
+            // list in order, emitting the winner at the first position seen.
+            var winner: [String: ConversationItem] = [:]  // key -> surviving item
+
+            for item in items {
+                guard item.kind == "pending_input" else { continue }
+                let key = pendingInputStrippedKey(item.content)
+                    + "\u{1f}"
+                    + item.pendingOptions.sorted().joined(separator: "\u{1f}")
+                if winner[key] == nil {
+                    winner[key] = item
+                } else if parsePendingResolution(item.content) != nil
+                           && parsePendingResolution(winner[key]!.content) == nil {
+                    // Upgrade: the resolved card beats the unanswered original.
+                    winner[key] = item
+                }
             }
+
+            var emittedKeys: Set<String> = []
+            var collapsed = 0
+            let result = items.compactMap { item -> ConversationItem? in
+                guard item.kind == "pending_input" else { return item }
+                let key = pendingInputStrippedKey(item.content)
+                    + "\u{1f}"
+                    + item.pendingOptions.sorted().joined(separator: "\u{1f}")
+                if emittedKeys.contains(key) {
+                    collapsed += 1
+                    return nil
+                }
+                emittedKeys.insert(key)
+                return winner[key]
+            }
+            if collapsed > 0 {
+                Telemetry.breadcrumb(
+                    "chat", "pending_input dedup collapsed",
+                    data: ["count": "\(collapsed)"]
+                )
+            }
+            return result
         }
 
         static func mergedEvents(

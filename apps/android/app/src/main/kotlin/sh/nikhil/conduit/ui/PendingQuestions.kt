@@ -89,6 +89,22 @@ object PendingQuestions {
     }
 
     /**
+     * Strip the control lines ([PENDING_INPUT_SENTINEL] and any
+     * [PENDING_RESOLVED_MARKER]-prefixed line) from a pending-input card's
+     * content, then trim whitespace. The result is a normalized key that is
+     * identical for the original (marker-free) and the resolved
+     * (marker-carrying) versions of the same card.
+     */
+    fun strippedKey(content: String): String =
+        content.split("\n")
+            .filter { line ->
+                val t = line.trim()
+                t != PENDING_INPUT_SENTINEL && !t.startsWith(PENDING_RESOLVED_MARKER)
+            }
+            .joinToString("\n")
+            .trim()
+
+    /**
      * Recover per-question groups from a pending-input `content` body.
      * Blocks are separated by blank lines; within a block the leading prose
      * is the question and the numbered/bulleted lines are its options. A
