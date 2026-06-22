@@ -52,6 +52,10 @@ private final class KeyboardLiveInsetTracker: ObservableObject {
 
     private var displayLink: CADisplayLink?
     private(set) weak var hostView: UIView?
+    /// Last inset value logged via Telemetry. Used to throttle breadcrumbs:
+    /// only log when crossing the 0/<=>positive boundary or when the value
+    /// shifts by >= 20pt, so we never flood Sentry at 60fps.
+    private var lastLoggedInset: CGFloat = -1
 
     /// Weak-target proxy so CADisplayLink does not create a retain cycle.
     private final class DisplayLinkProxy: NSObject {
@@ -99,6 +103,15 @@ private final class KeyboardLiveInsetTracker: ObservableObject {
         if abs(inset - liveInset) > 0.5 {
             liveInset = inset
         }
+        // Telemetry breadcrumb: emit when crossing 0<=>positive boundary or
+        // shifting by >=20pt. Throttled so we never fire 60 times per second;
+        // allows remote diagnosis of resting inset correctness from Sentry.
+        let crossedZero = (inset == 0) != (lastLoggedInset == 0)
+        let bigShift = abs(inset - lastLoggedInset) >= 20
+        if lastLoggedInset < 0 || crossedZero || bigShift {
+            lastLoggedInset = inset
+            Telemetry.breadcrumb("keyboard", "live inset", data: ["inset": String(format: "%.1f", inset)])
+        }
     }
 }
 
@@ -128,6 +141,28 @@ private struct KeyboardTrackerHost: UIViewRepresentable {
         host.backgroundColor = .clear
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         window.addSubview(host)
+
+        // UIKeyboardLayoutGuide.layoutFrame is only continuously updated when
+        // at least one ACTIVE Auto Layout constraint references the guide.
+        // Without a constraint the guide is "unengaged" at rest and returns
+        // the collapsed (bottom) frame, making keyboardInset collapse to ~0
+        // while the keyboard is presented at rest. Adding a zero-size invisible
+        // anchor view constrained to the guide's topAnchor keeps the guide
+        // engaged at all times (rest, animation, and interactive drag), so
+        // layoutFrame is always correct. The anchor is never drawn and has no
+        // user interaction.
+        let anchor = UIView()
+        anchor.isUserInteractionEnabled = false
+        anchor.backgroundColor = .clear
+        anchor.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(anchor)
+        NSLayoutConstraint.activate([
+            anchor.bottomAnchor.constraint(equalTo: host.keyboardLayoutGuide.topAnchor),
+            anchor.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            anchor.widthAnchor.constraint(equalToConstant: 0),
+            anchor.heightAnchor.constraint(equalToConstant: 0),
+        ])
+
         tracker.start(hostView: host)
     }
 }
