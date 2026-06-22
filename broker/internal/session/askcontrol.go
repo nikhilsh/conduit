@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -39,6 +40,91 @@ var askAnswerTimeout = 30 * time.Minute
 // match, end of the question line) and switch that question to
 // checkbox + Send. Text-carried so no broker→core→app schema changes.
 const multiSelectMarker = " (select all that apply)"
+
+// pendingResolvedMarker is the leading token of the SECOND line of a
+// PERSISTED, already-answered pending-input card. The broker writes a
+// resolution entry into the conversation log when an AskUserQuestion is
+// answered (or times out) so the answered/selected state survives an app
+// close+reopen and rides across devices — until now that state lived only
+// in the client's ephemeral SwiftUI @State and was lost on reload.
+//
+// Wire contract (text-carried, like multiSelectMarker, so NO broker→core→
+// app schema change): the resolution card content is
+//
+//	[[conduit:needs-input]]
+//	[[conduit:resolved]]{"answered":true,"answer":"Merge now"}
+//	<question>
+//	1. Merge now
+//	2. Hold off
+//
+// i.e. the normal pending-input card body with this marker line inserted
+// right after the sentinel. The JSON tail carries the resolution:
+//   - answered:true + answer:"<chosen text>" for a real answer (a tap or
+//     typed free text; multi-select taps arrive comma-joined verbatim);
+//   - answered:false (answer omitted) when the ask TIMED OUT or was
+//     resolved without a user answer, so the card stops showing "needs
+//     input" but renders no selected option.
+//
+// Backward-compat: a transcript with no [[conduit:resolved]] line parses
+// exactly as today (an unanswered card, or — for the unpersisted live
+// card — nothing). Core keeps classifying the entry as pending_input (the
+// sentinel is still present) and strips ONLY the sentinel line, so the
+// marker line survives in `content` for the app to parse. The JSON tail
+// leaves room to add fields without breaking older parsers.
+const pendingResolvedMarker = "[[conduit:resolved]]"
+
+// pendingResolution is the JSON payload carried after pendingResolvedMarker.
+type pendingResolution struct {
+	Answered bool   `json:"answered"`
+	Answer   string `json:"answer,omitempty"`
+}
+
+// resolvedPendingInputContent renders the persisted resolution card for an
+// answered/expired AskUserQuestion: the normal pending-input body with the
+// resolution marker inserted on the line after the sentinel. ok=false when
+// the ask has no renderable question body (nothing to persist). answer is
+// ignored when answered is false (timeout / no-answer resolution).
+func resolvedPendingInputContent(input json.RawMessage, answer string, answered bool) (string, bool) {
+	body, ok := askUserQuestionContent(input)
+	if !ok {
+		return "", false
+	}
+	res := pendingResolution{Answered: answered}
+	if answered {
+		res.Answer = answer
+	}
+	meta, err := json.Marshal(res)
+	if err != nil {
+		return "", false
+	}
+	markerLine := pendingResolvedMarker + string(meta)
+	// askUserQuestionContent guarantees a leading sentinel line; insert the
+	// marker right after it so core's strip_pending_sentinel (which removes
+	// only the exact sentinel line) leaves the marker intact in `content`.
+	if rest, found := strings.CutPrefix(body, pendingInputSentinel+"\n"); found {
+		return pendingInputSentinel + "\n" + markerLine + "\n" + rest, true
+	}
+	// Defensive: sentinel not at the head (shouldn't happen) — prepend both.
+	return pendingInputSentinel + "\n" + markerLine + "\n" + body, true
+}
+
+// parsePendingResolution extracts the resolution carried in a persisted
+// pending-input card's content, scanning for the pendingResolvedMarker line.
+// ok=false when the content has no resolution marker (an unanswered card, or
+// a legacy/backward-compat transcript). Mirrors the parse the apps perform.
+func parsePendingResolution(content string) (pendingResolution, bool) {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if rest, found := strings.CutPrefix(trimmed, pendingResolvedMarker); found {
+			var res pendingResolution
+			if json.Unmarshal([]byte(rest), &res) != nil {
+				return pendingResolution{}, false
+			}
+			return res, true
+		}
+	}
+	return pendingResolution{}, false
+}
 
 // pendingInputSentinel is a leading marker the broker prepends to the
 // rendered content of a GENUINE interactive question (the AskUserQuestion
@@ -283,9 +369,47 @@ func (s *Session) takePendingAsk() *pendingAsk {
 	return ask
 }
 
+// recordPendingResolution persists the resolved pending-input card to the
+// conversation log AND re-publishes it on the live chat stream, so the
+// answered/selected state both survives a close+reopen (transcript replay,
+// any device) and flips the live card immediately (matching today's
+// optimistic on-tap behavior). answer is the chosen option text (ignored
+// when answered is false, e.g. a timeout). Reuses the original ask ts so
+// apply_chat's (role,content,ts) dedup treats the resolved card as the
+// SAME logical item as the prior live card rather than a second copy. No-op
+// when the ask has no renderable body. Best-effort: never blocks the answer.
+func (s *Session) recordPendingResolution(ask *pendingAsk, answer string, answered bool) {
+	if ask == nil {
+		return
+	}
+	content, ok := resolvedPendingInputContent(ask.input, answer, answered)
+	if !ok {
+		return
+	}
+	s.convLog.appendResolvedPendingInput(content, ask.ts)
+	ts := ask.ts
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type": "view_event",
+		"view": "chat",
+		"event": map[string]any{
+			"role":    "assistant",
+			"content": content,
+			"ts":      ts,
+			"files":   []any{},
+		},
+	})
+	if err == nil {
+		s.PublishText(payload)
+	}
+}
+
 // expirePendingAsk releases an AskUserQuestion the user never answered:
 // allow with unchanged input, which the CLI reports to the model as
-// "The user did not answer the questions."
+// "The user did not answer the questions." It also records a no-answer
+// resolution so the card stops showing "needs input" on reopen.
 func (s *Session) expirePendingAsk(requestID string) {
 	s.mu.Lock()
 	ask := s.pendingAsk
@@ -296,6 +420,7 @@ func (s *Session) expirePendingAsk(requestID string) {
 	s.pendingAsk = nil
 	s.mu.Unlock()
 	_ = ask.cp.SendRaw(encodeControlAllow(ask.requestID, ask.input))
+	s.recordPendingResolution(ask, "", false)
 }
 
 // latchChatSessionID records the claude CLI's announced conversation id

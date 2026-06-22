@@ -2568,7 +2568,7 @@ final class SessionStore {
     /// older pages, so ids never collide between loads. `extraTag` (the
     /// before_ts cursor) further namespaces paged-item ids so two back-to-back
     /// page loads don't share an id space even if `index` overlaps.
-    nonisolated private static func mapRemoteItem(
+    nonisolated static func mapRemoteItem(
         _ raw: RemoteConversationItem,
         sessionID: String,
         idPrefix: String,
@@ -2576,13 +2576,36 @@ final class SessionStore {
         extraTag: String = ""
     ) -> ConversationItem {
         let role = raw.role.lowercased()
-        let kind = role == "tool" ? "tool" : "message"
         let files = (raw.files ?? []).map {
             ViewEventFile(path: $0.path, rev: $0.rev ?? "")
         }
+        // A persisted, RESOLVED pending-input card carries the broker's
+        // needs-input sentinel. Classify it as `pending_input` (so it renders
+        // as the answered card, not a plain bubble) and parse its options.
+        // The HTTP replay bypasses the Rust classifier, so we do here what
+        // core does on the live path — plus we KEEP the resolution marker in
+        // `content` (strip only the sentinel line) so the card can rehydrate
+        // its answered/selected state from the transcript after a reopen.
+        let isPending = raw.content.contains(ConduitUI.ChatViewModel.pendingInputSentinel)
+        let kind = isPending ? "pending_input" : (role == "tool" ? "tool" : "message")
+        if isPending,
+           let res = ConduitUI.ChatViewModel.parsePendingResolution(raw.content),
+           res.answered {
+            // One-time signal that a persisted answered card was rehydrated
+            // from the transcript (the fix: answered/selected state now
+            // survives close+reopen instead of living only in client @State).
+            Telemetry.breadcrumb("approvals", "pending_input rehydrated answered from transcript", data: [
+                "session": sessionID,
+                "has_answer": String(res.answer != nil),
+            ])
+        }
         // Strip the pending-input sentinel — see fetchConversation's inline
-        // comment for the full rationale.
+        // comment for the full rationale. The resolution marker (if any)
+        // survives; `parsePendingQuestions` filters it from visible prose.
         let content = Self.stripPendingSentinel(raw.content)
+        let pendingOptions = isPending
+            ? ConversationRenderer.extractPendingOptions(from: content)
+            : []
         let id = extraTag.isEmpty
             ? "\(idPrefix)-\(sessionID)-\(index)"
             : "\(idPrefix)-\(sessionID)-\(extraTag)-\(index)"
@@ -2599,7 +2622,7 @@ final class SessionStore {
             exitCode: nil,
             durationMs: nil,
             diffSummary: nil,
-            pendingOptions: [],
+            pendingOptions: pendingOptions,
             sourceAgent: nil,
             targetAgent: nil,
             taskText: nil,

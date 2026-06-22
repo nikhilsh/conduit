@@ -359,14 +359,29 @@ fn summarize_diff(text: &str) -> String {
 /// The apps strip it before display.
 pub const PENDING_INPUT_SENTINEL: &str = "[[conduit:needs-input]]";
 
-/// Remove the leading pending-input sentinel line (and any stray
-/// occurrences) from content destined for display. No-op when absent.
+/// The leading token of the resolution-marker line the broker inserts into
+/// a PERSISTED, already-answered pending-input card (line after the
+/// sentinel), e.g. `[[conduit:resolved]]{"answered":true,"answer":"…"}`.
+/// Byte-identical to the broker's `pendingResolvedMarker`. It is an internal
+/// classification/persistence signal, never user-facing prose, so it is
+/// stripped from `display_content` here — the same as the sentinel — so it
+/// never leaks into the card text on the live path (and on Android, which
+/// does not parse it). The iOS HTTP-rehydration path (pure Swift, bypasses
+/// this classifier) keeps the raw marker to rehydrate the answered state.
+pub const PENDING_RESOLVED_MARKER: &str = "[[conduit:resolved]]";
+
+/// Remove the internal pending-input control lines (the needs-input
+/// sentinel and the resolution marker) from content destined for display.
+/// No-op when neither marker is present.
 fn strip_pending_sentinel(text: &str) -> String {
-    if !text.contains(PENDING_INPUT_SENTINEL) {
+    if !text.contains(PENDING_INPUT_SENTINEL) && !text.contains(PENDING_RESOLVED_MARKER) {
         return text.to_string();
     }
     text.lines()
-        .filter(|line| line.trim() != PENDING_INPUT_SENTINEL)
+        .filter(|line| {
+            let t = line.trim();
+            t != PENDING_INPUT_SENTINEL && !t.starts_with(PENDING_RESOLVED_MARKER)
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -789,6 +804,34 @@ mod tests {
         assert!(
             !item.content.contains(PENDING_INPUT_SENTINEL),
             "sentinel must be stripped from display content: {:?}",
+            item.content
+        );
+        assert!(item.content.starts_with("Proceed with the merge?"));
+    }
+
+    /// A RESOLVED pending-input card (broker inserted the resolution marker
+    /// on the line after the sentinel when the AskUserQuestion was answered)
+    /// still classifies as pending_input, exposes the same options, and has
+    /// BOTH internal markers stripped from display content. The marker is
+    /// only consumed by the iOS HTTP-rehydration path; on the live path it
+    /// must never leak into the visible card text (nor on Android).
+    #[test]
+    fn pending_input_resolved_card_strips_marker() {
+        let item = item_from_chat_event(
+            &ev(
+                "assistant",
+                "[[conduit:needs-input]]\n\
+                 [[conduit:resolved]]{\"answered\":true,\"answer\":\"Merge now\"}\n\
+                 Proceed with the merge?\n1. Merge now\n2. Hold off",
+            ),
+            0,
+        );
+        assert_eq!(item.kind, "pending_input");
+        assert_eq!(item.pending_options, vec!["Merge now", "Hold off"]);
+        assert!(
+            !item.content.contains(PENDING_INPUT_SENTINEL)
+                && !item.content.contains(PENDING_RESOLVED_MARKER),
+            "both internal markers must be stripped from display: {:?}",
             item.content
         );
         assert!(item.content.starts_with("Proceed with the merge?"));

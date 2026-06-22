@@ -111,4 +111,50 @@ struct ConduitPendingInputTests {
         #expect(qs[0].prompt == "Proceed?")
         #expect(qs[0].options == ["Yes", "No"])
     }
+
+    // MARK: parsePendingResolution (persisted answered-state rehydration)
+
+    /// The persisted resolution marker is decoded into answered=true + the
+    /// chosen answer text. This is the authoritative state a freshly-reloaded
+    /// card uses — no local @State is involved.
+    @Test func parsesAnsweredResolutionFromTranscript() {
+        let content = "[[conduit:needs-input]]\n"
+            + #"[[conduit:resolved]]{"answered":true,"answer":"Merge now"}"# + "\n"
+            + "Proceed with the merge?\n1. Merge now\n2. Hold off"
+        let res = ConduitUI.ChatViewModel.parsePendingResolution(content)
+        #expect(res?.answered == true)
+        #expect(res?.answer == "Merge now")
+    }
+
+    /// A timed-out / no-answer resolution marks the card resolved (answered
+    /// flag) but carries no answer text — no option is highlighted.
+    @Test func parsesTimedOutResolutionWithNoAnswer() {
+        let content = "[[conduit:needs-input]]\n"
+            + #"[[conduit:resolved]]{"answered":false}"# + "\n"
+            + "Ship it?\n1. Yes\n2. No"
+        let res = ConduitUI.ChatViewModel.parsePendingResolution(content)
+        #expect(res?.answered == false)
+        #expect(res?.answer == nil)
+    }
+
+    /// Backward-compat: a pending-input card with NO resolution marker (an
+    /// unanswered card, or a transcript written before this feature) decodes
+    /// to nil — the card renders unanswered exactly as before.
+    @Test func legacyCardWithoutMarkerHasNoResolution() {
+        let content = "[[conduit:needs-input]]\nProceed?\n1. Yes\n2. No"
+        #expect(ConduitUI.ChatViewModel.parsePendingResolution(content) == nil)
+        #expect(ConduitUI.ChatViewModel.parsePendingResolution("just a reply") == nil)
+    }
+
+    /// The resolution marker line must NEVER render as visible question prose:
+    /// `parsePendingQuestions` filters it out alongside the sentinel.
+    @Test func resolutionMarkerStrippedFromQuestionText() {
+        let content = "[[conduit:needs-input]]\n"
+            + #"[[conduit:resolved]]{"answered":true,"answer":"Yes"}"# + "\n"
+            + "Proceed?\n1. Yes\n2. No"
+        let qs = ConduitUI.ChatViewModel.parsePendingQuestions(content)
+        #expect(qs.count == 1)
+        #expect(qs[0].prompt == "Proceed?")
+        #expect(qs[0].options == ["Yes", "No"])
+    }
 }

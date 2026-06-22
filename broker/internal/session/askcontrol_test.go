@@ -184,6 +184,143 @@ func TestAskUserQuestionContentMultiSelectMarker(t *testing.T) {
 	}
 }
 
+// TestRecordPendingResolutionPersistsExactlyOnce: recordPendingResolution
+// writes the resolved card to the transcript (so the answered state survives
+// reopen) AND re-publishes it live — but the live PublishText path (which
+// re-routes through appendRaw) must NOT double-persist it (appendRaw skips
+// the sentinel-prefixed card). Result: exactly one persisted resolution
+// entry, carrying the answer, keyed to the original ask ts.
+func TestRecordPendingResolutionPersistsExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	s := &Session{}
+	s.conduitRoot = dir
+	s.ID = "resolve-test"
+	s.applyPaths()
+
+	req, _ := parseControlRequest([]byte(askControlLine))
+	ask := &pendingAsk{requestID: req.RequestID, input: req.Input, ts: "2026-06-22T12:00:00Z"}
+
+	s.recordPendingResolution(ask, "Red, Green", true)
+
+	got, err := readConvLog(s.convLog.path)
+	if err != nil {
+		t.Fatalf("readConvLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want exactly 1 persisted resolution (no double-write), got %d: %+v", len(got), got)
+	}
+	if got[0].Ts != "2026-06-22T12:00:00Z" {
+		t.Fatalf("resolution must reuse the original ask ts, got %q", got[0].Ts)
+	}
+	res, ok := parsePendingResolution(got[0].Content)
+	if !ok || !res.Answered || res.Answer != "Red, Green" {
+		t.Fatalf("persisted resolution mismatch: ok=%v res=%+v", ok, res)
+	}
+}
+
+// TestResolvedPendingInputContentAnswered: an answered AskUserQuestion
+// renders a resolution card that (1) keeps the sentinel as its FIRST line
+// (so core still classifies it pending_input and strips only that line),
+// (2) carries the resolution marker on the SECOND line, and (3) preserves
+// the original question + options so the card still renders fully. The
+// round-trip parse recovers answered=true + the chosen answer text.
+func TestResolvedPendingInputContentAnswered(t *testing.T) {
+	input := json.RawMessage(`{"questions":[{"question":"Proceed with the merge?","options":[{"label":"Merge now"},{"label":"Hold off"}]}]}`)
+	content, ok := resolvedPendingInputContent(input, "Merge now", true)
+	if !ok {
+		t.Fatal("expected resolution content")
+	}
+	lines := strings.Split(content, "\n")
+	if lines[0] != pendingInputSentinel {
+		t.Fatalf("first line must be the sentinel, got %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], pendingResolvedMarker) {
+		t.Fatalf("second line must be the resolution marker, got %q", lines[1])
+	}
+	if !strings.Contains(content, "Proceed with the merge?") ||
+		!strings.Contains(content, "1. Merge now") {
+		t.Fatalf("question + options must survive: %q", content)
+	}
+	res, ok := parsePendingResolution(content)
+	if !ok {
+		t.Fatal("expected to parse the resolution")
+	}
+	if !res.Answered || res.Answer != "Merge now" {
+		t.Fatalf("round-trip mismatch: %+v", res)
+	}
+}
+
+// TestResolvedPendingInputContentTimedOut: a timed-out / no-answer ask is
+// marked resolved with answered=false and NO answer text, so the card stops
+// showing "needs input" without highlighting any option.
+func TestResolvedPendingInputContentTimedOut(t *testing.T) {
+	input := json.RawMessage(`{"questions":[{"question":"Ship it?","options":[{"label":"Yes"},{"label":"No"}]}]}`)
+	content, ok := resolvedPendingInputContent(input, "", false)
+	if !ok {
+		t.Fatal("expected resolution content")
+	}
+	res, ok := parsePendingResolution(content)
+	if !ok {
+		t.Fatal("expected to parse the resolution")
+	}
+	if res.Answered {
+		t.Fatalf("timed-out ask must be answered=false: %+v", res)
+	}
+	if res.Answer != "" {
+		t.Fatalf("timed-out ask must carry no answer text: %+v", res)
+	}
+	// answer:"" must be OMITTED from the wire (omitempty), not serialized.
+	if strings.Contains(content, `"answer"`) {
+		t.Fatalf("no-answer resolution must omit the answer field: %q", content)
+	}
+}
+
+// TestParsePendingResolutionBackwardCompat: a plain pending-input card with
+// NO resolution marker (an unanswered card, or a legacy transcript written
+// before this feature) parses as "no resolution" — the app then renders it
+// unanswered exactly as today.
+func TestParsePendingResolutionBackwardCompat(t *testing.T) {
+	legacy := pendingInputSentinel + "\nProceed?\n1. Yes\n2. No"
+	if _, ok := parsePendingResolution(legacy); ok {
+		t.Fatalf("unmarked card must not parse as resolved: %q", legacy)
+	}
+	// A non-card message likewise carries no resolution.
+	if _, ok := parsePendingResolution("just a normal reply"); ok {
+		t.Fatal("plain message must not parse as resolved")
+	}
+}
+
+// TestAppendResolvedPendingInputPersists: unlike a live unanswered card
+// (skipped by appendRaw), a RESOLVED card MUST land in the transcript so the
+// answered state survives reopen. Verifies readConvLog recovers it with the
+// resolution intact and the original ts preserved.
+func TestAppendResolvedPendingInputPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.jsonl")
+	l := newConvLogger(path)
+
+	input := json.RawMessage(`{"questions":[{"question":"Proceed with the merge?","options":[{"label":"Merge now"},{"label":"Hold off"}]}]}`)
+	content, ok := resolvedPendingInputContent(input, "Merge now", true)
+	if !ok {
+		t.Fatal("expected resolution content")
+	}
+	l.appendResolvedPendingInput(content, "2026-06-22T10:00:00Z")
+
+	got, err := readConvLog(path)
+	if err != nil {
+		t.Fatalf("readConvLog: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 persisted resolution entry, got %d: %+v", len(got), got)
+	}
+	if got[0].Role != "assistant" || got[0].Ts != "2026-06-22T10:00:00Z" {
+		t.Fatalf("entry metadata mismatch: %+v", got[0])
+	}
+	res, ok := parsePendingResolution(got[0].Content)
+	if !ok || !res.Answered || res.Answer != "Merge now" {
+		t.Fatalf("persisted resolution mismatch: ok=%v res=%+v", ok, res)
+	}
+}
+
 // Resume-on-respawn (round-4 device feedback: "session went down and
 // lost where it was" — a broker restart/self-heal respawned the claude
 // agent WITHOUT --resume, so it started a brand-new conversation).
