@@ -141,18 +141,6 @@ func (s *Session) cancelPendingTurnEndPush() {
 //     is currently connected. A non-owner subscriber (e.g. the SSH CLI)
 //     carries no matching device_id and is invisible to this gate.
 func (s *Session) maybeNotifyTurnEnd() {
-	// Skip trivial turns: if the last assistant message preview is the fallback
-	// "Turn complete" (no real text), do not schedule a push.
-	preview := s.lastAssistantMessagePreview(1500)
-	if preview == "Turn complete" {
-		// Still might want to fire LA end if timer was already armed — but a
-		// trivial turn means nothing meaningful happened. Just cancel any pending
-		// timer and return: the LA will end via notifyLATurnEnd when the session
-		// actually closes or on the next real turn's genuine-stop.
-		log.Printf("push: turn-end suppressed (no assistant text) session=%s", s.ID)
-		return
-	}
-
 	if s.ownerPresenceGate() {
 		return // owner device is watching — don't alert
 	}
@@ -199,7 +187,7 @@ func (s *Session) sendGenuineStopPush(n push.Notifier, id, sessionID string) {
 	s.notifyLATurnEnd()
 
 	title := s.pushTitleForSession()
-	body := s.aiRewriteBody(preview(s, 1500), 100)
+	body := s.aiRewriteBody(s.lastAssistantMessagePreview(1500), 100)
 	log.Printf("push: genuine-stop send session=%s title=%q body=%q", sessionID, title, body)
 	payload := push.Payload{
 		Title:     title,
@@ -211,12 +199,6 @@ func (s *Session) sendGenuineStopPush(n push.Notifier, id, sessionID string) {
 	if err := s.notifyTargeted(ctx, n, id, payload); err != nil {
 		fmt.Fprintf(os.Stderr, "push: turn-end notify session=%s: %v\n", sessionID, err)
 	}
-}
-
-// preview returns the last assistant message preview up to maxLen runes.
-// Thin wrapper so sendGenuineStopPush can call it without duplicating the read.
-func preview(s *Session, maxLen int) string {
-	return s.lastAssistantMessagePreview(maxLen)
 }
 
 // aiRewriteBody uses the session's aiGen provider (if set) to rewrite the
@@ -252,17 +234,6 @@ func (s *Session) aiRewriteBody(lastAssistantText string, fallbackLen int) strin
 		return fallback()
 	}
 	return truncatePushBody(result, fallbackLen)
-}
-
-// stopPendingTimerOnClose stops any pending genuine-stop timer so it can't fire
-// after the session is torn down. Called from the session close path.
-func (s *Session) stopPendingTimerOnClose() {
-	s.pushState.mu.Lock()
-	if s.pushState.pendingStopTimer != nil {
-		s.pushState.pendingStopTimer.Stop()
-		s.pushState.pendingStopTimer = nil
-	}
-	s.pushState.mu.Unlock()
 }
 
 // maybeNotifyPendingInput fires a push notification when the agent is now

@@ -417,7 +417,13 @@ func (c *acpProcess) Send(text string) error {
 	c.turnLastAssistant = ""
 	c.turnLastTS = ""
 	c.beginWatchdogLocked()
+	startHook := c.onTurnStart
 	c.mu.Unlock()
+
+	// Fire turn-start hook outside the lock so it doesn't nest under c.mu.
+	if startHook != nil {
+		startHook()
+	}
 
 	fmt.Fprintf(os.Stderr, "acp: prompt (session %s, id %d)\n", sid, id)
 	if err := c.writeRequest(id, "session/prompt", acpPromptParams(sid, text)); err != nil {

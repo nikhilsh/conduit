@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -118,6 +119,44 @@ func (r *recordingNotifier) last() push.Payload {
 	return r.got[len(r.got)-1]
 }
 
+// installCapturingTimer replaces timerAfterFunc with a stub that records the
+// armed function without scheduling it. Returns a "fire" func the test calls to
+// drive the genuine-stop timer deterministically — after maybeNotifyTurnEnd
+// returns (and releases s.pushState.mu) so sendGenuineStopPush can lock it.
+// Restores the original in t.Cleanup.
+//
+// CRITICAL: the stub returns a valid non-nil *time.Timer; production code calls
+// .Stop() on it when re-arming or cancelling — a nil return panics.
+func installCapturingTimer(t *testing.T) (fire func()) {
+	t.Helper()
+	orig := timerAfterFunc
+	var captured func()
+	timerAfterFunc = func(_ time.Duration, f func()) *time.Timer {
+		captured = f
+		return time.AfterFunc(time.Hour, func() {}) // non-nil, never fires
+	}
+	t.Cleanup(func() { timerAfterFunc = orig })
+	return func() {
+		if captured != nil {
+			f := captured
+			captured = nil
+			f()
+		}
+	}
+}
+
+// useSyncTimer installs a capturing timer stub and returns a helper that calls
+// maybeNotifyTurnEnd and immediately fires the captured timer function. This is
+// the standard seam for all turn-end push tests.
+func useSyncTimer(t *testing.T) func(s *Session) {
+	t.Helper()
+	fire := installCapturingTimer(t)
+	return func(s *Session) {
+		s.maybeNotifyTurnEnd()
+		fire()
+	}
+}
+
 // bareSession returns a minimal Session suitable for push-notify tests:
 // no PTY, no adapter, no process — just the fields the push path needs.
 func bareSession(id string) *Session {
@@ -150,12 +189,13 @@ func detachViewer(s *Session, ch chan []byte) {
 // TestPushNotifyTurnEnd_NoClient verifies that a turn-end fires a push when
 // no client is attached.
 func TestPushNotifyTurnEnd_NoClient(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-1")
 	s.SetPushNotifier(n, "broker")
 
-	// No subscriber → should notify.
-	s.maybeNotifyTurnEnd()
+	// No subscriber → should notify (after genuine-stop timer fires).
+	notifyTurnEnd(s)
 
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification, got %d", n.count())
@@ -175,6 +215,7 @@ func TestPushNotifyTurnEnd_NoClient(t *testing.T) {
 // TestPushNotifyTurnEnd_WithClient verifies that no push fires when a client
 // is watching.
 func TestPushNotifyTurnEnd_WithClient(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-2")
 	s.SetPushNotifier(n, "broker")
@@ -182,7 +223,7 @@ func TestPushNotifyTurnEnd_WithClient(t *testing.T) {
 	ch := attachViewer(s)
 	defer detachViewer(s, ch)
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	if n.count() != 0 {
 		t.Fatalf("expected 0 notifications (client attached), got %d", n.count())
@@ -309,8 +350,10 @@ func TestPushNotifyPendingInput_WithClient(t *testing.T) {
 }
 
 // TestPushNotifyDebounce verifies that two rapid turn-end transitions coalesce
-// into a single push (the debounce window).
+// into a single push (the debounce window). The capturing timer seam lets us
+// drive the timer deterministically to test the debounce in sendGenuineStopPush.
 func TestPushNotifyDebounce(t *testing.T) {
+	fire := installCapturingTimer(t)
 	// Pin the clock so rapid consecutive calls hit the debounce window.
 	fixed := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	orig := pushNow
@@ -321,9 +364,17 @@ func TestPushNotifyDebounce(t *testing.T) {
 	s := bareSession("sess-5")
 	s.SetPushNotifier(n, "broker")
 
-	// Two rapid turn-end calls at the same "now" — second should be coalesced.
+	// First turn-end arms the timer; fire it.
 	s.maybeNotifyTurnEnd()
+	fire()
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification after first fire, got %d", n.count())
+	}
+
+	// Second rapid call arms a new timer; fire it — debounce coalesces it.
 	s.maybeNotifyTurnEnd()
+	fire()
 
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification (debounce), got %d", n.count())
@@ -332,6 +383,7 @@ func TestPushNotifyDebounce(t *testing.T) {
 	// After advancing time past the window, a new call should fire.
 	pushNow = func() time.Time { return fixed.Add(idlePushWindow + time.Millisecond) }
 	s.maybeNotifyTurnEnd()
+	fire()
 
 	if n.count() != 2 {
 		t.Fatalf("expected 2 notifications after debounce window, got %d", n.count())
@@ -341,16 +393,18 @@ func TestPushNotifyDebounce(t *testing.T) {
 // TestPushNotifyNoNotifier verifies that nil notifier / empty identity are
 // safe no-ops.
 func TestPushNotifyNoNotifier(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	s := bareSession("sess-6")
 	// SetPushNotifier not called → pushState.notifier is nil.
 	// These must not panic.
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 	s.maybeNotifyPendingInput()
 }
 
 // TestPushNotifyDisplayName verifies that a renamed session includes both the
 // agent name and the display name in the notification title.
 func TestPushNotifyDisplayName(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-7")
 	s.SetPushNotifier(n, "broker")
@@ -359,7 +413,7 @@ func TestPushNotifyDisplayName(t *testing.T) {
 	s.displayName = "My Project"
 	s.mu.Unlock()
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification, got %d", n.count())
@@ -373,6 +427,7 @@ func TestPushNotifyDisplayName(t *testing.T) {
 // TestPushNotifyAITitle verifies that a session with an AI-generated title
 // (but no manual display name) uses "agent · aiTitle" as the notification title.
 func TestPushNotifyAITitle(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-8")
 	s.SetPushNotifier(n, "broker")
@@ -381,7 +436,7 @@ func TestPushNotifyAITitle(t *testing.T) {
 	s.aiTitle = "Refactor auth flow"
 	s.mu.Unlock()
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification, got %d", n.count())
@@ -395,6 +450,7 @@ func TestPushNotifyAITitle(t *testing.T) {
 // TestPushNotifyDisplayNameWinsOverAITitle verifies that a manual display name
 // takes priority over the AI-generated title in the notification title.
 func TestPushNotifyDisplayNameWinsOverAITitle(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-9")
 	s.SetPushNotifier(n, "broker")
@@ -404,7 +460,7 @@ func TestPushNotifyDisplayNameWinsOverAITitle(t *testing.T) {
 	s.aiTitle = "Should not appear"
 	s.mu.Unlock()
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification, got %d", n.count())
@@ -418,6 +474,7 @@ func TestPushNotifyDisplayNameWinsOverAITitle(t *testing.T) {
 // TestPushNotifyLastAssistantMessage verifies that when a convLog has an
 // assistant message, the push body is that message (truncated).
 func TestPushNotifyLastAssistantMessage(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-conv-1")
 	s.SetPushNotifier(n, "broker")
@@ -435,7 +492,7 @@ func TestPushNotifyLastAssistantMessage(t *testing.T) {
 	})
 	s.convLog.appendRaw(entry)
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification, got %d", n.count())
@@ -447,6 +504,7 @@ func TestPushNotifyLastAssistantMessage(t *testing.T) {
 
 // TestPushNotifyLastAssistantMessageTruncated verifies long messages are capped.
 func TestPushNotifyLastAssistantMessageTruncated(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-conv-2")
 	s.SetPushNotifier(n, "broker")
@@ -462,7 +520,7 @@ func TestPushNotifyLastAssistantMessageTruncated(t *testing.T) {
 	})
 	s.convLog.appendRaw(entry)
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	if n.count() != 1 {
 		t.Fatalf("expected 1 notification, got %d", n.count())
@@ -548,6 +606,7 @@ func TestLAEmit_NoToken(t *testing.T) {
 // TestLAEmit_TurnEnd_AlertNotAffected verifies that alert notifications still
 // fire for subscribers=0 even when LA is wired.
 func TestLAEmit_TurnEnd_AlertNotAffected(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	alertN := &recordingNotifier{}
 	s, reg, _ := newBareSessionWithLA("sess-la-3")
 	s.SetPushNotifier(alertN, "broker")
@@ -559,7 +618,7 @@ func TestLAEmit_TurnEnd_AlertNotAffected(t *testing.T) {
 	pushNow = func() time.Time { return fixed }
 	defer func() { pushNow = orig }()
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	// Alert notification must fire (no subscribers).
 	if alertN.count() != 1 {
@@ -802,13 +861,14 @@ func buildTargetedSession(t *testing.T, sessionID, ownerDeviceID string) (*Sessi
 
 // (d) Session with ownerDeviceID notifies only the owner device on turn-end.
 func TestSessionNotify_TurnEnd_TargetsOwnerDevice(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	s, reg, sender := buildTargetedSession(t, "sess-target-1", "device-owner")
 
 	// Register two devices.
 	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-owner", DeviceID: "device-owner"})
 	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-other", DeviceID: "device-other"})
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	sent := sender.sentTokens()
 	if len(sent) != 1 {
@@ -839,12 +899,13 @@ func TestSessionNotify_PendingInput_TargetsOwnerDevice(t *testing.T) {
 
 // (d) Session WITHOUT ownerDeviceID broadcasts to all registered devices.
 func TestSessionNotify_TurnEnd_BroadcastsWhenNoOwner(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	s, reg, sender := buildTargetedSession(t, "sess-broadcast-1", "" /* no owner */)
 
 	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-a", DeviceID: "device-a"})
 	reg.Register("broker", push.DeviceToken{Platform: push.PlatformFCM, Token: "tok-b", DeviceID: "device-b"})
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	sent := sender.sentTokens()
 	if len(sent) != 2 {
@@ -855,13 +916,14 @@ func TestSessionNotify_TurnEnd_BroadcastsWhenNoOwner(t *testing.T) {
 // (d) Session with ownerDeviceID but NO stored token for that device falls back
 // to broadcast (no push silently dropped).
 func TestSessionNotify_TurnEnd_FallsBackToBroadcastWhenNoToken(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	s, reg, sender := buildTargetedSession(t, "sess-fallback-1", "device-new")
 
 	// Register old tokens (without device_id — pre-targeting-era tokens).
 	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-old-a"})
 	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-old-b"})
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 
 	sent := sender.sentTokens()
 	if len(sent) != 2 {
@@ -889,6 +951,7 @@ func detachOwnerClient(s *Session, ch chan []byte) {
 // OwnerDeviceID is empty (legacy session), any binary subscriber still
 // suppresses the alert push — byte-identical to the pre-Phase2 behavior.
 func TestOwnerPresenceGate_Legacy_AnySubscriberSuppresses(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-gate-legacy-1")
 	s.SetPushNotifier(n, "broker")
@@ -897,7 +960,7 @@ func TestOwnerPresenceGate_Legacy_AnySubscriberSuppresses(t *testing.T) {
 	ch := attachViewer(s) // plain subscriber, no device_id tracking
 	defer detachViewer(s, ch)
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 	if n.count() != 0 {
 		t.Fatalf("legacy path: expected 0 notifications (subscriber attached), got %d", n.count())
 	}
@@ -906,12 +969,13 @@ func TestOwnerPresenceGate_Legacy_AnySubscriberSuppresses(t *testing.T) {
 // TestOwnerPresenceGate_Legacy_NoSubscriberFires verifies that the legacy path
 // still fires when no subscriber is attached.
 func TestOwnerPresenceGate_Legacy_NoSubscriberFires(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-gate-legacy-2")
 	s.SetPushNotifier(n, "broker")
 	// No SetPushOwner → ownerDeviceID == "" (legacy path).
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 	if n.count() != 1 {
 		t.Fatalf("legacy path: expected 1 notification (no subscriber), got %d", n.count())
 	}
@@ -920,13 +984,14 @@ func TestOwnerPresenceGate_Legacy_NoSubscriberFires(t *testing.T) {
 // TestOwnerPresenceGate_Modern_OwnerAttached_Suppresses verifies that when the
 // owner-device client is connected, the alert push is suppressed.
 func TestOwnerPresenceGate_Modern_OwnerAttached_Suppresses(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	s, reg, _ := buildTargetedSession(t, "sess-gate-modern-1", "device-phone")
 	reg.Register("broker", push.DeviceToken{Platform: push.PlatformAPNs, Token: "tok-phone", DeviceID: "device-phone"})
 
 	ch := attachOwnerClient(s)
 	defer detachOwnerClient(s, ch)
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 	// Owner is watching — must NOT push.
 	// Use SubscriberCount as a sanity check that a viewer is indeed attached.
 	if s.SubscriberCount() != 1 {
@@ -943,6 +1008,7 @@ func TestOwnerPresenceGate_Modern_OwnerAttached_Suppresses(t *testing.T) {
 // TestOwnerPresenceGate_Modern_OwnerDetached_Fires verifies that after the
 // owner-device client disconnects, the alert push fires again.
 func TestOwnerPresenceGate_Modern_OwnerDetached_Fires(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-gate-modern-2")
 	s.SetPushNotifier(n, "broker")
@@ -963,7 +1029,7 @@ func TestOwnerPresenceGate_Modern_OwnerDetached_Fires(t *testing.T) {
 		t.Fatal("expected SubscriberCount() == 0 after detach")
 	}
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 	if n.count() != 1 {
 		t.Fatalf("modern path: expected 1 notification (owner detached), got %d", n.count())
 	}
@@ -973,6 +1039,7 @@ func TestOwnerPresenceGate_Modern_OwnerDetached_Fires(t *testing.T) {
 // a subscriber whose device_id does NOT match OwnerDeviceID (e.g. the SSH CLI,
 // which carries no device_id) does NOT suppress the owner's alert push.
 func TestOwnerPresenceGate_Modern_NonOwnerSubscriber_DoesNotSuppress(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
 	n := &recordingNotifier{}
 	s := bareSession("sess-gate-modern-3")
 	s.SetPushNotifier(n, "broker")
@@ -993,7 +1060,7 @@ func TestOwnerPresenceGate_Modern_NonOwnerSubscriber_DoesNotSuppress(t *testing.
 		t.Fatal("non-owner subscriber must not set OwnerDeviceConnected()")
 	}
 
-	s.maybeNotifyTurnEnd()
+	notifyTurnEnd(s)
 	// Owner phone is backgrounded; non-owner is watching. Push MUST fire.
 	if n.count() != 1 {
 		t.Fatalf("modern path: expected 1 notification (non-owner attached, owner absent), got %d", n.count())
@@ -1035,5 +1102,141 @@ func TestOwnerPresenceGate_Modern_OwnerAttached_PendingInput_Suppresses(t *testi
 	s.maybeNotifyPendingInput()
 	if n.count() != 0 {
 		t.Fatalf("modern path pending-input: expected 0 notifications (owner attached), got %d", n.count())
+	}
+}
+
+// ---- Genuine-stop timer tests ----
+
+// TestGenuineStop_ArmsTimerDoesNotSendImmediately verifies that
+// maybeNotifyTurnEnd arms the timer but does NOT fire the push immediately.
+func TestGenuineStop_ArmsTimerDoesNotSendImmediately(t *testing.T) {
+	// Install a capturing timer — do NOT call fire(); we only check that nothing
+	// is sent before the timer fires.
+	fire := installCapturingTimer(t)
+	_ = fire // captured but not called
+	n := &recordingNotifier{}
+	s := bareSession("sess-gs-1")
+	s.SetPushNotifier(n, "broker")
+
+	s.maybeNotifyTurnEnd() // arms timer
+
+	// No send yet — the timer has not fired.
+	if n.count() != 0 {
+		t.Fatalf("expected 0 notifications before timer fires, got %d", n.count())
+	}
+}
+
+// TestGenuineStop_CancelBeforeFire_NoSend verifies that cancelPendingTurnEndPush
+// prevents the push. Simulates a new turn starting (which calls cancel) before
+// the genuine-stop timer would fire. After cancel, no push is sent.
+func TestGenuineStop_CancelBeforeFire_NoSend(t *testing.T) {
+	_ = installCapturingTimer(t) // installs stub but we don't fire it
+	n := &recordingNotifier{}
+	s := bareSession("sess-gs-2")
+	s.SetPushNotifier(n, "broker")
+
+	s.maybeNotifyTurnEnd()       // arm timer (captured, not fired)
+	s.cancelPendingTurnEndPush() // cancel: stops the timer and clears pendingStopTimer
+	// fire() is NOT called — the timer was stopped before it fired.
+
+	if n.count() != 0 {
+		t.Fatalf("expected 0 notifications (timer cancelled), got %d", n.count())
+	}
+}
+
+// TestGenuineStop_TimerFires_ExactlyOneSend verifies that when the genuine-stop
+// timer fires with no intervening cancellation, exactly one push is sent.
+func TestGenuineStop_TimerFires_ExactlyOneSend(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t) // arms + fires immediately
+	n := &recordingNotifier{}
+	s := bareSession("sess-gs-3")
+	s.SetPushNotifier(n, "broker")
+
+	notifyTurnEnd(s)
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification after timer fires, got %d", n.count())
+	}
+	if n.last().SessionID != "sess-gs-3" {
+		t.Errorf("session id = %q, want sess-gs-3", n.last().SessionID)
+	}
+}
+
+// mockAIGen is a test aiGenProvider that returns a canned response or an error.
+type mockAIGen struct {
+	result string
+	err    error
+}
+
+func (m *mockAIGen) Complete(_ context.Context, _, _ string, _ int) (string, error) {
+	return m.result, m.err
+}
+
+// TestGenuineStop_AIRewriteBody_UsesProvider verifies that aiRewriteBody calls
+// the injected aiGenProvider and uses its returned string as the push body.
+func TestGenuineStop_AIRewriteBody_UsesProvider(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
+	n := &recordingNotifier{}
+	s := bareSession("sess-gs-ai-1")
+	s.SetPushNotifier(n, "broker")
+
+	// Wire a mock provider that returns a canned rewrite.
+	s.mu.Lock()
+	s.aiGen = &mockAIGen{result: "Added auth endpoint"}
+	s.mu.Unlock()
+
+	// Give the session some assistant text so the preview is non-empty.
+	dir := t.TempDir()
+	logPath := dir + "/conversation.jsonl"
+	s.convLog = newConvLogger(logPath)
+	entry, _ := json.Marshal(ConvEntry{
+		Role:    "assistant",
+		Content: "I have added an authentication endpoint to the API.",
+		Ts:      "2026-06-22T00:00:00Z",
+	})
+	s.convLog.appendRaw(entry)
+
+	notifyTurnEnd(s)
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification, got %d", n.count())
+	}
+	if n.last().Body != "Added auth endpoint" {
+		t.Errorf("body = %q, want AI-rewritten body", n.last().Body)
+	}
+}
+
+// TestGenuineStop_AIRewriteBody_FallsBackOnError verifies that when the
+// aiGenProvider returns an error, aiRewriteBody falls back to the preview text.
+func TestGenuineStop_AIRewriteBody_FallsBackOnError(t *testing.T) {
+	notifyTurnEnd := useSyncTimer(t)
+	n := &recordingNotifier{}
+	s := bareSession("sess-gs-ai-2")
+	s.SetPushNotifier(n, "broker")
+
+	// Wire a mock provider that always errors.
+	s.mu.Lock()
+	s.aiGen = &mockAIGen{err: errors.New("ai provider unavailable")}
+	s.mu.Unlock()
+
+	// Assistant text in the convLog.
+	dir := t.TempDir()
+	logPath := dir + "/conversation.jsonl"
+	s.convLog = newConvLogger(logPath)
+	entry, _ := json.Marshal(ConvEntry{
+		Role:    "assistant",
+		Content: "Done.",
+		Ts:      "2026-06-22T00:00:00Z",
+	})
+	s.convLog.appendRaw(entry)
+
+	notifyTurnEnd(s)
+
+	if n.count() != 1 {
+		t.Fatalf("expected 1 notification, got %d", n.count())
+	}
+	// Fallback = truncatePushBody("Done.", 100) = "Done."
+	if n.last().Body != "Done." {
+		t.Errorf("body = %q, want fallback preview", n.last().Body)
 	}
 }

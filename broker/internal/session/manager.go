@@ -1255,6 +1255,8 @@ func (s *Session) Close() {
 		s.mu.Lock()
 		s.closing = true
 		s.mu.Unlock()
+		// Cancel any pending genuine-stop timer so it can't fire after teardown.
+		s.cancelPendingTurnEndPush()
 		if s.chat != nil {
 			// Stop the headless stream-json agent (closes stdin + kills
 			// the process) so it doesn't outlive the session.
