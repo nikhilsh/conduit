@@ -132,21 +132,15 @@ extension ConduitUI {
                 Divider().background(neon.border)
                 content
             }
-            // Pin the top chrome (header + tab strip + divider) against the
-            // keyboard. Device feedback: when the composer/keyboard appeared
-            // "the whole app goes up" — the header was pushed off-screen.
-            // Root cause: the chat content opts out of keyboard avoidance and
-            // lifts ONLY its composer manually (see ConduitChatView's
-            // `keyboardInset`), but this PARENT VStack still participated in
-            // SwiftUI's implicit bottom-safe-area reduction when the IME
-            // showed, so the layout system shrank the available height and
-            // shifted the entire stack — header included — upward. Ignoring
-            // the `.keyboard` region here keeps the chrome fixed; the composer
-            // is the only thing that tracks the keyboard (via its own inset),
-            // exactly the intended behaviour. The chat tab can never leave
-            // `.chat` (read-only collapses to the log), so this doesn't strand
-            // a keyboard-tracking surface that needs the avoidance.
-            .ignoresSafeArea(.keyboard, edges: .bottom)
+            // Header-pinning note (iOS 26 native avoidance, FB13296535 fixed):
+            // The VStack no longer ignores the keyboard safe area. With native
+            // avoidance, the `.safeAreaInset(edge: .bottom)` composer on the
+            // chat ScrollView (the flexible element) absorbs the keyboard
+            // height directly, so only the composer lifts — the header/tab
+            // strip above remain fixed. The prior `.ignoresSafeArea(.keyboard)`
+            // here suppressed native avoidance for the composer subtree, which
+            // was the root cause of the original bug. Removing it lets native
+            // avoidance propagate into the chat content correctly.
             // Full-bleed neon canvas for the notch / home-indicator, but
             // scope to `.container` so it does NOT ignore the `.keyboard`
             // region — a default `.ignoresSafeArea()` (regions: .all)

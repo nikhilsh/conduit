@@ -29,144 +29,6 @@ extension EnvironmentValues {
     }
 }
 
-// MARK: - Live keyboard inset tracker
-//
-// Fixes the interactive scroll-dismiss gap: UIResponder keyboard notifications
-// (willShow/willChangeFrame/willHide) fire for animated show/hide but NOT
-// continuously during a .scrollDismissesKeyboard(.interactively) drag, so the
-// old notification-only approach let keyboardInset freeze while the keyboard
-// descended -- opening a gap between the composer and the keyboard.
-//
-// UIKeyboardLayoutGuide (iOS 15+) tracks the keyboard frame continuously,
-// including every pixel of an interactive dismiss drag. A CADisplayLink reads
-// layoutFrame each display frame and publishes the live bottom inset so the
-// composer stays glued to the keyboard top throughout the drag.
-
-/// Observable holder for the live keyboard bottom inset. Driven by a
-/// CADisplayLink reading UIKeyboardLayoutGuide.layoutFrame every display frame.
-///
-/// Uses a DisplayLinkProxy (weak-target helper) so the CADisplayLink does not
-/// retain the tracker -- avoiding the retain cycle that would prevent deinit.
-private final class KeyboardLiveInsetTracker: ObservableObject {
-    @Published var liveInset: CGFloat = 0
-
-    private var displayLink: CADisplayLink?
-    private(set) weak var hostView: UIView?
-    /// Last inset value logged via Telemetry. Used to throttle breadcrumbs:
-    /// only log when crossing the 0/<=>positive boundary or when the value
-    /// shifts by >= 20pt, so we never flood Sentry at 60fps.
-    private var lastLoggedInset: CGFloat = -1
-
-    /// Weak-target proxy so CADisplayLink does not create a retain cycle.
-    private final class DisplayLinkProxy: NSObject {
-        weak var target: KeyboardLiveInsetTracker?
-        @objc func tick() { target?.tick() }
-    }
-
-    /// Start tracking using the given view's keyboardLayoutGuide. The view
-    /// must be in the window hierarchy (its window must be non-nil) for the
-    /// guide to reflect the real keyboard position. Call once on appear.
-    func start(hostView: UIView) {
-        guard displayLink == nil else { return }
-        self.hostView = hostView
-        let proxy = DisplayLinkProxy()
-        proxy.target = self
-        let link = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.tick))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-        Telemetry.breadcrumb("keyboard", "live tracker engaged")
-    }
-
-    /// Stop tracking, zero the inset, and remove the window-level host view.
-    func stop() {
-        displayLink?.invalidate()
-        displayLink = nil
-        hostView?.removeFromSuperview()
-        if liveInset != 0 { liveInset = 0 }
-    }
-
-    deinit {
-        displayLink?.invalidate()
-        hostView?.removeFromSuperview()
-    }
-
-    private func tick() {
-        guard let view = hostView, let window = view.window else { return }
-        // keyboardLayoutGuide.layoutFrame in the tracker view's coordinate
-        // space. Because the tracker view fills the window, its coordinate
-        // space equals window space. minY is the keyboard top edge.
-        let kbFrame = view.keyboardLayoutGuide.layoutFrame
-        let inset = max(0, window.bounds.maxY - kbFrame.minY - window.safeAreaInsets.bottom)
-        // Gate writes: only update Published when the value actually changed
-        // by more than half a point so 60fps ticks during an at-rest keyboard
-        // do not thrash SwiftUI's change detection.
-        if abs(inset - liveInset) > 0.5 {
-            liveInset = inset
-        }
-        // Telemetry breadcrumb: emit when crossing 0<=>positive boundary or
-        // shifting by >=20pt. Throttled so we never fire 60 times per second;
-        // allows remote diagnosis of resting inset correctness from Sentry.
-        let crossedZero = (inset == 0) != (lastLoggedInset == 0)
-        let bigShift = abs(inset - lastLoggedInset) >= 20
-        if lastLoggedInset < 0 || crossedZero || bigShift {
-            lastLoggedInset = inset
-            Telemetry.breadcrumb("keyboard", "live inset", data: ["inset": String(format: "%.1f", inset)])
-        }
-    }
-}
-
-/// Zero-size UIViewRepresentable. On first layout it installs a full-window
-/// tracking UIView into the key window so UIKeyboardLayoutGuide coordinates
-/// match window space exactly (the guide's layoutFrame is in the host view's
-/// local coordinate system -- a 0x0 view would give garbage coordinates).
-private struct KeyboardTrackerHost: UIViewRepresentable {
-    let tracker: KeyboardLiveInsetTracker
-
-    func makeUIView(context: Context) -> UIView {
-        // This placeholder is 0x0 and exists only to trigger updateUIView
-        // once the SwiftUI host is in the window hierarchy (so we can
-        // access the window and add the real tracker view there).
-        let placeholder = UIView()
-        placeholder.isUserInteractionEnabled = false
-        placeholder.backgroundColor = .clear
-        return placeholder
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard tracker.hostView == nil, let window = uiView.window else { return }
-        // Add a window-filling tracking view so keyboardLayoutGuide.layoutFrame
-        // is expressed in window coordinate space (its local == window space).
-        let host = UIView(frame: window.bounds)
-        host.isUserInteractionEnabled = false
-        host.backgroundColor = .clear
-        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        window.addSubview(host)
-
-        // UIKeyboardLayoutGuide.layoutFrame is only continuously updated when
-        // at least one ACTIVE Auto Layout constraint references the guide.
-        // Without a constraint the guide is "unengaged" at rest and returns
-        // the collapsed (bottom) frame, making keyboardInset collapse to ~0
-        // while the keyboard is presented at rest. Adding a zero-size invisible
-        // anchor view constrained to the guide's topAnchor keeps the guide
-        // engaged at all times (rest, animation, and interactive drag), so
-        // layoutFrame is always correct. The anchor is never drawn and has no
-        // user interaction.
-        let anchor = UIView()
-        anchor.isUserInteractionEnabled = false
-        anchor.backgroundColor = .clear
-        anchor.translatesAutoresizingMaskIntoConstraints = false
-        host.addSubview(anchor)
-        NSLayoutConstraint.activate([
-            anchor.bottomAnchor.constraint(equalTo: host.keyboardLayoutGuide.topAnchor),
-            anchor.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            anchor.widthAnchor.constraint(equalToConstant: 0),
-            anchor.heightAnchor.constraint(equalToConstant: 0),
-        ])
-
-        tracker.start(hostView: host)
-    }
-}
-
 // MARK: - ConduitChatView
 //
 // Conduit-faithful chat surface. Mirrors upstream's ConversationView:
@@ -275,20 +137,6 @@ extension ConduitUI {
         /// (composerMaxY ≤ keyboard top) or behind it — the missing signal that
         /// made the composer-behind-keyboard bug guesswork for many rounds.
         @State private var composerMaxY: CGFloat = 0
-        /// Points the composer cluster is manually lifted by. Driven by the
-        /// live `KeyboardLiveInsetTracker` (via `kbTracker.liveInset`) which
-        /// reads UIKeyboardLayoutGuide every display frame -- including during
-        /// interactive scroll-dismiss -- so the composer follows the keyboard
-        /// continuously rather than waiting for willShow/willHide notifications.
-        /// The .ignoresSafeArea(.keyboard) + manual-padding structure is kept
-        /// intact (avoids the 48pt undershoot that SwiftUI implicit avoidance
-        /// produced inside the phone tab ZStack).
-        @State private var keyboardInset: CGFloat = 0
-        /// Live keyboard frame tracker. UIKeyboardLayoutGuide continuously
-        /// updates its layoutFrame during interactive dismiss (which
-        /// notification-only tracking cannot observe), publishing the bottom
-        /// inset every display frame so `keyboardInset` follows the keyboard.
-        @StateObject private var kbTracker = KeyboardLiveInsetTracker()
         /// Pending-input event ids the user has already answered. Held at
         /// the ChatView level (not in the card's @State) so the locked /
         /// "Sent" state SURVIVES the card being recreated when new events
@@ -342,33 +190,6 @@ extension ConduitUI {
             // keyboard while the scroll content insets to keep the latest
             // message visible. The body just adds the voice sheet.
             messagesList
-                // Opt out of SwiftUI's implicit keyboard avoidance — we lift
-                // the composer manually via `keyboardInset` (see the state
-                // doc). The implicit path was unreliable inside the phone tab
-                // ZStack (intermittent 48pt undershoot).
-                .ignoresSafeArea(.keyboard, edges: .bottom)
-                // Install the live keyboard tracker. KeyboardTrackerHost's
-                // updateUIView fires once the SwiftUI host enters the window
-                // hierarchy; it then adds a full-window UIView to the key
-                // window so UIKeyboardLayoutGuide operates in window
-                // coordinates. Zero-size placeholder in the SwiftUI tree.
-                .background(
-                    KeyboardTrackerHost(tracker: kbTracker)
-                        .frame(width: 0, height: 0)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                )
-                // Sync the live tracker inset into keyboardInset every display
-                // frame. No withAnimation needed -- the CADisplayLink fires 60fps
-                // so the update IS the animation; the composer follows the
-                // keyboard in real time including during interactive dismiss.
-                // Guard on isActive: when the tab is inactive we force-zero
-                // keyboardInset and don't let the tracker override it before the
-                // keyboard has finished dismissing.
-                .onChange(of: kbTracker.liveInset) { _, inset in
-                    guard isActive else { return }
-                    keyboardInset = inset
-                }
                 // In-chat voice dictation. Mirrors the home-screen mic
                 // (device bug #26) — same VoiceDictationSheet — and brings
                 // the composer mic to parity with Android, which already
@@ -927,30 +748,6 @@ extension ConduitUI {
                                             }
                                     }
                                 )
-                                // Manual keyboard lift (see `keyboardInset`): the
-                                // view ignores the .keyboard safe area, so this
-                                // padding raises the composer to the keyboard top.
-                                .padding(.bottom, keyboardInset)
-                                // Fill ONLY the lifted band — the strip sitting
-                                // behind the keyboard's rounded top corners — with
-                                // the composer surface colour, bottom-aligned so it
-                                // covers the corner gap WITHOUT painting a hard
-                                // opaque rectangle over the composer's faded-in top
-                                // edge. The previous full-cluster `.background`
-                                // drew that flat seam across the chat ("the
-                                // rounded-corner fix doesn't look good" — device
-                                // feedback v0.0.81). The +24pt underlaps the
-                                // composer's own opaque bottom so there's no sliver
-                                // where the two meet; zero height when the keyboard
-                                // is down (keyboardInset == 0).
-                                .background(alignment: .bottom) {
-                                    if keyboardInset > 0 {
-                                        neon.surfaceSolid
-                                            .frame(maxWidth: .infinity)
-                                            .frame(height: keyboardInset + 24)
-                                            .allowsHitTesting(false)
-                                    }
-                                }
                         }
                     }
                 }
@@ -1115,7 +912,6 @@ extension ConduitUI {
                         // endEditing walk — now and next runloop — so a late
                         // re-present from the focus transition is caught too.
                         composerFocused = false
-                        keyboardInset = 0
                         dismissStrayKeyboard()
                         DispatchQueue.main.async { dismissStrayKeyboard() }
                     }
@@ -1129,10 +925,10 @@ extension ConduitUI {
                     logKeyboardDiag(focused ? "composer focused" : "composer blurred")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-                    // Inset is now driven by the live tracker (kbTracker.liveInset
-                    // via .onChange above) so applyKeyboardInset is not called here.
-                    // Keep the scroll-to-bottom so the latest message stays visible
-                    // when the keyboard appears, and keep the breadcrumb for Sentry.
+                    // Native avoidance (iOS 26+, FB13296535 fixed) handles the
+                    // composer lift. Keep the scroll-to-bottom so the latest
+                    // message stays visible when the keyboard appears, and keep
+                    // the breadcrumb for Sentry diagnostics.
                     let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
                     if autoScroll.shouldFollowNewMessage {
                         withAnimation(keyboardAnimation(note)) {
@@ -1141,13 +937,7 @@ extension ConduitUI {
                     }
                     logKeyboardDiag("keyboard will show", keyboardFrame: frame)
                 }
-                // willChangeFrame: the live tracker handles QuickType bar resizes
-                // continuously, so no manual applyKeyboardInset needed here.
-                // Keep the notification receive so logging can be added if needed.
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                    // Live tracker zeros liveInset as the keyboard descends off
-                    // screen. The breadcrumb is kept for Sentry diagnostics.
                     logKeyboardDiag("keyboard will hide")
                 }
             }
