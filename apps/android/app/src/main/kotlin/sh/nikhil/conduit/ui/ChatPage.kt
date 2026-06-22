@@ -1328,6 +1328,10 @@ internal fun mergedConversation(
  *      preserved.
  */
 internal fun dropPendingInputEchoes(items: List<ConversationItem>): List<ConversationItem> {
+    // Fast path: no pending-input cards → nothing to dedup or echo-drop. Return
+    // the SAME list reference unchanged (callers rely on referential identity:
+    // mergedConversation's empty-chatLog path and MergedConversationTest).
+    if (items.none { it.kind == "pending_input" }) return items
     // --- Pass 1: pick the winning pending_input per normalized key -----------
     // Key = stripped content (sentinel + resolved-marker lines removed) +
     //       sorted options joined with US (unit separator). This makes the
