@@ -41,6 +41,11 @@ fun AppRoot(
     // Fix 1: track which entry intent opened the manual onboarding sheet.
     var onboardingEntry by remember { mutableStateOf(FeatureFlags.OnboardingEntry.replay) }
     var showAgentPicker by remember { mutableStateOf(false) }
+    // Stashed prompt from the command-palette "Run on box" path: the typed text
+    // is held here until the agent picker consumes it as initialPrompt, seeding
+    // the new session with that text as its first message. Cleared when the
+    // agent picker dismisses. Mirrors iOS voicePrompt.
+    var paletteInitialPrompt by remember { mutableStateOf<String?>(null) }
     var showSearch by remember { mutableStateOf(false) }
     var showVoice by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
@@ -261,7 +266,11 @@ fun AppRoot(
         AgentPickerSheet(
             store = store,
             headerNote = null,
-            onDismiss = { showAgentPicker = false },
+            initialPrompt = paletteInitialPrompt,
+            onDismiss = {
+                showAgentPicker = false
+                paletteInitialPrompt = null
+            },
         )
     }
 
@@ -272,13 +281,35 @@ fun AppRoot(
     if (showCommandPalette) {
         // Cmd-K quick switcher. Reuses the same new-session / add-server /
         // select-session paths the rest of the app uses; "Fan out a task"
-        // chains into the Fan-out surface.
+        // chains into the Fan-out surface. "Run on box" seeds a new session
+        // with the typed text as the first message via the agent picker, mirroring
+        // iOS PR #719 (ConduitHomeView pendingRunOnBox + voicePrompt pattern).
         CommandPaletteScreen(
             store = store,
             onNewSession = { showCommandPalette = false; onNewSession() },
             onPairBox = { showCommandPalette = false; showAddServer = true },
             onOpenSession = { id -> showCommandPalette = false; store.select(id) },
             onFanOut = { showCommandPalette = false; showFanOut = true },
+            onRunOnBox = { text ->
+                // CommandPaletteScreen always calls onDismiss() before onRunOnBox(),
+                // so the palette is already in its dismiss-animation by the time this
+                // fires. Stash the prompt and open the agent picker directly -- no
+                // extra deferral needed on Android (no SwiftUI double-sheet issue).
+                val trimmed = text.trim()
+                if (trimmed.isNotEmpty()) {
+                    Telemetry.breadcrumb(
+                        "palette",
+                        "run_on_box_tapped",
+                        mapOf("has_text" to "true"),
+                    )
+                    if (harness is HarnessState.Live || harness is HarnessState.Linked) {
+                        paletteInitialPrompt = trimmed
+                        showAgentPicker = true
+                    } else {
+                        showAddServer = true
+                    }
+                }
+            },
             onDismiss = { showCommandPalette = false },
         )
     }
