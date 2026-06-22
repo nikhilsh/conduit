@@ -2145,6 +2145,16 @@ func (m *Manager) GetOrCreateWithOptions(id, assistant string, opts CreateOption
 			return nil, false, err
 		}
 	}
+	// Tombstone check: refuse to resurrect an id whose directory was
+	// previously archived by DeleteSession. The app's reconnect/resume
+	// path calls GetOrCreate with the same id it held; without this guard
+	// the fall-through below would create a blank new session reusing the
+	// archived id. Genuinely new sessions and Found-Sessions adopt/fork
+	// paths both use fresh UUIDs, so they never hit this check.
+	if m.sessionArchived(id) {
+		log.Printf("session %s: refusing reopen — archived", id)
+		return nil, false, errSessionArchived
+	}
 	adapter, err := m.registry.Get(assistant)
 	if err != nil {
 		return nil, false, err

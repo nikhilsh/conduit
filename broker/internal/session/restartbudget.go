@@ -31,6 +31,13 @@ const (
 // the ws/api layer maps it to a "session_gave_up" error.
 var errSessionGaveUp = errors.New("session gave up after repeated agent failures")
 
+// errSessionArchived marks a reopen refused because the session was
+// previously archived (deleted by the user). GetOrCreateWithOptions
+// returns this instead of creating a fresh session under the same id;
+// the ws/api layer maps it to HTTP 410 with code "session_archived" so
+// clients can drop the session from their list instead of retrying.
+var errSessionArchived = errors.New("session archived")
+
 // recordAgentExit updates the consecutive-fast-exit budget when the
 // agent's PTY drains to EOF. Called by drain() right before Close(), so
 // the new count lands in the meta.json that Close persists. Intentional

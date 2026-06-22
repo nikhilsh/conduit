@@ -16,6 +16,17 @@ func (m *Manager) sessionOnDisk(id string) bool {
 	return err == nil
 }
 
+// sessionArchived reports whether id has a canonical archived-sessions
+// directory (i.e. was deleted via DeleteSession). It checks only the
+// canonical `archived-sessions/<id>` path; timestamped cold-storage
+// copies (`archived-sessions/<id>.<ts>`) are not considered here — only
+// the canonical path is written by the first DeleteSession, so its
+// presence is the reliable tombstone. Caller must hold m.mu.
+func (m *Manager) sessionArchived(id string) bool {
+	info, err := os.Stat(filepath.Join(m.conduitRoot, archivedSessionsDirName, id))
+	return err == nil && info.IsDir()
+}
+
 func (m *Manager) recoverSessionLocked(id string) (*Session, error) {
 	metaPath := filepath.Join(m.conduitRoot, "sessions", id, "meta.json")
 	data, err := os.ReadFile(metaPath)

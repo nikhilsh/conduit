@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,5 +103,116 @@ func TestDeleteSessionIdempotent(t *testing.T) {
 	}
 	if err := m.DeleteSession(sess.ID); err != nil {
 		t.Fatalf("second DeleteSession should be a no-op, got: %v", err)
+	}
+}
+
+// TestArchivedSessionRefusesReopen verifies the tombstone check: after a
+// session is deleted (archived), any attempt to reopen it via
+// GetOrCreateWithOptions returns errSessionArchived and does NOT create a
+// fresh sessions/<id> directory or add the id to the live map.
+func TestArchivedSessionRefusesReopen(t *testing.T) {
+	root := testRoot(t)
+	reg := testRegistry(t, root, map[string]string{
+		"claude": idleScript("tombstone-ready"),
+	})
+	m := NewManager(reg)
+	t.Cleanup(m.Close)
+
+	const id = "session-tombstone"
+	sess, created, err := m.GetOrCreate(id, "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	if !created {
+		t.Fatal("expected new session")
+	}
+	waitForOutput(t, sess, "tombstone-ready")
+
+	// Archive it via DeleteSession.
+	if err := m.DeleteSession(id); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	// Canonical archived-sessions/<id> dir must exist.
+	archivedDir := filepath.Join(root, ".conduit", archivedSessionsDirName, id)
+	if _, err := os.Stat(archivedDir); err != nil {
+		t.Fatalf("archived dir missing after delete: %v", err)
+	}
+
+	// Reopen attempt must be refused with errSessionArchived.
+	_, _, err = m.GetOrCreate(id, "claude")
+	if !errors.Is(err, errSessionArchived) {
+		t.Fatalf("reopen archived session: got err %v, want errSessionArchived", err)
+	}
+
+	// sessions/<id> must NOT have been re-created.
+	activeDir := filepath.Join(root, ".conduit", "sessions", id)
+	if _, err := os.Stat(activeDir); !os.IsNotExist(err) {
+		t.Fatalf("active session dir must not be re-created after archive refusal, stat err=%v", err)
+	}
+
+	// The session must NOT appear in the live map.
+	if _, ok := m.Get(id); ok {
+		t.Fatal("archived session must not be in live map after reopen refusal")
+	}
+}
+
+// TestFreshSessionUnaffectedByTombstone verifies that a brand-new id
+// (never seen before) still creates normally — the tombstone check must
+// not block genuinely new sessions.
+func TestFreshSessionUnaffectedByTombstone(t *testing.T) {
+	root := testRoot(t)
+	reg := testRegistry(t, root, map[string]string{
+		"claude": idleScript("fresh-ok"),
+	})
+	m := NewManager(reg)
+	t.Cleanup(m.Close)
+
+	_, created, err := m.GetOrCreate("session-brand-new", "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate brand-new: %v", err)
+	}
+	if !created {
+		t.Fatal("expected brand-new session to be created")
+	}
+}
+
+// TestOnDiskRecoverableSessionStillRecovers verifies that an on-disk
+// recoverable session (in sessions/, not archived) still recovers via the
+// normal path — the tombstone check must not fire for non-archived ids.
+func TestOnDiskRecoverableSessionStillRecovers(t *testing.T) {
+	root := testRoot(t)
+	reg := testRegistry(t, root, map[string]string{
+		"claude": idleScript("recover-ok"),
+	})
+	m := NewManager(reg)
+	t.Cleanup(m.Close)
+
+	const id = "session-recover"
+	sess, _, err := m.GetOrCreate(id, "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	waitForOutput(t, sess, "recover-ok")
+	if err := sess.Checkpoint("before-recover"); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	// Simulate a broker restart: close the manager without deleting the
+	// session so the session dir stays in sessions/ (recoverable).
+	m.Close()
+
+	m2 := NewManager(reg)
+	t.Cleanup(m2.Close)
+
+	sess2, created, err := m2.GetOrCreate(id, "claude")
+	if err != nil {
+		t.Fatalf("GetOrCreate after restart: %v", err)
+	}
+	if created {
+		t.Fatal("expected session to be recovered (not freshly created)")
+	}
+	if sess2 == nil {
+		t.Fatal("recovered session is nil")
 	}
 }
