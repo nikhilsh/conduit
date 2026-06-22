@@ -1072,6 +1072,13 @@ func (s *Session) SendChat(msg string) bool {
 	if ask := s.takePendingAsk(); ask != nil {
 		if line, encErr := encodeAskAnswer(ask.requestID, ask.input, agentMsg); encErr == nil {
 			if err := ask.cp.SendRaw(line); err == nil {
+				// Persist + re-publish the resolved card so the
+				// answered/selected state survives close+reopen and rides
+				// across devices (the answer was delivered to the agent, but
+				// until now the answered state lived only in client @State).
+				// Record the user-facing `msg` (the tapped option / typed
+				// text), not the upload-rewritten agentMsg.
+				s.recordPendingResolution(ask, msg, true)
 				return true
 			}
 			// stdin gone (agent died holding the question) — fall
@@ -1241,6 +1248,10 @@ func (s *Session) ResolveApproval(decision string) bool {
 			if line, encErr := encodeAskAnswer(cur.requestID, cur.input, label); encErr == nil {
 				_ = cur.cp.SendRaw(line)
 			}
+			// Persist + re-publish the resolved card (out-of-band answer:
+			// ConduitApprovalsView / lock-screen intent) so the answered
+			// state survives close+reopen, same as the SendChat path.
+			s.recordPendingResolution(cur, label, true)
 			return true
 		}
 	}

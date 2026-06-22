@@ -59,6 +59,13 @@ func (l *convLogger) appendRaw(payload []byte) {
 			return
 		}
 	}
+	l.writeLine(payload)
+}
+
+// writeLine appends one already-encoded JSON object as a JSONL line under
+// the logger mutex. Shared by appendRaw and appendResolvedPendingInput so
+// the file-handling stays in one place.
+func (l *convLogger) writeLine(payload []byte) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// The session dir is created elsewhere for scrollback/meta, but be
@@ -72,6 +79,33 @@ func (l *convLogger) appendRaw(payload []byte) {
 	// One JSON object per line. payload is already compact JSON.
 	_, _ = f.Write(payload)
 	_, _ = f.Write([]byte("\n"))
+}
+
+// appendResolvedPendingInput persists a RESOLVED pending-input card (an
+// answered or timed-out AskUserQuestion). Unlike a live unanswered card —
+// which appendRaw deliberately skips because it must not replay as a
+// tappable "needs input" prompt — a resolved card IS terminal and MUST
+// persist, so the app can rehydrate the answered/selected state after a
+// close+reopen (and across devices). The content already carries the
+// pendingResolvedMarker, the app's signal to render it answered; we write
+// it directly via writeLine, bypassing appendRaw's sentinel skip. No-op on
+// a nil logger / empty path / empty content.
+func (l *convLogger) appendResolvedPendingInput(content, ts string) {
+	if l == nil || l.path == "" || content == "" {
+		return
+	}
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	b, err := json.Marshal(ConvEntry{
+		Role:    "assistant",
+		Content: content,
+		Ts:      ts,
+	})
+	if err != nil {
+		return
+	}
+	l.writeLine(b)
 }
 
 // appendUser records a user-sent prompt. The publish stream only carries

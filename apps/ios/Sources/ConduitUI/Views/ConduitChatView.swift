@@ -618,10 +618,21 @@ extension ConduitUI {
                                         event: event,
                                         isContinuation: continuation(in: rows, at: idx, role: event.role),
                                         sessionID: session.id,
-                                        pendingAnswered: answeredPendingIDs.contains(event.id)
+                                        // Answered state is now AUTHORITATIVE from the
+                                        // transcript (persistedResolution): the broker
+                                        // records the resolution into the conversation
+                                        // log, so a tapped option still shows selected
+                                        // after the app is closed+reopened and across
+                                        // devices. The ephemeral local @State (the
+                                        // answeredPending* sets) stays only as the
+                                        // instant on-tap feedback layer, superseded by
+                                        // the persisted state on reload.
+                                        pendingAnswered: persistedResolution(event)?.answered == true
+                                            || answeredPendingIDs.contains(event.id)
                                             || answeredPendingFingerprints.contains(pendingFingerprint(event))
                                             || store.resolvedPendingInputIDs.contains(event.id),
-                                        answeredText: answeredPendingText[pendingFingerprint(event)],
+                                        answeredText: answeredPendingText[pendingFingerprint(event)]
+                                            ?? persistedResolution(event)?.answer,
                                         streamRevision: streamRevision(for: event.id),
                                         appearanceRevision: appearanceRevision,
                                         onQuickReply: { reply in
@@ -1055,6 +1066,22 @@ extension ConduitUI {
             let opts = event.pendingOptions.sorted().joined(separator: ",")
             let prompt = event.content.trimmingCharacters(in: .whitespacesAndNewlines)
             return "\(prompt)|\(opts)"
+        }
+
+        /// Authoritative answered-state for a pending-input event, decoded
+        /// from the broker's persisted resolution marker in the transcript.
+        /// nil when the event is not a pending-input card or carries no
+        /// resolution (unanswered, or a legacy transcript). This is what makes
+        /// a tapped option still render selected after the app is closed and
+        /// reopened — the state used to live only in ephemeral SwiftUI @State.
+        private func persistedResolution(_ event: ConversationItem)
+            -> ConduitUI.ChatViewModel.PendingResolution?
+        {
+            guard event.kind == "pending_input" else { return nil }
+            guard let res = ConduitUI.ChatViewModel.parsePendingResolution(event.content),
+                  res.answered
+            else { return nil }
+            return res
         }
 
         // MARK: Suggested quick-replies

@@ -146,17 +146,66 @@ extension ConduitUI {
         /// fallback path. Byte-identical to the broker constant.
         static let pendingInputSentinel = "[[conduit:needs-input]]"
 
+        /// The leading token of the resolution-marker line the broker
+        /// inserts into a PERSISTED, already-answered pending-input card
+        /// (the line right after the sentinel), carrying a JSON tail like
+        /// `[[conduit:resolved]]{"answered":true,"answer":"Merge now"}`.
+        /// Byte-identical to the broker's `pendingResolvedMarker`. The card
+        /// rehydrates its answered/selected state from this on reopen — that
+        /// state used to live only in ephemeral SwiftUI @State and was lost
+        /// on reload. The marker line is filtered out of the visible question
+        /// text by `parsePendingQuestions`.
+        static let pendingResolvedMarker = "[[conduit:resolved]]"
+
+        /// The resolution carried by a persisted pending-input card.
+        struct PendingResolution: Equatable {
+            /// True when the user actually answered (a tap / typed text);
+            /// false when the ask timed out or was resolved without input.
+            let answered: Bool
+            /// The chosen option text (nil for a timed-out / no-answer
+            /// resolution). Drives "Sent · <answer>" + the selected-row
+            /// highlight after reopen.
+            let answer: String?
+        }
+
+        /// Decode the resolution from a persisted pending-input card's
+        /// content by scanning for the `pendingResolvedMarker` line. Returns
+        /// nil when no marker is present — an unanswered card, or a legacy
+        /// transcript written before this feature (backward-compatible: such
+        /// a card renders unanswered exactly as before). Mirrors the broker's
+        /// `parsePendingResolution`.
+        static func parsePendingResolution(_ content: String) -> PendingResolution? {
+            for rawLine in content.components(separatedBy: "\n") {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                guard line.hasPrefix(pendingResolvedMarker) else { continue }
+                let json = String(line.dropFirst(pendingResolvedMarker.count))
+                guard let data = json.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { return nil }
+                let answered = (obj["answered"] as? Bool) ?? false
+                let answer = (obj["answer"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                return PendingResolution(answered: answered, answer: answer)
+            }
+            return nil
+        }
+
         /// Recover per-question groups from a pending-input `content` body.
         /// Blocks are separated by blank lines; within a block the leading
         /// prose is the question and the numbered/bulleted lines are its
         /// options. A trailing multi-select marker on the prompt is
         /// stripped into `multiSelect`. Pure + unit-tested.
         static func parsePendingQuestions(_ content: String) -> [PendingQuestion] {
-            // Defensively drop the broker sentinel line if it survived to
-            // the client (core strips it on the typed path).
+            // Defensively drop the broker sentinel line AND the resolution
+            // marker line if either survived to the client (core strips both
+            // on the typed/live path; the HTTP-rehydration path keeps the
+            // marker so the card's answered state can be recovered — but the
+            // marker must never render as visible question prose).
             let content = content
                 .components(separatedBy: "\n")
-                .filter { $0.trimmingCharacters(in: .whitespaces) != pendingInputSentinel }
+                .filter {
+                    let t = $0.trimmingCharacters(in: .whitespaces)
+                    return t != pendingInputSentinel && !t.hasPrefix(pendingResolvedMarker)
+                }
                 .joined(separator: "\n")
             var result: [PendingQuestion] = []
             for block in content.components(separatedBy: "\n\n") {

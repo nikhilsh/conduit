@@ -505,6 +505,61 @@ struct StripPendingSentinelTests {
     }
 }
 
+/// Fresh-reload rehydration: a transcript fetched over HTTP (which bypasses
+/// the Rust classifier) for a RESOLVED AskUserQuestion must map to a
+/// `pending_input` ConversationItem whose `content` STILL carries the
+/// resolution marker — so the view's `persistedResolution(event)` decodes
+/// `answered=true` + the chosen option with NO local @State seeded. This is
+/// the close+reopen scenario: the answered/selected state used to live only
+/// in ephemeral SwiftUI @State and was lost on reload.
+@Suite("SessionStore.mapRemoteItem — persisted answered pending-input rehydrates from transcript")
+struct PendingInputRehydrationTests {
+    private let sentinel = "[[conduit:needs-input]]"
+    private let marker = "[[conduit:resolved]]"
+
+    private func raw(_ content: String) -> RemoteConversationItem {
+        RemoteConversationItem(role: "assistant", content: content, ts: "2026-06-22T12:00:00Z", files: nil)
+    }
+
+    @Test func answeredCardRehydratesSelectedOption() {
+        let content = "\(sentinel)\n"
+            + #"\#(marker){"answered":true,"answer":"Merge now"}"# + "\n"
+            + "Proceed with the merge?\n1. Merge now\n2. Hold off"
+        let item = SessionStore.mapRemoteItem(
+            raw(content), sessionID: "s-1", idPrefix: "saved", index: 0
+        )
+        // Classified as the answered card (not a plain bubble).
+        #expect(item.kind == "pending_input")
+        // Marker survives in content for the view to decode; sentinel stripped.
+        #expect(!item.content.contains(sentinel))
+        #expect(item.content.contains(marker))
+        // Exactly what the view's persistedResolution(event) does — no @State:
+        // authoritative answered=true + the chosen option, after a fresh reload.
+        let res = ConduitUI.ChatViewModel.parsePendingResolution(item.content)
+        #expect(res?.answered == true)
+        #expect(res?.answer == "Merge now")
+        // The card's primary option source (parsePendingQuestions) recovers the
+        // numbered options + question prose from the surviving content.
+        let qs = ConduitUI.ChatViewModel.parsePendingQuestions(item.content)
+        #expect(qs.count == 1)
+        #expect(qs[0].prompt == "Proceed with the merge?")
+        #expect(qs[0].options == ["Merge now", "Hold off"])
+    }
+
+    @Test func legacyCardWithoutMarkerRehydratesUnanswered() {
+        // Backward-compat: a transcript written before this feature has no
+        // resolution marker — it rehydrates as an unanswered pending card.
+        let content = "\(sentinel)\nProceed?\n1. Yes\n2. No"
+        let item = SessionStore.mapRemoteItem(
+            raw(content), sessionID: "s-1", idPrefix: "saved", index: 0
+        )
+        #expect(item.kind == "pending_input")
+        #expect(ConduitUI.ChatViewModel.parsePendingResolution(item.content) == nil)
+        let qs = ConduitUI.ChatViewModel.parsePendingQuestions(item.content)
+        #expect(qs.first?.options == ["Yes", "No"])
+    }
+}
+
 /// `session-reconcile-broker-truth` — pins the wire contract for the
 /// broker's authoritative live-session list (`GET /api/sessions`,
 /// `broker/internal/session.LiveSessionInfo`). A careless rename of a
