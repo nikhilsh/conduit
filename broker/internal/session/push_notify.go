@@ -16,6 +16,17 @@ import (
 // jsonUnmarshal is an alias so tests can intercept it if needed.
 var jsonUnmarshal = json.Unmarshal
 
+// genuineStopDelay is how long to wait after a turn-end hook fires before
+// concluding it was a genuine stop (not a mid-chain idle). If a new turn starts
+// within this window the timer is cancelled and no push is sent.
+const genuineStopDelay = 20 * time.Second
+
+// timerAfterFunc is an injectable seam for time.AfterFunc, used to drive the
+// genuineStopDelay timer deterministically in tests. Mirrors the pushNow pattern.
+var timerAfterFunc = func(d time.Duration, f func()) *time.Timer {
+	return time.AfterFunc(d, f)
+}
+
 // pushNotifyState is the per-session push-notification state:
 // the notifier, the identity to notify under, and a debounce latch
 // so rapid idle-transitions don't flood the device.
@@ -44,6 +55,10 @@ type pushNotifyState struct {
 	// lastInput records when we last fired a pending-input push, for the
 	// same coalescing reason.
 	lastInput time.Time
+	// pendingStopTimer is the delayed-send timer armed by maybeNotifyTurnEnd.
+	// When it fires (after genuineStopDelay with no intervening turn activity),
+	// the push is sent and the LA is ended. Guarded by mu.
+	pendingStopTimer *time.Timer
 }
 
 // idlePushWindow is the minimum time between two consecutive turn-end pushes
@@ -100,11 +115,24 @@ func (s *Session) notifyTargeted(ctx context.Context, n push.Notifier, identity 
 	return n.Notify(ctx, identity, payload)
 }
 
+// cancelPendingTurnEndPush stops and discards any pending genuine-stop timer.
+// Must be called when a new turn starts so we don't spuriously push after a
+// transient idle. Guards under pushState.mu.
+func (s *Session) cancelPendingTurnEndPush() {
+	s.pushState.mu.Lock()
+	if s.pushState.pendingStopTimer != nil {
+		s.pushState.pendingStopTimer.Stop()
+		s.pushState.pendingStopTimer = nil
+		log.Printf("push: cancelled pending turn-end push session=%s", s.ID)
+	}
+	s.pushState.mu.Unlock()
+}
+
 // maybeNotifyTurnEnd fires a push notification when a turn just completed
 // AND no owner-device client is currently attached to this session.
-// It debounces: at most one push per idlePushWindow per session. Safe for
-// concurrent callers (the accumulateUsage / onTurnEnd sites may race with
-// a re-attaching client).
+// Instead of sending immediately, it arms a genuineStopDelay timer. If a new
+// turn starts before the timer fires, cancelPendingTurnEndPush cancels it.
+// The LA "end" is deferred to the genuine-stop confirmation as well.
 //
 // Gate semantics (Option A, §3 of PLAN-SSH-CHAT-TAKEOVER.md):
 //   - Legacy (OwnerDeviceID == ""): suppress when SubscriberCount() > 0.
@@ -113,8 +141,17 @@ func (s *Session) notifyTargeted(ctx context.Context, n push.Notifier, identity 
 //     is currently connected. A non-owner subscriber (e.g. the SSH CLI)
 //     carries no matching device_id and is invisible to this gate.
 func (s *Session) maybeNotifyTurnEnd() {
-	// LA update: always emit (not gated on subscriber count) with event:"end".
-	s.notifyLATurnEnd()
+	// Skip trivial turns: if the last assistant message preview is the fallback
+	// "Turn complete" (no real text), do not schedule a push.
+	preview := s.lastAssistantMessagePreview(1500)
+	if preview == "Turn complete" {
+		// Still might want to fire LA end if timer was already armed — but a
+		// trivial turn means nothing meaningful happened. Just cancel any pending
+		// timer and return: the LA will end via notifyLATurnEnd when the session
+		// actually closes or on the next real turn's genuine-stop.
+		log.Printf("push: turn-end suppressed (no assistant text) session=%s", s.ID)
+		return
+	}
 
 	if s.ownerPresenceGate() {
 		return // owner device is watching — don't alert
@@ -126,28 +163,106 @@ func (s *Session) maybeNotifyTurnEnd() {
 		s.pushState.mu.Unlock()
 		return
 	}
+
+	// Stop any existing pending timer before re-arming.
+	if s.pushState.pendingStopTimer != nil {
+		s.pushState.pendingStopTimer.Stop()
+		s.pushState.pendingStopTimer = nil
+	}
+
+	sessionID := s.ID
+	s.pushState.pendingStopTimer = timerAfterFunc(genuineStopDelay, func() {
+		s.sendGenuineStopPush(n, id, sessionID)
+	})
+	log.Printf("push: turn-end armed genuine-stop timer session=%s delay=%s", s.ID, genuineStopDelay)
+	s.pushState.mu.Unlock()
+}
+
+// sendGenuineStopPush is called when the genuineStopDelay timer fires, meaning
+// no new turn started within the window. It sends the push notification and
+// fires the LA end.
+func (s *Session) sendGenuineStopPush(n push.Notifier, id, sessionID string) {
+	// Clear the timer reference under the lock.
+	s.pushState.mu.Lock()
+	s.pushState.pendingStopTimer = nil
 	now := pushNow()
 	if now.Sub(s.pushState.lastIdle) < idlePushWindow {
-		// Within the debounce window — coalesce.
+		// Within debounce window — coalesce.
 		s.pushState.mu.Unlock()
+		log.Printf("push: genuine-stop debounced session=%s", sessionID)
 		return
 	}
 	s.pushState.lastIdle = now
 	s.pushState.mu.Unlock()
 
+	// LA end: the stop is genuine.
+	s.notifyLATurnEnd()
+
 	title := s.pushTitleForSession()
-	body := s.lastAssistantMessagePreview(100)
-	log.Printf("push: turn-end session=%s title=%q body=%q", s.ID, title, body)
+	body := s.aiRewriteBody(preview(s, 1500), 100)
+	log.Printf("push: genuine-stop send session=%s title=%q body=%q", sessionID, title, body)
 	payload := push.Payload{
 		Title:     title,
 		Body:      body,
-		SessionID: s.ID,
+		SessionID: sessionID,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := s.notifyTargeted(ctx, n, id, payload); err != nil {
-		fmt.Fprintf(os.Stderr, "push: turn-end notify session=%s: %v\n", s.ID, err)
+		fmt.Fprintf(os.Stderr, "push: turn-end notify session=%s: %v\n", sessionID, err)
 	}
+}
+
+// preview returns the last assistant message preview up to maxLen runes.
+// Thin wrapper so sendGenuineStopPush can call it without duplicating the read.
+func preview(s *Session, maxLen int) string {
+	return s.lastAssistantMessagePreview(maxLen)
+}
+
+// aiRewriteBody uses the session's aiGen provider (if set) to rewrite the
+// last-assistant-message text as a concise push notification body. On any
+// error or timeout it falls back to lastAssistantMessagePreview(fallbackLen).
+func (s *Session) aiRewriteBody(lastAssistantText string, fallbackLen int) string {
+	s.mu.Lock()
+	gen := s.aiGen
+	s.mu.Unlock()
+
+	fallback := func() string {
+		return truncatePushBody(lastAssistantText, fallbackLen)
+	}
+
+	if gen == nil || strings.TrimSpace(lastAssistantText) == "" {
+		return fallback()
+	}
+
+	const system = "Rewrite the agent's message as ONE clear phone notification line. " +
+		"At most 10 words. Plain text only, no markdown, no quotes. " +
+		"Present tense. Describe what was done or said."
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := gen.Complete(ctx, system, lastAssistantText, 24)
+	if err != nil {
+		log.Printf("push: aiRewrite error session=%s: %v (using fallback)", s.ID, err)
+		return fallback()
+	}
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return fallback()
+	}
+	return truncatePushBody(result, fallbackLen)
+}
+
+// stopPendingTimerOnClose stops any pending genuine-stop timer so it can't fire
+// after the session is torn down. Called from the session close path.
+func (s *Session) stopPendingTimerOnClose() {
+	s.pushState.mu.Lock()
+	if s.pushState.pendingStopTimer != nil {
+		s.pushState.pendingStopTimer.Stop()
+		s.pushState.pendingStopTimer = nil
+	}
+	s.pushState.mu.Unlock()
 }
 
 // maybeNotifyPendingInput fires a push notification when the agent is now
@@ -165,6 +280,9 @@ func (s *Session) maybeNotifyTurnEnd() {
 func (s *Session) maybeNotifyPendingInput() {
 	// LA update: emit for pending-input (choice/permission interrupt).
 	s.notifyLAPendingInput()
+
+	// A pending-input supersedes any pending genuine-stop timer.
+	s.cancelPendingTurnEndPush()
 
 	if s.ownerPresenceGate() {
 		return
@@ -378,10 +496,35 @@ func (s *Session) SetLAAlertRegistry(reg *push.Registry) {
 	s.laState.mu.Unlock()
 }
 
+// notifyLATurnStart is called when a new turn BEGINS. It sets the LA status to
+// "running", records turnStartedAt, and emits an immediate LA update (which
+// push-to-starts if backgrounded). This ensures the Live Activity card is up
+// for the whole turn, not just after the first tool/command fires.
+func (s *Session) notifyLATurnStart() {
+	s.laState.mu.Lock()
+	if s.laState.status != "exited" {
+		s.laState.status = "running"
+	}
+	// Reset turnStartedAt for each new turn.
+	s.laState.turnStartedAt = pushNow()
+	// Clear any stale tool/command/interrupt so the card shows "running" cleanly.
+	s.laState.currentTool = ""
+	s.laState.currentCommand = ""
+	s.laState.interruptKind = ""
+	s.laState.prompt = ""
+	s.laState.optionCount = 0
+	s.laState.mu.Unlock()
+	log.Printf("push: LA turn-start session=%s", s.ID)
+	s.emitLAUpdateImmediate("update")
+}
+
 // SetLACurrentTool records a tool change and fires a debounced LA update.
 // Safe to call from any goroutine. No-op if no LA token is registered for
 // the session.
 func (s *Session) SetLACurrentTool(toolName string) {
+	// Cancel any pending genuine-stop timer — activity means the turn is live.
+	s.cancelPendingTurnEndPush()
+
 	s.laState.mu.Lock()
 	s.laState.currentTool = toolName
 	s.laState.currentCommand = ""
@@ -402,6 +545,9 @@ func (s *Session) SetLACurrentTool(toolName string) {
 // SetLACurrentCommand records a shell command change and fires a debounced LA update.
 // Safe to call from any goroutine.
 func (s *Session) SetLACurrentCommand(cmd string) {
+	// Cancel any pending genuine-stop timer — activity means the turn is live.
+	s.cancelPendingTurnEndPush()
+
 	s.laState.mu.Lock()
 	s.laState.currentCommand = cmd
 	s.laState.currentTool = ""
@@ -415,8 +561,9 @@ func (s *Session) SetLACurrentCommand(cmd string) {
 	s.maybeEmitLAUpdate()
 }
 
-// notifyLATurnEnd is called from maybeNotifyTurnEnd to emit an LA "end" event.
-// Not gated on subscriber count (LA card tracks even when app is foregrounded-but-locked).
+// notifyLATurnEnd is called from sendGenuineStopPush (when the genuine-stop
+// timer fires) to emit an LA "end" event. Not gated on subscriber count
+// (LA card tracks even when app is foregrounded-but-locked).
 func (s *Session) notifyLATurnEnd() {
 	s.laState.mu.Lock()
 	s.laState.status = "exited"

@@ -306,6 +306,12 @@ type Session struct {
 	// used by the external-resume recap one-shot (`claude --resume … --print`).
 	// nil/"" → recap falls back to the deterministic note.
 	claudeBinary func() string
+
+	// aiGen is the per-session AI-niceties provider (nil when no creds).
+	// Stored at startChatBackend time so push_notify.go can use it for
+	// AI-rewritten notification bodies without needing a spawnRequest.
+	// Guarded by mu.
+	aiGen aiGenProvider
 }
 
 func New(id string, adapter agents.Adapter) (*Session, error) {
@@ -712,6 +718,11 @@ func (s *Session) startChatBackend(
 		return
 	}
 
+	// Store aiGen on the session so push_notify.go can rewrite notification bodies.
+	s.mu.Lock()
+	s.aiGen = aiGen
+	s.mu.Unlock()
+
 	// Generic, backend-agnostic hook wiring (push notifications). A backend
 	// opts in by satisfying the optional interface; absent ones are skipped.
 	// The session has the notifier by the time startChatBackend runs.
@@ -720,6 +731,9 @@ func (s *Session) startChatBackend(
 	}
 	if h, ok := res.backend.(pendingInputHooker); ok {
 		h.setPendingInputHook(s.maybeNotifyPendingInput)
+	}
+	if h, ok := res.backend.(turnStartHooker); ok {
+		h.setTurnStartHook(s.notifyLATurnStart)
 	}
 
 	s.mu.Lock()
@@ -736,6 +750,9 @@ func (s *Session) startChatBackend(
 				}
 				if h, ok := fresh.(pendingInputHooker); ok {
 					h.setPendingInputHook(s.maybeNotifyPendingInput)
+				}
+				if h, ok := fresh.(turnStartHooker); ok {
+					h.setTurnStartHook(s.notifyLATurnStart)
 				}
 			}
 			return fresh, ferr

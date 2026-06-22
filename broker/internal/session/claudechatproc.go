@@ -35,6 +35,10 @@ type chatProcess struct {
 	// markTurnActive(false)). Used by the session to fire push notifications
 	// when no client is attached. Set once at wiring time.
 	onTurnIdle func()
+	// onTurnStart, when non-nil, fires when a turn begins (Send is called).
+	// Used to start the Live Activity card as early as possible.
+	// Set once at wiring time.
+	onTurnStart func()
 }
 
 // errChatProcessClosed is returned by Send after the process has been
@@ -138,6 +142,14 @@ func (c *chatProcess) setTurnIdleHook(fn func()) {
 	c.mu.Unlock()
 }
 
+// setTurnStartHook installs the turn-start callback (turnStartHooker interface).
+// Called once at wiring time before any Send.
+func (c *chatProcess) setTurnStartHook(fn func()) {
+	c.mu.Lock()
+	c.onTurnStart = fn
+	c.mu.Unlock()
+}
+
 // Send writes the user's composer text to the agent as one stream-json
 // `user` event. Safe for concurrent callers.
 func (c *chatProcess) Send(text string) error {
@@ -146,16 +158,23 @@ func (c *chatProcess) Send(text string) error {
 		return err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return errChatProcessClosed
 	}
 	if _, err = c.stdin.Write(line); err != nil {
+		c.mu.Unlock()
 		return err
 	}
 	// Latch the turn as in flight; the stream pump clears it on the
 	// turn-end `result` (see startChatProcess's onTurnEnd) or on EOF/Close.
 	c.turnActive = true
+	startHook := c.onTurnStart
+	c.mu.Unlock()
+	// Fire turn-start hook outside the lock so it doesn't nest under c.mu.
+	if startHook != nil {
+		startHook()
+	}
 	return nil
 }
 
