@@ -81,6 +81,11 @@ internal fun agentListFor(descriptors: Map<String, AgentDescriptor>): List<Strin
 fun AgentPickerSheet(
     store: SessionStore,
     headerNote: String? = null,
+    // Optional seed text for the new session's first message (e.g. from the
+    // command palette "Run on box" path or voice dictation). Forwarded to
+    // DirectoryStep.onCreate as the initialPrompt fallback when no harness
+    // bootstrap prompt is set. Mirrors iOS ConduitAgentPickerSheet.initialPrompt.
+    initialPrompt: String? = null,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -144,7 +149,12 @@ fun AgentPickerSheet(
                     // Always create on the connected box — readiness, directory
                     // browser, and create all use the connected box's client.
                     // Non-connected box rows are disabled in the box section.
-                    store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = seedPrompt)
+                    // seedPrompt = harness bootstrap prompt (non-null only when the
+                    // harness chip was tapped). Fall back to the sheet's own
+                    // initialPrompt (voice transcript / palette run-on-box text).
+                    // Mirrors iOS: let seed = seedPrompt ?? initialPrompt.
+                    val seed = seedPrompt ?: initialPrompt
+                    store.createSession(assistant = agent, startupCwd = cwd, reasoningEffort = effort, model = model, permissionMode = permissionMode, fastMode = fastMode, initialPrompt = seed)
                     onDismiss()
                 },
             )
