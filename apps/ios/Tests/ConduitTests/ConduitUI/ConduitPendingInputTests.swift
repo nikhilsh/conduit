@@ -157,4 +157,57 @@ struct ConduitPendingInputTests {
         #expect(qs[0].prompt == "Proceed?")
         #expect(qs[0].options == ["Yes", "No"])
     }
+
+    // MARK: dedup: original + resolved card collapse to one answered card
+
+    /// When the broker re-publishes a resolved copy of an answered
+    /// AskUserQuestion, the resolved card carries an extra
+    /// `[[conduit:resolved]]{...}` marker line that the original lacks.
+    /// The raw content strings differ, so the old content-keyed dedup kept
+    /// both. The fix: key on stripped content so they match, and let the
+    /// answered (resolved-marker) card win.
+    @Test func dedupeCollapseOriginalAndResolvedToAnsweredCard() {
+        let originalContent = "[[conduit:needs-input]]\nProceed with the merge?\n1. Merge now\n2. Hold off"
+        let resolvedContent = "[[conduit:needs-input]]\n"
+            + #"[[conduit:resolved]]{"answered":true,"answer":"Merge now"}"# + "\n"
+            + "Proceed with the merge?\n1. Merge now\n2. Hold off"
+        let original = item(kind: "pending_input", content: originalContent)
+        let resolved = item(kind: "pending_input", content: resolvedContent)
+
+        // Both orders must collapse to one card and the survivor must be answered.
+        for order in [[original, resolved], [resolved, original]] {
+            let result = ConduitUI.ChatViewModel.dropPendingInputEchoes(order)
+            #expect(result.count == 1)
+            let res = ConduitUI.ChatViewModel.parsePendingResolution(result[0].content)
+            #expect(res != nil, "survivor must carry the resolution marker (answered card won)")
+            #expect(res?.answered == true)
+            #expect(res?.answer == "Merge now")
+        }
+    }
+
+    /// Genuinely distinct questions (different stripped prompt) must NOT be
+    /// merged — both cards survive even when one is resolved.
+    @Test func dedupeKeepsDistinctQuestions() {
+        let q1 = item(kind: "pending_input", content: "[[conduit:needs-input]]\nMerge?\n1. Yes\n2. No")
+        let q2Resolved = item(kind: "pending_input",
+            content: "[[conduit:needs-input]]\n"
+                + #"[[conduit:resolved]]{"answered":true,"answer":"Yes"}"# + "\n"
+                + "Deploy?\n1. Yes\n2. No")
+        let result = ConduitUI.ChatViewModel.dropPendingInputEchoes([q1, q2Resolved])
+        #expect(result.count == 2)
+    }
+
+    /// dropPendingInputEchoes uses the stripped key when matching plain echoes,
+    /// so a raw echo of the question body (without markers) is still dropped
+    /// even when the surviving pending_input card carries the resolved marker.
+    @Test func echoDropWorksAgainstResolvedCard() {
+        let resolvedContent = "[[conduit:needs-input]]\n"
+            + #"[[conduit:resolved]]{"answered":true,"answer":"Merge now"}"# + "\n"
+            + "Proceed with the merge?\n1. Merge now\n2. Hold off"
+        let resolved = item(kind: "pending_input", content: resolvedContent)
+        let echo = item(kind: "message", content: "Proceed with the merge?")
+        let result = ConduitUI.ChatViewModel.dropPendingInputEchoes([echo, resolved])
+        #expect(result.count == 1)
+        #expect(result[0].kind == "pending_input")
+    }
 }

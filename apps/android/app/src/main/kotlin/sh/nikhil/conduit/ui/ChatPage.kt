@@ -1317,30 +1317,75 @@ internal fun mergedConversation(
  * plain bubble that merely echoes the same question can both reach the merged
  * log (the synthesized chatLog item and the typed card differ enough to dodge
  * the role+content fingerprint). Two passes:
- *  (a) drop any non-`pending_input` item whose trimmed content is contained in
- *      a `pending_input` body (length floor of 8 chars so short replies like
- *      "yes"/"ok" are never nuked);
- *  (b) collapse duplicate `pending_input` items sharing the same trimmed
- *      prompt+options body down to the first occurrence. Distinct prompts are
+ *  (a) collapse duplicate `pending_input` items sharing the same stripped
+ *      prompt+options key down to one card; among duplicates the RESOLVED card
+ *      (carrying a `[[conduit:resolved]]` marker line) wins over the raw
+ *      original so the answered state is never dropped. The survivor occupies
+ *      the FIRST occurrence's position.
+ *  (b) drop any non-`pending_input` item whose trimmed content is contained in
+ *      any surviving `pending_input` stripped body (length floor of 8 chars so
+ *      short replies like "yes"/"ok" are never nuked). Distinct prompts are
  *      preserved.
  */
 internal fun dropPendingInputEchoes(items: List<ConversationItem>): List<ConversationItem> {
-    val pendingBodies = items
-        .filter { it.kind == "pending_input" }
-        .map { it.content.trim() }
-        .filter { it.length >= 8 }
-    if (pendingBodies.isEmpty()) return items
+    // --- Pass 1: pick the winning pending_input per normalized key -----------
+    // Key = stripped content (sentinel + resolved-marker lines removed) +
+    //       sorted options joined with US (unit separator). This makes the
+    //       original and resolved versions of the same card share one key.
+    data class PendingKey(val strippedContent: String, val sortedOptions: String)
 
-    val seenPending = HashSet<String>()
-    return items.filter { item ->
-        if (item.kind == "pending_input") {
-            // Collapse exact-duplicate choice cards (same prompt+options body).
-            seenPending.add(item.content.trim())
-        } else {
-            val c = item.content.trim()
-            if (c.length < 8) true
-            else pendingBodies.none { it == c || it.contains(c) }
+    fun itemKey(item: ConversationItem): PendingKey = PendingKey(
+        strippedContent = PendingQuestions.strippedKey(item.content),
+        sortedOptions = item.pendingOptions.sorted().joinToString(""),
+    )
+
+    fun hasResolutionMarker(content: String): Boolean =
+        content.split("\n").any { it.trim().startsWith(PendingQuestions.PENDING_RESOLVED_MARKER) }
+
+    // First pass: determine winner per key (resolved beats unanswered).
+    val winner = LinkedHashMap<PendingKey, ConversationItem>()
+    for (item in items) {
+        if (item.kind != "pending_input") continue
+        val key = itemKey(item)
+        val existing = winner[key]
+        if (existing == null) {
+            winner[key] = item
+        } else if (hasResolutionMarker(item.content) && !hasResolutionMarker(existing.content)) {
+            // Upgrade: resolved card beats the unanswered original.
+            winner[key] = item
         }
+    }
+
+    // Second pass: emit items in order, replacing each pending_input with its
+    // winner at first occurrence, dropping subsequent duplicates.
+    val emittedKeys = HashSet<PendingKey>()
+    var collapsed = 0
+    val deduped = items.mapNotNull { item ->
+        if (item.kind != "pending_input") return@mapNotNull item
+        val key = itemKey(item)
+        if (emittedKeys.contains(key)) { collapsed++; return@mapNotNull null }
+        emittedKeys += key
+        winner[key] ?: item
+    }
+    if (collapsed > 0) {
+        Telemetry.breadcrumb(
+            "chat", "pending_input dedup collapsed",
+            mapOf("count" to collapsed.toString()),
+        )
+    }
+
+    // --- Pass 2: drop plain-message echoes of any surviving pending body -----
+    val pendingBodies = deduped
+        .filter { it.kind == "pending_input" }
+        .map { PendingQuestions.strippedKey(it.content) }
+        .filter { it.length >= 8 }
+    if (pendingBodies.isEmpty()) return deduped
+
+    return deduped.filter { item ->
+        if (item.kind == "pending_input") return@filter true
+        val c = item.content.trim()
+        if (c.length < 8) return@filter true
+        pendingBodies.none { it == c || it.contains(c) }
     }
 }
 
