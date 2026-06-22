@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Science
@@ -50,6 +51,7 @@ fun DebugMenuScreen(store: SessionStore, onDismiss: () -> Unit) {
     val sshTunnelEnabled by store.debugSshTunnelEnabled.collectAsState()
     val showSubagentPanel by appearance.showSubagentPanel.collectAsState()
     val experimentalNativeTerminal by appearance.experimentalNativeTerminal.collectAsState()
+    val commandRunBlock by appearance.commandRunBlock.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -125,6 +127,26 @@ fun DebugMenuScreen(store: SessionStore, onDismiss: () -> Unit) {
                             mapOf("enabled" to enabled.toString()),
                         )
                         appearance.setShowSubagentPanel(enabled)
+                    },
+                )
+            }
+
+            Spacer(Modifier.height(18.dp))
+
+            // §10 / §10b command-run Mono block (flag id chat.commandRunBlock).
+            SettingsSection("Chat Labs") {
+                ToggleRow(
+                    icon = Icons.Filled.Code,
+                    title = "Command-run Mono block",
+                    subtitle = "Render tool clusters as a flat codeBg Mono surface (§10/§10b). Default OFF. Needs on-device verification.",
+                    isOn = commandRunBlock,
+                    onChange = { enabled ->
+                        Telemetry.breadcrumb(
+                            "debug_menu",
+                            "command_run_block toggled",
+                            mapOf("enabled" to enabled.toString()),
+                        )
+                        appearance.setCommandRunBlock(enabled)
                     },
                 )
             }
