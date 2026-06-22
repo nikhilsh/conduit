@@ -891,6 +891,18 @@ class SessionStore : ViewModel(), ConduitDelegate {
     private val _credentialSource = MutableStateFlow<Map<String, String>>(emptyMap())
     val credentialSource: StateFlow<Map<String, String>> = _credentialSource.asStateFlow()
 
+    /**
+     * Per-session agent-auth failure flag. Set when a 401 / auth-failure
+     * is detected in an assistant/result chat event (the "Sign in on this
+     * box" banner). Value is the [OAuthProvider] to pre-select in the
+     * AgentLoginSheet. Cleared bidirectionally: when the user sends a new
+     * turn (sendChat) OR when an incoming assistant event is NOT a 401
+     * (the agent recovered out-of-band). Mirror of iOS
+     * `SessionStore.agentAuthFailure`.
+     */
+    private val _agentAuthFailure = MutableStateFlow<Map<String, OAuthProvider>>(emptyMap())
+    val agentAuthFailure: StateFlow<Map<String, OAuthProvider>> = _agentAuthFailure.asStateFlow()
+
     private val _previews = MutableStateFlow<Map<String, PreviewInfo>>(emptyMap())
     val previews: StateFlow<Map<String, PreviewInfo>> = _previews.asStateFlow()
 
@@ -3450,6 +3462,12 @@ class SessionStore : ViewModel(), ConduitDelegate {
             Telemetry.breadcrumb("onboarding", sh.nikhil.conduit.ui.OnboardingStep.FIRST_TURN_SENT,
                 mapOf("session" to sessionId, "chars" to msg.length.toString()))
         }
+        // §D: a fresh user turn is the retry — drop any standing agent-auth
+        // failure flag so the "Sign in on this box" banner clears. If the
+        // retry 401s again, the next assistant/result event re-sets it.
+        if (_agentAuthFailure.value.containsKey(sessionId)) {
+            _agentAuthFailure.value = _agentAuthFailure.value - sessionId
+        }
         // The user has answered — clear the AI quick-reply chips so they
         // don't linger over the next turn (task #233). Done before the
         // client guard so the chips drop even mid-reconnect.
@@ -4650,8 +4668,39 @@ class SessionStore : ViewModel(), ConduitDelegate {
         for (i in 0 until arr.length()) {
             val e = arr.getJSONObject(i)
             val role = e.optString("role", "")
-            val kind = if (role.lowercase() == "tool") "tool" else "message"
-            val itemContent = stripPendingSentinel(e.optString("content", ""))
+            val rawContent = e.optString("content", "")
+            // Detect pending_input BEFORE stripping the sentinel — once stripped
+            // the sentinel is gone and we can't classify the item. Mirror of iOS
+            // `mapRemoteItem` which checks `isPending` before stripping.
+            val isPending = rawContent.contains(sh.nikhil.conduit.ui.PendingQuestions.PENDING_INPUT_SENTINEL)
+            val kind = when {
+                isPending -> "pending_input"
+                role.lowercase() == "tool" -> "tool"
+                else -> "message"
+            }
+            // Strip the sentinel BUT keep the resolution marker so the
+            // PendingInputCard can rehydrate its answered/selected state from
+            // the transcript (iOS PR #721 parity). Core strips both on the
+            // live path; the HTTP-fetch path keeps the resolved marker here.
+            val itemContent = stripPendingSentinel(rawContent)
+            // If the item carries a resolution marker, parse it and add this
+            // item to resolvedPendingInputIDs so the inline card flips to
+            // answered immediately on load. Mirror of iOS `mapRemoteItem`.
+            if (isPending) {
+                val res = sh.nikhil.conduit.ui.PendingQuestions.parsePendingResolution(itemContent)
+                if (res?.answered == true) {
+                    val id = "$idPrefix-$sessionID-$i"
+                    _resolvedPendingInputIDs.value = _resolvedPendingInputIDs.value + id
+                    Telemetry.breadcrumb(
+                        "approvals",
+                        "pending_input rehydrated answered from transcript",
+                        mapOf(
+                            "session" to sessionID,
+                            "has_answer" to (res.answer != null).toString(),
+                        ),
+                    )
+                }
+            }
             val filesArr = e.optJSONArray("files") ?: JSONArray()
             val files = buildList {
                 for (j in 0 until filesArr.length()) {
@@ -4664,6 +4713,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     )
                 }
             }
+            // Options are extracted by PendingInputCard from content when empty;
+            // the core classifier populates them on the live path.
+            val pendingOptions = emptyList<String>()
             add(
                 ConversationItem(
                     id = "$idPrefix-$sessionID-$i",
@@ -4678,7 +4730,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     exitCode = null,
                     durationMs = null,
                     diffSummary = null,
-                    pendingOptions = emptyList(),
+                    pendingOptions = pendingOptions,
                     sourceAgent = null,
                     targetAgent = null,
                     taskText = null,
@@ -5128,8 +5180,9 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         // Section D: best-effort recover from an agent auth 401 surfaced as
         // assistant text (string-match fallback; typed view_event deferred).
-        if (event.role == "assistant") {
-            maybeRecoverAgentAuth401(sessionId, event.content)
+        // Also covers "result" role (mirror of iOS which checks both).
+        if (event.role == "assistant" || event.role == "result") {
+            detectAndHandleAgentAuth401(sessionId, event.content)
         }
         // A fresh turn invalidates the previous turn's AI chips (task
         // #233); the broker emits a new set after this turn completes.
@@ -5138,28 +5191,55 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
-     * Section D: if an assistant message looks like an agent auth 401
-     * ("API Error: 401" / "Invalid authentication credentials" / "Failed to
-     * authenticate"), best-effort auto-propagate this box's stored credential
-     * for the session's provider, then continue. The broker stores creds
-     * per-box, so a box that never received the push 401s on its first turn;
-     * re-pushing the device-stored blob typically lets the user retry the turn
-     * and succeed. String-match only (a typed event is a deferred follow-up);
-     * de-duped per session so a burst doesn't re-POST every frame.
+     * Section D: bidirectional agent-auth 401 handler called on every
+     * assistant/result chat event.
+     *
+     * SET path: if the event looks like an agent auth 401 ("API Error: 401" +
+     * "authenticat" / "Invalid authentication credentials" / "Failed to
+     * authenticate"), set [_agentAuthFailure] for this session so the chat
+     * banner appears, and best-effort auto-propagate the stored credential.
+     * De-duped per session (agentAuthRecoveredSessions) so a burst does not
+     * re-POST on every frame.
+     *
+     * CLEAR path (bidirectional fix, mirror of iOS PR #722): if the event is
+     * NOT a 401, clear any standing failure flag for this session. This covers
+     * the case where the user signs in out-of-band on the box and the agent
+     * resumes — the next successful assistant reply clears the banner without
+     * requiring the user to send a new turn. Mirror of iOS
+     * `SessionStore.detectAgentAuthFailure`.
      */
-    private fun maybeRecoverAgentAuth401(sessionId: String, content: String) {
+    private fun detectAndHandleAgentAuth401(sessionId: String, content: String) {
         val lower = content.lowercase()
-        val looksLike401 = lower.contains("api error: 401") ||
+        val looksLike401 =
+            (lower.contains("api error: 401") && lower.contains("authenticat")) ||
             lower.contains("invalid authentication credentials") ||
             lower.contains("failed to authenticate")
-        if (!looksLike401) return
-        if (!agentAuthRecoveredSessions.add(sessionId)) return
+        if (!looksLike401) {
+            // CLEAR path: a successful (non-401) assistant reply means the
+            // agent recovered — dismiss the "Sign in on this box" banner.
+            if (_agentAuthFailure.value.containsKey(sessionId)) {
+                _agentAuthFailure.value = _agentAuthFailure.value - sessionId
+                Telemetry.breadcrumb(
+                    "agent-credentials",
+                    "401 banner cleared — agent replied OK",
+                    mapOf("session" to sessionId),
+                )
+            }
+            return
+        }
+        // SET path: attribute the provider from the session assistant.
         val assistant = _sessions.value.firstOrNull { it.id == sessionId }?.assistant
-        val provider = when (assistant) {
+        val provider = when (assistant?.lowercase()) {
             "claude" -> OAuthProvider.ANTHROPIC
             "codex" -> OAuthProvider.OPENAI
-            else -> null
+            else -> OAuthProvider.ANTHROPIC
         }
+        // Update the banner flag (idempotent if provider unchanged).
+        if (_agentAuthFailure.value[sessionId] != provider) {
+            _agentAuthFailure.value = _agentAuthFailure.value + (sessionId to provider)
+        }
+        // De-dupe auto-recover per session so a burst doesn't re-POST.
+        if (!agentAuthRecoveredSessions.add(sessionId)) return
         Telemetry.breadcrumb(
             "agent-credentials",
             "401 detected in chat",
@@ -5168,22 +5248,21 @@ class SessionStore : ViewModel(), ConduitDelegate {
         val ctx = appContext
         val endpoint = _endpoint.value
         // Only re-push if we actually hold a stored credential for the
-        // provider; otherwise there is nothing to recover with (the UI's
-        // sign-in affordance is the path then).
-        val haveStored = provider != null && ctx != null &&
+        // provider; otherwise the banner routes the user to sign in.
+        val haveStored = ctx != null &&
             runCatching { OAuthStore.load(ctx, provider) }.getOrNull() != null
         if (!haveStored) {
             Telemetry.breadcrumb(
                 "agent-credentials",
                 "401 no stored credential to replay",
-                mapOf("session" to sessionId, "provider" to (provider?.raw ?: "unknown")),
+                mapOf("session" to sessionId, "provider" to provider.raw),
             )
             return
         }
         Telemetry.breadcrumb(
             "agent-credentials",
             "401 auto-recover propagating",
-            mapOf("session" to sessionId, "provider" to (provider?.raw ?: "unknown")),
+            mapOf("session" to sessionId, "provider" to provider.raw),
         )
         viewModelScope.launch { propagateStoredAgentCredentials(endpoint) }
     }

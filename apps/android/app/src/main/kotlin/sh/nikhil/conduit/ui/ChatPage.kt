@@ -107,6 +107,7 @@ import sh.nikhil.conduit.PendingChatKind
 import sh.nikhil.conduit.PinnedContext
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.Telemetry
+import sh.nikhil.conduit.auth.OAuthProvider
 import sh.nikhil.conduit.descriptorFor
 import sh.nikhil.conduit.sortedByConversationTs
 import sh.nikhil.conduit.stripPendingSentinel
@@ -437,6 +438,9 @@ fun ChatPage(
     // `SessionStore.resolvedPendingInputIDs`.
     val resolvedPendingInputIDs by store.resolvedPendingInputIDs.collectAsState()
     val credentialSourceMap by store.credentialSource.collectAsState()
+    // §D 401 handling: "Sign in on this box" banner state.
+    val agentAuthFailureMap by store.agentAuthFailure.collectAsState()
+    var showAgentLogin by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     // Backward-pagination state. Observe the store's pagination map so the
@@ -984,6 +988,53 @@ fun ChatPage(
                 thickness = 1.5.dp,
                 color = agentAccent.copy(alpha = 0.55f),
             )
+            // §D 401 handling: "Sign in on this box" banner shown above the
+            // composer when a 401 / auth-failure was detected in an incoming
+            // assistant/result event. Cleared bidirectionally: when the user
+            // sends a new turn OR when the agent replies without a 401 (out-
+            // of-band sign-in on the box). Mirror of iOS `agentAuthBanner`.
+            val authFailureProvider = agentAuthFailureMap[session.id]
+            if (authFailureProvider != null) {
+                val neon = LocalNeonTheme.current
+                val providerLabel = if (authFailureProvider == OAuthProvider.ANTHROPIC) "Claude" else "Codex"
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showAgentLogin = true }
+                        .background(neon.surface)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.AccountCircle,
+                        contentDescription = null,
+                        tint = neon.accent,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Sign in to $providerLabel on this box",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = neon.sans,
+                            fontWeight = FontWeight.SemiBold,
+                            color = neon.accent,
+                        )
+                        Text(
+                            "This box rejected the agent credential (401). Tap to sign in.",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = neon.sans,
+                            color = neon.textDim,
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = neon.textDim,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
             // "Queued Next" panel -- visible when there are queued-turn entries.
             // On tablet cap width to chatContentMaxWidth (760dp) and center,
             // matching the LazyColumn treatment above.
@@ -1068,6 +1119,17 @@ fun ChatPage(
             onDraftChange = { draft = it },
             onSend = dispatchSend,
             onDismiss = { showExpandedComposer = false },
+        )
+    }
+
+    // §D 401 handling: agent login sheet opened from the "Sign in on this
+    // box" banner. Pre-selected to the failing provider so the user lands
+    // on the correct OAuth flow. Mirror of iOS `showAgentLogin` sheet.
+    if (showAgentLogin && !readOnly) {
+        AgentLoginSheet(
+            store = store,
+            autoStartProvider = agentAuthFailureMap[session.id],
+            onDismiss = { showAgentLogin = false },
         )
     }
 }
@@ -1564,6 +1626,16 @@ private fun PendingInputCard(
             listOf(PendingQuestion(prompt = "", options = flat))
         }
     }
+    // Decode the persisted resolution from the transcript (iOS PR #721
+    // parity). The broker writes `[[conduit:resolved]]{"answered":true,
+    // "answer":"<option>"}` into the item's content right after the sentinel;
+    // core strips it on the live path but the HTTP-fetch path keeps it so
+    // the card can rehydrate its answered / selected state after close+reopen.
+    // On the live path this returns null (marker already stripped by core),
+    // which is correct — the ephemeral local state handles optimistic locking.
+    val persistedResolution = remember(ev.id, ev.content) {
+        PendingQuestions.parsePendingResolution(ev.content)
+    }
     // The explicit Send appears for multiple questions OR any multi-select
     // question — only a lone single-select question keeps tap-to-send.
     val needsSend = questions.size > 1 || questions.any { it.multiSelect }
@@ -1574,10 +1646,34 @@ private fun PendingInputCard(
     val selections = remember(ev.id) { mutableStateMapOf<Int, String>() }
     val multiSelections = remember(ev.id) { mutableStateMapOf<Int, Set<String>>() }
     var localSubmitted by remember(ev.id) { mutableStateOf(false) }
-    var sentAnswer by remember(ev.id) { mutableStateOf<String?>(null) }
-    // Settled once submitted locally OR recorded answered upstream — the
-    // second source is what makes the lock survive a card re-render.
-    val submitted = localSubmitted || alreadyAnswered
+    // sentAnswer: the chosen option text shown in "Sent . <answer>". Seeded
+    // from the persisted resolution on rehydration so the answer survives
+    // close+reopen (previously the ephemeral null caused "Sent" with no text).
+    var sentAnswer by remember(ev.id) {
+        mutableStateOf(persistedResolution?.answer)
+    }
+    // Settled once submitted locally OR recorded answered upstream OR the
+    // transcript carries a persisted resolution (rehydration path).
+    val submitted = localSubmitted || alreadyAnswered || persistedResolution?.answered == true
+    // Pre-populate the selected option highlight from the persisted answer so
+    // the answered option renders filled/checked after close+reopen. Only runs
+    // once per card (keyed on ev.id); safe to no-op when already seeded.
+    LaunchedEffect(ev.id) {
+        val answer = persistedResolution?.answer ?: return@LaunchedEffect
+        if (questions.size == 1 && !questions[0].multiSelect) {
+            if (answer in questions[0].options && selections[0] == null) {
+                selections[0] = answer
+            }
+        }
+    }
+    Telemetry.breadcrumb(
+        "chat", "pending_input_render",
+        mapOf(
+            "id" to ev.id,
+            "submitted" to submitted.toString(),
+            "rehydrated" to (persistedResolution?.answered == true).toString(),
+        ),
+    )
 
     // One question's answer: multi-select joins the chosen labels (in option
     // order) with ", " — the broker passes that comma-joined string through
