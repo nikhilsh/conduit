@@ -4809,7 +4809,20 @@ final class SessionStore {
             (lower.contains("api error: 401") && lower.contains("authenticat"))
             || lower.contains("invalid authentication credentials")
             || lower.contains("failed to authenticate")
-        guard hasAuthFailure else { return }
+        guard hasAuthFailure else {
+            // Bidirectional: a successful (non-401) agent reply means auth is
+            // working again, so clear any standing failure flag and dismiss the
+            // "Sign in on this box" banner. Without this the banner is set-only
+            // and lingers forever after the user fixes auth OUT OF BAND (signs
+            // in on the box / shell rather than via an app retry) — that path
+            // never reaches sendChat's clear (the only other clear site).
+            if agentAuthFailure[sessionID] != nil {
+                agentAuthFailure[sessionID] = nil
+                Telemetry.breadcrumb("agent_creds", "401 banner cleared — agent replied OK",
+                    data: ["session": sessionID])
+            }
+            return
+        }
 
         let provider = agentProvider(forSessionID: sessionID)
         // Idempotent: don't re-fire propagate/telemetry every time the same
