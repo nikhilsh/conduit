@@ -10,11 +10,11 @@ import SwiftUI
 //   • Actions          — New session… · Pair a box
 //   • Jump to session  — the live `store.sessions`, agent-tinted, filtered
 //                        by the typed query; selecting one opens it.
-//   • Run on box       — a single row that would run the typed command on
-//                        the box. There is NO "run on box" / new-session-
-//                        with-command path in the store today, so this is
-//                        wired to a no-op `onRunOnBox` closure that the
-//                        caller can fill in later (see the parameter doc).
+//   • Run on box       — a single row that starts a NEW session seeded with
+//                        the typed text as its first message. HomeView wires
+//                        `onRunOnBox` to stash the text and defer the agent-
+//                        picker presentation until after the palette dismisses
+//                        (avoids the iOS double-sheet race).
 //
 // HOW TO PRESENT (the caller wires this — this file only defines the view):
 //   Present as a sheet from any host that already has the SessionStore in
@@ -25,7 +25,7 @@ import SwiftUI
 //               onNewSession: { showAgentPicker = true },
 //               onPairBox:    { showAddServer = true },
 //               onOpenSession: { id in store.selectedSessionID = id },
-//               onRunOnBox:    { command in /* TODO: run-on-box path */ }
+//               onRunOnBox:    { command in /* stash + defer agent picker */ }
 //           )
 //           .environment(store)            // SessionStore from the host
 //           .presentationDetents([.medium, .large])
@@ -51,10 +51,11 @@ extension ConduitUI {
         /// Open the session with this id. Default no-op; caller sets
         /// `store.selectedSessionID` / pushes the project view.
         var onOpenSession: (String) -> Void = { _ in }
-        /// Run the typed command on the active box. NO backing path exists
-        /// in the store yet, so this defaults to a no-op TODO closure — the
-        /// caller wires it once a run-on-box / new-session-with-command
-        /// entry point lands.
+        /// Run the typed command on the active box as a new session seeded
+        /// with the typed text as its first message. The caller (HomeView)
+        /// stashes the text in `voicePrompt` and sets `pendingRunOnBox = true`
+        /// so the agent picker opens after the palette finishes dismissing,
+        /// avoiding the iOS double-sheet race.
         var onRunOnBox: (String) -> Void = { _ in }
         /// "Fan out a task" action — caller presents the Fan-out surface
         /// (`ConduitUI.FanOutView`). Default no-op so the sheet compiles
