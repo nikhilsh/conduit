@@ -895,6 +895,15 @@ extension ConduitUI {
                         subtitle: "Show each command the agent runs (off shows a compact summary)",
                         isOn: $flags.showCommandDetail
                     )
+                    Divider()
+                        .background(neon.border)
+                        .padding(.leading, 46)
+                    ConduitUI.toggleRow(
+                        icon: "terminal",
+                        title: "Command-run Mono block",
+                        subtitle: "Render command runs as a flat code surface with collapse at scale (Labs)",
+                        isOn: $flags.commandRunBlock
+                    )
                 }
             }
         }
