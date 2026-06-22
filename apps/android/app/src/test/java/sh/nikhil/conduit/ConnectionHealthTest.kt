@@ -15,19 +15,21 @@ class ConnectionHealthTest {
 
     // ------------------------------------------------------------------
     // WS-H.2: brokerVersionStatus
+    // The threshold is now always passed explicitly (app's release tag).
+    // Tests use a concrete version string rather than the deleted constant.
     // ------------------------------------------------------------------
 
     @Test fun devVersionIsUnknown() {
-        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus("dev"))
+        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus("dev", "v0.0.710"))
     }
 
     @Test fun emptyVersionIsUnknown() {
-        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus(""))
+        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus("", "v0.0.710"))
     }
 
     @Test fun unparsableVersionIsUnknown() {
-        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus("not-semver"))
-        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus("1.2"))
+        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus("not-semver", "v0.0.710"))
+        assertEquals(BrokerVersionStatus.Unknown, brokerVersionStatus("1.2", "v0.0.710"))
     }
 
     @Test fun unparsableMinimumIsUnknown() {
@@ -35,30 +37,30 @@ class ConnectionHealthTest {
     }
 
     @Test fun exactMatchIsCurrent() {
-        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.0.120", "v0.0.120"))
+        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.0.710", "v0.0.710"))
     }
 
     @Test fun newerPatchIsCurrent() {
-        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.0.121", "v0.0.120"))
+        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.0.711", "v0.0.710"))
     }
 
     @Test fun newerMinorIsCurrent() {
-        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.1.0", "v0.0.120"))
+        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.1.0", "v0.0.710"))
     }
 
     @Test fun newerMajorIsCurrent() {
-        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v1.0.0", "v0.0.120"))
+        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v1.0.0", "v0.0.710"))
     }
 
     @Test fun vPrefixOptional() {
-        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("0.0.121", "v0.0.120"))
-        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.0.121", "0.0.120"))
+        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("0.0.711", "v0.0.710"))
+        assertEquals(BrokerVersionStatus.Current, brokerVersionStatus("v0.0.711", "0.0.710"))
     }
 
     @Test fun olderPatchIsUpdateAvailable() {
-        val result = brokerVersionStatus("v0.0.119", "v0.0.120")
+        val result = brokerVersionStatus("v0.0.709", "v0.0.710")
         assertTrue(result is BrokerVersionStatus.UpdateAvailable)
-        assertEquals("v0.0.119", (result as BrokerVersionStatus.UpdateAvailable).brokerVersion)
+        assertEquals("v0.0.709", (result as BrokerVersionStatus.UpdateAvailable).brokerVersion)
     }
 
     @Test fun olderMinorIsUpdateAvailable() {
@@ -67,6 +69,29 @@ class ConnectionHealthTest {
 
     @Test fun olderMajorIsUpdateAvailable() {
         assertTrue(brokerVersionStatus("v0.9.99", "v1.0.0") is BrokerVersionStatus.UpdateAvailable)
+    }
+
+    // ------------------------------------------------------------------
+    // Broker-update decision (session-safe gate)
+    // ------------------------------------------------------------------
+
+    @Test fun notStaleIsNone() {
+        assertEquals(BrokerUpdateDecision.None, brokerUpdateDecision(isStale = false, liveCount = 0, isSshPaired = true))
+        assertEquals(BrokerUpdateDecision.None, brokerUpdateDecision(isStale = false, liveCount = 3, isSshPaired = false))
+    }
+
+    @Test fun staleZeroLiveSshIsSilentUpdate() {
+        assertEquals(BrokerUpdateDecision.SilentUpdate, brokerUpdateDecision(isStale = true, liveCount = 0, isSshPaired = true))
+    }
+
+    @Test fun staleLiveSessionsSshIsDeferAndWarn() {
+        assertEquals(BrokerUpdateDecision.DeferAndWarn, brokerUpdateDecision(isStale = true, liveCount = 1, isSshPaired = true))
+        assertEquals(BrokerUpdateDecision.DeferAndWarn, brokerUpdateDecision(isStale = true, liveCount = 5, isSshPaired = true))
+    }
+
+    @Test fun staleTokenBoxIsShowCopyBanner() {
+        assertEquals(BrokerUpdateDecision.ShowCopyBanner, brokerUpdateDecision(isStale = true, liveCount = 0, isSshPaired = false))
+        assertEquals(BrokerUpdateDecision.ShowCopyBanner, brokerUpdateDecision(isStale = true, liveCount = 3, isSshPaired = false))
     }
 
     // ------------------------------------------------------------------

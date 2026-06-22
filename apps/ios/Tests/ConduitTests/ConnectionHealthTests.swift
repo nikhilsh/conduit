@@ -6,19 +6,23 @@ import Testing
 @Suite("brokerVersionStatus")
 struct BrokerVersionStatusTests {
 
+    // The app version used as threshold is now passed explicitly (appVersion).
+    // These tests verify the pure comparison function, passing a concrete version
+    // rather than the deleted `minimumBrokerVersion` constant.
+
     // MARK: Unknown paths
 
     @Test func devVersionIsUnknown() {
-        #expect(brokerVersionStatus(brokerVersion: "dev", minimumVersion: "v0.0.100") == .unknown)
+        #expect(brokerVersionStatus(brokerVersion: "dev", minimumVersion: "v0.0.710") == .unknown)
     }
 
     @Test func emptyVersionIsUnknown() {
-        #expect(brokerVersionStatus(brokerVersion: "", minimumVersion: "v0.0.100") == .unknown)
+        #expect(brokerVersionStatus(brokerVersion: "", minimumVersion: "v0.0.710") == .unknown)
     }
 
     @Test func unparsableVersionIsUnknown() {
-        #expect(brokerVersionStatus(brokerVersion: "not-semver", minimumVersion: "v0.0.100") == .unknown)
-        #expect(brokerVersionStatus(brokerVersion: "1.2", minimumVersion: "v0.0.100") == .unknown)
+        #expect(brokerVersionStatus(brokerVersion: "not-semver", minimumVersion: "v0.0.710") == .unknown)
+        #expect(brokerVersionStatus(brokerVersion: "1.2", minimumVersion: "v0.0.710") == .unknown)
     }
 
     @Test func unparsableMinimumIsUnknown() {
@@ -29,33 +33,33 @@ struct BrokerVersionStatusTests {
     // MARK: Current paths
 
     @Test func exactMatchIsCurrent() {
-        #expect(brokerVersionStatus(brokerVersion: "v0.0.120", minimumVersion: "v0.0.120") == .current)
+        #expect(brokerVersionStatus(brokerVersion: "v0.0.710", minimumVersion: "v0.0.710") == .current)
     }
 
     @Test func newerPatchIsCurrent() {
-        #expect(brokerVersionStatus(brokerVersion: "v0.0.121", minimumVersion: "v0.0.120") == .current)
+        #expect(brokerVersionStatus(brokerVersion: "v0.0.711", minimumVersion: "v0.0.710") == .current)
     }
 
     @Test func newerMinorIsCurrent() {
-        #expect(brokerVersionStatus(brokerVersion: "v0.1.0", minimumVersion: "v0.0.120") == .current)
+        #expect(brokerVersionStatus(brokerVersion: "v0.1.0", minimumVersion: "v0.0.710") == .current)
     }
 
     @Test func newerMajorIsCurrent() {
-        #expect(brokerVersionStatus(brokerVersion: "v1.0.0", minimumVersion: "v0.0.120") == .current)
+        #expect(brokerVersionStatus(brokerVersion: "v1.0.0", minimumVersion: "v0.0.710") == .current)
     }
 
     @Test func vPrefixOptional() {
         // Broker may omit the "v" prefix.
-        #expect(brokerVersionStatus(brokerVersion: "0.0.121", minimumVersion: "v0.0.120") == .current)
-        #expect(brokerVersionStatus(brokerVersion: "v0.0.121", minimumVersion: "0.0.120") == .current)
+        #expect(brokerVersionStatus(brokerVersion: "0.0.711", minimumVersion: "v0.0.710") == .current)
+        #expect(brokerVersionStatus(brokerVersion: "v0.0.711", minimumVersion: "0.0.710") == .current)
     }
 
     // MARK: Update-available paths
 
     @Test func olderPatchIsUpdateAvailable() {
-        let result = brokerVersionStatus(brokerVersion: "v0.0.119", minimumVersion: "v0.0.120")
+        let result = brokerVersionStatus(brokerVersion: "v0.0.709", minimumVersion: "v0.0.710")
         if case .updateAvailable(let v) = result {
-            #expect(v == "v0.0.119")
+            #expect(v == "v0.0.709")
         } else {
             Issue.record("Expected .updateAvailable, got \(result)")
         }
@@ -68,6 +72,31 @@ struct BrokerVersionStatusTests {
         } else {
             Issue.record("Expected .updateAvailable, got \(result)")
         }
+    }
+}
+
+// MARK: - Broker-update decision (session-safe gate)
+
+@Suite("brokerUpdateDecision")
+struct BrokerUpdateDecisionTests {
+
+    @Test func notStaleIsNone() {
+        #expect(brokerUpdateDecision(isStale: false, liveCount: 0, isSshPaired: true) == .none)
+        #expect(brokerUpdateDecision(isStale: false, liveCount: 3, isSshPaired: false) == .none)
+    }
+
+    @Test func staleZeroLiveSshIsSilentUpdate() {
+        #expect(brokerUpdateDecision(isStale: true, liveCount: 0, isSshPaired: true) == .silentUpdate)
+    }
+
+    @Test func staleLiveSessionsSshIsDeferAndWarn() {
+        #expect(brokerUpdateDecision(isStale: true, liveCount: 1, isSshPaired: true) == .deferAndWarn)
+        #expect(brokerUpdateDecision(isStale: true, liveCount: 5, isSshPaired: true) == .deferAndWarn)
+    }
+
+    @Test func staleTokenBoxIsShowCopyBanner() {
+        #expect(brokerUpdateDecision(isStale: true, liveCount: 0, isSshPaired: false) == .showCopyBanner)
+        #expect(brokerUpdateDecision(isStale: true, liveCount: 3, isSshPaired: false) == .showCopyBanner)
     }
 }
 

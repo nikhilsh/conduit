@@ -79,8 +79,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.CircularProgressIndicator
 import sh.nikhil.conduit.BrokerVersionStatus
+import sh.nikhil.conduit.BuildConfig
 import sh.nikhil.conduit.HarnessState
-import sh.nikhil.conduit.MINIMUM_BROKER_VERSION
 import sh.nikhil.conduit.NeedsYouItem
 import sh.nikhil.conduit.SavedServer
 import sh.nikhil.conduit.SessionLifecycle
@@ -141,14 +141,16 @@ fun HomeScreen(
     // shown on both phone and tablet so the update prompt is never lost on
     // the tablet path where the phone drawer (ProjectListScreen) is absent.
     val brokerReadiness by store.brokerReadiness.collectAsState()
+    val pendingBrokerUpdate by store.pendingBrokerUpdate.collectAsState()
 
     // Pending exit target for the session-row long-press confirmation.
     // Mirror of iOS PR #128's `pendingDelete` on ConduitHomeView — we
     // keep the title alongside the id so the prompt can name the
     // session being ended without re-resolving displayNames.
     var pendingDelete by remember { mutableStateOf<SessionDeleteTarget?>(null) }
-    // SSH re-bootstrap sheet (same pattern as ProjectListScreen).
-    var showSshReBoot by remember { mutableStateOf(false) }
+    // showSshReBoot removed: SSH broker update now goes through
+    // store.confirmAndUpdateBroker() directly (no sheet needed when
+    // creds are already saved). Kept as tombstone for reference.
     // Fix 2: snackbar for archive failures.
     val snackbarHostState = remember { SnackbarHostState() }
     val archiveError by store.archiveError.collectAsState()
@@ -299,21 +301,38 @@ fun HomeScreen(
             )
         }
 
-        // Broker-update banner (parity: iOS HomeView shows it for all form
-        // factors; on Android the phone drawer has it in ProjectListScreen
-        // but the tablet never showed it — this surfaces it on HomeScreen so
-        // the tablet path is covered too). Same guard logic as ProjectListScreen.
-        brokerReadiness?.brokerVersion?.let { bv ->
-            val vStatus = brokerVersionStatus(bv, MINIMUM_BROKER_VERSION)
-            if (vStatus is BrokerVersionStatus.UpdateAvailable) {
-                val sshPaired = endpoint.url.contains("127.0.0.1")
-                Spacer(Modifier.height(8.dp))
-                BrokerUpdateBanner(
-                    brokerVersion = bv,
-                    isSshPaired = sshPaired,
-                    onRebootstrap = { showSshReBoot = true },
-                    modifier = Modifier.padding(horizontal = 14.dp),
-                )
+        // Broker-update banner (session-safe). SSH boxes: show when
+        // pendingBrokerUpdate is set for the active box (deferred because of
+        // live sessions). Token boxes: show when broker is stale vs appVersion.
+        val appVersion = BuildConfig.RELEASE_TAG
+        val activeServerId = savedServers.firstOrNull { it.endpoint == endpoint }?.id
+        val activeServerSsh = savedServers.firstOrNull { it.endpoint == endpoint }?.ssh
+        val pending = pendingBrokerUpdate?.takeIf { it.boxId == activeServerId }
+        if (pending != null) {
+            // SSH box, deferred update — user must confirm.
+            Spacer(Modifier.height(8.dp))
+            BrokerUpdateBanner(
+                brokerVersion = pending.brokerVersion,
+                isSshPaired = true,
+                liveCount = pending.liveCount,
+                onRebootstrap = { store.confirmAndUpdateBroker() },
+                modifier = Modifier.padding(horizontal = 14.dp),
+            )
+        } else {
+            brokerReadiness?.brokerVersion?.let { bv ->
+                val vStatus = brokerVersionStatus(bv, appVersion)
+                if (vStatus is BrokerVersionStatus.UpdateAvailable && activeServerSsh == null) {
+                    // Token-paired box: no auto-update path; show copy banner.
+                    val liveCount = activeServerId?.let { store.liveSessionCount(it) } ?: 0
+                    Spacer(Modifier.height(8.dp))
+                    BrokerUpdateBanner(
+                        brokerVersion = bv,
+                        isSshPaired = false,
+                        liveCount = liveCount,
+                        onRebootstrap = {},
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                    )
+                }
             }
         }
 
@@ -938,10 +957,6 @@ fun HomeScreen(
                 TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
             },
         )
-    }
-
-    if (showSshReBoot) {
-        SSHLoginSheet(store = store, onDismiss = { showSshReBoot = false })
     }
 
     // Fix 4: rename dialog — long-press on a box row.

@@ -493,8 +493,9 @@ struct BrokerReadiness: Decodable, Equatable {
 // MARK: - Broker-version comparison (WS-H.2)
 //
 // The broker stamps its build with the release tag ("v0.0.120"). The app
-// carries a compile-time minimum it expects. "dev" / unparseable versions
-// are treated as Unknown so hand-built boxes are never nagged.
+// compares against its own marketing version (BuildInfo.marketingVersion).
+// "dev" / unparseable versions are treated as Unknown so hand-built boxes
+// are never nagged.
 
 /// Result of comparing the broker's reported version to the app minimum.
 enum BrokerVersionStatus: Equatable {
@@ -524,6 +525,41 @@ func brokerVersionStatus(brokerVersion: String, minimumVersion: String) -> Broke
     else { return .unknown }
     if bv < mv { return .updateAvailable(brokerVersion: brokerVersion) }
     return .current
+}
+
+// MARK: - Broker-update decision (session-safe gate)
+
+/// What the app should do when it detects a stale broker.
+enum BrokerUpdateDecision: Equatable {
+    /// Not stale, or versions are unparseable — do nothing.
+    case none
+    /// Stale + zero live sessions + SSH paired: silent auto-update is safe.
+    case silentUpdate
+    /// Stale + live sessions exist + SSH paired: must warn the user first.
+    case deferAndWarn
+    /// Stale + token-paired box: no auto-update path; show the copy-install banner.
+    case showCopyBanner
+}
+
+/// Pure, testable decision: given the staleness, live-session count, and
+/// pairing type, return what the broker-update gate should do.
+/// Both apps use the same logic; "dev"/unparseable versions return `.none`.
+func brokerUpdateDecision(
+    isStale: Bool,
+    liveCount: Int,
+    isSshPaired: Bool
+) -> BrokerUpdateDecision {
+    guard isStale else { return .none }
+    guard isSshPaired else { return .showCopyBanner }
+    return liveCount == 0 ? .silentUpdate : .deferAndWarn
+}
+
+/// Payload attached to `pendingBrokerUpdate` when the silent auto-update is
+/// deferred because there are live sessions on the box.
+struct PendingBrokerUpdate: Equatable {
+    let boxID: String
+    let brokerVersion: String
+    let liveCount: Int
 }
 
 // MARK: - Readiness checklist item (WS-H.3)
@@ -1809,10 +1845,14 @@ final class SessionStore {
     private var brokerUpdateAttempted: Set<String> = []
     private var brokerUpdateInFlight = false
 
-    /// The app's compile-time minimum broker version. Bumped when new broker
-    /// features the app depends on require a newer server. "dev" / hand-built
-    /// brokers are never nagged (see `brokerVersionStatus`).
-    static let minimumBrokerVersion = "v0.0.120"
+    /// Non-nil when the silent auto-update was deferred because the box has
+    /// live sessions. The UI shows a warning banner and the user must confirm.
+    var pendingBrokerUpdate: PendingBrokerUpdate?
+
+    /// Session IDs to auto-resume after the broker restarts. Keyed by boxID.
+    /// Populated at confirm-time (before the restart); consumed in
+    /// `reattachBoxLiveSessions` once `recoverableSessionIDs` is populated.
+    private var pendingResume: [String: Set<String>] = [:]
 
     /// Refresh both `modelCatalog` and `agentDescriptors` from the active
     /// endpoint's capabilities. ONE request; old brokers (no `agents` key)
@@ -1885,13 +1925,13 @@ final class SessionStore {
         }
     }
 
-    /// Fix: broker auto-update on reconnect.
+    /// Session-safe broker auto-update gate.
     ///
     /// When the connected box is an SSH box whose broker reports a version
-    /// OLDER than the app, trigger a single one-shot re-bootstrap. The
-    /// bootstrap script's reuse path runs `_update_broker_if_stale` (atomic
-    /// replace + `systemctl --user restart`), after which the broker reports
-    /// the app version and this is a no-op.
+    /// OLDER than the app:
+    ///   - If there are no live sessions: silent update (safe; nothing to lose).
+    ///   - If there are live sessions: defer — set `pendingBrokerUpdate` so the
+    ///     UI can warn the user and let them confirm.
     ///
     /// Gating (so it never loops):
     ///   - only SSH boxes (token-paired boxes have no bootstrap path);
@@ -1905,18 +1945,8 @@ final class SessionStore {
               server.ssh != nil else { return }
         let boxID = server.id
 
-        // Parse both as vMAJOR.MINOR.PATCH; bail on "dev"/empty/unparseable so
-        // hand-built or newer brokers are never churned.
-        func parse(_ v: String) -> (Int, Int, Int)? {
-            let s = v.hasPrefix("v") ? String(v.dropFirst()) : v
-            let parts = s.split(separator: ".").compactMap { Int($0) }
-            guard parts.count == 3 else { return nil }
-            return (parts[0], parts[1], parts[2])
-        }
-        guard !brokerVersion.isEmpty, brokerVersion != "dev",
-              let bv = parse(brokerVersion), let av = parse(appVersion) else { return }
-        // Only act when the broker is genuinely BEHIND the app.
-        guard bv < av else { return }
+        let status = brokerVersionStatus(brokerVersion: brokerVersion, minimumVersion: appVersion)
+        guard case .updateAvailable = status else { return }
 
         let key = "\(boxID)@\(brokerVersion)"
         guard !brokerUpdateInFlight, !brokerUpdateAttempted.contains(key) else {
@@ -1927,19 +1957,67 @@ final class SessionStore {
             return
         }
         brokerUpdateAttempted.insert(key)
-        brokerUpdateInFlight = true
 
-        Telemetry.breadcrumb("broker_update", "stale detected", data: [
-            "box": boxID, "installed": brokerVersion, "expected": appVersion,
+        let liveCount = liveSessionCount(forBox: boxID)
+        let decision = brokerUpdateDecision(
+            isStale: true,
+            liveCount: liveCount,
+            isSshPaired: true
+        )
+
+        switch decision {
+        case .silentUpdate:
+            Telemetry.breadcrumb("broker_update", "stale detected — silent update (no live sessions)", data: [
+                "box": boxID, "installed": brokerVersion, "expected": appVersion,
+            ])
+            brokerUpdateInFlight = true
+            attemptSshSelfHeal()
+            brokerUpdateInFlight = false
+
+        case .deferAndWarn:
+            Telemetry.breadcrumb("broker_update", "deferred (live sessions)", data: [
+                "box": boxID, "installed": brokerVersion, "expected": appVersion,
+                "live_count": "\(liveCount)",
+            ])
+            pendingBrokerUpdate = PendingBrokerUpdate(
+                boxID: boxID,
+                brokerVersion: brokerVersion,
+                liveCount: liveCount
+            )
+
+        default:
+            break
+        }
+    }
+
+    /// Called by the UI after the user confirms the "end N sessions to update"
+    /// alert. Snapshots live session IDs for auto-resume, then triggers the
+    /// SSH self-heal that restarts the broker.
+    func confirmAndUpdateBroker() {
+        guard let pending = pendingBrokerUpdate else { return }
+        let boxID = pending.boxID
+
+        // Snapshot live session IDs for this box so we can auto-resume them
+        // after the broker restarts and reconnects.
+        let liveIDs = sessions.compactMap { s -> String? in
+            guard sessionBox[s.id] == boxID else { return nil }
+            switch sessionLifecycle[s.id] {
+            case .exited, .failed: return nil
+            default: return s.id
+            }
+        }
+        if !liveIDs.isEmpty {
+            pendingResume[boxID] = Set(liveIDs)
+            Telemetry.breadcrumb("broker_update", "auto_resume scheduled", data: [
+                "box": boxID, "count": "\(liveIDs.count)",
+            ])
+        }
+
+        Telemetry.breadcrumb("broker_update", "update confirmed by user", data: [
+            "box": boxID, "installed": pending.brokerVersion,
         ])
-        Telemetry.breadcrumb("broker_update", "triggered", data: [
-            "box": boxID, "installed": brokerVersion, "expected": appVersion,
-        ])
-        // Re-run the full SSH bootstrap (reuse path) which compares
-        // CONDUIT_VERSION and atomically replaces + restarts a stale broker.
-        // attemptSshSelfHeal owns its own isReconnecting single-flight guard;
-        // clear our in-flight flag once it returns control (it kicks a Task and
-        // returns synchronously, but the at-most-once key already protects us).
+        pendingBrokerUpdate = nil
+        brokerUpdateInFlight = true
         attemptSshSelfHeal()
         brokerUpdateInFlight = false
     }
@@ -5914,6 +5992,25 @@ final class SessionStore {
                     "count": "\(rejoining)",
                 ])
             }
+
+            // CHANGE 4: Auto-resume sessions snapshotted at broker-update
+            // confirm time. Only resume the ids we snapshotted — never
+            // mass-resume arbitrary old recoverable sessions.
+            if let resumeSet = pendingResume.removeValue(forKey: serverID), !resumeSet.isEmpty {
+                Telemetry.breadcrumb("broker_update", "auto_resume fired", data: [
+                    "box": serverID, "count": "\(resumeSet.count)",
+                ])
+                for sessionID in resumeSet where recoverableSessionIDs.contains(sessionID) {
+                    // Look up the assistant from the saved sessions list.
+                    let assistant = SavedSessionsStore.shared.sessions
+                        .first(where: { $0.id == sessionID })?.agent ?? "claude"
+                    Telemetry.breadcrumb("broker_update", "auto_resume fire", data: [
+                        "session": sessionID, "assistant": assistant,
+                    ])
+                    resumeRecoverableSession(sessionID: sessionID, assistant: assistant)
+                }
+            }
+
             refreshSessions()
         }
     }
