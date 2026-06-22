@@ -18,6 +18,10 @@ private struct CommandDetailEnabledKey: EnvironmentKey {
     static let defaultValue: Bool = true
 }
 
+private struct CommandRunBlockEnabledKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
 extension EnvironmentValues {
     var chatArm: FeatureFlags.ChatArm {
         get { self[ChatArmKey.self] }
@@ -26,6 +30,10 @@ extension EnvironmentValues {
     var commandDetailEnabled: Bool {
         get { self[CommandDetailEnabledKey.self] }
         set { self[CommandDetailEnabledKey.self] = newValue }
+    }
+    var commandRunBlockEnabled: Bool {
+        get { self[CommandRunBlockEnabledKey.self] }
+        set { self[CommandRunBlockEnabledKey.self] = newValue }
     }
 }
 
@@ -219,6 +227,7 @@ extension ConduitUI {
                 // the first time the chat shell mounts (idempotent).
                 .environment(\.chatArm, flags.resolvedChatArm)
                 .environment(\.commandDetailEnabled, flags.showCommandDetail)
+                .environment(\.commandRunBlockEnabled, flags.commandRunBlock)
                 .task { flags.logChatExposureIfNeeded() }
         }
 
@@ -304,6 +313,8 @@ extension ConduitUI {
             // run is "adjacent tool calls with no assistant prose between
             // them": any non-tool event closes the current bundle.
             //
+            // When commandRunBlock is ON (§10/§10b flag), always group with
+            // minRun:1 so even a single command lands in the Mono block.
             // When showCommandDetail is OFF (the default), collapse ALL tool
             // runs (even singletons, minRun:1) regardless of arm — every
             // contiguous tool sequence becomes a compact footnote. When ON,
@@ -311,18 +322,19 @@ extension ConduitUI {
             // arm A renders every card standalone.
             let hideCommands = !flags.showCommandDetail
             let rows: [ConduitUI.ChatRow]
-            if hideCommands {
-                rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 1) { ev in
-                    ev.role.lowercased() == "tool"
-                        && ev.status.lowercased() != "swapping"
-                        && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
-                }
+            let toolFilter: (ConversationItem) -> Bool = { ev in
+                ev.role.lowercased() == "tool"
+                    && ev.status.lowercased() != "swapping"
+                    && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
+            }
+            if flags.commandRunBlock {
+                // §10/§10b: always group every contiguous tool run (minRun:1)
+                // so the Mono block handles rendering for runs of any size.
+                rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 1, isGroupableTool: toolFilter)
+            } else if hideCommands {
+                rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 1, isGroupableTool: toolFilter)
             } else if flags.resolvedChatArm == .b {
-                rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 2) { ev in
-                    ev.role.lowercased() == "tool"
-                        && ev.status.lowercased() != "swapping"
-                        && !["pending_input", "handoff", "plan", "subagent"].contains(ev.kind)
-                }
+                rows = ConduitUI.ChatViewModel.groupedRows(events, minRun: 2, isGroupableTool: toolFilter)
             } else {
                 rows = events.map { ConduitUI.ChatRow.single($0) }
             }
@@ -2612,6 +2624,35 @@ extension NeonTheme {
 
 // MARK: - Tool bundle card (round-3 §1)
 
+// MARK: - §10/§10b pure logic helpers (testable)
+
+/// Pure-data helpers extracted so unit tests can exercise the
+/// collapse-threshold, failed-row surfacing, and ticker-fraction logic
+/// without a SwiftUI host. Internal (not private) so `@testable import`
+/// reaches them from ConduitTests.
+enum CommandRunBlockLogic {
+
+    /// Number of commands at or above which §10b collapse-at-scale activates.
+    static let collapseThreshold = 10
+
+    /// Whether a run should collapse (true = §10b, false = §10 settled block).
+    static func shouldCollapse(count: Int) -> Bool {
+        count >= collapseThreshold
+    }
+
+    /// The failed items from a run (status == fail or exitCode != 0).
+    static func failedItems(from items: [ConversationItem]) -> [ConversationItem] {
+        items.filter { NeonCardState(status: $0.status, exitCode: $0.exitCode) == .fail }
+    }
+
+    /// Progress fraction for the running ticker: completed / total.
+    /// Returns 0 when total is 0 (unknown), clamped to [0,1].
+    static func tickerFraction(completedCount: Int, totalCount: Int) -> Double {
+        guard totalCount > 0 else { return 0 }
+        return min(Double(completedCount) / Double(totalCount), 1.0)
+    }
+}
+
 /// The failure tint the round-3 design assigns to bundles containing a
 /// non-zero exit (`#FF7847`) — warmer than `neon.red` so a failed sweep
 /// reads as "needs a look", not "crash".
@@ -2654,6 +2695,8 @@ private struct ConduitToolBundleCard: View {
     /// When false (the default), render the compact footnote instead of the
     /// full card surface. Injected from the chat shell.
     @Environment(\.commandDetailEnabled) private var commandDetailEnabled
+    /// When true, render the §10/§10b Mono block instead. Gated off by default.
+    @Environment(\.commandRunBlockEnabled) private var commandRunBlockEnabled
 
     init(items: [ConversationItem], sessionID: String = "") {
         self.items = items
@@ -2732,7 +2775,9 @@ private struct ConduitToolBundleCard: View {
     }
 
     var body: some View {
-        if !commandDetailEnabled {
+        if commandRunBlockEnabled {
+            monoBlockBody
+        } else if !commandDetailEnabled {
             compactBody
         } else if arm == .b {
             signatureBody
@@ -2944,6 +2989,476 @@ private struct ConduitToolBundleCard: View {
             .padding(.vertical, 3)
             .background(Capsule().fill(color.opacity(0.16)))
             .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
+    }
+
+    // MARK: - §10 / §10b Mono block (commandRunBlock flag)
+
+    /// §10 / §10b entry point.
+    /// While running -> Option-C inline ticker.
+    /// >= threshold -> §10b collapse-at-scale layout.
+    /// < threshold  -> §10 flat settled block.
+    @ViewBuilder
+    private var monoBlockBody: some View {
+        if anyRunning {
+            MonoRunningTicker(items: items)
+        } else if CommandRunBlockLogic.shouldCollapse(count: items.count) {
+            MonoCollapseBlock(items: items, displayItems: displayItems, failCount: failCount)
+        } else {
+            MonoSettledBlock(items: items, displayItems: displayItems, failCount: failCount)
+        }
+    }
+}
+
+// MARK: - §10 Mono block views (commandRunBlock flag)
+
+// ---------------------------------------------------------------------------
+// MonoSettledBlock — §10 Option B, runs of < 10 commands.
+// Flat codeBg surface, hairline border, header + per-row grid.
+// ---------------------------------------------------------------------------
+private struct MonoSettledBlock: View {
+    let items: [ConversationItem]
+    let displayItems: [ConversationItem]
+    let failCount: Int
+
+    @Environment(\.neonTheme) private var neon
+
+    private var allPassed: Bool { failCount == 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            monoHeader
+            Divider()
+                .background(neon.border)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(displayItems, id: \.id) { item in
+                    MonoCommandRow(item: item)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                .fill(neon.codeBg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                        .stroke(neon.border, lineWidth: 0.5)
+                )
+        )
+        .onAppear {
+            Telemetry.breadcrumb("chat", "mono-block render", data: [
+                "count": "\(items.count)",
+                "failCount": "\(failCount)",
+                "collapsed": "false",
+            ])
+        }
+    }
+
+    private var monoHeader: some View {
+        HStack(spacing: 0) {
+            Text("RUN \(items.count)")
+                .font(.system(size: 10, weight: .medium).monospaced())
+                .foregroundStyle(neon.textFaint)
+            Text("  \(items.count == 1 ? "command" : "commands")")
+                .font(.system(size: 10).monospaced())
+                .foregroundStyle(neon.textFaint)
+            Spacer(minLength: 8)
+            if failCount > 0 {
+                Text("\(failCount) failed")
+                    .font(.system(size: 10, weight: .medium).monospaced())
+                    .foregroundStyle(neon.red)
+            } else {
+                Text("\u{2713}")
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(neon.textFaint)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MonoCommandRow — one row in the settled or expanded ledger.
+// $ command (tail-truncated) + trailing check or red exit code.
+// Failed rows expand their stderr tail inline beneath.
+// ---------------------------------------------------------------------------
+private struct MonoCommandRow: View {
+    let item: ConversationItem
+    /// Row number for the expanded ledger (nil = normal settled block).
+    var rowNumber: Int? = nil
+    /// Whether to show per-row duration (ledger mode).
+    var showDuration: Bool = false
+
+    @Environment(\.neonTheme) private var neon
+
+    private var state: NeonCardState {
+        NeonCardState(status: item.status, exitCode: item.exitCode)
+    }
+    private var command: String {
+        ConversationRenderer.extractCommand(from: item)
+            ?? NeonToolClassifier.humanLabel(toolName: item.toolName, fileCount: item.files.count)
+    }
+    private var isFailed: Bool { state == .fail }
+    private var stderrTail: String {
+        // Use content as stderr output (same as ConduitSpineToolRow).
+        let raw = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "" }
+        // Surface last ~3 lines as the tail.
+        let lines = raw.components(separatedBy: "\n")
+        let tail = lines.suffix(3).joined(separator: "\n")
+        return tail
+    }
+    private var durationText: String? {
+        guard showDuration, let ms = item.durationMs, ms > 0 else { return nil }
+        if ms < 1000 { return "\(ms)ms" }
+        let s = ms / 1000
+        if s < 60 { return "\(s)s" }
+        return "\(s / 60)m\(s % 60)s"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 0) {
+                if let n = rowNumber {
+                    Text(String(format: "%2d.", n))
+                        .font(.system(size: 10.5).monospaced())
+                        .foregroundStyle(neon.textFaint)
+                        .frame(width: 28, alignment: .trailing)
+                        .padding(.trailing, 4)
+                }
+                Text("$")
+                    .font(.system(size: 11).monospaced())
+                    .foregroundStyle(neon.textFaint)
+                    .padding(.trailing, 6)
+                Text(command)
+                    .font(.system(size: 11).monospaced())
+                    .foregroundStyle(neon.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                if let dur = durationText {
+                    Text(dur)
+                        .font(.system(size: 10).monospaced())
+                        .foregroundStyle(neon.textFaint)
+                        .padding(.trailing, 6)
+                }
+                if let code = item.exitCode, code != 0 {
+                    Text("\(code)")
+                        .font(.system(size: 10.5, weight: .medium).monospaced())
+                        .foregroundStyle(neon.red)
+                } else if !isFailed {
+                    Text("\u{2713}")
+                        .font(.system(size: 10.5).monospaced())
+                        .foregroundStyle(neon.textFaint)
+                }
+            }
+            .padding(.vertical, 3)
+            // Failures expand stderr tail inline, always visible.
+            if isFailed, !stderrTail.isEmpty {
+                Text(stderrTail)
+                    .font(.system(size: 10.5).monospaced())
+                    .foregroundStyle(neon.codeText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(neon.codeBg.opacity(0.6))
+                    )
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MonoCollapseBlock — §10b, runs of >= 10 commands.
+// Collapsed: one-line summary. On failure: failed rows inline + footer.
+// Expand: height-capped scrollable ledger with All/Failed filter.
+// ---------------------------------------------------------------------------
+private struct MonoCollapseBlock: View {
+    let items: [ConversationItem]
+    let displayItems: [ConversationItem]
+    let failCount: Int
+
+    @State private var expanded = false
+    @State private var filterFailed = false
+
+    @Environment(\.neonTheme) private var neon
+
+    private var failedItems: [ConversationItem] {
+        CommandRunBlockLogic.failedItems(from: items)
+    }
+    private var totalDurationText: String {
+        let totalMs = items.compactMap { $0.durationMs }.reduce(0, +)
+        guard totalMs > 0 else { return "" }
+        let s = totalMs / 1000
+        if s < 60 { return "\(s)s" }
+        return "\(s / 60)m\(s % 60)s"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            collapseHeader
+            if expanded {
+                Divider().background(neon.border)
+                expandedLedger
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if failCount > 0 {
+                // Stay collapsed but show failed rows inline.
+                Divider().background(neon.border)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(failedItems, id: \.id) { item in
+                        MonoCommandRow(item: item)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                // Footer: K ran clean -- show all
+                HStack(spacing: 4) {
+                    Text("\(items.count - failCount) ran clean")
+                        .font(.system(size: 10).monospaced())
+                        .foregroundStyle(neon.textFaint)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            expanded = true
+                            Telemetry.breadcrumb("chat", "mono-block ledger expand", data: [
+                                "count": "\(items.count)", "failCount": "\(failCount)",
+                            ])
+                        }
+                    } label: {
+                        Text("show all \u{203A}")
+                            .font(.system(size: 10).monospaced())
+                            .foregroundStyle(neon.textFaint)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                .fill(neon.codeBg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: ConduitToolCardMetrics.surfaceCornerRadius, style: .continuous)
+                        .stroke(neon.border, lineWidth: 0.5)
+                )
+        )
+        .onAppear {
+            Telemetry.breadcrumb("chat", "mono-block render", data: [
+                "count": "\(items.count)",
+                "failCount": "\(failCount)",
+                "collapsed": "\(!expanded)",
+            ])
+        }
+    }
+
+    private var collapseHeader: some View {
+        HStack(spacing: 0) {
+            Text("\(items.count) commands")
+                .font(.system(size: 10, weight: .medium).monospaced())
+                .foregroundStyle(neon.textFaint)
+            let dur = totalDurationText
+            if !dur.isEmpty {
+                Text(" \u{00B7} \(dur)")
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(neon.textFaint)
+            }
+            Text(" \u{00B7} ")
+                .font(.system(size: 10).monospaced())
+                .foregroundStyle(neon.textFaint)
+            if failCount > 0 {
+                Text("\(failCount) failed")
+                    .font(.system(size: 10, weight: .medium).monospaced())
+                    .foregroundStyle(neon.red)
+            } else {
+                Text("\u{2713} passed")
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(neon.textFaint)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(neon.textFaint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                expanded.toggle()
+                if expanded {
+                    Telemetry.breadcrumb("chat", "mono-block ledger expand", data: [
+                        "count": "\(items.count)", "failCount": "\(failCount)",
+                    ])
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(items.count) commands\(failCount > 0 ? ", \(failCount) failed" : ", all passed")")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var expandedLedger: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // All / Failed filter
+            if failCount > 0 {
+                HStack(spacing: 0) {
+                    filterButton("All", selected: !filterFailed) {
+                        filterFailed = false
+                        Telemetry.breadcrumb("chat", "mono-block filter", data: ["filter": "all"])
+                    }
+                    Text("  /  ")
+                        .font(.system(size: 10).monospaced())
+                        .foregroundStyle(neon.textFaint)
+                    filterButton("Failed", selected: filterFailed) {
+                        filterFailed = true
+                        Telemetry.breadcrumb("chat", "mono-block filter", data: ["filter": "failed"])
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
+            }
+            let ledgerItems: [ConversationItem] = filterFailed ? failedItems : items
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(ledgerItems.enumerated()), id: \.element.id) { idx, item in
+                        MonoCommandRow(item: item, rowNumber: idx + 1, showDuration: true)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+            .frame(maxHeight: 264)
+        }
+    }
+
+    private func filterButton(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: selected ? .semibold : .regular).monospaced())
+                .foregroundStyle(selected ? neon.codeText : neon.textFaint)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MonoRunningTicker — §10b Option C, while anyRunning.
+// Minimal inline: pulse dot + RUNNING + elapsed + count/total,
+// then $ <live command> (tail-truncated), and a determinate progress rule.
+// ---------------------------------------------------------------------------
+private struct MonoRunningTicker: View {
+    let items: [ConversationItem]
+
+    @State private var elapsedSeconds: Int = 0
+    @State private var timerTask: Task<Void, Never>? = nil
+    @Environment(\.neonTheme) private var neon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var completedCount: Int {
+        items.filter { item in
+            let s = NeonCardState(status: item.status, exitCode: item.exitCode)
+            return s == .ok || s == .fail
+        }.count
+    }
+
+    private var totalCount: Int { items.count }
+
+    private var progressFraction: Double {
+        CommandRunBlockLogic.tickerFraction(completedCount: completedCount, totalCount: totalCount)
+    }
+
+    private var liveCommand: String {
+        // The last item that is still running, or the last item overall.
+        let running = items.last { NeonCardState(status: $0.status, exitCode: $0.exitCode) == .running }
+        let item = running ?? items.last
+        guard let item else { return "" }
+        return ConversationRenderer.extractCommand(from: item)
+            ?? NeonToolClassifier.humanLabel(toolName: item.toolName, fileCount: item.files.count)
+    }
+
+    private var elapsedText: String {
+        let m = elapsedSeconds / 60
+        let s = elapsedSeconds % 60
+        return "\(m):\(String(format: "%02d", s))"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                // Pulse dot (static when reduceMotion).
+                Circle()
+                    .fill(neon.accent2)
+                    .frame(width: 6, height: 6)
+                    .opacity(reduceMotion ? 1.0 : 1.0)   // animation placeholder
+                Text("RUNNING")
+                    .font(.system(size: 10, weight: .semibold).monospaced())
+                    .foregroundStyle(neon.accent2)
+                Spacer(minLength: 4)
+                Text(elapsedText)
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(neon.textFaint)
+                Text("\(completedCount) / \(totalCount)")
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(neon.textFaint)
+            }
+            HStack(spacing: 6) {
+                Text("$")
+                    .font(.system(size: 11).monospaced())
+                    .foregroundStyle(neon.textFaint)
+                Text(liveCommand)
+                    .font(.system(size: 11).monospaced())
+                    .foregroundStyle(neon.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            // Determinate progress rule.
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(neon.border)
+                        .frame(height: 1.5)
+                    Rectangle()
+                        .fill(neon.accent2)
+                        .frame(width: geo.size.width * progressFraction, height: 1.5)
+                }
+            }
+            .frame(height: 2)
+        }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            Telemetry.breadcrumb("chat", "mono-ticker start", data: [
+                "total": "\(totalCount)",
+                "completed": "\(completedCount)",
+            ])
+            elapsedSeconds = 0
+            timerTask?.cancel()
+            timerTask = Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if !Task.isCancelled {
+                        elapsedSeconds += 1
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            timerTask?.cancel()
+            timerTask = nil
+            Telemetry.breadcrumb("chat", "mono-ticker stop", data: [
+                "elapsed": "\(elapsedSeconds)",
+                "completed": "\(completedCount)",
+                "total": "\(totalCount)",
+            ])
+        }
     }
 }
 

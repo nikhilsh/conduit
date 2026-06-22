@@ -63,6 +63,7 @@ final class FeatureFlags {
         static let onboardingGuide = "conduit.flags.onboarding.guide"
         static let replyHaptics = "conduit.flags.chat.replyHaptics"
         static let showCommandDetail = "conduit.flags.chat.showCommandDetail"
+        static let commandRunBlock = "conduit.flags.chat.commandRunBlock"
         static let sshTunnelTransport = "conduit.flags.transport.sshTunnel"
         static let showSubagentPanel = "conduit.flags.debug.showSubagentPanel"
         static let concurrentMultiBox = "conduit.flags.transport.concurrentMultiBox"
@@ -178,6 +179,19 @@ final class FeatureFlags {
         didSet { defaults.set(showCommandDetail, forKey: Keys.showCommandDetail) }
     }
 
+    // MARK: - Command-run Mono block (§10/§10b) — default OFF
+
+    /// When ON, command-run groups are rendered as a flat codeBg Mono block
+    /// (§10 Option B) instead of the compact/signature/breathe card styles.
+    /// Runs of >= 10 commands collapse at scale (§10b) with a one-line
+    /// summary and optional expand ledger. While running, a minimal inline
+    /// ticker (Option C) replaces the card. Default OFF — all new rendering
+    /// code is gated behind this flag so OFF is byte-identical to today.
+    /// Surfaced in Settings -> Conversation (Labs).
+    var commandRunBlock: Bool {
+        didSet { defaults.set(commandRunBlock, forKey: Keys.commandRunBlock) }
+    }
+
     /// Last reasoning-effort the user picked on the effort dial (§3
     /// acceptance: "persists the last choice"). Empty until first use, in
     /// which case the sheet falls back to the agent's default. Stored as the
@@ -249,6 +263,7 @@ final class FeatureFlags {
 
         self.replyHaptics = defaults.object(forKey: Keys.replyHaptics) as? Bool ?? true
         self.showCommandDetail = defaults.object(forKey: Keys.showCommandDetail) as? Bool ?? false
+        self.commandRunBlock = defaults.object(forKey: Keys.commandRunBlock) as? Bool ?? false
         self.sshTunnelTransport = defaults.object(forKey: Keys.sshTunnelTransport) as? Bool ?? true
         self.showSubagentPanel = defaults.object(forKey: Keys.showSubagentPanel) as? Bool ?? false
         self.concurrentMultiBox = defaults.object(forKey: Keys.concurrentMultiBox) as? Bool ?? false
