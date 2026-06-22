@@ -9,6 +9,16 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.186
+
+**Session-safe auto-update + keyboard scroll-dismiss + push notification overhaul.** PRs #711 (iOS+Android), #712 (iOS), #713 (broker). Broker REDEPLOYED (v0.0.186 live).
+
+- **1 · Session-safe broker auto-update (PR #711)** — the silent broker auto-update is now gated on live-session presence: zero live sessions → silent restart; live sessions present → banner warn + confirm before restart, then auto-resume the snapshotted sessions after. Retires the dead `v0.0.120` version floor in favour of a real broker-vs-app version compare. Verify on iOS + Android: (a) connect a box with an older broker and no live sessions → broker updates silently; (b) connect with a live session running → a warning banner/dialog appears, confirm → broker restarts → sessions auto-resume. [iOS+Android, on-device]
+- **2 · iOS keyboard interactive scroll-dismiss (PR #712)** — live `UIKeyboardLayoutGuide` + `CADisplayLink` inset tracker replaces the notification-driven inset so the composer follows an interactive scroll-dismiss in real time. NOTE: a follow-up resting-position fix is in progress on branch `ios/keyboard-resting-inset` — verify only the drag-dismiss behaviour here, not the final resting height. Verify on iOS: open a chat → drag the messages list down to dismiss the keyboard → the composer tracks the keyboard edge throughout the drag with no gap. [iOS, on-device; resting-position pending follow-up]
+- **3 · Push notifications: genuine-stop timer + AI body + Live Activity turn-start (PR #713)** — turn-end pushes are deferred behind a cancellable 20 s "genuine stop" timer (a new agent turn cancels it, preventing spurious mid-work notifications); the notification body is AI-rewritten via the session's `aiGen` provider (Haiku / `codex exec`, falls back to truncated preview); and the Live Activity is now started at turn-start rather than end. Verify: (a) trigger a multi-turn agent run → no intermediate "done" push arrives while turns are still flowing; (b) when the agent genuinely stops, a push arrives with an AI-written summary body; (c) lock the screen and start a session → the Live Activity appears at turn-start. [broker — live; iOS LA on-device]
+
+---
+
 ## v0.0.182
 
 **Chat-noise + keyboard + SSH-chat-takeover + broker-restart-chat round.** PRs #693/#694 (Show command detail toggle, iOS+Android), #699 (plan-card misclassification, core+Android), #697 (iOS keyboard), #698 (iOS edge-swipe-back), #695 (broker `conduit-broker chat` Phase 1), #696 (broker owner-presence push-gate Phase 2), #700 (broker replays chat transcript on WS reattach). Broker REDEPLOYED.

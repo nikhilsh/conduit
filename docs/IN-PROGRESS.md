@@ -7,14 +7,7 @@ Items currently being built. On merge, move each to
 
 ## Active
 
-- **Session-safe broker auto-update** — branch `app/broker-update-session-safe`,
-  PR #711. Both apps silently re-bootstrapped (restarted) a stale SSH broker on
-  reconnect, reaping all live sessions with no warning. Now: gate the auto-update
-  on live-session presence (silent only when 0 live; warn + confirm when live),
-  retire the dead `v0.0.120` floor (compare broker vs app version —
-  `BuildInfo.marketingVersion` / `BuildConfig.RELEASE_TAG`), and auto-resume the
-  snapshotted live sessions after the restart. iOS+Android, **needs on-device
-  verification** (banner UI + restart→reconnect→auto-resume path).
+- (nothing actively building)
 
 ## Deferred (not active)
 
