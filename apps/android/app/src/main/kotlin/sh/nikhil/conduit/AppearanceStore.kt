@@ -273,6 +273,17 @@ class AppearanceStore : ViewModel() {
     val showSubagentPanel: StateFlow<Boolean> = _showSubagentPanel.asStateFlow()
 
     /**
+     * §10 / §10b command-run Mono block + collapse-at-scale (flag id
+     * `chat.commandRunBlock`). Default OFF. When ON, renders every
+     * ToolCluster (including a lone single command) as a flat codeBg Mono
+     * block; runs of >= COMMAND_RUN_COLLAPSE_THRESHOLD commands collapse with
+     * AnimatedVisibility; a running cluster shows the Option C ticker.
+     * Mirror of iOS `AppearanceStore.commandRunBlock`.
+     */
+    private val _commandRunBlock = MutableStateFlow(false)
+    val commandRunBlock: StateFlow<Boolean> = _commandRunBlock.asStateFlow()
+
+    /**
      * Agents enabled in the new-session picker (§ declutter). claude + codex
      * ship on; gemini / opencode are opt-in. Persisted as a string set; the
      * picker filters its candidate list to this set via
@@ -325,6 +336,7 @@ class AppearanceStore : ViewModel() {
         _onboardingFurthestStep.value = p.getInt(KEY_ONB_FURTHEST_STEP, 0)
         _onboardingGuide.value = p.getBoolean(KEY_ONB_GUIDE, true)
         _showSubagentPanel.value = p.getBoolean(KEY_SHOW_SUBAGENT_PANEL, FeatureFlags.showSubagentPanel)
+        _commandRunBlock.value = p.getBoolean(KEY_COMMAND_RUN_BLOCK, false)
         _enabledAgents.value =
             p.getStringSet(KEY_ENABLED_AGENTS, null)?.toSet() ?: FeatureFlags.defaultEnabledAgents.toSet()
 
@@ -398,6 +410,12 @@ class AppearanceStore : ViewModel() {
     fun setShowSubagentPanel(value: Boolean) {
         _showSubagentPanel.value = value
         prefs?.edit()?.putBoolean(KEY_SHOW_SUBAGENT_PANEL, value)?.apply()
+    }
+
+    /** Set the command-run Mono block flag (chat.commandRunBlock). Default OFF. */
+    fun setCommandRunBlock(value: Boolean) {
+        _commandRunBlock.value = value
+        prefs?.edit()?.putBoolean(KEY_COMMAND_RUN_BLOCK, value)?.apply()
     }
 
     /** Enable/disable an agent in the new-session picker. Default agents
@@ -529,6 +547,7 @@ class AppearanceStore : ViewModel() {
         private const val KEY_ONB_GUIDE = "onboarding.guide"
         private const val KEY_SHOW_SUBAGENT_PANEL = "debug.showSubagentPanel"
         private const val KEY_ENABLED_AGENTS = "newSession.enabledAgents"
+        private const val KEY_COMMAND_RUN_BLOCK = "chat.commandRunBlock"
     }
 }
 

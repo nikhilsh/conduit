@@ -13,6 +13,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -52,6 +53,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilterChip
 
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -70,6 +72,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -570,6 +573,8 @@ fun ChatPage(
     val appearanceStore = sh.nikhil.conduit.LocalAppearanceStore.current
     val replyHapticsEnabled by appearanceStore.replyHaptics.collectAsState()
     val showCommandDetail by appearanceStore.showCommandDetail.collectAsState()
+    // §10 / §10b command-run Mono block flag (chat.commandRunBlock, default OFF).
+    val commandRunBlock by appearanceStore.commandRunBlock.collectAsState()
     // Fix 10: arm-B (Signature) coalesces consecutive tool turns into clusters.
     val chatStylePref by appearanceStore.chatStylePreference.collectAsState()
     val chatExperimentKilled by appearanceStore.chatExperimentKilled.collectAsState()
@@ -873,19 +878,28 @@ fun ChatPage(
                     // into one cluster unit; arm A and lone tools stay inline.
                     // When command detail is hidden, ALL contiguous tool runs
                     // (including lone single commands) collapse into a cluster.
+                    // §10 flag: when commandRunBlock is ON, lone commands also
+                    // cluster so they render in the Mono surface.
                     val hideCommands = !showCommandDetail
                     val renderUnits = groupChatUnits(
                         roles = events.map { it.role },
                         signature = signatureArm,
                         hideCommands = hideCommands,
+                        monoBlock = commandRunBlock,
                     )
                     items(renderUnits.size) { unitIndex ->
                         when (val unit = renderUnits[unitIndex]) {
                             is ChatRenderUnit.ToolCluster ->
-                                ToolClusterCard(
-                                    items = unit.indices.map { events[it] },
-                                    compact = hideCommands,
-                                )
+                                if (commandRunBlock) {
+                                    NeonMonoCommandCluster(
+                                        items = unit.indices.map { events[it] },
+                                    )
+                                } else {
+                                    ToolClusterCard(
+                                        items = unit.indices.map { events[it] },
+                                        compact = hideCommands,
+                                    )
+                                }
                             is ChatRenderUnit.Single -> {
                                 val index = unit.index
                                 val previousRole = if (index > 0) events[index - 1].role else null
@@ -1165,8 +1179,9 @@ internal suspend fun scrollToTrueBottom(listState: androidx.compose.foundation.l
  * renders one event inline exactly as today; a [ToolCluster] coalesces 2+
  * CONSECUTIVE tool-role events into one collapsible cluster. Carries event
  * indices so the existing index-keyed continuation logic is preserved.
+ * Internal so [groupChatUnits] is unit-testable via [CommandRunBlockTest].
  */
-private sealed class ChatRenderUnit {
+internal sealed class ChatRenderUnit {
     data class Single(val index: Int) : ChatRenderUnit()
     data class ToolCluster(val indices: List<Int>) : ChatRenderUnit()
 }
@@ -1179,21 +1194,28 @@ private sealed class ChatRenderUnit {
  * they render as a compact muted footnote line. This applies regardless of the
  * [signature] arm.
  *
- * When [hideCommands] is false and [signature] is true (arm B), only runs of
- * 2+ consecutive tool turns collapse; a lone tool stays inline.
+ * When [monoBlock] is true (chat.commandRunBlock ON), ALL contiguous tool
+ * runs — including lone single commands — collapse into a [ToolCluster] so
+ * they render in the §10 Mono surface. This is independent of [hideCommands].
  *
- * When [hideCommands] is false and [signature] is false (arm A), every event
- * is rendered inline (no clustering).
+ * When [hideCommands] is false and [monoBlock] is false and [signature] is
+ * true (arm B), only runs of 2+ consecutive tool turns collapse; a lone tool
+ * stays inline.
+ *
+ * When [hideCommands] is false and [monoBlock] is false and [signature] is
+ * false (arm A), every event is rendered inline (no clustering).
  *
  * Pure + index-based so it is unit-testable and keeps the continuation/key
  * logic intact.
  */
-private fun groupChatUnits(
+internal fun groupChatUnits(
     roles: List<String>,
     signature: Boolean,
     hideCommands: Boolean = false,
+    monoBlock: Boolean = false,
 ): List<ChatRenderUnit> {
-    if (!hideCommands && !signature) return roles.indices.map { ChatRenderUnit.Single(it) }
+    val collapseAll = hideCommands || monoBlock
+    if (!collapseAll && !signature) return roles.indices.map { ChatRenderUnit.Single(it) }
     val units = mutableListOf<ChatRenderUnit>()
     var i = 0
     while (i < roles.size) {
@@ -1202,8 +1224,8 @@ private fun groupChatUnits(
             while (j < roles.size && roles[j].lowercase() == "tool") j++
             val run = (i until j).toList()
             when {
-                // hideCommands: collapse even a single tool turn into a cluster.
-                hideCommands -> units.add(ChatRenderUnit.ToolCluster(run))
+                // hideCommands or monoBlock: collapse even a single tool turn.
+                collapseAll -> units.add(ChatRenderUnit.ToolCluster(run))
                 // signature arm B: only 2+ consecutive tool turns collapse.
                 run.size >= 2 -> units.add(ChatRenderUnit.ToolCluster(run))
                 else -> units.add(ChatRenderUnit.Single(run[0]))
@@ -2752,6 +2774,596 @@ private fun clusterRowLabel(ev: ConversationItem): String {
     ev.command?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
     ev.toolName?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
     return ev.kind.replaceFirstChar { it.uppercase() }
+}
+
+// ── §10 / §10b Mono block helpers (pure, internal, testable) ────────────────
+
+/**
+ * Collapse threshold for §10b. Runs of [COMMAND_RUN_COLLAPSE_THRESHOLD] or
+ * more commands collapse to a single header line with [AnimatedVisibility].
+ */
+internal const val COMMAND_RUN_COLLAPSE_THRESHOLD = 10
+
+/**
+ * Returns true when the cluster is still running (any item has status
+ * "running" or "pending"). Used to switch between ticker and settled rendering.
+ */
+internal fun clusterAnyRunning(items: List<ConversationItem>): Boolean =
+    items.any { it.status.equals("running", true) || it.status.equals("pending", true) }
+
+/**
+ * Returns the count of failed items in a cluster. A row is failed when its
+ * status is "failed" or its exitCode is non-zero.
+ */
+internal fun clusterFailCount(items: List<ConversationItem>): Int =
+    items.count { ev ->
+        val exit = ev.exitCode?.toInt()
+        ev.status.equals("failed", true) || (exit != null && exit != 0)
+    }
+
+/**
+ * Returns the subset of [items] that failed. Used by §10b to surface failed
+ * rows inline even when collapsed.
+ */
+internal fun clusterFailedRows(items: List<ConversationItem>): List<ConversationItem> =
+    items.filter { ev ->
+        val exit = ev.exitCode?.toInt()
+        ev.status.equals("failed", true) || (exit != null && exit != 0)
+    }
+
+/**
+ * Ticker progress fraction: completed / total where completed = items whose
+ * status is NOT running/pending and NOT empty; total = cluster size. Clamps
+ * to [0f, 1f]. Returns 0f when all are still running.
+ */
+internal fun clusterTickerFraction(items: List<ConversationItem>): Float {
+    if (items.isEmpty()) return 0f
+    val done = items.count {
+        !it.status.equals("running", true) && !it.status.equals("pending", true) && it.status.isNotBlank()
+    }
+    return (done.toFloat() / items.size.toFloat()).coerceIn(0f, 1f)
+}
+
+/**
+ * §10b should-collapse decision: true when the item count meets the threshold.
+ */
+internal fun shouldCollapseCluster(count: Int): Boolean = count >= COMMAND_RUN_COLLAPSE_THRESHOLD
+
+// ── §10b Running ticker (Option C) ──────────────────────────────────────────
+
+/**
+ * §10b Option C running ticker. Renders while any command in the cluster is
+ * still executing. NO card chrome: two quiet mono lines + a determinate
+ * LinearProgressIndicator rule. Respects system reduced-motion (stops the
+ * pulse dot animation; bar still shows its static fill).
+ */
+@Composable
+private fun CommandRunTicker(items: List<ConversationItem>) {
+    val neon = LocalNeonTheme.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val reduceMotion = remember {
+        android.provider.Settings.Global.getFloat(
+            context.contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }
+    val done = items.count {
+        !it.status.equals("running", true) && !it.status.equals("pending", true) && it.status.isNotBlank()
+    }
+    val total = items.size
+    val fraction = clusterTickerFraction(items)
+
+    // Live command: the last item that is still running/pending, else the last item.
+    val liveCommand = (items.lastOrNull { it.status.equals("running", true) || it.status.equals("pending", true) }
+        ?: items.lastOrNull())?.let { clusterRowLabel(it) } ?: ""
+
+    // Elapsed timer: tick once per second.
+    var elapsedSeconds by remember { mutableIntStateOf(0) }
+    LaunchedEffect(items) {
+        while (true) {
+            kotlinx.coroutines.delay(1_000)
+            elapsedSeconds++
+        }
+    }
+    val elapsedText = remember(elapsedSeconds) {
+        val m = elapsedSeconds / 60
+        val s = elapsedSeconds % 60
+        String.format("%d:%02d", m, s)
+    }
+
+    Telemetry.breadcrumb(
+        "chat",
+        "command_run_ticker_render",
+        mapOf("total" to total.toString(), "done" to done.toString()),
+    )
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        // Line 1: dot RUNNING (left) · elapsed · done/total (right).
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            NeonStatusDot(color = neon.accent2, pulsing = !reduceMotion, size = 7.dp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "RUNNING",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                color = neon.accent2,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                "$elapsedText   $done / $total",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textDim,
+            )
+        }
+        // Line 2: $ live command (tail-truncated).
+        if (liveCommand.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$ ",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = neon.mono,
+                    color = neon.textFaint,
+                )
+                Text(
+                    liveCommand,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = neon.mono,
+                    color = neon.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        // Determinate progress rule (fraction = done / total). Never indeterminate.
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier.fillMaxWidth(),
+            color = neon.accent2,
+            trackColor = neon.border,
+        )
+    }
+}
+
+// ── §10 Mono block (settled run, < threshold) ────────────────────────────────
+
+/**
+ * One row in the §10 Mono block: fixed grid of `$` + command + trailing
+ * status. On failure, the stderr tail renders inline beneath.
+ */
+@Composable
+private fun MonoCommandRow(ev: ConversationItem, neon: NeonTheme) {
+    val exit = ev.exitCode?.toInt()
+    val failed = ev.status.equals("failed", true) || (exit != null && exit != 0)
+    val cmd = clusterRowLabel(ev)
+    // Stderr tail for failed rows: gather first Stderr/Text section from toolSections.
+    val stderrTail = if (failed) {
+        remember(ev) {
+            val sections = ConversationRenderer.toolSections(ev)
+            sections.filterIsInstance<ToolSection.Stderr>().firstOrNull()?.text
+                ?: sections.filterIsInstance<ToolSection.Text>().firstOrNull()?.text
+        }
+    } else null
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Leading `$` (faint).
+            Text(
+                "$ ",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+            )
+            // Command text — tail-truncated, never middle.
+            Text(
+                cmd,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = neon.mono,
+                color = neon.textDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            if (failed && exit != null) {
+                // Nonzero exit code in red — ONLY when nonzero.
+                Text(
+                    exit.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.Bold,
+                    color = neon.red,
+                )
+            } else if (!failed) {
+                // Success: single muted check.
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = neon.textFaint,
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+        }
+        // Failed row: stderr tail inline (auto-expanded, never hidden).
+        if (failed && !stderrTail.isNullOrBlank()) {
+            Text(
+                stderrTail.trim().lines().takeLast(4).joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                fontFamily = neon.mono,
+                color = neon.red,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(neon.codeBg)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * §10 Mono block: flat codeBg Surface, hairline border, neon.radiusDp —
+ * for settled runs of < COMMAND_RUN_COLLAPSE_THRESHOLD items. Shows a faint
+ * header row (RUN N / commands; aggregate status) followed by per-command rows
+ * in a fixed-grid layout.
+ */
+@Composable
+private fun MonoCommandBlockSettled(items: List<ConversationItem>) {
+    val neon = LocalNeonTheme.current
+    val n = items.size
+    val failCount = remember(items) { clusterFailCount(items) }
+    val anyFailed = failCount > 0
+
+    Telemetry.breadcrumb(
+        "chat",
+        "command_run_block_render",
+        mapOf(
+            "count" to n.toString(),
+            "failCount" to failCount.toString(),
+            "collapsed" to "false",
+        ),
+    )
+
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(neon.codeBg)
+            .border(0.5.dp, neon.border, shape),
+    ) {
+        // Header row: RUN N / commands (left) · aggregate status (right).
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "RUN $n",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                fontWeight = FontWeight.Bold,
+                color = neon.textFaint,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (n == 1) "command" else "commands",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = neon.textFaint,
+            )
+            Spacer(Modifier.weight(1f))
+            if (anyFailed) {
+                Text(
+                    "$failCount failed",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = neon.mono,
+                    fontWeight = FontWeight.Bold,
+                    color = neon.red,
+                )
+            } else {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = neon.textFaint,
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+        }
+        HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+        // Per-command rows.
+        items.forEach { ev ->
+            MonoCommandRow(ev, neon)
+            HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+        }
+    }
+}
+
+// ── §10b Collapse-at-scale (>= threshold) ───────────────────────────────────
+
+/**
+ * §10b expanded ledger: a height-capped, internally-scrolling LazyColumn of
+ * numbered rows. Each row: index, $ command, per-row duration, exit (nonzero
+ * only). All / Failed filter chip at the top.
+ */
+@Composable
+private fun MonoCommandLedger(items: List<ConversationItem>, neon: NeonTheme) {
+    // 0 = All, 1 = Failed filter.
+    var filterIdx by remember { mutableIntStateOf(0) }
+    val failedItems = remember(items) { clusterFailedRows(items) }
+    val displayItems = if (filterIdx == 1) failedItems else items
+
+    Telemetry.breadcrumb(
+        "chat",
+        "command_run_ledger_filter",
+        mapOf("filter" to if (filterIdx == 0) "all" else "failed"),
+    )
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        // All / Failed filter chips.
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(
+                selected = filterIdx == 0,
+                onClick = {
+                    filterIdx = 0
+                    Telemetry.breadcrumb("chat", "command_run_filter_toggle", mapOf("filter" to "all"))
+                },
+                label = { Text("All", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono) },
+            )
+            FilterChip(
+                selected = filterIdx == 1,
+                onClick = {
+                    filterIdx = 1
+                    Telemetry.breadcrumb("chat", "command_run_filter_toggle", mapOf("filter" to "failed"))
+                },
+                label = { Text("Failed", style = MaterialTheme.typography.labelSmall, fontFamily = neon.mono) },
+            )
+        }
+        // Height-capped LazyColumn: 73 rows must never blow up the transcript.
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 264.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
+            itemsIndexed(displayItems) { _, ev ->
+                val exit = ev.exitCode?.toInt()
+                val failed = ev.status.equals("failed", true) || (exit != null && exit != 0)
+                val durationText = ev.durationMs?.let { formatNeonDuration(it) }
+                val rowNumber = (items.indexOf(ev) + 1).toString().padStart(2)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 0.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Row number (muted).
+                    Text(
+                        "$rowNumber.",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
+                        modifier = Modifier.width(28.dp),
+                    )
+                    Text("$ ", fontFamily = neon.mono, color = neon.textFaint,
+                        style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        clusterRowLabel(ev),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = neon.mono,
+                        color = if (failed) neon.red else neon.textDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // Per-row duration.
+                    durationText?.let {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = neon.mono,
+                            color = neon.textFaint,
+                        )
+                    }
+                    // Nonzero exit only.
+                    if (failed && exit != null && exit != 0) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "exit $exit",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = neon.mono,
+                            color = neon.red,
+                        )
+                    }
+                }
+                HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+            }
+        }
+    }
+}
+
+/**
+ * §10b collapse-at-scale block for settled runs of >= COMMAND_RUN_COLLAPSE_THRESHOLD.
+ * Default: collapsed to one header line. On failure: always surfaces failed
+ * rows inline. Expanded: height-capped ledger with All/Failed filter.
+ */
+@Composable
+private fun MonoCommandBlockCollapsible(items: List<ConversationItem>) {
+    val neon = LocalNeonTheme.current
+    val n = items.size
+    val failCount = remember(items) { clusterFailCount(items) }
+    val anyFailed = failCount > 0
+    val passedCount = n - failCount
+    val failedRows = remember(items) { clusterFailedRows(items) }
+
+    // Auto-expand when there are failures so errors are never buried.
+    var expanded by remember(items) { mutableStateOf(false) }
+
+    // Total duration: sum of all item durations.
+    val totalDurMs = remember(items) {
+        items.mapNotNull { it.durationMs }.fold(0UL) { acc, d -> acc + d }
+    }
+    val totalDurText = if (totalDurMs > 0UL) formatNeonDuration(totalDurMs) else null
+
+    Telemetry.breadcrumb(
+        "chat",
+        "command_run_block_render",
+        mapOf(
+            "count" to n.toString(),
+            "failCount" to failCount.toString(),
+            "collapsed" to (!expanded).toString(),
+        ),
+    )
+
+    val shape = RoundedCornerShape(neon.radiusDp.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(neon.codeBg)
+            .border(0.5.dp, neon.border, shape),
+    ) {
+        // Collapsed header row (tap to expand).
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    expanded = !expanded
+                    Telemetry.breadcrumb(
+                        "chat",
+                        "command_run_ledger_expand",
+                        mapOf("expanded" to (!expanded).toString()),
+                    )
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Terminal,
+                contentDescription = null,
+                tint = neon.textFaint,
+                modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                buildString {
+                    append("$n commands")
+                    totalDurText?.let { append(" · $it") }
+                    if (anyFailed) append(" · $failCount failed")
+                    else append(" · passed")
+                },
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = neon.mono,
+                color = if (anyFailed) neon.red else neon.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = neon.textFaint,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+
+        // Failed rows always surface inline below the header (never hidden by collapse).
+        if (anyFailed && !expanded) {
+            HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+            failedRows.forEach { ev ->
+                MonoCommandRow(ev, neon)
+                HorizontalDivider(color = neon.border, thickness = 0.5.dp)
+            }
+            // Footer: "K ran clean — show all >"
+            if (passedCount > 0) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            expanded = true
+                            Telemetry.breadcrumb("chat", "command_run_ledger_expand", mapOf("via" to "footer"))
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "$passedCount ran clean",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "— show all",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = neon.mono,
+                        color = neon.textFaint,
+                    )
+                    Icon(
+                        Icons.Outlined.KeyboardArrowRight,
+                        contentDescription = "Show all",
+                        tint = neon.textFaint,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        }
+
+        // Expanded: full ledger with filter chip.
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                MonoCommandLedger(items, neon)
+            }
+        }
+    }
+}
+
+// ── Top-level §10 / §10b dispatcher ─────────────────────────────────────────
+
+/**
+ * Dispatcher for the §10 / §10b Mono block. Called by [ToolClusterCard] site
+ * when the chat.commandRunBlock flag is ON. Routes to:
+ *  - [CommandRunTicker] while any command is running (Option C).
+ *  - [MonoCommandBlockCollapsible] for settled runs of >= threshold.
+ *  - [MonoCommandBlockSettled] for settled runs of < threshold (including lone
+ *    single commands per screen 11).
+ */
+@Composable
+private fun NeonMonoCommandCluster(items: List<ConversationItem>) {
+    val anyRunning = remember(items) { clusterAnyRunning(items) }
+    if (anyRunning) {
+        CommandRunTicker(items)
+        return
+    }
+    if (shouldCollapseCluster(items.size)) {
+        MonoCommandBlockCollapsible(items)
+    } else {
+        MonoCommandBlockSettled(items)
+    }
 }
 
 /**
