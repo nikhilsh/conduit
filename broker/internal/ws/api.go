@@ -286,6 +286,11 @@ func (s *Server) serveSessionStart(w http.ResponseWriter, r *http.Request) {
 			// session was archived and will not respawn. 410 so clients
 			// can distinguish "ended for good" from a transient failure.
 			writeAPIError(w, http.StatusGone, "session_gave_up", msg)
+		case strings.Contains(msg, "session archived"):
+			// Session was previously deleted; refuse the resurrect.
+			// 410 Gone so clients can drop it from their list instead
+			// of retrying endlessly.
+			writeAPIError(w, http.StatusGone, "session_archived", msg)
 		default:
 			writeAPIError(w, http.StatusInternalServerError, "session_start_failed", msg)
 		}
@@ -1080,6 +1085,8 @@ func (s *Server) serveAdoptSession(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, "invalid_cwd", msg)
 		case strings.Contains(msg, "gave up"):
 			writeAPIError(w, http.StatusGone, "session_gave_up", msg)
+		case strings.Contains(msg, "session archived"):
+			writeAPIError(w, http.StatusGone, "session_archived", msg)
 		default:
 			writeAPIError(w, http.StatusInternalServerError, "adopt_failed", msg)
 		}
@@ -1166,6 +1173,8 @@ func (s *Server) serveForkSession(w http.ResponseWriter, req adoptRequest, sessI
 			writeAPIError(w, http.StatusBadRequest, "invalid_cwd", msg)
 		case strings.Contains(msg, "gave up"):
 			writeAPIError(w, http.StatusGone, "session_gave_up", msg)
+		case strings.Contains(msg, "session archived"):
+			writeAPIError(w, http.StatusGone, "session_archived", msg)
 		default:
 			writeAPIError(w, http.StatusInternalServerError, "fork_failed", msg)
 		}
