@@ -18,11 +18,32 @@ private let conduitTsFractional: ISO8601DateFormatter = {
 }()
 private let conduitTsPlain = ISO8601DateFormatter()
 
+// Thread-safe memoization cache for conduitConversationTsEpoch.
+// The same ts strings re-appear on every refresh (every streamed delta
+// re-merges the full transcript). Caching collapses repeated ICU parses
+// (~50 us each) to a dictionary lookup, eliminating the main-thread hang
+// reported in Sentry (App Hang up to 12 s, sortedByConversationTs / ICU).
+// Called from both the @MainActor and Task.detached, hence the lock.
+// The lock also serialises access to conduitTsFractional / conduitTsPlain,
+// which (like all NSFormatter subclasses) are not safe for concurrent use.
+private let conduitTsEpochCacheLock = NSLock()
+private var conduitTsEpochCache: [String: Double] = [:]
+
 func conduitConversationTsEpoch(_ ts: String) -> Double {
     if ts.isEmpty { return .greatestFiniteMagnitude }
-    if let d = conduitTsFractional.date(from: ts) { return d.timeIntervalSince1970 }
-    if let d = conduitTsPlain.date(from: ts) { return d.timeIntervalSince1970 }
-    return .greatestFiniteMagnitude
+    conduitTsEpochCacheLock.lock()
+    defer { conduitTsEpochCacheLock.unlock() }
+    if let cached = conduitTsEpochCache[ts] { return cached }
+    let epoch: Double
+    if let d = conduitTsFractional.date(from: ts) {
+        epoch = d.timeIntervalSince1970
+    } else if let d = conduitTsPlain.date(from: ts) {
+        epoch = d.timeIntervalSince1970
+    } else {
+        epoch = .greatestFiniteMagnitude
+    }
+    conduitTsEpochCache[ts] = epoch
+    return epoch
 }
 
 /// A fractional-precision RFC3339 string for the supplied epoch — used to
@@ -4907,25 +4928,53 @@ final class SessionStore {
         guard let client = clientForSession(sessionID) else { return }
         nonisolated(unsafe) let capturedClient = client
         Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            // Blocking FFI call — stays off-main.
             guard let items = try? capturedClient.listConversationItems(sessionId: sessionID) else { return }
-            await self?.applyRefreshedConversation(sessionID: sessionID, box: SendableConvItems(items: items))
+            // Snapshot the main-actor state we need for the merge in a single
+            // brief hop, then do the heavy sort+merge work off-main.
+            let liveBox = SendableConvItems(items: items)
+            let snapshot: SendableMergeSnapshot = await MainActor.run {
+                let existing = self.conversationLog[sessionID] ?? []
+                let serverFingerprints = Set(liveBox.items.map { "\($0.role)|\($0.content)" })
+                let stillPending = existing.filter {
+                    $0.id.hasPrefix("local-") && !serverFingerprints.contains("\($0.role)|\($0.content)")
+                }
+                return SendableMergeSnapshot(
+                    past: self.hydratedChat[sessionID] ?? [],
+                    pending: stillPending
+                )
+            }
+            // mergeConversation is nonisolated static — safe to call off-main.
+            let merged = SessionStore.mergeConversation(
+                past: snapshot.past,
+                live: liveBox.items,
+                pending: snapshot.pending
+            )
+            Telemetry.breadcrumb("perf", "refresh_conversation_merge_done",
+                data: ["session": sessionID, "count": String(merged.count)])
+            let mergedBox = SendableConvItems(items: merged)
+            await MainActor.run {
+                self.conversationLog[sessionID] = mergedBox.items
+            }
         }
     }
 
     /// Box that carries the (value-type, effectively-immutable) conversation
-    /// items across the off-main → main-actor hop under strict concurrency.
+    /// items across the off-main <-> main-actor hops under strict concurrency.
     private struct SendableConvItems: @unchecked Sendable {
         let items: [ConversationItem]
     }
 
-    /// Main-actor entry for the off-main path — unwraps the box on the main
-    /// actor, then merges.
-    private func applyRefreshedConversation(sessionID: String, box: SendableConvItems) {
-        applyRefreshedConversation(sessionID: sessionID, items: box.items)
+    /// Snapshot of the main-actor merge inputs passed into the detached task.
+    private struct SendableMergeSnapshot: @unchecked Sendable {
+        let past: [ConversationItem]
+        let pending: [ConversationItem]
     }
 
     /// Merge freshly-pulled live items into `conversationLog` on the main
-    /// actor (shared by the sync + off-main refresh paths).
+    /// actor (shared by the sync path — e.g. direct callers that already
+    /// hold main-actor state and want an immediate synchronous apply).
     private func applyRefreshedConversation(sessionID: String, items: [ConversationItem]) {
         // Preserve locally-echoed `local-*` items not yet reflected by the
         // server (matched by role+content). Once the harness mirrors the same

@@ -414,15 +414,25 @@ internal object PinnedContextReducer {
 
 /**
  * Normalize a conversation `ts` string to epoch millis for ordering.
- * The local user echo stamps ISO_INSTANT ("…Z") while broker items may
+ * The local user echo stamps ISO_INSTANT ("Z") while broker items may
  * use an offset form, so comparing the raw strings lexicographically can
  * put a later assistant reply above an earlier user turn (device bug:
  * agent replies appearing before user messages). Tries [Instant.parse]
- * then [OffsetDateTime.parse]; unparseable → 0L (sorts first, with the
+ * then [OffsetDateTime.parse]; unparseable -> 0L (sorts first, with the
  * caller's original index breaking the tie so arrival order is kept).
+ *
+ * Memoized: the same ts strings re-appear on every refresh (every streamed
+ * delta re-merges the full transcript). [ConcurrentHashMap] collapses
+ * repeated JVM datetime parses to a map lookup, eliminating the equivalent
+ * of the iOS main-thread hang (Sentry: sortedByConversationTs / ICU parse).
+ * Thread-safe: called from UniFFI worker threads (onStatus/onChatEvent).
  */
-fun tsEpochMillis(ts: String): Long =
-    try {
+private val tsEpochMillisCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+fun tsEpochMillis(ts: String): Long {
+    if (ts.isEmpty()) return 0L
+    tsEpochMillisCache[ts]?.let { return it }
+    val epoch = try {
         Instant.parse(ts).toEpochMilli()
     } catch (_: Exception) {
         try {
@@ -431,6 +441,9 @@ fun tsEpochMillis(ts: String): Long =
             0L
         }
     }
+    tsEpochMillisCache[ts] = epoch
+    return epoch
+}
 
 /**
  * Order conversation items chronologically by `ts`, correctly placing
@@ -4977,6 +4990,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
 
     private fun refreshConversation(sessionId: String) {
         val c = client ?: return
+        Telemetry.breadcrumb("perf", "refresh_conversation", mapOf("session" to sessionId))
         runCatching { c.listConversationItems(sessionId) }
             .onSuccess { items ->
                 // Preserve locally-echoed `local-*` items not yet reflected
@@ -5007,6 +5021,8 @@ class SessionStore : ViewModel(), ConduitDelegate {
                 // Splice the local user echo and sticky past items into the
                 // server log in true chronological order. See [sortedByConversationTs].
                 val merged = (pastNotInLive + items + stillPending).sortedByConversationTs { it.ts }
+                Telemetry.breadcrumb("perf", "refresh_conversation_merge_done",
+                    mapOf("session" to sessionId, "count" to merged.size.toString()))
                 _conversationLog.value = _conversationLog.value + (sessionId to merged)
             }
         // Fix 9: if this session has the per-session auto-approve grant and the
