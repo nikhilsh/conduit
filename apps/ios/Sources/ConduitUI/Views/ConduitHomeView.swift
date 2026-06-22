@@ -700,19 +700,41 @@ extension ConduitUI {
                                 .contentShape(Rectangle())
                                 .onTapGesture { selectedBox = server }
                         }
-                        // WS-H.2: broker-update banner — non-blocking, shown only
-                        // when the broker reports an outdated version. "dev" /
-                        // unparseable broker versions never show the banner.
-                        if let bv = store.brokerReadiness?.brokerVersion,
-                           case .updateAvailable = brokerVersionStatus(
-                               brokerVersion: bv,
-                               minimumVersion: SessionStore.minimumBrokerVersion
-                           ) {
-                            let sshPaired = store.endpoint.url.contains("127.0.0.1")
+                        // WS-H.2 (session-safe): broker-update banner.
+                        // SSH boxes: show when `pendingBrokerUpdate` is set for
+                        // the active box (the auto-update was deferred due to
+                        // live sessions) OR when the broker is stale with 0
+                        // live sessions (silent update already in flight — show
+                        // nothing). Token boxes: show whenever broker is stale
+                        // vs the app version.
+                        let appVer = BuildInfo.marketingVersion
+                        if let pending = store.pendingBrokerUpdate,
+                           pending.boxID == store.savedServers.first(where: { $0.endpoint == store.endpoint })?.id {
+                            // SSH box, deferred update — user must confirm.
+                            ConduitUI.BrokerUpdateBanner(
+                                brokerVersion: pending.brokerVersion,
+                                isSshPaired: true,
+                                liveCount: pending.liveCount,
+                                onRebootstrap: { store.confirmAndUpdateBroker() }
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
+                        } else if let bv = store.brokerReadiness?.brokerVersion,
+                                  case .updateAvailable = brokerVersionStatus(
+                                      brokerVersion: bv,
+                                      minimumVersion: appVer
+                                  ),
+                                  store.savedServers.first(where: { $0.endpoint == store.endpoint })?.ssh == nil {
+                            // Token-paired box: no auto-update path, show copy banner.
+                            let liveCount = store.liveSessionCount(
+                                forBox: store.savedServers.first(where: { $0.endpoint == store.endpoint })?.id ?? ""
+                            )
                             ConduitUI.BrokerUpdateBanner(
                                 brokerVersion: bv,
-                                isSshPaired: sshPaired,
-                                onRebootstrap: { showSshReBoot = true }
+                                isSshPaired: false,
+                                liveCount: liveCount,
+                                onRebootstrap: {}
                             )
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)

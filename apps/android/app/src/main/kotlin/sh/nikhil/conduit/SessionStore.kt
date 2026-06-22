@@ -945,6 +945,23 @@ class SessionStore : ViewModel(), ConduitDelegate {
     @Volatile private var brokerUpdateInFlight: Boolean = false
 
     /**
+     * Non-null when the silent auto-update was deferred because the box has
+     * live sessions. The UI shows a warning banner; the user must confirm.
+     * Mirror of iOS [SessionStore.pendingBrokerUpdate].
+     */
+    private val _pendingBrokerUpdate = MutableStateFlow<PendingBrokerUpdate?>(null)
+    val pendingBrokerUpdate: StateFlow<PendingBrokerUpdate?> = _pendingBrokerUpdate.asStateFlow()
+
+    /**
+     * Session IDs to auto-resume after the broker restarts. Keyed by boxId.
+     * Populated at confirm-time (before restart); consumed in
+     * [reconcileLiveSessions] once the broker reconnects and reports
+     * recoverable IDs. Mirror of iOS [SessionStore.pendingResume].
+     */
+    private val pendingResume: MutableMap<String, Set<String>> =
+        java.util.Collections.synchronizedMap(mutableMapOf())
+
+    /**
      * True once the held tunnel reported `isAlive() == false` (the SSH session
      * died: network flap, server reboot, idle kill, app suspend). Drives a
      * "connection lost — reconnect" affordance. Reset on a fresh tunnel.
@@ -2037,7 +2054,26 @@ class SessionStore : ViewModel(), ConduitDelegate {
                     mapOf("server" to serverID, "count" to demoted.toString()))
             }
 
-            // -- 4. Sync the live-session list --
+            // -- 4. CHANGE 4: Auto-resume sessions snapshotted at broker-update
+            //    confirm time. Only resume the ids we snapshotted — never
+            //    mass-resume arbitrary old recoverable sessions.
+            val resumeSet = pendingResume.remove(serverID)
+            if (!resumeSet.isNullOrEmpty()) {
+                Telemetry.breadcrumb("broker_update", "auto_resume fired",
+                    mapOf("box" to serverID, "count" to resumeSet.size.toString()))
+                for (sessionID in resumeSet) {
+                    if (sessionID in recoverableIDs) {
+                        // Look up the assistant from the saved sessions list.
+                        val assistant = _savedSessions.value
+                            .firstOrNull { it.id == sessionID }?.agent ?: "claude"
+                        Telemetry.breadcrumb("broker_update", "auto_resume fire",
+                            mapOf("session" to sessionID, "assistant" to assistant))
+                        resumeRecoverableSession(sessionID, assistant)
+                    }
+                }
+            }
+
+            // -- 5. Sync the live-session list --
             refreshSessions()
         } catch (t: Throwable) {
             // Older broker without /api/sessions, transient network failure,
@@ -2091,20 +2127,17 @@ class SessionStore : ViewModel(), ConduitDelegate {
     }
 
     /**
-     * After a successful connect to an SSH box, compare the broker's reported
-     * version (`/api/capabilities` -> `readiness.broker_version`) against the
-     * app version and trigger a one-shot re-bootstrap when stale.
+     * Session-safe broker auto-update gate.
      *
-     * Why: [reconnect] and [selectSavedServer] short-circuit to a WS-only bounce
-     * when the SSH tunnel is still alive, so the bootstrap script's reuse path
-     * (which runs `_update_broker_if_stale`) never fires on a reconnect and the
-     * broker drifts behind the app. This re-runs the full bootstrap via
-     * [attemptSshSelfHeal], whose reuse path updates the broker binary.
+     * Compares the broker's reported version (from `/api/capabilities`) against
+     * the app's own release tag. When stale:
+     *   - Zero live sessions on the box: silent update (safe; nothing to lose).
+     *   - Live sessions present: defer — set [_pendingBrokerUpdate] so the UI
+     *     shows a warning banner and the user can confirm.
      *
      * Gated: single-flight ([brokerUpdateInFlight]) + at-most-once per
      * (boxId, broker_version) per launch ([attemptedBrokerUpdate]). Token-paired
-     * boxes are skipped (no SSH ref => nothing to re-bootstrap). No-op when the
-     * version is empty/"dev"/already current.
+     * boxes are skipped (no SSH ref => nothing to re-bootstrap).
      */
     private suspend fun updateBrokerIfStale() {
         val ep = _endpoint.value
@@ -2121,15 +2154,22 @@ class SessionStore : ViewModel(), ConduitDelegate {
         }
         val readiness = runCatching { parseReadiness(raw) }.getOrNull()
         val brokerVersion = readiness?.brokerVersion.orEmpty()
-        val appVersion = BuildConfig.VERSION_NAME
+        // Use RELEASE_TAG (the actual release version) as the threshold.
+        // VERSION_NAME is pinned to "0.0.1" and cannot be used for comparisons.
+        val appVersion = BuildConfig.RELEASE_TAG
 
         // Unknown / dev brokers report "dev" or empty — never re-bootstrap those.
-        if (brokerVersion.isEmpty() || brokerVersion == "dev") {
-            Telemetry.breadcrumb("broker_update", "skip — unknown broker version",
-                mapOf("box" to boxId, "broker_version" to brokerVersion))
+        // Also skip if the app itself is a dev build.
+        if (brokerVersion.isEmpty() || brokerVersion == "dev"
+            || appVersion.isEmpty() || appVersion == "dev") {
+            Telemetry.breadcrumb("broker_update", "skip — unknown broker or app version",
+                mapOf("box" to boxId, "broker_version" to brokerVersion, "app_version" to appVersion))
             return
         }
-        if (brokerVersion == appVersion) {
+
+        val isStale = brokerVersionStatus(brokerVersion, appVersion) is BrokerVersionStatus.UpdateAvailable
+
+        if (!isStale) {
             Telemetry.breadcrumb("broker_update", "broker current",
                 mapOf("box" to boxId, "version" to brokerVersion))
             return
@@ -2149,12 +2189,64 @@ class SessionStore : ViewModel(), ConduitDelegate {
             return
         }
 
+        val liveCount = liveSessionCount(boxId)
+        val decision = brokerUpdateDecision(isStale = true, liveCount = liveCount, isSshPaired = true)
+
+        when (decision) {
+            is BrokerUpdateDecision.SilentUpdate -> {
+                Telemetry.breadcrumb("broker_update", "stale broker — silent update (no live sessions)",
+                    mapOf("box" to boxId, "broker_version" to brokerVersion, "app_version" to appVersion))
+                brokerUpdateInFlight = true
+                try {
+                    attemptSshSelfHeal()
+                } finally {
+                    brokerUpdateInFlight = false
+                }
+            }
+            is BrokerUpdateDecision.DeferAndWarn -> {
+                Telemetry.breadcrumb("broker_update", "deferred (live sessions)",
+                    mapOf("box" to boxId, "broker_version" to brokerVersion,
+                          "app_version" to appVersion, "live_count" to liveCount.toString()))
+                _pendingBrokerUpdate.value = PendingBrokerUpdate(
+                    boxId = boxId,
+                    brokerVersion = brokerVersion,
+                    liveCount = liveCount,
+                )
+            }
+            else -> { /* None / ShowCopyBanner: SSH guard above ensures we never reach these */ }
+        }
+    }
+
+    /**
+     * Called by the UI after the user confirms the "end N sessions to update"
+     * dialog. Snapshots live session IDs for auto-resume, then triggers the
+     * SSH self-heal that restarts the broker. Mirror of iOS
+     * `SessionStore.confirmAndUpdateBroker()`.
+     */
+    fun confirmAndUpdateBroker() {
+        val pending = _pendingBrokerUpdate.value ?: return
+        val boxId = pending.boxId
+
+        // Snapshot live session IDs for this box so we can auto-resume them
+        // after the broker restarts and the app reconnects.
+        val liveIDs = _sessions.value
+            .filter { s ->
+                _sessionBox.value[s.id] == boxId && isConfirmedLive(s.id)
+            }
+            .map { it.id }
+            .toSet()
+
+        if (liveIDs.isNotEmpty()) {
+            pendingResume[boxId] = liveIDs
+            Telemetry.breadcrumb("broker_update", "auto_resume scheduled",
+                mapOf("box" to boxId, "count" to liveIDs.size.toString()))
+        }
+
+        Telemetry.breadcrumb("broker_update", "update confirmed by user",
+            mapOf("box" to boxId, "installed" to pending.brokerVersion))
+        _pendingBrokerUpdate.value = null
         brokerUpdateInFlight = true
-        Telemetry.breadcrumb("broker_update", "stale broker — triggering re-bootstrap",
-            mapOf("box" to boxId, "broker_version" to brokerVersion, "app_version" to appVersion))
         try {
-            // attemptSshSelfHeal re-runs the full bootstrap (reuse path), which
-            // updates the broker binary when stale. Has its own single-flight.
             attemptSshSelfHeal()
         } finally {
             brokerUpdateInFlight = false

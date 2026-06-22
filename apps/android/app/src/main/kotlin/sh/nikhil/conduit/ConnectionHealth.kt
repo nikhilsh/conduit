@@ -58,22 +58,17 @@ sealed class BrokerVersionStatus {
 }
 
 /**
- * The app's compile-time minimum broker version. Bumped when new broker
- * features the app depends on require a newer server. Mirrors iOS
- * `SessionStore.minimumBrokerVersion`.
- */
-const val MINIMUM_BROKER_VERSION = "v0.0.120"
-
-/**
  * Compare [brokerVersion] to [minimumVersion]. Both are expected in
  * "vMAJOR.MINOR.PATCH" form; anything else → [BrokerVersionStatus.Unknown].
  * "dev" / empty → [BrokerVersionStatus.Unknown].
  *
- * Pure function; visible for unit tests. Mirror of iOS `brokerVersionStatus`.
+ * The caller is responsible for passing the appropriate threshold (typically
+ * the app's own release tag, not a hardcoded constant). Pure function;
+ * visible for unit tests. Mirror of iOS `brokerVersionStatus`.
  */
 fun brokerVersionStatus(
     brokerVersion: String,
-    minimumVersion: String = MINIMUM_BROKER_VERSION,
+    minimumVersion: String,
 ): BrokerVersionStatus {
     fun parse(v: String): Triple<Int, Int, Int>? {
         val s = if (v.startsWith("v")) v.drop(1) else v
@@ -91,6 +86,49 @@ fun brokerVersionStatus(
     return if (bv.lessThan(mv)) BrokerVersionStatus.UpdateAvailable(brokerVersion)
     else BrokerVersionStatus.Current
 }
+
+// MARK: - Broker-update decision (session-safe gate)
+
+/**
+ * What the app should do when it detects a stale broker.
+ * Mirror of iOS [BrokerUpdateDecision].
+ */
+sealed class BrokerUpdateDecision {
+    /** Not stale, or versions are unparseable — do nothing. */
+    data object None : BrokerUpdateDecision()
+    /** Stale + zero live sessions + SSH paired: silent auto-update is safe. */
+    data object SilentUpdate : BrokerUpdateDecision()
+    /** Stale + live sessions exist + SSH paired: must warn the user first. */
+    data object DeferAndWarn : BrokerUpdateDecision()
+    /** Stale + token-paired box: no auto-update path; show copy-install banner. */
+    data object ShowCopyBanner : BrokerUpdateDecision()
+}
+
+/**
+ * Pure, testable decision: given staleness, live-session count, and pairing
+ * type, return what the broker-update gate should do. Mirror of iOS
+ * `brokerUpdateDecision`.
+ */
+fun brokerUpdateDecision(
+    isStale: Boolean,
+    liveCount: Int,
+    isSshPaired: Boolean,
+): BrokerUpdateDecision {
+    if (!isStale) return BrokerUpdateDecision.None
+    if (!isSshPaired) return BrokerUpdateDecision.ShowCopyBanner
+    return if (liveCount == 0) BrokerUpdateDecision.SilentUpdate else BrokerUpdateDecision.DeferAndWarn
+}
+
+/**
+ * Payload attached to [SessionStore.pendingBrokerUpdate] when the silent
+ * auto-update is deferred because there are live sessions on the box.
+ * Mirror of iOS `PendingBrokerUpdate`.
+ */
+data class PendingBrokerUpdate(
+    val boxId: String,
+    val brokerVersion: String,
+    val liveCount: Int,
+)
 
 // MARK: - WS-H.3: readiness checklist
 

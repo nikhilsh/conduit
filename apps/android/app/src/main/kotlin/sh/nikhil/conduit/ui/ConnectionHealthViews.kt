@@ -4,9 +4,11 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -34,7 +36,11 @@ private const val INSTALL_ONELINER = "curl -fsSL https://conduit.nikhil.sh/insta
 /**
  * Non-blocking banner shown on the home / box list when the broker is
  * outdated. SSH-paired boxes (endpoint == 127.0.0.1:*) get a one-tap
- * re-bootstrap; token-paired boxes get the install.sh one-liner to copy.
+ * re-bootstrap (with a confirmation dialog when [liveCount] > 0);
+ * token-paired boxes get the install.sh one-liner to copy.
+ *
+ * [liveCount]: pass 0 to skip the live-session warning; pass the real count
+ * so the confirmation dialog names the exact number.
  *
  * "dev" / unparseable broker versions are NEVER shown (honest-state).
  * Mirror of iOS `ConduitUI.BrokerUpdateBanner`.
@@ -43,12 +49,32 @@ private const val INSTALL_ONELINER = "curl -fsSL https://conduit.nikhil.sh/insta
 fun BrokerUpdateBanner(
     brokerVersion: String,
     isSshPaired: Boolean,
+    liveCount: Int = 0,
     onRebootstrap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val neon = LocalNeonTheme.current
     val clipboard = LocalClipboardManager.current
     var copyConfirmed by remember { mutableStateOf(false) }
+    var showConfirmDialog by remember { mutableStateOf(false) }
+
+    if (showConfirmDialog) {
+        val sessionWord = if (liveCount == 1) "session" else "sessions"
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            title = { Text("End $liveCount running $sessionWord to update?") },
+            text = { Text("History is saved and sessions resume after the restart.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConfirmDialog = false
+                    onRebootstrap()
+                }) { Text("Update") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
 
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -87,12 +113,23 @@ fun BrokerUpdateBanner(
                     fontSize = 12.sp,
                     color = neon.textDim,
                 )
+                if (liveCount > 0) {
+                    val plural = if (liveCount == 1) "session" else "sessions"
+                    Text(
+                        "Updating restarts the broker and ends $liveCount running $plural. Their history is saved — they'll resume automatically afterward.",
+                        fontFamily = neon.sans,
+                        fontSize = 12.sp,
+                        color = neon.textDim,
+                    )
+                }
                 if (isSshPaired) {
-                    // One-tap re-bootstrap.
+                    // One-tap re-bootstrap (with confirm when live sessions exist).
                     Surface(
                         shape = RoundedCornerShape(99.dp),
                         color = neon.accent,
-                        modifier = Modifier.clickable { onRebootstrap() },
+                        modifier = Modifier.clickable {
+                            if (liveCount > 0) showConfirmDialog = true else onRebootstrap()
+                        },
                     ) {
                         Text(
                             "Update now",

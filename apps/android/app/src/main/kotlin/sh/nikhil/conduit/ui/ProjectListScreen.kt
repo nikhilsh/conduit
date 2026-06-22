@@ -32,13 +32,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sh.nikhil.conduit.BuildConfig
+import sh.nikhil.conduit.BrokerVersionStatus
 import sh.nikhil.conduit.HarnessState
-import sh.nikhil.conduit.MINIMUM_BROKER_VERSION
 import sh.nikhil.conduit.SessionLifecycle
 import sh.nikhil.conduit.SessionStore
 import sh.nikhil.conduit.VisibleSession
 import sh.nikhil.conduit.brokerVersionStatus
-import sh.nikhil.conduit.BrokerVersionStatus
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -58,10 +58,12 @@ fun ProjectListScreen(
     val chatLog by store.chatLog.collectAsState()
     val creationError by store.sessionCreationError.collectAsState()
     val brokerReadiness by store.brokerReadiness.collectAsState()
+    val pendingBrokerUpdate by store.pendingBrokerUpdate.collectAsState()
+    val savedServers by store.savedServers.collectAsState()
     var showAgentPicker by remember { mutableStateOf(false) }
     var showAddServer by remember { mutableStateOf(false) }
-    // WS-H.2: SSH re-bootstrap sheet.
-    var showSshReBoot by remember { mutableStateOf(false) }
+    // showSshReBoot removed: SSH broker update now goes through
+    // store.confirmAndUpdateBroker() directly.
     // Long-press archive confirmation target. The drawer list previously
     // had no delete affordance (only HomeScreen did); we mirror that
     // long-press → confirm → store.archive flow here. Archiving ends the
@@ -120,18 +122,34 @@ fun ProjectListScreen(
                 }) { Icon(Icons.Default.Add, "New session", tint = neon.accent) }
             }
 
-            // WS-H.2: broker-update banner — non-blocking, only when the broker
-            // reports an outdated version. "dev" / unparseable never show.
-            brokerReadiness?.brokerVersion?.let { bv ->
-                val vStatus = brokerVersionStatus(bv, MINIMUM_BROKER_VERSION)
-                if (vStatus is BrokerVersionStatus.UpdateAvailable) {
-                    val sshPaired = endpoint.url.contains("127.0.0.1")
-                    BrokerUpdateBanner(
-                        brokerVersion = bv,
-                        isSshPaired = sshPaired,
-                        onRebootstrap = { showSshReBoot = true },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
+            // WS-H.2 (session-safe): broker-update banner.
+            // SSH boxes: show when pendingBrokerUpdate is set (deferred due to
+            // live sessions). Token boxes: show when broker is stale vs appVersion.
+            val appVersion = BuildConfig.RELEASE_TAG
+            val activeServerId = savedServers.firstOrNull { it.endpoint == endpoint }?.id
+            val activeServerSsh = savedServers.firstOrNull { it.endpoint == endpoint }?.ssh
+            val pending = pendingBrokerUpdate?.takeIf { it.boxId == activeServerId }
+            if (pending != null) {
+                BrokerUpdateBanner(
+                    brokerVersion = pending.brokerVersion,
+                    isSshPaired = true,
+                    liveCount = pending.liveCount,
+                    onRebootstrap = { store.confirmAndUpdateBroker() },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            } else {
+                brokerReadiness?.brokerVersion?.let { bv ->
+                    val vStatus = brokerVersionStatus(bv, appVersion)
+                    if (vStatus is BrokerVersionStatus.UpdateAvailable && activeServerSsh == null) {
+                        val liveCount = activeServerId?.let { store.liveSessionCount(it) } ?: 0
+                        BrokerUpdateBanner(
+                            brokerVersion = bv,
+                            isSshPaired = false,
+                            liveCount = liveCount,
+                            onRebootstrap = {},
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
                 }
             }
 
@@ -258,11 +276,9 @@ fun ProjectListScreen(
     if (showAddServer) {
         AddServerSheet(store = store, onDismiss = { showAddServer = false })
     }
-    // WS-H.2: SSH re-bootstrap sheet triggered from the broker-update banner.
-    if (showSshReBoot) {
-        SSHLoginSheet(store = store, onDismiss = { showSshReBoot = false })
-    }
 }
+// SSH re-bootstrap sheet removed: broker update now goes through
+// store.confirmAndUpdateBroker() which calls attemptSshSelfHeal() directly.
 
 /**
  * Carrier for the session-row long-press delete confirmation. Holds the

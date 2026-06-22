@@ -16,13 +16,20 @@ extension ConduitUI {
     /// `isSshPaired`: true when the active endpoint was paired via SSH
     /// (the bootstrap re-run path is available). false = token-paired
     /// (show the install.sh copy affordance instead).
+    /// `liveCount`: number of currently running sessions on this box.
+    /// When > 0 the SSH "Update now" button shows a confirmation alert
+    /// explaining that sessions will be ended but their history is saved.
     struct BrokerUpdateBanner: View {
         let brokerVersion: String
         let isSshPaired: Bool
+        /// Pass 0 to skip the live-session warning. Pass the real count so
+        /// the confirmation alert can name the exact number.
+        let liveCount: Int
         let onRebootstrap: () -> Void
 
         @Environment(\.neonTheme) private var neon
         @State private var copyConfirmed = false
+        @State private var showConfirmAlert = false
 
         private let installOneliner = "curl -fsSL https://conduit.nikhil.sh/install.sh | sh"
 
@@ -43,9 +50,21 @@ extension ConduitUI {
                         .foregroundStyle(neon.textDim)
                         .fixedSize(horizontal: false, vertical: true)
 
+                    if liveCount > 0 {
+                        let plural = liveCount == 1 ? "session" : "sessions"
+                        Text("Updating restarts the broker and ends \(liveCount) running \(plural). Their history is saved — they'll resume automatically afterward.")
+                            .font(neon.sans(12))
+                            .foregroundStyle(neon.textDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     if isSshPaired {
                         Button {
-                            onRebootstrap()
+                            if liveCount > 0 {
+                                showConfirmAlert = true
+                            } else {
+                                onRebootstrap()
+                            }
                         } label: {
                             Text("Update now")
                                 .font(neon.sans(12).weight(.semibold))
@@ -55,6 +74,15 @@ extension ConduitUI {
                                 .background(Capsule().fill(neon.accent))
                         }
                         .buttonStyle(.plain)
+                        .alert(
+                            "End \(liveCount) running \(liveCount == 1 ? "session" : "sessions") to update?",
+                            isPresented: $showConfirmAlert
+                        ) {
+                            Button("Update", role: .destructive) { onRebootstrap() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("History is saved and sessions resume after the restart.")
+                        }
                     } else {
                         // Token-paired: show the one-liner to copy.
                         Button {
