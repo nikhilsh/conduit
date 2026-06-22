@@ -33,7 +33,7 @@ class CommandRunBlockTest {
         files = emptyList(),
         toolName = toolName,
         command = command,
-        exitCode = exitCode?.toUInt(),
+        exitCode = exitCode,
         durationMs = durationMs,
         diffSummary = null,
         pendingOptions = emptyList(),
