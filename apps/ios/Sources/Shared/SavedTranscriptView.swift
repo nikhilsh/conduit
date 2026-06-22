@@ -62,6 +62,13 @@ struct SavedTranscriptView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .tint(neon.accent)
+        // Re-arm the edge-swipe-back: the embedded read-only ChatView installs
+        // a DragGesture (auto-scroll tracking) that competes with UIKit's
+        // interactivePopGestureRecognizer, so the back-swipe dies on this
+        // screen. SwipeBackEnabler re-arms the recognizer with a permissive
+        // delegate (allows simultaneous recognition) — the same fix the live
+        // session screen uses (ConduitProjectView).
+        .background(ConduitUI.SwipeBackEnabler().frame(width: 0, height: 0))
         .task { await load() }
         .appearanceColorScheme()
     }
