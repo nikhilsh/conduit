@@ -169,15 +169,161 @@ preserves full subscription scope). Kept only as a documented escape hatch (§9)
 
 ---
 
+## 1.6 Do we even need a separate root? (the subsuming question)
+
+The operator raised the question that reframes the whole design: **why does a
+conduit session create a second `$HOME` at all?** If a session ran with the
+operator's **real `$HOME`** (where `~/.claude/.credentials.json` and
+`~/.codex/auth.json` already live) and merely `cd`'d into the chosen workspace
+folder, then on a logged-in box **the session and the operator are the same
+lineage by construction** — the credential fork never happens. This is Option A
+(§3.4a) taken to its end: *stop creating a second root*. Before adopting it we
+must name, with code/commit evidence, exactly why the ephemeral home exists and
+what (if anything) genuinely requires it.
+
+### 1.6.1 Why the ephemeral `agentHomeDir` exists — the ACTUAL reasons (with evidence)
+
+The per-session ephemeral HOME was introduced in **PR #126**
+(`bbae5e7a broker-always-isolate-home: per-session HOME copy of broker creds (no
+more refresh race)`). Its commit message states the rationale verbatim:
+
+> "Each agent now refreshes its **own private copy** of the OAuth refresh token
+> instead of racing concurrent peers on a shared `.credentials.json` — which is
+> what triggered the silent 'Please run /login' cascade on hosts running >1
+> claude session."
+
+That is the **primary and originating reason**, and it is **circular with the
+bug this plan fixes.** PR #126 diagnosed a refresh race and "fixed" it by giving
+each agent a *private copy* — but a private copy of a single-use-rotating
+lineage is precisely a **second head that strands the operator** (§1.2). The
+isolation that #126 introduced to *stop* a race is the *cause* of the race we
+see today. The originating reason is therefore not load-bearing; it is the bug.
+(The same rationale is restamped in two live code comments that are now wrong:
+`manager.go:266` "The per-session HOME is what breaks the concurrent-refresh
+race"; the `lifecycle.go` §G.2 HOME-injection comment. Both should be corrected
+when the fix lands.)
+
+The OTHER reasons the home grew over time, each verified against current code:
+
+| # | Reason | Evidence | Genuinely needs a separate HOME? |
+|---|--------|----------|----------------------------------|
+| 1 | **Credential isolation / "no refresh race"** | PR #126 message; `manager.go:266`, `agent_home_test.go` header | **No — circular with the bug.** Sharing the real `~/.claude` is what claude is *designed* for and is the actual fix. |
+| 2 | **Resume** (`projects/<slug>/`, `sessions/…` survive Close) | `478c5f4e` ("agent-home survives shutdown, completing the resume chain"); `cleanupAgentHomeCredentials` (`manager.go:1349`) scrubs only the cred file, keeps transcripts | **No — cwd/date-keyed.** Transcripts are keyed by cwd-slug (claude) and date/id (codex); they don't collide in a shared dir and resume works *better* there (§1.4a fact #1). Real `~/.claude` already holds the operator's own resumable transcripts. |
+| 3 | **`.claude.json` theme + `hasCompletedOnboarding`** (suppress first-run picker) | `seedClaudeConfig` (`lifecycle.go:357`) writes `$HOME/.claude.json` | **No.** It is a top-level HOME file, identical for every session. The operator's real `~/.claude.json` already has onboarding done. Sharing it is harmless. |
+| 4 | **Terminal-tab "always logged in"** mirror loop | `manager.go:521–530` mirrors every *other* provider's host creds into the session HOME so a `claude` run inside a `codex` session isn't logged out | **No — this is the copy bug again.** With the real `$HOME`, the Terminal tab IS the operator's real login for *every* CLI for free; the entire mirror loop deletes. |
+| 5 | **opencode per-session state** (`.local/share/opencode`, `.config/opencode`) | `lifecycle.go:258–260` | **No (and out of scope).** opencode authenticates via non-rotating env keys (§1.4); it is not in the race. It can keep a per-session mirror OR use the real dir — either is safe. |
+| 6 | **IS_SANDBOX sandbox assertion** | `lifecycle.go:107–115`: the `IS_SANDBOX=1` comment cites "each session gets an ephemeral per-session `$HOME` and a dedicated PTY" as the basis for asserting a constrained sandbox to claude | **Partially — see §1.6.3.** The ephemeral home is invoked as *part of* the sandbox justification. This is the one reason that is not purely the copy bug. |
+| 7 | **Workspace-pollution avoidance** (don't drop a creds dir in the repo) | `manager.go:452–456`: the home lives under `sessionDir`, NOT `s.workspaceDir`, to avoid polluting the user's repo / committing secrets | **N/A to this question.** This explains *where* the home lives, not *whether* a separate home is needed. Pointing creds at the operator's real `~/.claude` (outside the repo) satisfies it trivially. |
+
+**Conclusion of the inventory:** of the seven reasons, **six are either the copy
+bug itself, or state that is cwd/id-keyed and safe to share, or out of scope.**
+Only the IS_SANDBOX assertion (#6) is a distinct, non-bug reason — and it is a
+*comment's framing*, not a hard dependency (§1.6.3).
+
+### 1.6.2 The host already proves sharing is safe
+
+Verified live on this box (2026-06-23): **multiple `claude` processes are running
+concurrently off the single `/root/.claude`** — `ps` shows several
+`/root/.local/share/claude/versions/{2.1.185,2.1.186} --agent claude` processes
+plus the `claude daemon` supervisor, all sharing one config dir and one
+`daemon.log`. The daemon's cross-process refresh coordination
+(`token still valid (cross-process refresh or not yet due)`, §1.3) is exactly the
+mechanism that makes this safe. **claude is designed for one config dir + many
+processes + many cwds; the per-session ephemeral HOME was conduit's invention,
+not claude's requirement.** Codex honours `CODEX_HOME` natively and the broker
+already injects it (`lifecycle.go:127`), so pointing it at the real `~/.codex`
+is a one-value change. The original OAuth plan even noted "the temp-file-rename
+pattern that **both CLIs use**" (`docs/archive/PLAN-AGENT-OAUTH.md §G.3`) —
+corroborating §6's rename-proof argument for *both* providers.
+
+### 1.6.3 Blast radius / the sandbox boundary — honest assessment
+
+With the real `$HOME`, a misbehaving or compromised session can read/write the
+operator's actual `~/.claude` and everything else under `$HOME`. Is today's
+ephemeral home a real boundary worth keeping?
+
+- It is **not a security boundary in any meaningful sense today.** Sessions
+  already run as the **broker UID (root on the bare-VPS deploy)** with
+  `--dangerously-skip-permissions` + `IS_SANDBOX=1`, and the session's cwd is the
+  operator's **real repo** (`s.requestedCWD`), which it can already read/write
+  arbitrarily. An agent that wanted the operator's `~/.claude` could already
+  `cat ~/.claude/.credentials.json` from its shell — `$HOME` being elsewhere does
+  not stop it. The ephemeral home is a **convenience/isolation** boundary, not a
+  containment one.
+- The **IS_SANDBOX comment's** "each session gets an ephemeral per-session
+  `$HOME`" is one clause of its justification, but the operative sandbox
+  properties are the **dedicated PTY** and the broker-controlled process tree,
+  not the HOME location. `IS_SANDBOX=1` is an *assertion* conduit makes to let
+  claude run skip-permissions under root; claude does not inspect HOME to
+  validate it. So pointing HOME (or just `CLAUDE_CONFIG_DIR`) at the real config
+  dir does **not** weaken the assertion in any way claude checks.
+- **Middle ground exists and is strictly better than "full real HOME":** share
+  only the **config/creds** via `CLAUDE_CONFIG_DIR` / `CODEX_HOME` pointed at the
+  operator's real `~/.claude` / `~/.codex`, while keeping a **per-session HOME**
+  for incidental state. This keeps the credential lineage unified (the actual
+  fix) without dumping every session into the operator's full home directory for
+  unrelated dotfiles. It is **exactly R1 with the canonical dir POINTED AT the
+  operator's real config dir** — i.e. Option A — not a different design.
+
+### 1.6.4 Verdict: X (don't fork) and Y (keep R1) are the SAME answer
+
+The question is framed as X-vs-Y but they reconcile into one design:
+
+- **(X) "Don't fork HOME" is correct and subsumes the bug:** the refresh race is
+  cured by making the session and the operator one lineage. The originating
+  reason for the separate home (#126's "private copy") was the bug; retiring the
+  credential fork is the fix.
+- **(Y) A separate HOME is NOT load-bearing for creds** — every cred-related
+  reason is the copy bug or cwd-keyed-and-shareable. The *only* non-bug reason
+  (IS_SANDBOX framing) does not actually depend on HOME location.
+
+**Reconciliation:** we do **not** need to relocate the *entire* HOME to fix the
+bug, and we shouldn't — most per-session HOME state (opencode, incidental
+dotfiles, the per-session `.claude.json`) is harmless to keep isolated. We need
+to unfork **only the credential lineage**, which is precisely **point
+`CLAUDE_CONFIG_DIR` / `CODEX_HOME` at the operator's real `~/.claude` / `~/.codex`
+config dir** (Option A) on a logged-in box, and at a broker-owned canonical dir
+(seeded from the app blob) on a login-less box (Option B). **That is R1.**
+
+So: **"don't fork the root" and "R1 config-dir relocation" are the same family.**
+R1 with the canonical dir = the operator's real config dir IS the "don't fork"
+answer, while preserving the per-session HOME for everything that is genuinely
+incidental. The cleanest correct design is therefore:
+
+> **Per-session HOME stays for incidental state; `CLAUDE_CONFIG_DIR` /
+> `CODEX_HOME` point at the operator's real `~/.claude` / `~/.codex` (logged-in
+> box, Option A) or a broker-owned canonical dir seeded by app-push (login-less
+> box, Option B). The credential lineage is never copied.**
+
+This is strictly simpler than the symlink design and simpler than even the
+original copy path: on a logged-in box the broker does **no copy, no symlink, no
+canonical-file seeding at all** — it sets two env vars to the operator's real
+config dirs and deletes the entire mirror/watchdog apparatus (§7). The
+**feature flag (`CONDUIT_SHARED_AGENT_CREDS`) stays** to ship dark and flip on
+the dev box after the behavioural live items (§10) pass.
+
+What this changes vs. the prior revision of this doc: the prior text already
+chose R1 and described Option A, but treated the broker-owned `agent-creds/`
+canonical dir as the *primary* layout (§3.2) and Option A as a recommendation.
+**This section promotes Option A (real config dir) to the default whenever a host
+login exists**, and demotes the broker-owned `agent-creds/` dir to the
+login-less-box fallback (Option B). The implementation map (§11) and deletion
+list (§7) already cover the code; §3.4a is the authority for the A/B selection.
+
+---
+
 ## 2. The invariant
 
 > **Exactly one refresher per lineage. Never fork the lineage.**
 
-Operationally: for each provider there is **one** canonical config directory the
-broker owns. Every session's agent process is pointed at that one directory via
-the CLI's own relocation env var (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME`
-for codex), so the agent CLIs' own cross-process refresh coordination is the
-*only* thing that ever advances the lineage. A refresh by any session, or by the
+Operationally: for each provider there is **one** canonical config directory.
+By default (logged-in box, §1.6.4 Option A) that directory **IS the operator's
+real `~/.claude` / `~/.codex`**; on a login-less box (Option B) it is a
+broker-owned dir under `conduitRoot`, seeded from the app-pushed blob. Every
+session's agent process is pointed at that one directory via the CLI's own
+relocation env var (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex), so
+the agent CLIs' own cross-process refresh coordination is the *only* thing that
+ever advances the lineage. A refresh by any session, or by the
 operator's own interactive `claude`/`codex`, mutates the **same bytes** everyone
 else reads. **There is no second head to strand, and no write mode can create
 one**: a temp-file+rename writes the temp file *into the shared canonical dir*
@@ -203,10 +349,16 @@ Corollary invariants the design must also hold:
 
 ### 3.1 Decision per provider
 
+The canonical dir is selected per §1.6.4 / §3.4a: **Option A (default when a host
+login exists) = the operator's real `~/.claude` / `~/.codex`** — zero copy, the
+operator IS the lineage; **Option B (login-less box) = a broker-owned dir under
+`conduitRoot`**, seeded from the app-pushed blob. The env-injection mechanism is
+identical either way — only the *target path* differs.
+
 | Provider | Mechanism | Env injected (lifecycle.go `commandEnv`) | Why rename-proof |
 |----------|-----------|------------------------------------------|------------------|
-| **claude** | **R1 — relocate `CLAUDE_CONFIG_DIR`** to a shared canonical dir | `CLAUDE_CONFIG_DIR=<conduitRoot>/agent-creds/anthropic` | A temp+rename happens *inside the shared dir* and still targets the one `.credentials.json` there; leverages claude's proven cross-process refresh coordination (§1.3). |
-| **codex** | **R1 — relocate `CODEX_HOME`** to a shared canonical dir | `CODEX_HOME=<conduitRoot>/agent-creds/openai` (replaces the current per-session `<home>/.codex`) | Same: rename targets the one `$CODEX_HOME/auth.json`; even with *no* cross-process lock the loser re-reads the winner's fresh `auth.json` because it is the same file. |
+| **claude** | **R1 — relocate `CLAUDE_CONFIG_DIR`** to the canonical dir | `CLAUDE_CONFIG_DIR=$HOME/.claude` (Option A) **or** `<conduitRoot>/agent-creds/anthropic` (Option B) | A temp+rename happens *inside the shared dir* and still targets the one `.credentials.json` there; leverages claude's proven cross-process refresh coordination (§1.3). |
+| **codex** | **R1 — relocate `CODEX_HOME`** to the canonical dir | `CODEX_HOME=$HOME/.codex` (Option A) **or** `<conduitRoot>/agent-creds/openai` (Option B) — replaces the current per-session `<home>/.codex` | Same: rename targets the one `$CODEX_HOME/auth.json`; even with *no* cross-process lock the loser re-reads the winner's fresh `auth.json` because it is the same file. |
 | **opencode / gemini** | **not in the race** — env-key / reusable-token providers. **No relocation.** | unchanged | No single-use rotation; nothing to fork. |
 
 R2 (per-file symlink) is **demoted to a rejected alternative** (§3.5): it cannot
@@ -502,6 +654,17 @@ the mechanism.
 
 ## 7. What gets DELETED / shrunk
 
+**On a logged-in box (Option A, the default), the credential side of agent-home
+spawn collapses to almost nothing:** the broker sets
+`CLAUDE_CONFIG_DIR=$HOME/.claude` / `CODEX_HOME=$HOME/.codex` and does **no
+credential copy, no symlink, and no canonical-file seeding** — the session reads
+the operator's real config dir directly. The per-session HOME *itself* is
+retained for incidental state (opencode, `.claude.json`, the PTY/sandbox), but
+its entire claude/codex **credential** apparatus is removed. Two now-false code
+comments must be corrected as part of the change: `manager.go:266` ("The
+per-session HOME is what breaks the concurrent-refresh race" — it CAUSES it) and
+the `lifecycle.go` §G.2 HOME-injection comment.
+
 Under R1 the watchdog credential branch **fully dies** for both providers:
 
 - **`broker/internal/session/credfresh.go` — the watchdog re-mirror is
@@ -653,14 +816,14 @@ exists to fork). This is the key change from the prior revision.
 | File | Change |
 |------|--------|
 | `broker/internal/session/lifecycle.go` | In `commandEnv` (the HOME/`CODEX_HOME` injection block, ~L124–129): when `CONDUIT_SHARED_AGENT_CREDS` is on, set `CLAUDE_CONFIG_DIR=<canonicalDir(anthropic)>` for claude sessions and `CODEX_HOME=<canonicalDir(openai)>` (replacing the per-session `<home>/.codex`). Delete `mirrorHostCredentials` for claude/codex (keep an opencode-only mirror). Keep `seedClaudeConfig` (also seed the canonical `.claude.json` when flagged). |
-| `broker/internal/session/credseed.go` (new) | `ensureCanonicalCred(provider)` (seed precedence §3.4) + `canonicalCredDir(provider)` + relocated `useHostOverAppBlob` / `credentialExpiryMillis` / `jwtExpiryMillis`. Option A vs B selection (host dir when a host login exists, broker-owned dir otherwise). |
+| `broker/internal/session/credseed.go` (new) | `canonicalCredDir(provider)` does the **Option A vs B selection: return the operator's real `$HOME/.claude` / `$HOME/.codex` when a host login exists (Option A — and then `ensureCanonicalCred` is a NO-OP, no seeding), else a broker-owned `agent-creds/<provider>` dir (Option B)**. `ensureCanonicalCred(provider)` seeds ONLY the Option-B dir (precedence §3.4) + relocated `useHostOverAppBlob` / `credentialExpiryMillis` / `jwtExpiryMillis`. |
 | `broker/internal/session/credfresh.go` | **Delete** `refreshStaleAgentCredentials` + `sessionCredentialFile`. Move retained expiry helpers to `credseed.go`. File may be removed entirely. |
 | `broker/internal/session/watchdog.go` | Remove the `refreshStaleAgentCredentials()` call (L68). |
 | `broker/internal/session/manager.go` | Spawn path (~L458–530): once-per-provider `ensureCanonicalCred`; drop the per-session copy, the `allProviders` claude/codex mirror loop, and the per-session Materialize. Remove the claude/codex branches from `cleanupAgentHomeCredentials` (~L1349). Gut/remove `RefreshAllSessionCredentials` (~L1731). Gate everything on `CONDUIT_SHARED_AGENT_CREDS`. |
 | `broker/internal/session/stage_transcript.go` | `stageExternalTranscript` takes the destination config dir as a parameter (the canonical dir under R1) instead of hardcoding `agentHome/.claude` / `agentHome/.codex`. |
 | `broker/internal/session/{accountusage,aigen,codexaccountusage}.go` | Read the canonical cred dir (or have `selectAIGenProvider` receive the canonical dir) instead of `agentHomeDir`, when the flag is on. |
 | `broker/internal/credentials/store.go` | Add `MaterializeCanonical(provider, canonicalDir)` (writes `.credentials.json` / `auth.json` at the canonical path) and a `Set` hook to re-seed the canonical file on account-switch. Encrypted store otherwise unchanged. |
-| `broker/cmd/conduit-broker/main.go` | Read `CONDUIT_SHARED_AGENT_CREDS`; ensure `agent-creds/<provider>/` dirs at startup; seed canonical files for stored providers on boot. |
+| `broker/cmd/conduit-broker/main.go` | Read `CONDUIT_SHARED_AGENT_CREDS`. **Option-B only**: ensure `agent-creds/<provider>/` dirs at startup + seed canonical files for stored providers on boot. On a logged-in box (Option A) there is nothing to create or seed — sessions point at the real `~/.claude` / `~/.codex`. |
 | tests | `credseed_test.go` (new), update `credfresh_test.go`, add the multi-session same-canonical-dir + distinct-cwd-slug assertions. |
 
 ---
