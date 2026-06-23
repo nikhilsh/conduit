@@ -284,6 +284,21 @@ type Session struct {
 	// that spawned BEFORE the app credential arrived (credfresh.go).
 	// nil when no store was wired (legacy host-mirror path).
 	agentCredStore *credentials.Store
+	// sharedCredConfigEnv carries the CONDUIT_SHARED_AGENT_CREDS config-dir
+	// relocation env vars (CLAUDE_CONFIG_DIR / CODEX_HOME → canonical dir)
+	// to inject in commandEnv. Populated at spawn ONLY when the flag is on;
+	// nil/empty on the default (flag-off) per-session-copy path, which keeps
+	// commandEnv byte-for-byte unchanged. See credseed.go.
+	sharedCredConfigEnv map[string]string
+	// sharedCredHome is the credential lookup home chosen for this session
+	// under CONDUIT_SHARED_AGENT_CREDS: the operator's real $HOME (Option A)
+	// or the broker-owned <conduitRoot>/agent-cred dir (Option B). Its
+	// .claude/.codex subpaths hold the live credential the broker-side
+	// fetchers read. Empty on the flag-off path (fetchers use agentHomeDir).
+	sharedCredHome string
+	// sharedCredOptionA records whether sharedCredHome IS the operator's real
+	// $HOME (read-through, no broker writes). Diagnostic / future use.
+	sharedCredOptionA bool
 	// credentialSource records which credential was used at spawn time:
 	// "box" when the host login (~/.claude/.credentials.json etc.) was
 	// used, "app_forwarded" when the app-pushed OAuth blob was
@@ -462,100 +477,160 @@ func newSession(id string, adapter agents.Adapter, opts sessionOptions) (*Sessio
 		s.agentHomeDir = ephemeral
 		s.agentCredProvider = provider
 		s.agentCredStore = opts.credStore
-		populated := false
-		if opts.credStore != nil && provider != "" && opts.credStore.Has(provider) {
-			// Stale-blob guard (credfresh.go): an app-pushed blob whose
-			// token already expired can't be refreshed by the agent
-			// (Anthropic rotates refresh tokens, and the host login has
-			// long since consumed this lineage's) — materializing it
-			// verbatim yields a session that 401s on every turn while
-			// the box itself is happily logged in. Prefer the host
-			// login when it's strictly fresher than an expired blob.
-			useBlob := true
-			if blob, err := opts.credStore.Get(provider); err == nil {
-				if skip, blobExp, hostExp := useHostOverAppBlob(provider, blob); skip {
-					useBlob = false
-					fmt.Fprintf(os.Stderr, "session %s: stored %s OAuth blob expired (expiry %d < host %d); using host credentials\n", s.ID, provider, blobExp, hostExp)
+		if sharedAgentCredsEnabled() {
+			// CONDUIT_SHARED_AGENT_CREDS (doc PLAN-AGENT-CREDENTIAL-LINEAGE.md):
+			// do NOT fork the credential into a per-session copy. Resolve ONE
+			// canonical config dir per provider (Option A = operator's real
+			// ~/.claude/~/.codex when a host login exists; Option B = a
+			// broker-owned dir seeded from the app blob otherwise) and point
+			// the session at it via the CLI's own relocation env var. Every
+			// session in the race shares one lineage head, so the agent CLIs'
+			// cross-process refresh coordination — not a broker copy — governs
+			// refreshes, and the operator's host login is never stranded.
+			//
+			// Seed BOTH providers (anthropic + openai) so the interactive
+			// Terminal tab is logged into whichever CLI the user runs, matching
+			// the flag-off "mirror every provider" loop below.
+			res, seedErr := ensureSharedCred(s.conduitRoot, opts.credStore)
+			if seedErr != nil {
+				// Non-fatal (doc §8 fail-safe): the env still points at the
+				// resolved dirs; the agent prompts /login if a file is absent.
+				fmt.Fprintf(os.Stderr, "session %s: ensureSharedCred: %v (agent may prompt for login)\n", s.ID, seedErr)
+			}
+			credEnv, configDirs := sharedCredEnvFrom(res)
+			s.sharedCredConfigEnv = credEnv
+			s.sharedCredHome = res.home
+			s.sharedCredOptionA = res.optionA
+			// Seed the per-build .claude.json (theme/onboarding) into a
+			// broker-owned CLAUDE_CONFIG_DIR too (NO-OP under Option A). The
+			// $HOME/.claude.json seed below still runs for all builds.
+			if err := seedClaudeCanonicalConfig(res); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: seedClaudeCanonicalConfig: %v\n", s.ID, err)
+			}
+			if err := seedClaudeConfig(ephemeral); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
+			}
+			// credential_source banner: derive from the session's own provider's
+			// canonical resolution ("app_forwarded" when seeded from the pushed
+			// blob, "box" when pointing at the host login).
+			if provider != "" {
+				if label := res.sourceLabel[provider]; label != "" {
+					s.credentialSource = label
+					log.Printf("session %s: credential_source=%s (provider=%s, shared-creds)", s.ID, label, provider)
 				}
 			}
-			if useBlob {
-				if err := opts.credStore.Materialize(provider, ephemeral); err != nil {
-					fmt.Fprintf(os.Stderr, "session %s: credentials.Materialize(%s): %v (falling back to host-creds copy)\n", s.ID, provider, err)
-				} else {
-					populated = true
+			// Resume staging targets the canonical dir under the flag (doc §3.6).
+			realHome := hostHomeDir()
+			if er := opts.externalResume; er.ExternalID != "" {
+				stageExternalTranscriptInto(configDirs, ephemeral, realHome, er.Agent, er.ExternalID)
+				seedResumeRecap(s.convLog.path, er.Agent, er.ExternalID, ephemeral, s.recapBinary(er.Agent))
+			}
+			if ef := opts.externalFork; ef.ExternalID != "" {
+				stageExternalTranscriptInto(configDirs, ephemeral, realHome, ef.Agent, ef.ExternalID)
+				seedResumeRecap(s.convLog.path, ef.Agent, ef.ExternalID, ephemeral, s.recapBinary(ef.Agent))
+			}
+		} else {
+			// ── Default (CONDUIT_SHARED_AGENT_CREDS OFF) ── today's behaviour,
+			// byte-for-byte: each session gets a PRIVATE copy of the credential
+			// (credStore.Materialize OR mirrorHostCredentials), the every-other-
+			// provider mirror loop, and the credfresh.go watchdog re-mirror. This
+			// apparatus is intentionally retained as the else-branch; its deletion
+			// is a deliberate FOLLOW-UP after the flag's live items pass (doc §7).
+			populated := false
+			if opts.credStore != nil && provider != "" && opts.credStore.Has(provider) {
+				// Stale-blob guard (credfresh.go): an app-pushed blob whose
+				// token already expired can't be refreshed by the agent
+				// (Anthropic rotates refresh tokens, and the host login has
+				// long since consumed this lineage's) — materializing it
+				// verbatim yields a session that 401s on every turn while
+				// the box itself is happily logged in. Prefer the host
+				// login when it's strictly fresher than an expired blob.
+				useBlob := true
+				if blob, err := opts.credStore.Get(provider); err == nil {
+					if skip, blobExp, hostExp := useHostOverAppBlob(provider, blob); skip {
+						useBlob = false
+						fmt.Fprintf(os.Stderr, "session %s: stored %s OAuth blob expired (expiry %d < host %d); using host credentials\n", s.ID, provider, blobExp, hostExp)
+					}
+				}
+				if useBlob {
+					if err := opts.credStore.Materialize(provider, ephemeral); err != nil {
+						fmt.Fprintf(os.Stderr, "session %s: credentials.Materialize(%s): %v (falling back to host-creds copy)\n", s.ID, provider, err)
+					} else {
+						populated = true
+					}
 				}
 			}
-		}
-		if !populated && provider != "" {
-			if err := mirrorHostCredentials(provider, ephemeral); err != nil {
-				// Non-fatal: agent will see an empty HOME and prompt
-				// for login. Clean error path; no race with peers.
-				fmt.Fprintf(os.Stderr, "session %s: mirrorHostCredentials(%s): %v (agent will prompt for login)\n", s.ID, provider, err)
-			}
-		}
-		// Detect which credential was actually used so the app can show a
-		// banner when it is supplying the credential as a fallback.
-		if provider != "" {
-			if populated {
-				s.credentialSource = "app_forwarded"
-				log.Printf("session %s: credential_source=app_forwarded (provider=%s)", s.ID, provider)
-			} else if hf := hostCredentialFile(provider); hf != "" {
-				if _, err := os.Stat(hf); err == nil {
-					s.credentialSource = "box"
-					log.Printf("session %s: credential_source=box (provider=%s)", s.ID, provider)
+			if !populated && provider != "" {
+				if err := mirrorHostCredentials(provider, ephemeral); err != nil {
+					// Non-fatal: agent will see an empty HOME and prompt
+					// for login. Clean error path; no race with peers.
+					fmt.Fprintf(os.Stderr, "session %s: mirrorHostCredentials(%s): %v (agent will prompt for login)\n", s.ID, provider, err)
 				}
 			}
-		}
-		// The interactive Terminal tab runs under this SAME ephemeral HOME.
-		// If we only materialized the session's own agent provider, the user
-		// would find `claude`/`codex` LOGGED OUT in the terminal of any
-		// session whose agent differs — a `shell` session (no provider at
-		// all), or running `codex` inside a claude session and vice-versa —
-		// even though the box itself is logged in. Mirror the host login for
-		// every OTHER known provider too so the terminal is always logged in
-		// for whatever CLI the user runs. Host-creds only (the app-blob path
-		// stays reserved for the agent's own provider above), best-effort,
-		// and quiet on the common "host isn't logged into that agent" case.
-		// Each session keeps its own private copy, so this does NOT
-		// reintroduce the cross-session refresh-token race.
-		allProviders := opts.credentialProviders
-		if len(allProviders) == 0 {
-			allProviders = allCredentialProviders()
-		}
-		for _, p := range allProviders {
-			if p == provider {
-				continue // already materialized above (possibly via app blob)
+			// Detect which credential was actually used so the app can show a
+			// banner when it is supplying the credential as a fallback.
+			if provider != "" {
+				if populated {
+					s.credentialSource = "app_forwarded"
+					log.Printf("session %s: credential_source=app_forwarded (provider=%s)", s.ID, provider)
+				} else if hf := hostCredentialFile(provider); hf != "" {
+					if _, err := os.Stat(hf); err == nil {
+						s.credentialSource = "box"
+						log.Printf("session %s: credential_source=box (provider=%s)", s.ID, provider)
+					}
+				}
 			}
-			_ = mirrorHostCredentials(p, ephemeral)
-		}
-		// Seed a theme + onboarding marker so Claude Code's first-run
-		// interactive theme picker doesn't block the PTY — for the agent AND
-		// for an interactive `claude` the user runs in the Terminal tab of a
-		// non-claude session. Harmless for codex (no equivalent prompt); the
-		// file only matters to claude. Non-fatal.
-		if err := seedClaudeConfig(ephemeral); err != nil {
-			fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
-		}
-		// Stage the external conversation transcript into the isolated agent-home
-		// so --resume / exec resume can find it. External sessions (Found Sessions
-		// adopt-resume / adopt-fork) store their transcripts in the broker's real
-		// $HOME (~/.claude/projects/…  or  ~/.codex/sessions/…), but the agent
-		// runs with HOME=<ephemeral> and can't see them. Copy the file before the
-		// agent launches. Best-effort: a miss is logged but never blocks the spawn.
-		realHome := hostHomeDir()
-		if er := opts.externalResume; er.ExternalID != "" {
-			stageExternalTranscript(ephemeral, realHome, er.Agent, er.ExternalID)
-			// Seed the new session's chat log with an agent-WRITTEN recap of the
-			// prior transcript so the Chat tab opens showing "what we were doing"
-			// rather than appearing empty. Bounded + best-effort: never blocks
-			// the spawn past recapTimeout, falls back to a deterministic note.
-			seedResumeRecap(s.convLog.path, er.Agent, er.ExternalID, ephemeral, s.recapBinary(er.Agent))
-		}
-		if ef := opts.externalFork; ef.ExternalID != "" {
-			stageExternalTranscript(ephemeral, realHome, ef.Agent, ef.ExternalID)
-			// Same recap for fork: the user branched the conversation and should
-			// see a recap of the prior context as the starting point.
-			seedResumeRecap(s.convLog.path, ef.Agent, ef.ExternalID, ephemeral, s.recapBinary(ef.Agent))
+			// The interactive Terminal tab runs under this SAME ephemeral HOME.
+			// If we only materialized the session's own agent provider, the user
+			// would find `claude`/`codex` LOGGED OUT in the terminal of any
+			// session whose agent differs — a `shell` session (no provider at
+			// all), or running `codex` inside a claude session and vice-versa —
+			// even though the box itself is logged in. Mirror the host login for
+			// every OTHER known provider too so the terminal is always logged in
+			// for whatever CLI the user runs. Host-creds only (the app-blob path
+			// stays reserved for the agent's own provider above), best-effort,
+			// and quiet on the common "host isn't logged into that agent" case.
+			// Each session keeps its own private copy, so this does NOT
+			// reintroduce the cross-session refresh-token race.
+			allProviders := opts.credentialProviders
+			if len(allProviders) == 0 {
+				allProviders = allCredentialProviders()
+			}
+			for _, p := range allProviders {
+				if p == provider {
+					continue // already materialized above (possibly via app blob)
+				}
+				_ = mirrorHostCredentials(p, ephemeral)
+			}
+			// Seed a theme + onboarding marker so Claude Code's first-run
+			// interactive theme picker doesn't block the PTY — for the agent AND
+			// for an interactive `claude` the user runs in the Terminal tab of a
+			// non-claude session. Harmless for codex (no equivalent prompt); the
+			// file only matters to claude. Non-fatal.
+			if err := seedClaudeConfig(ephemeral); err != nil {
+				fmt.Fprintf(os.Stderr, "session %s: seedClaudeConfig: %v (agent may show first-run theme picker)\n", s.ID, err)
+			}
+			// Stage the external conversation transcript into the isolated agent-home
+			// so --resume / exec resume can find it. External sessions (Found Sessions
+			// adopt-resume / adopt-fork) store their transcripts in the broker's real
+			// $HOME (~/.claude/projects/…  or  ~/.codex/sessions/…), but the agent
+			// runs with HOME=<ephemeral> and can't see them. Copy the file before the
+			// agent launches. Best-effort: a miss is logged but never blocks the spawn.
+			realHome := hostHomeDir()
+			if er := opts.externalResume; er.ExternalID != "" {
+				stageExternalTranscript(ephemeral, realHome, er.Agent, er.ExternalID)
+				// Seed the new session's chat log with an agent-WRITTEN recap of the
+				// prior transcript so the Chat tab opens showing "what we were doing"
+				// rather than appearing empty. Bounded + best-effort: never blocks
+				// the spawn past recapTimeout, falls back to a deterministic note.
+				seedResumeRecap(s.convLog.path, er.Agent, er.ExternalID, ephemeral, s.recapBinary(er.Agent))
+			}
+			if ef := opts.externalFork; ef.ExternalID != "" {
+				stageExternalTranscript(ephemeral, realHome, ef.Agent, ef.ExternalID)
+				// Same recap for fork: the user branched the conversation and should
+				// see a recap of the prior context as the starting point.
+				seedResumeRecap(s.convLog.path, ef.Agent, ef.ExternalID, ephemeral, s.recapBinary(ef.Agent))
+			}
 		}
 	}
 	cmd.Env = s.commandEnv(nil)
@@ -644,7 +719,26 @@ func (s *Session) selectAIGen(assistant string) aiGenProvider {
 	if s.modelCatalog != nil {
 		catalog = s.modelCatalog()
 	}
-	return selectAIGenProvider(assistant, s.agentHomeDir, codexBin, nil, catalog)
+	return selectAIGenProvider(assistant, s.credLookupHome(), codexBin, nil, catalog)
+}
+
+// credLookupHome is the directory under which the broker-side fetchers
+// (account usage, AI niceties) find the live credential at the
+// provider-native subpath `<home>/.claude/.credentials.json` resp
+// `<home>/.codex/auth.json`.
+//
+//   - Flag OFF (default): the per-session ephemeral HOME, where the private
+//     copy was materialized/mirrored. Unchanged behaviour.
+//   - Flag ON: the shared credential lookup home (Option A = the operator's
+//     real $HOME; Option B = <conduitRoot>/agent-cred), so the fetchers read
+//     the SAME canonical lineage the agent refreshes — never a stale
+//     per-session copy. Falls back to agentHomeDir if the shared home was
+//     not resolved (defensive).
+func (s *Session) credLookupHome() string {
+	if sharedAgentCredsEnabled() && strings.TrimSpace(s.sharedCredHome) != "" {
+		return s.sharedCredHome
+	}
+	return s.agentHomeDir
 }
 
 // startChatBackend builds the structured chat backend for `adapter` and

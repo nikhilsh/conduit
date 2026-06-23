@@ -136,7 +136,7 @@ func (s *Session) RefreshAccountUsage() {
 	ctx, cancel := context.WithTimeout(context.Background(), accountUsageTimeout)
 	defer cancel()
 
-	u, ok, err := backend.Usage(ctx, do, s.agentHomeDir)
+	u, ok, err := backend.Usage(ctx, do, s.credLookupHome())
 	if !ok || err != nil {
 		return
 	}

@@ -127,6 +127,18 @@ func (s *Session) commandEnv(extra map[string]string) []string {
 			pairs["CODEX_HOME"] = filepath.Join(s.agentHomeDir, ".codex")
 		}
 	}
+	// CONDUIT_SHARED_AGENT_CREDS (doc PLAN-AGENT-CREDENTIAL-LINEAGE.md):
+	// when the flag is on, retarget the CLI config-dir env vars
+	// (CLAUDE_CONFIG_DIR / CODEX_HOME) at the shared canonical dirs so every
+	// session reads ONE credential lineage head instead of a private copy.
+	// These intentionally OVERRIDE the per-session CODEX_HOME set above (and
+	// add CLAUDE_CONFIG_DIR) — both providers are set so the interactive
+	// Terminal tab is logged in for whichever CLI the user runs. The map is
+	// nil/empty on the default flag-off path, so this loop is a no-op there
+	// and commandEnv stays byte-for-byte unchanged.
+	for k, v := range s.sharedCredConfigEnv {
+		pairs[k] = v
+	}
 	// Preview dev-server port (AGENT-ADAPTERS.md §2.3): the agent binds $PORT
 	// and the broker reverse-proxies `/preview/<id>/` to it; $AGENT_CHAT_PORT
 	// (=PORT+1000) is the optional MCP view_event bridge. Only set when a port
