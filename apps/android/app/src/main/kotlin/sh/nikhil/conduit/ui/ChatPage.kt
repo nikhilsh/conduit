@@ -429,12 +429,13 @@ fun ChatPage(
     // recreated as new events stream in, so a settled card can't re-fire.
     // Mirror of iOS `ConduitChatView.answeredPendingIDs`.
     var answeredPendingIds by remember { mutableStateOf(setOf<String>()) }
-    // Content fingerprints of answered pending-input cards: prompt + sorted
-    // options joined with "|". Supplements `answeredPendingIds` so a broker
-    // re-emitting the SAME pending card with a fresh id (after an app
-    // reconnect) still renders locked / "Sent" rather than showing a duplicate
-    // interactive card. Mirror of iOS `answeredPendingFingerprints`.
-    var answeredPendingFingerprints by remember { mutableStateOf(setOf<String>()) }
+    // Fingerprints of answered pending-input cards, now stored in SessionStore
+    // so they persist across chat view dismissals within the same app launch.
+    // Mirror of iOS SessionStore.answeredPendingBySession.
+    val answeredPendingBySession by store.answeredPendingBySession.collectAsState()
+    val answeredPendingTextBySession by store.answeredPendingTextBySession.collectAsState()
+    val answeredPendingFingerprintsForSession = answeredPendingBySession[session.id] ?: emptySet()
+    val answeredPendingTextForSession = answeredPendingTextBySession[session.id] ?: emptyMap()
     // IDs resolved via out-of-band approval paths (ApprovalsScreen, push
     // notification action). Folds in immediately so the inline card flips
     // to answered without waiting for the broker echo. Mirror of iOS
@@ -909,17 +910,24 @@ fun ChatPage(
                                     agentAccent = agentAccent,
                                     isContinuation = previousRole?.lowercase() == ev.role.lowercase(),
                                     pendingAnswered = ev.id in answeredPendingIds
-                                        || pendingContentFingerprint(ev) in answeredPendingFingerprints
+                                        || pendingContentFingerprint(ev) in answeredPendingFingerprintsForSession
                                         || ev.id in resolvedPendingInputIDs,
+                                    answeredText = answeredPendingTextForSession[pendingContentFingerprint(ev)],
                                     // A pending-input answer is delivered as the user's
                                     // next chat message — the broker matches it to the
                                     // blocked AskUserQuestion control request. Mirror of
                                     // iOS (`store.sendChat`), not the draft-fill path the
                                     // composer's quick-reply chips use.
-                                    onAnswerPending = { msg -> store.sendChat(session.id, msg) },
+                                    onAnswerPending = { msg ->
+                                        store.markPendingInputAnswered(
+                                            session.id,
+                                            pendingContentFingerprint(ev),
+                                            msg,
+                                        )
+                                        store.sendChat(session.id, msg)
+                                    },
                                     onPendingAnswered = {
                                         answeredPendingIds = answeredPendingIds + ev.id
-                                        answeredPendingFingerprints = answeredPendingFingerprints + pendingContentFingerprint(ev)
                                     },
                                 )
                             }
@@ -1472,6 +1480,10 @@ private fun ConversationEventRow(
     isContinuation: Boolean = false,
     /** Durable lock: this pending-input card was already answered. */
     pendingAnswered: Boolean = false,
+    /** Answer text for the chip label when the card was answered in this
+     *  app launch but the view was closed+reopened (no persisted resolution
+     *  in transcript yet). Falls back to the persisted resolution answer. */
+    answeredText: String? = null,
     /** Deliver a pending-input answer (sends as the user's chat message). */
     onAnswerPending: (String) -> Unit = {},
     /** Record this pending-input card as answered (durable upstream lock). */
@@ -1487,6 +1499,7 @@ private fun ConversationEventRow(
             ev = ev,
             agentAccent = agentAccent,
             alreadyAnswered = pendingAnswered,
+            answeredText = answeredText,
             onAnswer = onAnswerPending,
             onAnswered = onPendingAnswered,
         )
@@ -1678,6 +1691,9 @@ private fun PendingInputCard(
     ev: ConversationItem,
     @Suppress("UNUSED_PARAMETER") agentAccent: Color,
     alreadyAnswered: Boolean,
+    /** Answer text carried from the SessionStore for same-session-reopen display.
+     *  Supplements persistedResolution?.answer for the in-launch (no-transcript) path. */
+    answeredText: String? = null,
     onAnswer: (String) -> Unit,
     onAnswered: () -> Unit,
 ) {
@@ -1718,10 +1734,10 @@ private fun PendingInputCard(
     val multiSelections = remember(ev.id) { mutableStateMapOf<Int, Set<String>>() }
     var localSubmitted by remember(ev.id) { mutableStateOf(false) }
     // sentAnswer: the chosen option text shown in "Sent . <answer>". Seeded
-    // from the persisted resolution on rehydration so the answer survives
-    // close+reopen (previously the ephemeral null caused "Sent" with no text).
+    // from the persisted resolution (app-restart path) or from the in-session
+    // store answeredText (same-launch close+reopen path, no transcript marker yet).
     var sentAnswer by remember(ev.id) {
-        mutableStateOf(persistedResolution?.answer)
+        mutableStateOf(persistedResolution?.answer ?: answeredText)
     }
     // Settled once submitted locally OR recorded answered upstream OR the
     // transcript carries a persisted resolution (rehydration path).
