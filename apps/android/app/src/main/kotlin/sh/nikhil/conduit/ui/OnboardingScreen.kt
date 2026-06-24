@@ -84,6 +84,7 @@ fun OnboardingScreen(
     store: SessionStore,
     onFinish: () -> Unit,
     entry: FeatureFlags.OnboardingEntry = FeatureFlags.OnboardingEntry.firstRun,
+    onDemoMode: (() -> Unit)? = null,
 ) {
     val neon = LocalNeonTheme.current
     val appearance = LocalAppearanceStore.current
@@ -146,7 +147,7 @@ fun OnboardingScreen(
             if (step < FeatureFlags.Step.DONE) OnbProgress(neon, step)
 
             when (step) {
-                FeatureFlags.Step.WELCOME -> OnbWelcome(neon, onPair = { go(FeatureFlags.Step.INSTALL) }, onCode = { go(FeatureFlags.Step.PAIR) })
+                FeatureFlags.Step.WELCOME -> OnbWelcome(neon, onPair = { go(FeatureFlags.Step.INSTALL) }, onCode = { go(FeatureFlags.Step.PAIR) }, onDemo = onDemoMode)
                 FeatureFlags.Step.INSTALL -> OnbInstall(neon, guide, onNext = { go(FeatureFlags.Step.PAIR) })
                 else -> OnbPair(neon, guide, onPair = {
                     // Each specific transport method logs its own crumb
@@ -242,7 +243,7 @@ private fun OnbProgress(neon: NeonTheme, step: Int) {
 }
 
 @Composable
-private fun OnbWelcome(neon: NeonTheme, onPair: () -> Unit, onCode: () -> Unit) {
+private fun OnbWelcome(neon: NeonTheme, onPair: () -> Unit, onCode: () -> Unit, onDemo: (() -> Unit)? = null) {
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp),
         verticalArrangement = Arrangement.Center,
@@ -265,10 +266,19 @@ private fun OnbWelcome(neon: NeonTheme, onPair: () -> Unit, onCode: () -> Unit) 
         OnbPrimary(neon, "Pair a machine", onPair)
         Spacer(Modifier.height(11.dp))
         Text(
-            "Already running a broker?  Enter a code →",
+            "Already running a broker?  Enter a code ->",
             fontFamily = neon.mono, fontSize = 13.sp, color = neon.codex,
             modifier = Modifier.clickable(onClick = onCode).padding(6.dp),
         )
+        // Demo mode CTA for App Store reviewers who have no VPS.
+        if (onDemo != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Explore without a server",
+                fontFamily = neon.sans, fontSize = 12.sp, color = neon.textDim,
+                modifier = Modifier.clickable(onClick = onDemo).padding(6.dp),
+            )
+        }
     }
 }
 

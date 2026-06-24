@@ -49,6 +49,8 @@ extension ConduitUI {
             // and causes a visible sequencing glitch on fresh install.
             guard !splashActive else { return false }
             guard !onboardingFinished else { return false }
+            // Demo mode bypasses onboarding entirely — the fake shell IS the app.
+            guard !store.isDemoMode else { return false }
             let route = FeatureFlags.onboardingRoute(
                 pairedBrokers: store.savedServers.count,
                 brokerReachable: store.harness.canIssueCommands
@@ -62,7 +64,9 @@ extension ConduitUI {
                     // `.container` (not a bare ignore) so the root canvas never
                     // claims the `.keyboard` region — see GlassAppBackground.
                     .ignoresSafeArea(.container, edges: .all)
-                if horizontalSizeClass == .regular {
+                if store.isDemoMode {
+                    DemoShell()
+                } else if horizontalSizeClass == .regular {
                     TabletShell()
                 } else {
                     ConduitUI.HomeView()
@@ -76,6 +80,18 @@ extension ConduitUI {
                     .environment(store)
                     .environment(flags)
             }
+        }
+    }
+
+    // MARK: - DemoShell (App Store reviewer demo mode)
+    //
+    // Shown when store.isDemoMode is true. Routes to the appropriate
+    // DemoHomeView layout (phone vs. tablet) via the environment size class.
+    // Exits by calling store.deactivateDemo() from within DemoHomeView.
+
+    fileprivate struct DemoShell: View {
+        var body: some View {
+            ConduitUI.DemoHomeView()
         }
     }
 

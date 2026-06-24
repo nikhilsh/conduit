@@ -288,10 +288,21 @@ extension ConduitUI {
                     primaryCTA("Pair a machine", icon: "chevron.right") { go(to: .install) }
                     Button { go(to: .pair) } label: {
                         (Text("Already running a broker?  ").foregroundColor(neon.textFaint)
-                         + Text("Enter a code →").foregroundColor(neon.codex))
+                         + Text("Enter a code ->").foregroundColor(neon.codex))
                             .font(neon.mono(13))
                     }
                     .buttonStyle(.plain)
+                    // Demo mode CTA for App Store reviewers who have no VPS.
+                    Button {
+                        store.activateDemo()
+                        onFinish()
+                    } label: {
+                        Text("Explore without a server")
+                            .font(.footnote)
+                            .foregroundStyle(neon.textDim)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
                 }
                 .padding(.horizontal, 28)
                 .padding(.bottom, 24)

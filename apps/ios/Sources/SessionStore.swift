@@ -838,6 +838,24 @@ final class SessionStore {
         }
     }
 
+    // MARK: - Demo mode
+    /// True when the user activated the in-app demo (no real server needed).
+    /// Persisted so a relaunch stays in demo until the user exits.
+    var isDemoMode: Bool {
+        get { UserDefaults.standard.bool(forKey: "conduit.isDemoMode") }
+        set { UserDefaults.standard.set(newValue, forKey: "conduit.isDemoMode") }
+    }
+
+    func activateDemo() {
+        isDemoMode = true
+        Telemetry.breadcrumb("demo", "activated")
+    }
+
+    func deactivateDemo() {
+        isDemoMode = false
+        Telemetry.breadcrumb("demo", "deactivated")
+    }
+
     var harness: HarnessState = .disconnected
     var sessions: [ProjectSession] = []
     var selectedSessionID: String?
