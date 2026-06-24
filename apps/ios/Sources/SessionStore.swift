@@ -5072,14 +5072,10 @@ final class SessionStore {
     /// broker / core constant; mirrors core `strip_pending_sentinel`.
     nonisolated static func stripPendingSentinel(_ text: String) -> String {
         let sentinel = ConduitUI.ChatViewModel.pendingInputSentinel
-        let resolvedMarker = ConduitUI.ChatViewModel.pendingResolvedMarker
-        guard text.contains(sentinel) || text.contains(resolvedMarker) else { return text }
+        guard text.contains(sentinel) else { return text }
         return text
             .components(separatedBy: "\n")
-            .filter {
-                let t = $0.trimmingCharacters(in: .whitespaces)
-                return t != sentinel && !t.hasPrefix(resolvedMarker)
-            }
+            .filter { $0.trimmingCharacters(in: .whitespaces) != sentinel }
             .joined(separator: "\n")
     }
 
