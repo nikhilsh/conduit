@@ -34,8 +34,9 @@ After the upload, the workflow runs `apps/ios/scripts/testflight-postprocess.py`
 Two `workflow_dispatch` inputs tune this: `beta_group_names` (comma-separated,
 default `Conduit Internal`) and `wait_for_processing` (default true). Tag-triggered
 runs use the defaults. External (public-link) distribution and beta-review
-submission are intentionally **not** automated yet — we're internal-only until a
-reviewer demo-mode exists (Conduit can't be tested without a live broker).
+submission are intentionally **not** automated yet — a reviewer demo-mode is being
+built (feat/apple-review-demo-mode-impl) to allow App Store review without a live
+broker. Once that ships and is device-verified, external distribution can be enabled.
 
 ## One-time setup (required before the first TestFlight build)
 

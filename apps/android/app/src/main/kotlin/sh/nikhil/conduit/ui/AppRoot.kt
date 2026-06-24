@@ -70,6 +70,7 @@ fun AppRoot(
     val endpoint by store.endpoint.collectAsState()
     val harness by store.harness.collectAsState()
     val savedServers by store.savedServers.collectAsState()
+    val isDemoMode by store.isDemoMode.collectAsState()
 
     // Onboarding gate (section 5) -- accounts-free, device-local. No sign-in wall:
     // show the wizard when this device holds no broker pairing key. `Full`
@@ -80,7 +81,8 @@ fun AppRoot(
     // but allowing onboarding to compose underneath causes a visible flash
     // when the splash dismisses. Show onboarding only AFTER the splash has
     // finished (showSplash flips false after the cross-fade completes).
-    val needsOnboarding = !showSplash && !onboardingFinished &&
+    // Also skip onboarding when demo mode is active -- the demo shell replaces it.
+    val needsOnboarding = !showSplash && !onboardingFinished && !isDemoMode &&
         FeatureFlags.onboardingRoute(
             pairedBrokers = savedServers.size,
             brokerReachable = harness is HarnessState.Live || harness is HarnessState.Linked,
@@ -444,6 +446,10 @@ fun AppRoot(
         OnboardingScreen(
             store = store,
             onFinish = { onboardingFinished = true },
+            onDemoMode = {
+                store.activateDemo()
+                onboardingFinished = true
+            },
         )
     }
 
@@ -457,6 +463,13 @@ fun AppRoot(
             onFinish = { showOnboarding = false },
             entry = onboardingEntry,
         )
+    }
+
+    // Demo mode overlay: DemoHomeScreen renders over the real app content.
+    // The real Box/BoxWithConstraints tree above is still composed but hidden
+    // behind the demo shell. The splash still renders on top of everything.
+    if (isDemoMode && !showSplash) {
+        DemoHomeScreen(store = store, onExitDemo = { store.deactivateDemo() })
     }
 
     if (showSplash) {

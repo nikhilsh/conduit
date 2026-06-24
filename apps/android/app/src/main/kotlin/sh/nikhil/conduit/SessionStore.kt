@@ -539,6 +539,22 @@ internal fun <T> mergeRefreshedSessions(
  */
 class SessionStore : ViewModel(), ConduitDelegate {
 
+    // MARK: - Demo mode
+    private val _isDemoMode = MutableStateFlow(false)
+    val isDemoMode: StateFlow<Boolean> = _isDemoMode.asStateFlow()
+
+    fun activateDemo() {
+        prefs?.edit()?.putBoolean("conduit.isDemoMode", true)?.apply()
+        _isDemoMode.value = true
+        Telemetry.breadcrumb("demo", "activated")
+    }
+
+    fun deactivateDemo() {
+        prefs?.edit()?.putBoolean("conduit.isDemoMode", false)?.apply()
+        _isDemoMode.value = false
+        Telemetry.breadcrumb("demo", "deactivated")
+    }
+
     private val _endpoint = MutableStateFlow(Endpoint())
     val endpoint: StateFlow<Endpoint> = _endpoint.asStateFlow()
 
@@ -1637,6 +1653,7 @@ class SessionStore : ViewModel(), ConduitDelegate {
             _savedSessions.value = SavedSessionsReducer.decode(p.getString(KEY_SAVED_SESSIONS, null))
             _pendingChats.value = PendingChatQueue.decode(p.getString(KEY_PENDING_CHATS, null))
             _debugSshTunnelEnabled.value = p.getBoolean(KEY_SSH_TUNNEL, true)
+            _isDemoMode.value = p.getBoolean("conduit.isDemoMode", false)
             refreshRecentDirectories()
             if (_endpoint.value.isComplete && _savedServers.value.none { it.endpoint == _endpoint.value }) {
                 upsertSavedServer(_endpoint.value.displayHost, _endpoint.value, makeDefault = true)
