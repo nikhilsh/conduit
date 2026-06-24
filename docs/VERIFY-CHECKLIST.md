@@ -74,6 +74,15 @@ release, the section for that version is the device-test punch list.
 
 ---
 
+## v0.0.190
+
+**§10/§10b command-run rework (flagged) + AskUserQuestion duplicate-card hardening.** PRs #726 (iOS/iPad), #727 (Android), #725 (iOS+Android). App-only — no broker change, no redeploy. Tag cut at `229174b6`.
+
+- **1 · §10/§10b command-run "Mono block" — behind `chat.commandRunBlock` (default OFF)** — a contiguous command run renders as a flat mono code surface: an aligned `$ command` grid where success is a single muted trailing check, the exit code shows ONLY on failure (red) with the stderr tail inline, and commands truncate at the END only (kills the old middle-merge "…pro…yml | awk" bug). A run of ≥10 commands collapses to one summary line with failures surfaced inline + a quiet "N ran clean — show all" and an expandable height-capped All/Failed ledger; while the batch runs, a minimal-inline ticker shows the live command + elapsed timer + a determinate progress rule (never an indeterminate spinner; respects reduced-motion). iOS/iPad PR #726, Android PR #727. To verify: Settings → Labs → enable "Command-run Mono block", then run several shell commands (and a 10+ command batch incl. a failure). [iOS+Android phone+tablet, on-device]
+- **2 · AskUserQuestion duplicate-card hardening** — the pending-input dedup now keys on *marker-stripped* content with the answered (`[[conduit:resolved]]`) card winning, so an original card plus the broker's re-published resolved card always collapse to one (closes a codex raw-path duplicate and limits version-skew damage). PR #725. NOTE: the leaked-marker + duplicate + never-answered card the owner hit on v0.0.188 was a version skew — the live broker emits the `[[conduit:resolved]]` marker (#721) but 188 predates the client strip/consume; #721 shipped in v0.0.189, so updating past 188 fixes the reported symptom and this PR hardens it further. [iOS+Android, on-device]
+
+---
+
 ## v0.0.186
 
 **Session-safe auto-update + keyboard scroll-dismiss + push notification overhaul.** PRs #711 (iOS+Android), #712 (iOS), #713 (broker). Broker REDEPLOYED (v0.0.186 live).
