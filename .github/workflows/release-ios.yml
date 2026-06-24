@@ -47,6 +47,7 @@ jobs:
           IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           IOS_WIDGET_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_WIDGET_PROVISIONING_PROFILE_BASE64 }}
+          IOS_NOTIFICATION_SERVICE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_NOTIFICATION_SERVICE_PROVISIONING_PROFILE_BASE64 }}
         run: |
           mkdir -p "$RUNNER_TEMP/signing"
           echo "$IOS_CERTIFICATE_P12_BASE64"     | base64 --decode > "$RUNNER_TEMP/signing/cert.p12"
@@ -56,6 +57,11 @@ jobs:
             exit 1
           fi
           echo "$IOS_WIDGET_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/widget_profile.mobileprovision"
+          if [ -z "$IOS_NOTIFICATION_SERVICE_PROVISIONING_PROFILE_BASE64" ]; then
+            echo "::error title=Missing notification service profile::Set IOS_NOTIFICATION_SERVICE_PROVISIONING_PROFILE_BASE64 (an IOS_APP_ADHOC profile for sh.nikhil.conduit.notificationservice)." >&2
+            exit 1
+          fi
+          echo "$IOS_NOTIFICATION_SERVICE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/notification_profile.mobileprovision"
 
       - name: Install provisioning profile (by UUID)
         run: |
@@ -75,6 +81,14 @@ jobs:
           echo "WIDGET_PROFILE_UUID=$WIDGET_PROFILE_UUID" >> "$GITHUB_ENV"
           echo "WIDGET_PROFILE_NAME=$WIDGET_PROFILE_NAME" >> "$GITHUB_ENV"
           cp "$WIDGET_SRC" "$HOME/Library/MobileDevice/Provisioning Profiles/$WIDGET_PROFILE_UUID.mobileprovision"
+          # Notification service extension profile (own bundle id → own profile).
+          NOTIF_SRC="$RUNNER_TEMP/signing/notification_profile.mobileprovision"
+          security cms -D -i "$NOTIF_SRC" > "$RUNNER_TEMP/signing/notification_profile.plist"
+          NOTIF_PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/signing/notification_profile.plist")
+          NOTIF_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/signing/notification_profile.plist")
+          echo "NOTIF_PROFILE_UUID=$NOTIF_PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "NOTIF_PROFILE_NAME=$NOTIF_PROFILE_NAME" >> "$GITHUB_ENV"
+          cp "$NOTIF_SRC" "$HOME/Library/MobileDevice/Provisioning Profiles/$NOTIF_PROFILE_UUID.mobileprovision"
 
       - name: Create temp keychain + import cert
         env:
@@ -210,6 +224,8 @@ jobs:
               <string>${PROFILE_NAME}</string>
               <key>sh.nikhil.conduit.widgets</key>
               <string>${WIDGET_PROFILE_NAME}</string>
+              <key>sh.nikhil.conduit.notificationservice</key>
+              <string>${NOTIF_PROFILE_NAME}</string>
             </dict>
             <key>stripSwiftSymbols</key>
             <true/>

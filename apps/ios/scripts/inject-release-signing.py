@@ -2,13 +2,12 @@
 """Inject manual code-signing into the release targets of apps/ios/project.yml.
 
 Run by the release workflows (release-ios.yml / release-testflight.yml) after
-the signing assets are staged but BEFORE `xcodegen generate`. The host app and
-the Live Activity widget extension have distinct bundle ids, so each needs its
-own provisioning profile — we rewrite BOTH targets to Manual signing. The
-profile names are ${PROFILE_NAME} / ${WIDGET_PROFILE_NAME} (exported to the
-job env by the "Install provisioning profile" steps); xcodebuild resolves these
-build-setting references from its environment at build time, exactly as the app
-target already did before this script existed.
+the signing assets are staged but BEFORE `xcodegen generate`. The host app,
+the Live Activity widget extension, and the notification service extension each
+have distinct bundle ids and need their own provisioning profile. Profile names
+are ${PROFILE_NAME} / ${WIDGET_PROFILE_NAME} / ${NOTIF_PROFILE_NAME} (exported
+to the job env by the "Install provisioning profile" step); xcodebuild resolves
+these build-setting references from its environment at build time.
 """
 from pathlib import Path
 
@@ -59,5 +58,32 @@ if widget_marker not in text:
     raise SystemExit("widget signing marker not found in project.yml")
 text = text.replace(widget_marker, widget_replacement, 1)
 
+# --- notification service extension target ---
+notif_marker = (
+    "        PRODUCT_BUNDLE_IDENTIFIER: sh.nikhil.conduit.notificationservice\n"
+    '        TARGETED_DEVICE_FAMILY: "1,2"\n'
+    "        SUPPORTS_MACCATALYST: NO\n"
+    "        GENERATE_INFOPLIST_FILE: NO\n"
+    "        CODE_SIGN_STYLE: Automatic\n"
+    "        CODE_SIGNING_REQUIRED: NO\n"
+    "        CODE_SIGNING_ALLOWED: NO\n"
+)
+notif_replacement = (
+    "        PRODUCT_BUNDLE_IDENTIFIER: sh.nikhil.conduit.notificationservice\n"
+    '        TARGETED_DEVICE_FAMILY: "1,2"\n'
+    "        SUPPORTS_MACCATALYST: NO\n"
+    "        GENERATE_INFOPLIST_FILE: NO\n"
+    "        # Release: manual signing with the notification service's own provisioning profile.\n"
+    "        CODE_SIGN_STYLE: Manual\n"
+    "        CODE_SIGN_IDENTITY: Apple Distribution\n"
+    "        DEVELOPMENT_TEAM: ${TEAM_ID}\n"
+    "        PROVISIONING_PROFILE_SPECIFIER: ${NOTIF_PROFILE_NAME}\n"
+    "        CODE_SIGNING_REQUIRED: YES\n"
+    "        CODE_SIGNING_ALLOWED: YES\n"
+)
+if notif_marker not in text:
+    raise SystemExit("notification service signing marker not found in project.yml")
+text = text.replace(notif_marker, notif_replacement, 1)
+
 path.write_text(text)
-print("injected manual signing for app + widget targets")
+print("injected manual signing for app + widget + notification service targets")
