@@ -36,6 +36,7 @@ extension ConduitUI {
         @State private var showFork = false
         @State private var showEndConfirm = false
         @State private var compactRequested = false
+        @State private var showEarlierAgents = false
 
         var body: some View {
             if embedded {
@@ -485,6 +486,8 @@ extension ConduitUI {
 
         private var agentsSection: some View {
             let roster = store.subagentRosters[session.id] ?? []
+            let active = roster.filter { $0.status == "working" }
+            let finished = roster.filter { $0.status != "working" }
             return VStack(alignment: .leading, spacing: 8) {
                 eyebrow("Agents")
                 VStack(spacing: 0) {
@@ -495,16 +498,45 @@ extension ConduitUI {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(14)
                     } else {
-                        ForEach(Array(roster.enumerated()), id: \.element.id) { index, agent in
+                        ForEach(Array(active.enumerated()), id: \.element.id) { index, agent in
                             if index > 0 {
                                 Rectangle().fill(neon.border).frame(height: 1)
                             }
                             agentRow(agent)
                         }
+                        if !finished.isEmpty {
+                            if !active.isEmpty {
+                                Rectangle().fill(neon.border).frame(height: 1)
+                            }
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showEarlierAgents.toggle()
+                                }
+                            } label: {
+                                HStack {
+                                    Text("Earlier agents (\(finished.count))")
+                                        .font(neon.mono(12.5))
+                                        .foregroundStyle(neon.textDim)
+                                    Spacer()
+                                    Image(systemName: showEarlierAgents ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(neon.textDim)
+                                }
+                                .padding(12)
+                            }
+                            .buttonStyle(.plain)
+                            if showEarlierAgents {
+                                ForEach(Array(finished.enumerated()), id: \.element.id) { index, agent in
+                                    Rectangle().fill(neon.border).frame(height: 1)
+                                    agentRow(agent)
+                                }
+                            }
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .neonCardSurface(neon, fill: neon.surface, cornerRadius: neon.radius - 4)
+                .animation(.easeInOut(duration: 0.2), value: showEarlierAgents)
             }
         }
 

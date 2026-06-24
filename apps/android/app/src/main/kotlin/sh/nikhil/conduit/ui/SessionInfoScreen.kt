@@ -27,6 +27,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
@@ -683,6 +685,9 @@ fun SessionInfoScreen(store: SessionStore, session: ProjectSession, onDismiss: (
  */
 @Composable
 private fun AgentsSection(subagents: List<SubagentEntry>, neon: NeonTheme) {
+    val active = subagents.filter { it.status == "working" }
+    val finished = subagents.filter { it.status != "working" }
+    var showEarlier by remember { mutableStateOf(false) }
     Column {
         Eyebrow("AGENTS", neon)
         Box(
@@ -700,9 +705,9 @@ private fun AgentsSection(subagents: List<SubagentEntry>, neon: NeonTheme) {
                 )
             } else {
                 Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                    subagents.forEachIndexed { idx, agent ->
+                    active.forEachIndexed { idx, agent ->
                         SubagentRow(agent = agent, neon = neon)
-                        if (idx < subagents.lastIndex) {
+                        if (idx < active.lastIndex) {
                             Spacer(Modifier.height(1.dp))
                             Box(
                                 Modifier
@@ -712,6 +717,54 @@ private fun AgentsSection(subagents: List<SubagentEntry>, neon: NeonTheme) {
                                     .background(neon.border),
                             )
                             Spacer(Modifier.height(1.dp))
+                        }
+                    }
+                    if (finished.isNotEmpty()) {
+                        if (active.isNotEmpty()) {
+                            Spacer(Modifier.height(1.dp))
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .padding(horizontal = 14.dp)
+                                    .background(neon.border),
+                            )
+                            Spacer(Modifier.height(1.dp))
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showEarlier = !showEarlier }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Earlier agents (${finished.size})",
+                                fontFamily = neon.mono,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = neon.textDim,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(
+                                imageVector = if (showEarlier) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                                contentDescription = if (showEarlier) "Collapse" else "Expand",
+                                tint = neon.textDim,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        if (showEarlier) {
+                            finished.forEachIndexed { idx, agent ->
+                                Spacer(Modifier.height(1.dp))
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(1.dp)
+                                        .padding(horizontal = 14.dp)
+                                        .background(neon.border),
+                                )
+                                Spacer(Modifier.height(1.dp))
+                                SubagentRow(agent = agent, neon = neon)
+                            }
                         }
                     }
                 }
