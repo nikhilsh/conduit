@@ -370,14 +370,18 @@ func (s *Session) takePendingAsk() *pendingAsk {
 }
 
 // recordPendingResolution persists the resolved pending-input card to the
-// conversation log AND re-publishes it on the live chat stream, so the
-// answered/selected state both survives a close+reopen (transcript replay,
-// any device) and flips the live card immediately (matching today's
-// optimistic on-tap behavior). answer is the chosen option text (ignored
-// when answered is false, e.g. a timeout). Reuses the original ask ts so
-// apply_chat's (role,content,ts) dedup treats the resolved card as the
-// SAME logical item as the prior live card rather than a second copy. No-op
-// when the ask has no renderable body. Best-effort: never blocks the answer.
+// conversation log so the answered state survives close+reopen (transcript
+// replay on any device). answer is the chosen option text (ignored when
+// answered is false, e.g. a timeout). No-op when the ask has no renderable
+// body. Best-effort: never blocks the answer.
+//
+// NOTE: we intentionally do NOT re-broadcast the resolved content over the
+// live WS. The resolved content differs from the original (it prepends
+// [[conduit:resolved]]...) so Rust apply_chat stores it as a SECOND item
+// alongside the original pending_input, producing a duplicate raw-text
+// bubble in the chat. The client already flips the card to a chip
+// optimistically on tap; the transcript update here covers the
+// close+reopen path.
 func (s *Session) recordPendingResolution(ask *pendingAsk, answer string, answered bool) {
 	if ask == nil {
 		return
@@ -387,23 +391,6 @@ func (s *Session) recordPendingResolution(ask *pendingAsk, answer string, answer
 		return
 	}
 	s.convLog.appendResolvedPendingInput(content, ask.ts)
-	ts := ask.ts
-	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339Nano)
-	}
-	payload, err := json.Marshal(map[string]any{
-		"type": "view_event",
-		"view": "chat",
-		"event": map[string]any{
-			"role":    "assistant",
-			"content": content,
-			"ts":      ts,
-			"files":   []any{},
-		},
-	})
-	if err == nil {
-		s.PublishText(payload)
-	}
 }
 
 // expirePendingAsk releases an AskUserQuestion the user never answered:
