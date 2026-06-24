@@ -2908,8 +2908,14 @@ private fun CommandRunTicker(items: List<ConversationItem>) {
     val liveCommand = (items.lastOrNull { it.status.equals("running", true) || it.status.equals("pending", true) }
         ?: items.lastOrNull())?.let { clusterRowLabel(it) } ?: ""
 
-    // Elapsed timer: tick once per second.
-    var elapsedSeconds by remember { mutableIntStateOf(0) }
+    // Elapsed timer: seed from the first item's ts so reopening a chat doesn't reset it.
+    val seedSeconds = remember(items) {
+        val earliest = items.mapNotNull {
+            runCatching { java.time.Instant.parse(it.ts) }.getOrNull()
+        }.minOrNull()
+        earliest?.let { maxOf(0L, java.time.Instant.now().epochSecond - it.epochSecond).toInt() } ?: 0
+    }
+    var elapsedSeconds by remember(items) { mutableIntStateOf(seedSeconds) }
     LaunchedEffect(items) {
         while (true) {
             kotlinx.coroutines.delay(1_000)
