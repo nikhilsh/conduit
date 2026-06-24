@@ -392,12 +392,11 @@ struct SessionStoreTests {
         // sendChat must route to answerPendingInput and bypass the queue.
         store.sendChat(sessionID: sessionID, message: "Yes")
 
-        // The echo must appear in the conversation log (not just the queue).
+        // No optimistic user echo — answered pending-input cards show the
+        // answer as a chip on the card itself, not as a separate YOU bubble.
         let log = store.conversationLog[sessionID] ?? []
         let userEcho = log.first(where: { $0.role == "user" })
-        #expect(userEcho != nil)
-        #expect(userEcho?.content == "Yes")
-        #expect(userEcho?.id.hasPrefix("local-") == true)
+        #expect(userEcho == nil, "answerPendingInput must not inject a YOU echo")
 
         // The answer must be in the NORMAL pending queue (not queuedTurn).
         let pending = store.pendingChats.entries(for: sessionID)

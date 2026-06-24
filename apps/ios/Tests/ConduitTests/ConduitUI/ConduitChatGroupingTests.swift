@@ -83,6 +83,6 @@ struct ConduitChatGroupingTests {
     @Test func groupIdIsStable() {
         let rows = group([item("tool", "t1"), item("tool", "t2"), item("tool", "t3")])
         #expect(rows.count == 1)
-        #expect(rows[0].id == "toolgroup-t1-3")
+        #expect(rows[0].id == "toolgroup-t1")
     }
 }

@@ -63,7 +63,7 @@ extension ConduitUI {
         var id: String {
             switch self {
             case .single(let item): return item.id
-            case .toolGroup(let items): return "toolgroup-\(items.first?.id ?? "")-\(items.count)"
+            case .toolGroup(let items): return "toolgroup-\(items.first?.id ?? "")"
             }
         }
     }
