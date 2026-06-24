@@ -9,7 +9,17 @@ release, the section for that version is the device-test punch list.
 
 ---
 
-## v0.0.192 (unreleased)
+## v0.0.193
+
+**Pending-input dedup + tool cluster collapse.** PRs #736 (broker), #737 (iOS + Android + broker).
+
+- **Broker: no duplicate answer bubble after re-broadcast (PR #736)** — broker no longer re-broadcasts a resolved `pending_input` event over WS on reconnect; previously caused a second answer bubble to appear. Broker-only fix; auto-ships via redeploy. [broker — live]
+- **Pending-input merge dedup: resolved past wins over unanswered live (PR #737)** — if the transcript already has a resolved answer for a pending-input card and a live re-emission of the same card arrives (broker re-broadcast), the resolved card wins and the unanswered duplicate is suppressed. Prevents ghost unanswered cards appearing mid-conversation. iOS + Android parity with tests. [iOS + Android, on-device]
+- **Tool cluster cards collapse to compact footnote by default (PR #737)** — when "Show command detail" is ON, individual tool cluster cards now start as the muted compact footnote ("ran N commands") and expand to the full card on tap — same as the flag-off appearance. Tap the expanded card header to re-collapse. [iOS + Android, on-device]
+
+---
+
+## v0.0.192
 
 **LA zombie + chat UX fixes.** PRs #734 (relay + iOS), #735 (iOS + Android).
 
