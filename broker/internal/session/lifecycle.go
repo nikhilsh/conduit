@@ -76,7 +76,7 @@ func (s *Session) commandDir(adapter agents.Adapter) string {
 			}
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil && dirExists(home) {
+	if home := userHomeDir(); dirExists(home) {
 		return home
 	}
 	return s.worktreeDir
